@@ -189,3 +189,27 @@ fn deposit_after_depositor_cleared_is_rejected() {
     // Depositor should no longer be able to deposit
     client.deposit(&depositor, &50);
 }
+
+#[test]
+fn balance_unchanged_after_failed_deduct() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let contract_id = env.register(CalloraVault {}, ());
+    let client = CalloraVaultClient::new(&env, &contract_id);
+
+    // Initialize with 100 tokens
+    client.init(&owner, &Some(100));
+    assert_eq!(client.balance(), 100);
+
+    // Attempt to deduct 101 (should panic with "insufficient balance")
+    // Use std::panic::catch_unwind to catch the panic and verify balance afterward
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.deduct(&101);
+    }));
+
+    // Verify the operation panicked
+    assert!(result.is_err());
+
+    // Verify balance is unchanged (still 100)
+    assert_eq!(client.balance(), 100);
+}
