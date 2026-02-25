@@ -19,7 +19,7 @@ Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) an
   - `withdraw_to(to, amount)` — owner-only; withdraw to a designated address
   - `balance()` — current balance
 
-Events are emitted for init, deposit, deduct, withdraw, and withdraw_to. See [EVENT_SCHEMA.md](EVENT_SCHEMA.md) for indexer/frontend use. Approximate gas/cost notes: [BENCHMARKS.md](BENCHMARKS.md). Upgrade and migration: [UPGRADE.md](UPGRADE.md).
+Events are emitted for init, deposit, deduct, withdraw, and withdraw_to. See [EVENT_SCHEMA.md](EVENT_SCHEMA.md) for indexer/frontend use. Approximate gas/cost notes: [BENCHMARKS.md](BENCHMARKS.md). Upgrade and migration: [UPGRADE.md](UPGRADE.md). Security checklist and audit readiness: [SECURITY.md](SECURITY.md).
 
 ## Local setup
 
@@ -57,6 +57,7 @@ callora-contracts/
 ├── Cargo.toml              # Workspace and release profile
 ├── BENCHMARKS.md           # Vault operation gas/cost notes
 ├── EVENT_SCHEMA.md         # Event names, topics, and payload types
+├── SECURITY.md             # Security checklist and audit readiness
 ├── UPGRADE.md              # Vault upgrade and migration path
 ├── contracts/
 │   └── vault/
