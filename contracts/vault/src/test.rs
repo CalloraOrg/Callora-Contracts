@@ -477,9 +477,11 @@ fn init_none_balance() {
     let owner = Address::generate(&env);
     let contract_id = env.register(CalloraVault {}, ());
     let client = CalloraVaultClient::new(&env, &contract_id);
+    let (usdc_address, _, _) = create_usdc(&env, &owner);
 
-    // Call init with None
-    client.init(&owner, &None);
+    env.mock_all_auths();
+    // Call init with None for initial_balance and min_deposit
+    client.init(&owner, &usdc_address, &None, &None);
 
     // Assert balance is 0
     assert_eq!(client.balance(), 0);
