@@ -40,6 +40,17 @@ fn init_and_balance() {
 }
 
 #[test]
+fn init_default_zero_balance() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let contract_id = env.register(CalloraVault {}, ());
+    let client = CalloraVaultClient::new(&env, &contract_id);
+
+    client.init(&owner, &None);
+    assert_eq!(client.balance(), 0);
+}
+
+#[test]
 fn deposit_and_deduct() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -52,7 +63,7 @@ fn deposit_and_deduct() {
     client.deposit(&owner, &200);
     assert_eq!(client.balance(), 300);
 
-    client.deduct(&50);
+    client.deduct(&owner, &50);
     assert_eq!(client.balance(), 250);
 }
 

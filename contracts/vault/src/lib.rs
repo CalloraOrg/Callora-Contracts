@@ -52,8 +52,16 @@ pub struct CalloraVault;
 impl CalloraVault {
     /// Initialize vault for an owner with optional initial balance.
     /// Emits an "init" event with the owner address and initial balance.
+    ///
+    /// # Panics
+    /// - If the vault is already initialized
+    /// - If `initial_balance` is negative
     pub fn init(env: Env, owner: Address, initial_balance: Option<i128>) -> VaultMeta {
+        if env.storage().instance().has(&StorageKey::Meta) {
+            panic!("vault already initialized");
+        }
         let balance = initial_balance.unwrap_or(0);
+        assert!(balance >= 0, "initial balance must be non-negative");
         let meta = VaultMeta {
             owner: owner.clone(),
             balance,
@@ -97,6 +105,9 @@ impl CalloraVault {
     }
 
     /// Get vault metadata (owner and balance).
+    ///
+    /// # Panics
+    /// - If the vault has not been initialized
     pub fn get_meta(env: Env) -> VaultMeta {
         env.storage()
             .instance()
@@ -125,8 +136,10 @@ impl CalloraVault {
     }
 
     /// Deposit increases balance. Callable by owner or designated depositor.
+    /// Emits a "deposit" event with the depositor address and amount.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
+        assert!(amount > 0, "amount must be positive");
 
         assert!(
             Self::is_authorized_depositor(&env, &caller),
@@ -139,8 +152,11 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Deduct balance for an API call. Only backend/authorized caller in production.
-    pub fn deduct(env: Env, amount: i128) -> i128 {
+    /// Deduct balance for an API call. Only owner/authorized caller in production.
+    pub fn deduct(env: Env, caller: Address, amount: i128) -> i128 {
+        caller.require_auth();
+        Self::require_owner(&env, &caller);
+
         let mut meta = Self::get_meta(env.clone());
         assert!(meta.balance >= amount, "insufficient balance");
         meta.balance -= amount;
@@ -151,6 +167,33 @@ impl CalloraVault {
     /// Return current balance.
     pub fn balance(env: Env) -> i128 {
         Self::get_meta(env).balance
+    }
+
+    pub fn transfer_ownership(env: Env, new_owner: Address) {
+        let mut meta = Self::get_meta(env.clone());
+        meta.owner.require_auth();
+
+        // Validate new_owner is not the same as current owner
+        assert!(
+            new_owner != meta.owner,
+            "new_owner must be different from current owner"
+        );
+
+        // Emit event before changing the owner, so we have the old owner
+        // topics = (transfer_ownership, old_owner, new_owner)
+        env.events().publish(
+            (
+                Symbol::new(&env, "transfer_ownership"),
+                meta.owner.clone(),
+                new_owner.clone(),
+            ),
+            (),
+        );
+
+        meta.owner = new_owner;
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, "meta"), &meta);
     }
 }
 

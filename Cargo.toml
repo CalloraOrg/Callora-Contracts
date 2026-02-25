@@ -5,6 +5,9 @@ members = ["contracts/vault", "contracts/revenue_pool"]
 [workspace.dependencies]
 soroban-sdk = "22"
 
+[profile.dev]
+overflow-checks = true
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true
