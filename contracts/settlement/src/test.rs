@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use soroban_sdk::{contractimpl, contracttype, Address, Env, Symbol, Vec, i128};
 use crate::{CalloraSettlement, CalloraVault};
+use soroban_sdk::{contractimpl, contracttype, i128, Address, Env, Symbol, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -67,10 +67,10 @@ mod settlement_tests {
 
         // Test successful initialization
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         assert_eq!(CalloraSettlement::__test_get_admin(env.clone()), admin);
         assert_eq!(CalloraSettlement::__test_get_vault(env.clone()), vault);
-        
+
         let global_pool = CalloraSettlement::__test_get_global_pool(env.clone());
         assert_eq!(global_pool.total_balance, 0);
         assert!(global_pool.last_updated > 0);
@@ -83,7 +83,7 @@ mod settlement_tests {
         let vault = Address::generate(&env);
 
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         // Test receiving payment to global pool
         let payment_amount = 1000i128;
         CalloraSettlement::receive_payment(
@@ -108,21 +108,22 @@ mod settlement_tests {
         let developer = Address::generate(&env);
 
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         // Test receiving payment to specific developer
         let payment_amount = 500i128;
         CalloraSettlement::receive_payment(
             env.clone(),
             vault.clone(), // vault is authorized caller
             payment_amount,
-            false, // to_pool = false
+            false,                   // to_pool = false
             Some(developer.clone()), // specify developer
         );
 
         // Verify developer balance updated
-        let balance = CalloraSettlement::__test_get_developer_balance(env.clone(), developer.clone());
+        let balance =
+            CalloraSettlement::__test_get_developer_balance(env.clone(), developer.clone());
         assert_eq!(balance, payment_amount);
-        
+
         // Verify global pool unchanged
         let global_pool = CalloraSettlement::__test_get_global_pool(env.clone());
         assert_eq!(global_pool.total_balance, 0);
@@ -137,7 +138,7 @@ mod settlement_tests {
         let unauthorized = Address::generate(&env);
 
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         // Test unauthorized caller
         CalloraSettlement::receive_payment(
             env.clone(),
@@ -156,15 +157,9 @@ mod settlement_tests {
         let vault = Address::generate(&env);
 
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         // Test zero amount
-        CalloraSettlement::receive_payment(
-            env.clone(),
-            vault.clone(),
-            0i128,
-            true,
-            None,
-        );
+        CalloraSettlement::receive_payment(env.clone(), vault.clone(), 0i128, true, None);
     }
 
     #[test]
@@ -175,14 +170,14 @@ mod settlement_tests {
         let vault = Address::generate(&env);
 
         CalloraSettlement::__test_init(env.clone(), admin.clone(), vault.clone());
-        
+
         // Test pool=false without developer
         CalloraSettlement::receive_payment(
             env.clone(),
             vault.clone(),
             100i128,
             false, // to_pool = false
-            None, // no developer specified
+            None,  // no developer specified
         );
     }
 }
@@ -207,7 +202,7 @@ mod vault_tests {
 
         // Set settlement address
         client.set_settlement(&admin, &settlement);
-        
+
         // Verify settlement address is set
         assert_eq!(client.get_settlement(), settlement);
     }
@@ -305,7 +300,7 @@ mod integration_tests {
         settlement_client.receive_payment(
             vault_contract_id, // vault is authorized caller
             payment_amount,
-            false, // to_pool = false
+            false,           // to_pool = false
             Some(developer), // credit to specific developer
         );
 

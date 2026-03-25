@@ -16,8 +16,15 @@ impl RevenuePool {
     /// Initialize the revenue pool with an admin and the USDC token address.
     ///
     /// # Arguments
-    /// * `admin` – Address that may call `distribute`. Typically backend or multisig.
-    /// * `usdc_token` – Stellar USDC (or wrapped USDC) token contract address.
+    /// * `env` - The environment running the contract.
+    /// * `admin` - Address that may call `distribute`. Typically backend or multisig.
+    /// * `usdc_token` - Stellar USDC (or wrapped USDC) token contract address.
+    ///
+    /// # Panics
+    /// * If the revenue pool is already initialized.
+    ///
+    /// # Events
+    /// Emits an `init` event with the `admin` address as a topic and `usdc_token` address as data.
     pub fn init(env: Env, admin: Address, usdc_token: Address) {
         admin.require_auth();
         let inst = env.storage().instance();
@@ -33,6 +40,15 @@ impl RevenuePool {
     }
 
     /// Return the current admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    ///
+    /// # Returns
+    /// The `Address` of the current admin.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
@@ -41,6 +57,14 @@ impl RevenuePool {
     }
 
     /// Replace the current admin. Only the existing admin may call this.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin.
+    /// * `new_admin` - Address of the new admin to be set.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -59,12 +83,22 @@ impl RevenuePool {
     /// wants to log that a payment was credited from the vault.
     ///
     /// # Arguments
-    /// * `caller` – Must be admin (or could be extended to allow vault to call).
-    /// * `amount` – Amount received (for event logging).
-    /// * `from_vault` – Optional; true if the source was the vault.
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be admin (or could be extended to allow vault to call).
+    /// * `amount` - Amount received (for event logging).
+    /// * `from_vault` - Optional; true if the source was the vault.
+    ///
+    /// # Panics
+    /// * If the caller does not have the correct authorization.
+    ///
+    /// # Events
+    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of `(amount, from_vault)` as data.
     pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
         caller.require_auth();
-        let _admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
         env.events().publish(
             (Symbol::new(&env, "receive_payment"), caller),
             (amount, from_vault),
@@ -76,9 +110,19 @@ impl RevenuePool {
     /// Only the admin may call. Transfers USDC from this contract to `to`.
     ///
     /// # Arguments
-    /// * `caller` – Must be the current admin.
-    /// * `to` – Developer address to receive USDC.
-    /// * `amount` – Amount in token base units (e.g. USDC stroops).
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin.
+    /// * `to` - Developer address to receive USDC.
+    /// * `amount` - Amount in token base units (e.g. USDC stroops).
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
+    /// * If the amount is zero or negative (`"amount must be positive"`).
+    /// * If the revenue pool has not been initialized.
+    /// * If the revenue pool holds less than the requested amount (`"insufficient USDC balance"`).
+    ///
+    /// # Events
+    /// Emits a `distribute` event with `to` as a topic and `amount` as data.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
@@ -113,8 +157,18 @@ impl RevenuePool {
     /// or if any individual amount is not positive.
     ///
     /// # Arguments
+    /// * `env` - The environment running the contract.
     /// * `caller` - Must be the current admin.
-    /// * `payments` - A vector of (Address, amount) tuples.
+    /// * `payments` - A vector of `(Address, i128)` tuples representing destinations and amounts.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
+    /// * If any individual amount is zero or negative (`"amount must be positive"`).
+    /// * If the revenue pool has not been initialized.
+    /// * If the total amount exceeds the contract's available balance (`"insufficient USDC balance"`).
+    ///
+    /// # Events
+    /// Emits a `batch_distribute` event for each payment with `to` as a topic and `amount` as data.
     pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
@@ -152,6 +206,15 @@ impl RevenuePool {
     }
 
     /// Return this contract's USDC balance (for testing and dashboards).
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    ///
+    /// # Returns
+    /// The balance of the contract in USDC base units.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
     pub fn balance(env: Env) -> i128 {
         let usdc_address: Address = env
             .storage()

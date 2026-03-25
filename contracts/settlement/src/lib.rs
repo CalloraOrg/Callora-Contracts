@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Map, Vec, i128};
+use soroban_sdk::{contract, contractimpl, contracttype, i128, Address, Env, Map, Symbol, Vec};
 
 /// Developer balance record in settlement contract
 #[contracttype]
@@ -48,11 +48,7 @@ pub struct CalloraSettlement;
 #[contractimpl]
 impl CalloraSettlement {
     /// Initialize the settlement contract with admin and vault address
-    pub fn init(
-        env: Env,
-        admin: Address,
-        vault_address: Address,
-    ) {
+    pub fn init(env: Env, admin: Address, vault_address: Address) {
         // Only allow initialization once
         if env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
             panic!("settlement contract already initialized");
@@ -82,16 +78,16 @@ impl CalloraSettlement {
     }
 
     /// Receive payment from vault and credit to pool or developer balance
-    /// 
+    ///
     /// # Arguments
     /// * `caller` - Must be authorized vault address or admin
     /// * `amount` - Payment amount in USDC micro-units
     /// * `to_pool` - If true, credit global pool; if false, credit caller's developer balance
     /// * `developer` - Optional developer address (required when to_pool=false)
-    /// 
+    ///
     /// # Access Control
     /// Only the registered vault address or admin can call this function
-    /// 
+    ///
     /// # Events
     /// Emits PaymentReceivedEvent and BalanceCreditedEvent
     pub fn receive_payment(
@@ -126,22 +122,25 @@ impl CalloraSettlement {
                 to_pool: true,
                 developer: None,
             };
-            env.events()
-                .publish((Symbol::new(&env, "payment_received"), caller.clone()), payment_event);
+            env.events().publish(
+                (Symbol::new(&env, "payment_received"), caller.clone()),
+                payment_event,
+            );
         } else {
             // Credit specific developer balance
-            let dev_address = developer.unwrap_or_else(|| panic!("developer address required when to_pool=false"));
-            
+            let dev_address = developer
+                .unwrap_or_else(|| panic!("developer address required when to_pool=false"));
+
             let mut balances: Map<Address, i128> = env
                 .storage()
                 .instance()
                 .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
                 .unwrap_or_else(|| Map::new(&env));
-            
+
             let current_balance = balances.get(dev_address).unwrap_or(0);
             let new_balance = current_balance + amount;
             balances.set(dev_address, new_balance);
-            
+
             env.storage()
                 .instance()
                 .set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &balances);
@@ -153,16 +152,20 @@ impl CalloraSettlement {
                 to_pool: false,
                 developer: Some(dev_address.clone()),
             };
-            env.events()
-                .publish((Symbol::new(&env, "payment_received"), caller.clone()), payment_event);
+            env.events().publish(
+                (Symbol::new(&env, "payment_received"), caller.clone()),
+                payment_event,
+            );
 
             let balance_event = BalanceCreditedEvent {
                 developer: dev_address.clone(),
                 amount,
                 new_balance,
             };
-            env.events()
-                .publish((Symbol::new(&env, "balance_credited"), dev_address), balance_event);
+            env.events().publish(
+                (Symbol::new(&env, "balance_credited"), dev_address),
+                balance_event,
+            );
         }
     }
 
@@ -197,7 +200,7 @@ impl CalloraSettlement {
             .instance()
             .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
             .unwrap_or_else(|| Map::new(&env));
-        
+
         balances.get(developer).unwrap_or(0)
     }
 
@@ -208,13 +211,10 @@ impl CalloraSettlement {
             .instance()
             .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
             .unwrap_or_else(|| Map::new(&env));
-        
+
         let mut result = Vec::new(&env);
         for (address, balance) in balances.iter() {
-            result.push_back(DeveloperBalance {
-                address,
-                balance,
-            });
+            result.push_back(DeveloperBalance { address, balance });
         }
         result
     }
@@ -247,7 +247,7 @@ impl CalloraSettlement {
     fn require_authorized_caller(env: Env, caller: Address) {
         let vault = Self::get_vault(env.clone());
         let admin = Self::get_admin(env.clone());
-        
+
         if caller != vault && caller != admin {
             panic!("unauthorized: caller must be vault or admin");
         }
