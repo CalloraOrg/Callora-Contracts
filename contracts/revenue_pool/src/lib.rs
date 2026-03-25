@@ -31,7 +31,6 @@ impl RevenuePool {
         if inst.has(&Symbol::new(&env, ADMIN_KEY)) {
             panic!("revenue pool already initialized");
         }
-        let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
 
