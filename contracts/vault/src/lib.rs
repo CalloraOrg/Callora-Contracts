@@ -157,10 +157,8 @@ impl CalloraVault {
             .expect("vault not initialized")
     }
 
-    /// Replace the current admin. Only the existing admin may call this.
-    ///
-    /// # Panics
-    /// * `"unauthorized: caller is not admin"` – if caller is not the current admin.
+    /// Transfers the administrative role to a new address.
+    /// Can only be called by the current Admin.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());
@@ -222,13 +220,8 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("vault not initialized"))
     }
 
-    /// Add or clear allowed depositors. Owner-only.
-    ///
-    /// Pass `None` to revoke all depositor access; `Some(address)` to add an address
-    /// if not already present.
-    ///
-    /// # Panics
-    /// * `"unauthorized: owner only"` – if caller is not the vault owner.
+    /// Sets whether an address is allowed to deposit into the vault.
+    /// Can only be called by the Owner.
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone());
@@ -254,7 +247,8 @@ impl CalloraVault {
         }
     }
 
-    /// Set or update the authorized caller for deduction. Only callable by the vault owner.
+    /// Sets the authorized caller permitted to trigger deductions.
+    /// Can only be called by the Owner.
     pub fn set_authorized_caller(env: Env, caller: Address) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -270,9 +264,8 @@ impl CalloraVault {
         );
     }
 
-    /// Deposit increases balance. Callable by owner or designated depositor.
-    /// User transfers USDC to the contract; contract increases internal balance.
-    /// Emits a "deposit" event with amount and new balance.
+    /// Deposits USDC into the vault.
+    /// Can be called by the Owner or any Allowed Depositor.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
@@ -317,10 +310,8 @@ impl CalloraVault {
             .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
-    /// Deduct balance for an API call. Callable by authorized caller (e.g. backend) or owner.
-    /// Amount must not exceed max single deduct (see init / get_max_deduct).
-    /// If revenue pool is set, USDC is transferred to it; otherwise it remains in the vault.
-    /// Emits a "deduct" event with caller, optional request_id, amount, and new balance.
+    /// Deducts USDC from the vault for settlement or revenue pool.
+    /// Can be called by the Owner or the Authorized Caller.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
@@ -356,10 +347,8 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Batch deduct: multiple (amount, optional request_id) in one transaction.
-    /// Each amount must not exceed max_deduct. Reverts entire batch if any check fails.
-    /// If revenue pool is set, total deducted USDC is transferred to it once.
-    /// Emits one "deduct" event per item.
+    /// Deducts multiple amounts of USDC from the vault for different requests.
+    /// Can be called by the Owner or the Authorized Caller.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         caller.require_auth();
         let max_deduct = Self::get_max_deduct(env.clone());
@@ -411,6 +400,8 @@ impl CalloraVault {
         Self::get_meta(env).balance
     }
 
+    /// Transfers ownership of the vault to a new address.
+    /// Can only be called by the current Owner.
     pub fn transfer_ownership(env: Env, new_owner: Address) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -432,7 +423,8 @@ impl CalloraVault {
         env.storage().instance().set(&Symbol::new(&env, META_KEY), &meta);
     }
 
-    /// Withdraw from vault. Callable only by the vault owner.
+    /// Withdraws USDC from the vault to the owner.
+    /// Can only be called by the Owner.
     pub fn withdraw(env: Env, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -450,11 +442,8 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Withdraw USDC from the vault to a designated address. Owner-only.
-    ///
-    /// # Panics
-    /// * `"amount must be positive"` – amount is zero or negative.
-    /// * `"insufficient balance"` – vault balance is less than amount.
+    /// Withdraws USDC from the vault to a specific recipient.
+    /// Can only be called by the Owner.
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -472,10 +461,8 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Set the settlement contract address. Admin-only.
-    ///
-    /// # Panics
-    /// * `"unauthorized: caller is not admin"` – caller is not the current admin.
+    /// Sets the settlement contract address.
+    /// Can only be called by the Admin.
     pub fn set_settlement(env: Env, caller: Address, settlement_address: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());

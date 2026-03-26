@@ -69,7 +69,7 @@ All tests use `#[should_panic]` assertions for guaranteed validation. This resol
    ```bash
    # Build vault contract
    cargo build --target wasm32-unknown-unknown --release -p callora-vault
-   
+
    # Or use the convenience script from project root
    ./scripts/check-wasm-size.sh
    ```
@@ -81,6 +81,7 @@ All tests use `#[should_panic]` assertions for guaranteed validation. This resol
    - `codegen-units = 1` - better optimization at cost of compile time
 
    To verify the WASM size stays under 64KB, run:
+
    ```bash
    ./scripts/check-wasm-size.sh
    ```
@@ -122,8 +123,8 @@ The script will:
 It installs tarpaulin, runs coverage, uploads the HTML report as a downloadable
 artefact, and posts a coverage summary table as a PR comment.
 A result below 95 % causes the workflow — and the required status check — to fail.
-=======
->>>>>>> b0229e42e4d4517da9f548ea3e374a5886304bf2
+
+
 
 ## Project layout
 
@@ -174,6 +175,12 @@ callora-contracts/
 - **Input validation**: `deposit` and `deduct` reject zero and negative amounts (`amount > 0`). `init` rejects negative initial balances.
 - **`overflow-checks`**: Enabled for **both** `[profile.dev]` and `[profile.release]` in the workspace `Cargo.toml`, ensuring overflow bugs are caught in tests as well as production.
 - **Max balance**: `i128::MAX` (≈ 1.7 × 10³⁸ stroops). Deposits that would exceed this limit will panic.
+
+## Documentation
+
+- [Core Contracts](contracts/README.md)
+- [Vault Access Control Model](contracts/vault/ACCESS_CONTROL.md)
+- [Security Audit Notes](docs/SECURITY.md)
 
 ## 🔐 Security
 
