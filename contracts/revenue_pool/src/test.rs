@@ -490,3 +490,42 @@ fn batch_distribute_success_events() {
         }
     }
 }
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn get_admin_before_init_panics() {
+    let env = Env::default();
+    let (_, client) = create_pool(&env);
+    client.get_admin();
+}
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn distribute_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    client.distribute(&admin, &dev, &100);
+}
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn batch_distribute_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((Address::generate(&env), 100));
+    client.batch_distribute(&admin, &payments);
+}
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn balance_before_init_panics() {
+    let env = Env::default();
+    let (_, client) = create_pool(&env);
+    client.balance();
+}

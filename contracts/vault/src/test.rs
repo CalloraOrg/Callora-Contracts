@@ -806,6 +806,43 @@ fn batch_deduct_empty_fails() {
 }
 
 #[test]
+#[should_panic(expected = "vault not initialized")]
+fn get_admin_before_init_panics() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    client.get_admin();
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn get_meta_before_init_panics_lib_test() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    client.get_meta();
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn distribute_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    client.distribute(&admin, &dev, &100);
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn deposit_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    client.deposit(&owner, &100);
+}
+
+#[test]
 fn batch_deduct_zero_amount_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1408,4 +1445,43 @@ fn get_settlement_before_set_panics() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.get_settlement();
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn get_admin_before_init_panics() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    client.get_admin();
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn distribute_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    client.distribute(&admin, &dev, &100);
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn deposit_before_init_panics_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    client.deposit(&owner, &100);
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn deduct_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    client.deduct(&owner, &100, &None);
 }
