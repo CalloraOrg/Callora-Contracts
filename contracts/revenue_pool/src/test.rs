@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::token;
 use soroban_sdk::TryFromVal;
-use soroban_sdk::{Env, Symbol, TryIntoVal, Vec, Address};
+use soroban_sdk::{Address, Env, Symbol, TryIntoVal, Vec};
 
 fn create_usdc<'a>(
     env: &'a Env,
@@ -137,7 +137,7 @@ fn admin_transfer_emits_events() {
     client.set_admin(&admin, &new_admin);
     let events = env.events().all();
     let transfer_started = events.last().unwrap();
-    
+
     // FIX: Convert Val to Symbol for comparison
     let event_name = Symbol::try_from_val(&env, &transfer_started.1.get(0).unwrap()).unwrap();
     assert_eq!(event_name, Symbol::new(&env, "admin_transfer_started"));
@@ -146,10 +146,14 @@ fn admin_transfer_emits_events() {
     client.claim_admin(&new_admin);
     let events = env.events().all();
     let transfer_completed = events.last().unwrap();
-    
+
     // FIX: Convert Val to Symbol for comparison
-    let event_name_comp = Symbol::try_from_val(&env, &transfer_completed.1.get(0).unwrap()).unwrap();
-    assert_eq!(event_name_comp, Symbol::new(&env, "admin_transfer_completed"));
+    let event_name_comp =
+        Symbol::try_from_val(&env, &transfer_completed.1.get(0).unwrap()).unwrap();
+    assert_eq!(
+        event_name_comp,
+        Symbol::new(&env, "admin_transfer_completed")
+    );
 }
 
 #[test]
@@ -194,11 +198,10 @@ fn batch_distribute_success_events() {
     client.batch_distribute(&admin, &payments);
 
     let events = env.events().all();
-    assert!(events.len() >= 4); // At least 2 transfers + 2 batch_distribute events
+    assert!(events.len() >= 4);
 
     for i in 0..events.len() {
         let (_, topics, data) = events.get(i).unwrap();
-        // Safe conversion of topics
         let topic_0 = topics.get(0).unwrap();
         if let Ok(event_name) = Symbol::try_from_val(&env, &topic_0) {
             if event_name == Symbol::new(&env, "batch_distribute") {
