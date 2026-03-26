@@ -529,3 +529,17 @@ fn balance_before_init_panics() {
     let (_, client) = create_pool(&env);
     client.balance();
 }
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not admin")]
+fn receive_payment_unauthorized_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.receive_payment(&attacker, &100, &false);
+}

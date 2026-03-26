@@ -347,4 +347,14 @@ mod settlement_tests {
         let balance = client.get_developer_balance(&developer);
         assert_eq!(balance, 0);
     }
+
+    #[test]
+    #[should_panic(expected = "settlement contract not initialized")]
+    fn test_receive_payment_uninitialized() {
+        let env = Env::default();
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.receive_payment(&vault, &100, &true, &None);
+    }
 }

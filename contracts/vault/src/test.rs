@@ -1485,3 +1485,149 @@ fn deduct_before_init_panics() {
     let (_, client) = create_vault(&env);
     client.deduct(&owner, &100, &None);
 }
+
+#[test]
+#[should_panic(expected = "initial balance must be non-negative")]
+fn init_negative_balance_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(-1), &None, &None, &None, &None);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not admin")]
+fn distribute_unauthorized_panics_vault() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.distribute(&attacker, &Address::generate(&env), &50);
+}
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn distribute_zero_amount_panics_vault() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.distribute(&owner, &Address::generate(&env), &0);
+}
+
+#[test]
+#[should_panic(expected = "insufficient USDC balance")]
+fn distribute_insufficient_balance_panics_vault() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.distribute(&owner, &Address::generate(&env), &101);
+}
+
+#[test]
+#[should_panic(expected = "deduct amount exceeds max_deduct")]
+fn deduct_exceeds_max_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(500));
+    client.deduct(&owner, &501, &None);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized caller")]
+fn deduct_unauthorized_caller_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.deduct(&attacker, &100, &None);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized caller")]
+fn batch_deduct_unauthorized_caller_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    let items = soroban_sdk::vec![&env, DeductItem { amount: 100, request_id: None }];
+    client.batch_deduct(&attacker, &items);
+}
+
+#[test]
+#[should_panic(expected = "batch_deduct requires at least one item")]
+fn batch_deduct_empty_items_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.batch_deduct(&owner, &soroban_sdk::Vec::new(&env));
+}
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn batch_deduct_invalid_amount_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    let items = soroban_sdk::vec![&env, DeductItem { amount: 0, request_id: None }];
+    client.batch_deduct(&owner, &items);
+}
+
+#[test]
+#[should_panic(expected = "new_owner must be different from current owner")]
+fn transfer_ownership_same_owner_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.transfer_ownership(&owner);
+}
+
+#[test]
+#[should_panic(expected = "amount must be positive")]
+fn withdraw_zero_amount_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.withdraw(&0);
+}
+
+#[test]
+#[should_panic(expected = "vault not initialized")]
+fn withdraw_uninitialized_panics() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    client.withdraw(&100);
+}
