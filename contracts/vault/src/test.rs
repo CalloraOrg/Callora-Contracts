@@ -1276,12 +1276,18 @@ fn metadata_remains_after_ownership_transfer() {
     assert_eq!(client.get_metadata(&offering_id), Some(metadata.clone()));
 
     // Old owner should no longer be able to update it
-    let update_res = client.try_update_metadata(&owner, &offering_id, &String::from_str(&env, "new"));
+    // Old owner should no longer be able to update it
+    let update_res =
+        client.try_update_metadata(&owner, &offering_id, &String::from_str(&env, "new"));
     assert!(update_res.is_err());
 
     // New owner should be able to update it
+    // New owner should be able to update it
     client.update_metadata(&new_owner, &offering_id, &String::from_str(&env, "new"));
-    assert_eq!(client.get_metadata(&offering_id), Some(String::from_str(&env, "new")));
+    assert_eq!(
+        client.get_metadata(&offering_id),
+        Some(String::from_str(&env, "new"))
+    );
 }
 
 // ---------------------------------------------------------------------------
