@@ -109,6 +109,11 @@ pub struct BalanceCreditedEvent {
    - `get_admin()`, `get_vault()`, `get_global_pool()`
    - `get_developer_balance(developer)`
    - `get_all_developer_balances()` (admin only)
+     > [!WARNING]
+     > The iteration order of `get_all_developer_balances` is determined by the underlying Soroban `Map` implementation and is not guaranteed to be stable or sorted in a specific way by the contract's business logic. Integrators should not rely on any particular order.
+     > 
+     > [!TIP]
+     > For large sets of developer balances, it is recommended to use **off-chain indexing**. The contract emits `BalanceCreditedEvent` whenever a balance is updated, which can be indexed by off-chain services to provide efficient, sorted, and paginated views of all balances.
 
 4. **Admin Functions**
    - `set_admin()` (admin only)
@@ -229,6 +234,7 @@ CalloraSettlement::receive_payment(
 - **Batch Deduct**: ~200,000 gas for 5 items
 - **Settlement Receive**: ~80,000 gas
 - **Developer Query**: ~20,000 gas
+- **Enumeration**: Gas costs for `get_all_developer_balances()` scale linearly with the number of developers. For very large maps, this call may exceed budget limits.
 
 ## Deployment
 

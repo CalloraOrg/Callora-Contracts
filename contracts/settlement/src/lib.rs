@@ -170,6 +170,16 @@ impl CalloraSettlement {
     }
 
     /// Get all developer balances (for admin use)
+    ///
+    /// # Warning
+    /// This function iterates over all developer balances stored in the contract.
+    /// The iteration order is not guaranteed to be stable and depends on the
+    /// internal implementation of the Soroban `Map`.
+    ///
+    /// # Recommendation
+    /// For systems with many developers, off-chain indexing of `BalanceCreditedEvent`
+    /// is recommended over calling this function, as its gas cost scales linearly
+    /// with the number of entries.
     pub fn get_all_developer_balances(env: Env) -> Vec<DeveloperBalance> {
         let inst = env.storage().instance();
         let balances: Map<Address, i128> = inst

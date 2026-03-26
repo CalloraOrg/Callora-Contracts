@@ -229,4 +229,47 @@ mod settlement_tests {
         let global_pool = client.get_global_pool();
         assert_eq!(global_pool.total_balance, 500i128);
     }
+
+    #[test]
+    fn test_get_all_developer_balances_order_agnostic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        let dev3 = Address::generate(&env);
+
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()));
+        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()));
+        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()));
+
+        let all = client.get_all_developer_balances();
+        assert_eq!(all.len(), 3);
+
+        // We check for existence of all records, but NOT for a specific order.
+        // Soroban's Map iteration order is implementation-defined and should not be relied upon.
+        let mut found_dev1 = false;
+        let mut found_dev2 = false;
+        let mut found_dev3 = false;
+
+        for record in all.iter() {
+            if record.address == dev1 {
+                assert_eq!(record.balance, 100);
+                found_dev1 = true;
+            } else if record.address == dev2 {
+                assert_eq!(record.balance, 200);
+                found_dev2 = true;
+            } else if record.address == dev3 {
+                assert_eq!(record.balance, 300);
+                found_dev3 = true;
+            }
+        }
+
+        assert!(found_dev1 && found_dev2 && found_dev3);
+    }
 }
