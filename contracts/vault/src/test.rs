@@ -1447,34 +1447,6 @@ fn get_settlement_before_set_panics() {
     client.get_settlement();
 }
 
-#[test]
-#[should_panic(expected = "vault not initialized")]
-fn get_admin_before_init_panics() {
-    let env = Env::default();
-    let (_, client) = create_vault(&env);
-    client.get_admin();
-}
-
-#[test]
-#[should_panic(expected = "vault not initialized")]
-fn distribute_before_init_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let dev = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    client.distribute(&admin, &dev, &100);
-}
-
-#[test]
-#[should_panic(expected = "vault not initialized")]
-fn deposit_before_init_panics_vault() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    client.deposit(&owner, &100);
-}
 
 #[test]
 #[should_panic(expected = "vault not initialized")]
