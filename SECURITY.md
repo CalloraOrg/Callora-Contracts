@@ -50,8 +50,21 @@ This document outlines security best practices and checklist items for Callora v
 - [ ] Funds cannot be locked permanently
 - [ ] Minimum deposit requirements enforced
 - [ ] Maximum deduction limits enforced
-- [ ] Revenue pool transfers validated
+- [x] Revenue pool transfers validated
 - [ ] Batch operations respect individual limits
+
+### Revenue Pool Security Assumptions
+
+The Revenue Pool contract (`contracts/revenue_pool`) operates under the following security assumptions and threat models:
+
+- **Malicious Admin:** The `admin` role has the authority to distribute funds and replace the admin address. A compromised or malicious admin could drain the pool's USDC balance.
+  - *Mitigation:* The `admin` should always be a heavily guarded multisig account or a rigorously audited governance contract.
+
+- **Wrong USDC Token Initialization:** The `usdc_token` address is set once during `init`. If initialized with a malicious or incorrect token address, the pool will process the wrong asset.
+  - *Mitigation:* The deployment process must verify the official Stellar USDC (or appropriate wrapped USDC) contract address before initialization. The `init` function guards against re-initialization.
+
+- **Operational Griefing (Balances):** Anyone can effectively transfer USDC to the revenue pool. If an attacker sends unsolicited funds, it increases the `balance()` but does not disrupt the `distribute` logic, as distribution is explicitly controlled by the admin.
+  - *Mitigation:* The pool does not rely on strict balance equality invariants for its core operations, mitigating balance-based operational griefing. Off-chain monitoring should track `receive_payment` events and native token transfers to reconcile expected vs. actual balances.
 
 ### Input Validation
 
