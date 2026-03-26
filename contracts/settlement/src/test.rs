@@ -272,4 +272,79 @@ mod settlement_tests {
 
         assert!(found_dev1 && found_dev2 && found_dev3);
     }
+
+    #[test]
+    #[should_panic(expected = "settlement contract not initialized")]
+    fn test_get_admin_uninitialized_panics() {
+        let env = Env::default();
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.get_admin();
+    }
+
+    #[test]
+    #[should_panic(expected = "settlement contract not initialized")]
+    fn test_get_vault_uninitialized_panics() {
+        let env = Env::default();
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.get_vault();
+    }
+
+    #[test]
+    #[should_panic(expected = "settlement contract not initialized")]
+    fn test_get_global_pool_uninitialized_panics() {
+        let env = Env::default();
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.get_global_pool();
+    }
+
+    #[test]
+    fn test_get_all_balances_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let all = client.get_all_developer_balances();
+        assert_eq!(all.len(), 0);
+    }
+
+    #[test]
+    fn test_get_developer_balance_not_found() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let balance = client.get_developer_balance(&developer);
+        assert_eq!(balance, 0);
+    }
+
+    #[test]
+    fn test_get_all_balances_uninitialized() {
+        let env = Env::default();
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let all = client.get_all_developer_balances();
+        assert_eq!(all.len(), 0);
+    }
+
+    #[test]
+    fn test_get_developer_balance_uninitialized() {
+        let env = Env::default();
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let balance = client.get_developer_balance(&developer);
+        assert_eq!(balance, 0);
+    }
 }
