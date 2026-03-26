@@ -141,7 +141,7 @@ fn set_admin_two_step_transfers_control() {
 
     client.init(&admin, &usdc_address);
     fund_pool(&usdc_admin, &pool_addr, 300);
-    
+
     // Step 1: Nominate
     client.set_admin(&admin, &new_admin);
     // Still old admin
@@ -194,18 +194,28 @@ fn admin_transfer_emits_events() {
     let (usdc, _, _) = create_usdc(&env, &admin);
 
     client.init(&admin, &usdc);
-    
+
     // Step 1 event
     client.set_admin(&admin, &new_admin);
     let events = env.events().all();
     let transfer_started = events.last().unwrap();
-    assert_eq!(transfer_started.1.get(0).unwrap(), Symbol::new(&env, "admin_transfer_started").try_into_val(&env).unwrap());
+    assert_eq!(
+        transfer_started.1.get(0).unwrap(),
+        Symbol::new(&env, "admin_transfer_started")
+            .try_into_val(&env)
+            .unwrap()
+    );
 
     // Step 2 event
     client.claim_admin(&new_admin);
     let events = env.events().all();
     let transfer_completed = events.last().unwrap();
-    assert_eq!(transfer_completed.1.get(0).unwrap(), Symbol::new(&env, "admin_transfer_completed").try_into_val(&env).unwrap());
+    assert_eq!(
+        transfer_completed.1.get(0).unwrap(),
+        Symbol::new(&env, "admin_transfer_completed")
+            .try_into_val(&env)
+            .unwrap()
+    );
 }
 
 #[test]

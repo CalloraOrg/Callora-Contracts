@@ -110,10 +110,8 @@ impl RevenuePool {
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
 
-        env.events().publish(
-            (Symbol::new(&env, "admin_transfer_completed"), pending),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
     }
 
     /// Placeholder: record that payment was received (e.g. from vault).
