@@ -243,7 +243,7 @@ impl CalloraSettlement {
     /// Internal function to require authorized caller (vault or admin)
     fn require_authorized_caller(env: Env, caller: Address) {
         let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env);
+        let admin = Self::get_admin(env.clone());
         if caller != vault && caller != admin {
             panic!("unauthorized: caller must be vault or admin");
         }
