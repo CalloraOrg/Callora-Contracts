@@ -1,7 +1,8 @@
 #[cfg(test)]
 mod settlement_tests {
-    use crate::{CalloraSettlement, CalloraSettlementClient, DeveloperBalance, GlobalPool};
-    use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, Vec};
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Events as _};
+    use soroban_sdk::{Address, Env, Symbol, Vec};
 
     #[test]
     fn test_settlement_initialization() {
@@ -417,6 +418,6 @@ mod settlement_tests {
         let vault = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        client.receive_payment(&vault, &100, &true, &None);
+        client.receive_payment(&vault, &100i128, &true, &None);
     }
 }
