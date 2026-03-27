@@ -1616,3 +1616,91 @@ fn withdraw_uninitialized_panics() {
     let (_, client) = create_vault(&env);
     client.withdraw(&100);
 }
+
+#[test]
+fn deduct_owner_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    let remaining = client.deduct(&owner, &100, &None);
+    assert_eq!(remaining, 900);
+    assert_eq!(client.balance(), 900);
+}
+
+#[test]
+fn deduct_authorized_caller_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let auth_caller = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(auth_caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
+
+    let remaining = client.deduct(&auth_caller, &100, &None);
+    assert_eq!(remaining, 900);
+    assert_eq!(client.balance(), 900);
+}
+
+#[test]
+fn deduct_token_transfer_to_settlement_consistency() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.set_settlement(&owner, &settlement);
+
+    client.deduct(&owner, &250, &None);
+
+    assert_eq!(client.balance(), 750);
+    assert_eq!(usdc_client.balance(&settlement), 250);
+    assert_eq!(usdc_client.balance(&vault_address), 750);
+}
+
+#[test]
+fn deduct_token_transfer_to_revenue_pool_consistency() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let revenue_pool = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &None,
+        &None,
+        &Some(revenue_pool.clone()),
+        &None,
+    );
+
+    client.deduct(&owner, &300, &None);
+
+    assert_eq!(client.balance(), 700);
+    assert_eq!(usdc_client.balance(&revenue_pool), 300);
+    assert_eq!(usdc_client.balance(&vault_address), 700);
+}

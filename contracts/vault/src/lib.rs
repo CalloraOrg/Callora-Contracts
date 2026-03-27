@@ -359,40 +359,70 @@ impl CalloraVault {
     pub fn get_max_deduct(env: Env) -> i128 {
         Self::get_config(env).max_deduct
     }
-
+    /// Deducts USDC from the vault for settlement or revenue pool.
+    /// Can be called by the Owner or the Authorized Caller.
+    ///
+    /// # Arguments
+    /// * `env` - The environment.
+    /// * `caller` - Must be the owner or the authorized caller.
+    /// * `amount` - Amount to deduct.
+    /// * `request_id` - Optional symbol for tracking/idempotency.
+    ///
+    /// # Panics
+    /// * `"amount must be positive"` - if amount <= 0.
+    /// * `"unauthorized caller"` - if caller is neither owner nor authorized_caller.
+    /// * `"insufficient balance"` - if vault tracked balance < amount.
+    /// * `"deduct amount exceeds max_deduct"` - if amount > max_deduct limit.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
         caller.require_auth();
+
+        // Security: Ensure amount is strictly positive to prevent zero-value or negative-value logic bypasses.
         assert!(amount > 0, "amount must be positive");
+
         let config = Self::get_config(env.clone());
+
+        // Security: Enforce configured cap per single deduction to limit exposure from compromised backend services.
         assert!(
             amount <= config.max_deduct,
             "deduct amount exceeds max_deduct"
         );
+
         let mut state = Self::get_state(env.clone());
 
-        // Check authorization: must be either the authorized_caller if set, or the owner.
+        // Security: Strictly allow ONLY the owner or the designated authorized_caller.
+        // This ensures the owner maintains ultimate control while allowing automated services.
         let authorized = match &config.authorized_caller {
             Some(auth_caller) => caller == *auth_caller || caller == config.owner,
             None => caller == config.owner,
         };
         assert!(authorized, "unauthorized caller");
 
+        // Security: Native balance safety – never allow deductions that would result in a negative tracked balance.
         assert!(state.balance >= amount, "insufficient balance");
+
+        // Update internal accounting before token transfer to follow checks-effects-interactions pattern.
         state.balance -= amount;
         env.storage().instance().set(&StorageKey::State, &state);
 
-        // Transfer USDC to settlement contract or revenue pool if configured
+        // Token Movement: Transfer USDC to settlement contract or revenue pool if configured.
+        // We prioritize settlement (global) over revenue_pool (internal).
         if let Some(settlement) = &config.settlement {
             Self::transfer_funds(&env, &config.usdc_token, settlement, amount);
         } else if let Some(revenue_pool) = &config.revenue_pool {
             Self::transfer_funds(&env, &config.usdc_token, revenue_pool, amount);
         }
 
+        // Emit event following EVENT_SCHEMA.md for indexing and transparency.
         let topics = match &request_id {
             Some(rid) => (Symbol::new(&env, "deduct"), caller.clone(), rid.clone()),
-            None => (Symbol::new(&env, "deduct"), caller, Symbol::new(&env, "")),
+            None => (
+                Symbol::new(&env, "deduct"),
+                caller,
+                Symbol::new(&env, ""), // Empty symbol if no request_id provided
+            ),
         };
         env.events().publish(topics, (amount, state.balance));
+
         state.balance
     }
 
