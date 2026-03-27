@@ -121,7 +121,7 @@ impl CalloraSettlement {
                 developer: Some(dev_address.clone()),
             };
             env.events().publish(
-                (Symbol::new(&env, "payment_received"), caller.clone()),
+                (Symbol::new(&env, "payment_received"), caller),
                 payment_event,
             );
             let balance_event = BalanceCreditedEvent {
