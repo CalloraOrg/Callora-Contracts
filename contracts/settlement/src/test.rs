@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod settlement_tests {
-    use crate::{CalloraSettlement, CalloraSettlementClient};
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use crate::{CalloraSettlement, CalloraSettlementClient, DeveloperBalance, GlobalPool};
+    use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, Vec};
 
     #[test]
     fn test_settlement_initialization() {

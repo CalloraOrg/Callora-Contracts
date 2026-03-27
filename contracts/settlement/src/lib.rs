@@ -101,7 +101,7 @@ impl CalloraSettlement {
                 developer: None,
             };
             env.events().publish(
-                (Symbol::new(&env, "payment_received"), caller.clone()),
+                (Symbol::new(&env, "payment_received"), caller),
                 payment_event,
             );
         } else {
@@ -243,7 +243,7 @@ impl CalloraSettlement {
     /// Internal function to require authorized caller (vault or admin)
     fn require_authorized_caller(env: Env, caller: Address) {
         let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env);
         if caller != vault && caller != admin {
             panic!("unauthorized: caller must be vault or admin");
         }
