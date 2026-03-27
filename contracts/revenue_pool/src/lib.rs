@@ -9,9 +9,9 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 /// # Security Assumptions
 /// - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
 /// - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
-/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers 
+/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
 ///   increase balance without breaking logic.
-/// 
+///
 /// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 const ADMIN_KEY: &str = "admin";
 const USDC_KEY: &str = "usdc";
