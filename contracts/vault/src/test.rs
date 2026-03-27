@@ -1729,6 +1729,7 @@ fn get_settlement_before_set_panics() {
     client.get_settlement();
 }
 
+
 #[test]
 fn test_clear_allowed_depositors() {
     let env = Env::default();
@@ -1861,4 +1862,233 @@ fn withdraw_to_zero_succeeds() {
     client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
 
     assert_eq!(client.withdraw(&300), 0);
+// ---------------------------------------------------------------------------
+// set_authorized_caller + deduct authorization matrix tests
+// ---------------------------------------------------------------------------
+
+/// Helper: init a vault with `balance` and no pre-set authorized caller.
+/// Caller must have already called `env.mock_all_auths()`.
+fn init_vault_no_auth_caller<'a>(
+    env: &'a Env,
+    owner: &Address,
+    balance: i128,
+) -> (Address, CalloraVaultClient<'a>) {
+    let (vault_address, client) = create_vault(env);
+    let (usdc, _, usdc_admin) = create_usdc(env, owner);
+    fund_vault(&usdc_admin, &vault_address, balance);
+    client.init(owner, &usdc, &Some(balance), &None, &None, &None, &None);
+    (vault_address, client)
+}
+
+#[test]
+fn set_authorized_caller_stores_address_and_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    env.mock_all_auths();
+    let (vault_address, client) = init_vault_no_auth_caller(&env, &owner, 100);
+
+    client.set_authorized_caller(&owner, &backend);
+
+    // Event emitted: topic ("set_auth_caller", owner), data = backend
+    let events = env.events().all();
+    let ev = events
+        .iter()
+        .find(|e| {
+            !e.1.is_empty() && {
+                let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t == Symbol::new(&env, "set_auth_caller")
+            }
+        })
+        .expect("expected set_auth_caller event");
+
+    assert_eq!(ev.0, vault_address);
+    let topic_owner: Address = ev.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic_owner, owner);
+    let data: Address = ev.2.into_val(&env);
+    assert_eq!(data, backend);
+
+    // Stored correctly (checked after event assertion to avoid resetting event log)
+    let meta = client.get_meta();
+    assert_eq!(meta.authorized_caller, Some(backend));
+}
+
+#[test]
+fn set_authorized_caller_can_be_updated_to_different_address() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend_v1 = Address::generate(&env);
+    let backend_v2 = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 100);
+    client.set_authorized_caller(&owner, &backend_v1);
+    client.set_authorized_caller(&owner, &backend_v2);
+
+    let meta = client.get_meta();
+    assert_eq!(meta.authorized_caller, Some(backend_v2));
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: owner only")]
+fn set_authorized_caller_non_owner_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let backend = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 100);
+
+    client.set_authorized_caller(&attacker, &backend);
+}
+
+#[test]
+#[should_panic(expected = "new_caller must differ from current authorized caller")]
+fn set_authorized_caller_same_address_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 100);
+
+    client.set_authorized_caller(&owner, &backend);
+    // Setting the same address again must be rejected
+    client.set_authorized_caller(&owner, &backend);
+}
+
+#[test]
+#[should_panic(expected = "new_caller must not be the vault contract itself")]
+fn set_authorized_caller_vault_address_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    env.mock_all_auths();
+    let (vault_address, client) = init_vault_no_auth_caller(&env, &owner, 100);
+
+    client.set_authorized_caller(&owner, &vault_address);
+}
+
+// --- Deduct authorization matrix ---
+
+#[test]
+fn deduct_matrix_owner_is_allowed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    // Owner can deduct even without an authorized_caller set
+    let remaining = client.deduct(&owner, &100, &None);
+    assert_eq!(remaining, 400);
+}
+
+#[test]
+fn deduct_matrix_authorized_caller_is_allowed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    client.set_authorized_caller(&owner, &backend);
+
+    let remaining = client.deduct(&backend, &150, &None);
+    assert_eq!(remaining, 350);
+}
+
+#[test]
+fn deduct_matrix_other_address_is_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    client.set_authorized_caller(&owner, &backend);
+
+    let result = client.try_deduct(&stranger, &50, &None);
+    assert!(result.is_err(), "stranger must be rejected from deduct");
+}
+
+#[test]
+fn deduct_matrix_no_authorized_caller_set_non_owner_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    // No authorized_caller configured — only owner may deduct
+    let result = client.try_deduct(&stranger, &50, &None);
+    assert!(
+        result.is_err(),
+        "non-owner must be rejected when no authorized_caller is set"
+    );
+}
+
+#[test]
+fn batch_deduct_matrix_owner_is_allowed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 100,
+            request_id: None
+        },
+        DeductItem {
+            amount: 50,
+            request_id: None
+        },
+    ];
+    let remaining = client.batch_deduct(&owner, &items);
+    assert_eq!(remaining, 350);
+}
+
+#[test]
+fn batch_deduct_matrix_authorized_caller_is_allowed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    client.set_authorized_caller(&owner, &backend);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 200,
+            request_id: None
+        },
+    ];
+    let remaining = client.batch_deduct(&backend, &items);
+    assert_eq!(remaining, 300);
+}
+
+#[test]
+fn batch_deduct_matrix_other_address_is_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let backend = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    env.mock_all_auths();
+    let (_, client) = init_vault_no_auth_caller(&env, &owner, 500);
+
+    client.set_authorized_caller(&owner, &backend);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 50,
+            request_id: None
+        },
+    ];
+    let result = client.try_batch_deduct(&stranger, &items);
+    assert!(
+        result.is_err(),
+        "stranger must be rejected from batch_deduct"
+    );
 }

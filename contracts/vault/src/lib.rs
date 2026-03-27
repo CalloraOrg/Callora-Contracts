@@ -325,19 +325,45 @@ impl CalloraVault {
         }
     }
 
-    /// Sets the authorized caller permitted to trigger deductions.
-    /// Can only be called by the Owner.
-    pub fn set_authorized_caller(env: Env, caller: Address) {
-        let mut meta = Self::get_meta(env.clone());
-        meta.owner.require_auth();
-
-        meta.authorized_caller = Some(caller.clone());
-        env.storage().instance().set(&StorageKey::Meta, &meta);
-
-        env.events().publish(
-            (Symbol::new(&env, "set_auth_caller"), meta.owner.clone()),
-            caller,
+    /// Sets the address permitted to invoke deduct flows alongside the owner.
+    ///
+    /// Only the vault owner may call this function. The new authorized caller must
+    /// differ from the address already stored; passing the same address is rejected
+    /// as a meaningless no-op. Passing the vault contract's own address is also
+    /// rejected.
+    ///
+    /// # Arguments
+    /// * `env`        – The environment running the contract.
+    /// * `owner`      – Must be the current vault owner; must authorize this call.
+    /// * `new_caller` – Address to grant deduction rights.
+    ///
+    /// # Panics
+    /// * `"unauthorized: owner only"` – if `owner` is not the vault owner.
+    /// * `"new_caller must differ from current authorized caller"` – if `new_caller`
+    ///   is already the stored authorized caller (meaningless update).
+    /// * `"new_caller must not be the vault contract itself"` – if `new_caller` is
+    ///   the vault's own contract address.
+    ///
+    /// # Events
+    /// Emits topic `("set_auth_caller", owner)` with data `new_caller` on success.
+    pub fn set_authorized_caller(env: Env, owner: Address, new_caller: Address) {
+        owner.require_auth();
+        Self::require_owner(env.clone(), owner.clone());
+        assert!(
+            new_caller != env.current_contract_address(),
+            "new_caller must not be the vault contract itself"
         );
+        let mut meta = Self::get_meta(env.clone());
+        if let Some(ref current) = meta.authorized_caller {
+            assert!(
+                new_caller != *current,
+                "new_caller must differ from current authorized caller"
+            );
+        }
+        meta.authorized_caller = Some(new_caller.clone());
+        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.events()
+            .publish((Symbol::new(&env, "set_auth_caller"), owner), new_caller);
     }
 
     /// Emergency pause — blocks `deposit`, `deduct`, and `batch_deduct`.

@@ -75,3 +75,29 @@ The `transfer_ownership` function allows the current owner to hand over full con
 ### Admin Transition
 
 The `set_admin` function allows the current admin (typically the owner initially) to delegate operational control (like settlement and distribution) to a dedicated service account.
+
+---
+
+## Migration: Owner-Only Metering → Backend-Signed Metering
+
+### Background
+
+In the initial deployment model, only the vault owner could invoke `deduct` and `batch_deduct`. This required the owner's key to be present in the metering path, which is impractical for automated, high-frequency backend services.
+
+### Current Model
+
+The `set_authorized_caller` function allows the owner to designate a single backend address (e.g., a matching engine or metering service) that may call deduct flows alongside the owner. Both the owner and the authorized caller are permitted; all other addresses are rejected.
+
+### Migration Steps
+
+1. Deploy or upgrade the vault contract containing `set_authorized_caller`.
+2. The owner calls `set_authorized_caller(owner, backend_address)` to register the backend signing key.
+3. The backend service signs and submits `deduct` / `batch_deduct` transactions using its own key.
+4. The owner's key is no longer required in the hot metering path.
+
+### Operational Notes
+
+- Only the owner may call `set_authorized_caller`; the backend cannot self-register.
+- Rotating the backend key requires calling `set_authorized_caller` again with the new address. The previous address is replaced atomically.
+- Every change emits a `set_auth_caller` event (topics: `("set_auth_caller", owner)`, data: `new_caller`) for audit purposes.
+- Passing the vault contract's own address or the currently stored address as `new_caller` is rejected.
