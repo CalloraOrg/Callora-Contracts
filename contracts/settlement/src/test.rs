@@ -1,8 +1,7 @@
 #[cfg(test)]
-mod settlement_tests {
-    use super::*;
-    use soroban_sdk::testutils::{Address as _, Events as _};
-    use soroban_sdk::{Address, Env, Symbol, Vec};
+use super::*;
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
     #[test]
     fn test_settlement_initialization() {
