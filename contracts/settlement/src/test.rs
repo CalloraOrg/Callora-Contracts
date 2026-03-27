@@ -431,4 +431,127 @@ mod settlement_tests {
             }
         }
     }
+
+    // ── event shape tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_payment_received_event_to_pool() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.receive_payment(&vault, &1000i128, &true, &None);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "payment_received")
+                }
+            })
+            .expect("expected payment_received event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, vault);
+
+        let data: crate::PaymentReceivedEvent = ev.2.into_val(&env);
+        assert_eq!(data.from_vault, vault);
+        assert_eq!(data.amount, 1000i128);
+        assert!(data.to_pool);
+        assert!(data.developer.is_none());
+    }
+
+    #[test]
+    fn test_payment_received_and_balance_credited_events_to_developer() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()));
+
+        let events = env.events().all();
+
+        let pr_ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "payment_received")
+                }
+            })
+            .expect("expected payment_received event");
+
+        let pr_data: crate::PaymentReceivedEvent = pr_ev.2.into_val(&env);
+        assert!(!pr_data.to_pool);
+        assert_eq!(pr_data.developer, Some(developer.clone()));
+
+        let bc_ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "balance_credited")
+                }
+            })
+            .expect("expected balance_credited event");
+
+        let topic1: Address = bc_ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let bc_data: crate::BalanceCreditedEvent = bc_ev.2.into_val(&env);
+        assert_eq!(bc_data.developer, developer);
+        assert_eq!(bc_data.amount, 500i128);
+        assert_eq!(bc_data.new_balance, 500i128);
+    }
+
+    #[test]
+    fn test_balance_credited_new_balance_is_cumulative() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()));
+        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()));
+
+        // grab the last balance_credited event
+        let events = env.events().all();
+        let bc_ev = events
+            .iter()
+            .rev()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "balance_credited")
+                }
+            })
+            .expect("expected balance_credited event");
+
+        let bc_data: crate::BalanceCreditedEvent = bc_ev.2.into_val(&env);
+        assert_eq!(bc_data.new_balance, 500i128);
+    }
 }

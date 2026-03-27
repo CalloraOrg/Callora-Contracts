@@ -74,19 +74,19 @@ impl CalloraSettlement {
         inst.set(&Symbol::new(&env, GLOBAL_POOL_KEY), &global_pool);
     }
 
-    /// Receive payment from vault and credit to pool or developer balance
+    /// Receive payment from vault and credit to pool or developer balance.
     ///
     /// # Arguments
     /// * `caller` - Must be authorized vault address or admin
-    /// * `amount` - Payment amount in USDC micro-units
-    /// * `to_pool` - If true, credit global pool; if false, credit caller's developer balance
-    /// * `developer` - Optional developer address (required when to_pool=false)
+    /// * `amount` - Payment amount in USDC micro-units; must be > 0
+    /// * `to_pool` - If true, credit global pool; if false, credit a specific developer
+    /// * `developer` - Required when `to_pool=false`; ignored when `to_pool=true`
     ///
     /// # Access Control
-    /// Only the registered vault address or admin can call this function
+    /// Only the registered vault address or admin can call this function.
     ///
     /// # Events
-    /// Emits PaymentReceivedEvent and BalanceCreditedEvent
+    /// Always emits `payment_received`. Also emits `balance_credited` when `to_pool=false`.
     pub fn receive_payment(
         env: Env,
         caller: Address,
@@ -94,6 +94,7 @@ impl CalloraSettlement {
         to_pool: bool,
         developer: Option<Address>,
     ) {
+        caller.require_auth();
         Self::require_authorized_caller(env.clone(), caller.clone());
         if amount <= 0 {
             panic!("amount must be positive");
@@ -101,18 +102,20 @@ impl CalloraSettlement {
         let inst = env.storage().instance();
         if to_pool {
             let mut global_pool = Self::get_global_pool(env.clone());
-            global_pool.total_balance += amount;
+            global_pool.total_balance = global_pool
+                .total_balance
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("pool balance overflow"));
             global_pool.last_updated = env.ledger().timestamp();
             inst.set(&Symbol::new(&env, GLOBAL_POOL_KEY), &global_pool);
-            let payment_event = PaymentReceivedEvent {
-                from_vault: caller.clone(),
-                amount,
-                to_pool: true,
-                developer: None,
-            };
             env.events().publish(
                 (Symbol::new(&env, "payment_received"), caller.clone()),
-                payment_event,
+                PaymentReceivedEvent {
+                    from_vault: caller.clone(),
+                    amount,
+                    to_pool: true,
+                    developer: None,
+                },
             );
         } else {
             let dev_address = developer
@@ -121,27 +124,27 @@ impl CalloraSettlement {
                 .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
                 .unwrap_or_else(|| Map::new(&env));
             let current_balance = balances.get(dev_address.clone()).unwrap_or(0);
-            let new_balance = current_balance + amount;
+            let new_balance = current_balance
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("developer balance overflow"));
             balances.set(dev_address.clone(), new_balance);
             inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &balances);
-            let payment_event = PaymentReceivedEvent {
-                from_vault: caller.clone(),
-                amount,
-                to_pool: false,
-                developer: Some(dev_address.clone()),
-            };
             env.events().publish(
                 (Symbol::new(&env, "payment_received"), caller.clone()),
-                payment_event,
+                PaymentReceivedEvent {
+                    from_vault: caller.clone(),
+                    amount,
+                    to_pool: false,
+                    developer: Some(dev_address.clone()),
+                },
             );
-            let balance_event = BalanceCreditedEvent {
-                developer: dev_address.clone(),
-                amount,
-                new_balance,
-            };
             env.events().publish(
-                (Symbol::new(&env, "balance_credited"), dev_address),
-                balance_event,
+                (Symbol::new(&env, "balance_credited"), dev_address.clone()),
+                BalanceCreditedEvent {
+                    developer: dev_address,
+                    amount,
+                    new_balance,
+                },
             );
         }
     }

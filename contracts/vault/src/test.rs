@@ -356,6 +356,28 @@ fn owner_can_set_and_clear_allowed_depositor() {
 }
 
 #[test]
+fn set_allowed_depositor_duplicate_is_ignored() {
+    // Adding the same depositor twice should not create a duplicate entry
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+    client.set_allowed_depositor(&owner, &Some(depositor.clone())); // duplicate — should be a no-op
+
+    // depositor can still deposit exactly once (list not doubled)
+    usdc_admin.mint(&depositor, &50);
+    usdc_client.approve(&depositor, &vault_address, &50, &1000);
+    assert_eq!(client.deposit(&depositor, &50), 150);
+}
+
+#[test]
 #[should_panic(expected = "unauthorized: owner only")]
 fn non_owner_cannot_set_allowed_depositor() {
     let env = Env::default();
