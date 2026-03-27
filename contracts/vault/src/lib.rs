@@ -27,6 +27,21 @@
 //! - Allowed depositors are trusted addresses (typically backend services).
 //! - Access can be revoked at any time by the owner.
 //! - All deposit attempts are authenticated against the caller's address.
+//!
+//! ## Pause / Circuit Breaker
+//!
+//! The vault exposes an emergency pause mechanism that lets the **Admin** or **Owner**
+//! halt sensitive write operations without losing funds:
+//!
+//! - **Blocked while paused**: `deposit`, `deduct`, `batch_deduct`.
+//! - **Allowed while paused**: `withdraw`, `withdraw_to`, `distribute` — these are
+//!   recovery paths that must remain available so the owner can always reclaim funds
+//!   during an incident.
+//!
+//! Toggle functions:
+//! - `pause(caller)`   – blocks sensitive operations; emits `vault_paused`.
+//! - `unpause(caller)` – restores normal operation; emits `vault_unpaused`.
+//! - `is_paused()`     – read-only state query; returns `false` before first `pause` call.
 
 #![no_std]
 
@@ -325,10 +340,67 @@ impl CalloraVault {
         );
     }
 
+    /// Emergency pause — blocks `deposit`, `deduct`, and `batch_deduct`.
+    ///
+    /// Withdrawals (`withdraw`, `withdraw_to`) and `distribute` remain available
+    /// so the owner can always recover funds during an incident.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault Admin or Owner.
+    ///
+    /// # Panics
+    /// * `"unauthorized: caller is not admin or owner"` – if caller is neither.
+    /// * `"vault already paused"`                       – if already in paused state.
+    ///
+    /// # Events
+    /// Emits topic `("vault_paused", caller)` with no data on success.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin_or_owner(env.clone(), &caller);
+        assert!(!Self::is_paused(env.clone()), "vault already paused");
+        env.storage().instance().set(&StorageKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "vault_paused"), caller), ());
+    }
+
+    /// Emergency unpause — restores `deposit`, `deduct`, and `batch_deduct`.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault Admin or Owner.
+    ///
+    /// # Panics
+    /// * `"unauthorized: caller is not admin or owner"` – if caller is neither.
+    /// * `"vault not paused"`                           – if not currently paused.
+    ///
+    /// # Events
+    /// Emits topic `("vault_unpaused", caller)` with no data on success.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin_or_owner(env.clone(), &caller);
+        assert!(Self::is_paused(env.clone()), "vault not paused");
+        env.storage().instance().set(&StorageKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
+    }
+
+    /// Returns `true` if the vault is currently paused, `false` otherwise.
+    ///
+    /// Will return `false` before `pause` is ever called.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Deposits USDC into the vault.
     /// Can be called by the Owner or any Allowed Depositor.
+    ///
+    /// # Panics
+    /// * `"vault is paused"` – if the circuit breaker is active.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
+        Self::require_not_paused(env.clone());
         assert!(amount > 0, "amount must be positive");
         assert!(
             Self::is_authorized_depositor(env.clone(), caller.clone()),
@@ -370,8 +442,12 @@ impl CalloraVault {
 
     /// Deducts USDC from the vault for settlement or revenue pool.
     /// Can be called by the Owner or the Authorized Caller.
+    ///
+    /// # Panics
+    /// * `"vault is paused"` – if the circuit breaker is active.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
         caller.require_auth();
+        Self::require_not_paused(env.clone());
         assert!(amount > 0, "amount must be positive");
         let max_deduct = Self::get_max_deduct(env.clone());
         assert!(amount <= max_deduct, "deduct amount exceeds max_deduct");
@@ -691,6 +767,25 @@ impl CalloraVault {
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
         let usdc = token::Client::new(env, usdc_token);
         usdc.transfer(&env.current_contract_address(), to, &amount);
+    }
+
+    /// Panic with `"vault is paused"` when the circuit breaker is active.
+    fn require_not_paused(env: Env) {
+        assert!(!Self::is_paused(env), "vault is paused");
+    }
+
+    /// Panic with an auth error unless `caller` is the Admin **or** the Owner.
+    fn require_admin_or_owner(env: Env, caller: &Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("vault not initialized");
+        let meta = Self::get_meta(env);
+        assert!(
+            *caller == admin || *caller == meta.owner,
+            "unauthorized: caller is not admin or owner"
+        );
     }
 }
 
