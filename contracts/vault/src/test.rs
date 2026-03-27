@@ -1208,6 +1208,108 @@ fn unauthorized_cannot_set_metadata() {
     client.set_metadata(&unauthorized, &offering_id, &metadata);
 }
 
+#[test]
+fn set_metadata_max_length_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "a".repeat(64).as_str());
+    let metadata = String::from_str(&env, "b".repeat(256).as_str());
+
+    client.set_metadata(&owner, &offering_id, &metadata);
+    assert_eq!(client.get_metadata(&offering_id), Some(metadata));
+}
+
+#[test]
+#[should_panic(expected = "metadata exceeds max length")]
+fn set_metadata_exceeds_length_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "off-1");
+    let metadata = String::from_str(&env, "b".repeat(257).as_str());
+
+    client.set_metadata(&owner, &offering_id, &metadata);
+}
+
+#[test]
+#[should_panic(expected = "offering_id exceeds max length")]
+fn set_offering_id_exceeds_length_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "a".repeat(65).as_str());
+    let metadata = String::from_str(&env, "meta");
+
+    client.set_metadata(&owner, &offering_id, &metadata);
+}
+
+#[test]
+fn update_metadata_max_length_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "offering-update");
+    let metadata = String::from_str(&env, "b".repeat(256).as_str());
+
+    client.set_metadata(&owner, &offering_id, &String::from_str(&env, "old"));
+    client.update_metadata(&owner, &offering_id, &metadata);
+    assert_eq!(client.get_metadata(&offering_id), Some(metadata));
+}
+
+#[test]
+fn metadata_remains_after_ownership_transfer() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "off-transfer");
+    let metadata = String::from_str(&env, "ipfs://cid123");
+    client.set_metadata(&owner, &offering_id, &metadata);
+
+    client.transfer_ownership(&new_owner);
+
+    // Metadata should still be accessible
+    assert_eq!(client.get_metadata(&offering_id), Some(metadata.clone()));
+
+    // Old owner should no longer be able to update it
+    let update_res =
+        client.try_update_metadata(&owner, &offering_id, &String::from_str(&env, "new"));
+    assert!(update_res.is_err());
+
+    // New owner should be able to update it
+    client.update_metadata(&new_owner, &offering_id, &String::from_str(&env, "new"));
+    assert_eq!(
+        client.get_metadata(&offering_id),
+        Some(String::from_str(&env, "new"))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Full lifecycle test
 // ---------------------------------------------------------------------------
@@ -1311,7 +1413,7 @@ fn init_with_revenue_pool_stores_address() {
     client.init(
         &owner,
         &usdc,
-        &Some(500),
+        &Some(500), &None,
         &None,
         &None,
         &Some(revenue_pool.clone()),
@@ -1429,32 +1531,70 @@ fn get_settlement_before_set_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
+    env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.get_settlement();
 }
 
 #[test]
-#[should_panic(expected = "no ownership transfer pending")]
-fn accept_ownership_fails_if_not_nominated() {
+fn test_clear_allowed_depositors() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
+    let depositor = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.accept_ownership();
+
+    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+    client.set_allowed_depositor(&owner, &None);
+
+    usdc_admin.mint(&depositor, &50);
+    usdc_client.approve(&depositor, &vault_address, &50, &1000);
+    let result = client.try_deposit(&depositor, &50);
+    assert!(result.is_err());
 }
 
 #[test]
-#[should_panic(expected = "no admin transfer pending")]
-fn accept_admin_fails_if_not_nominated() {
+fn test_set_authorized_caller() {
     let env = Env::default();
     let owner = Address::generate(&env);
+    let auth_caller = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.accept_admin();
+
+    client.set_authorized_caller(&auth_caller);
+    let meta = client.get_meta();
+    assert_eq!(meta.authorized_caller, Some(auth_caller));
+}
+
+#[test]
+fn test_deduct_with_settlement_success() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc_address,
+        &Some(1000),
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    client.set_settlement(&owner, &settlement);
+
+    client.deduct(&owner, &300, &None);
+
+    assert_eq!(client.balance(), 700);
+    assert_eq!(usdc_client.balance(&settlement), 300);
 }

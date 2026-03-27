@@ -163,6 +163,9 @@ impl CalloraSettlement {
 
     /// Get developer balance
     pub fn get_developer_balance(env: Env, developer: Address) -> i128 {
+        if !env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
+            panic!("settlement contract not initialized");
+        }
         let inst = env.storage().instance();
         let balances: Map<Address, i128> = inst
             .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
@@ -172,6 +175,9 @@ impl CalloraSettlement {
 
     /// Get all developer balances (for admin use)
     pub fn get_all_developer_balances(env: Env) -> Vec<DeveloperBalance> {
+        if !env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
+            panic!("settlement contract not initialized");
+        }
         let inst = env.storage().instance();
         let balances: Map<Address, i128> = inst
             .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
@@ -246,3 +252,6 @@ impl CalloraSettlement {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_views;

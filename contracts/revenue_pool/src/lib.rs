@@ -56,15 +56,19 @@ impl RevenuePool {
             .expect("revenue pool not initialized")
     }
 
-    /// Nominates a new admin. The nominee must call `accept_admin` to finalize.
+    /// Initiate replacement of the current admin. Only the existing admin may call this.
+    /// The new admin must call `claim_admin` to complete the transfer.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
     /// * `caller` - Must be the current admin.
-    /// * `new_admin` - Address of the new admin to be nominated.
+    /// * `new_admin` - Address of the proposed new admin.
     ///
     /// # Panics
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
+    ///
+    /// # Events
+    /// Emits an `admin_transfer_started` event with the `current_admin` as a topic and `new_admin` as data.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -75,38 +79,47 @@ impl RevenuePool {
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
 
         env.events().publish(
-            (Symbol::new(&env, "admin_nominated"), current, new_admin),
-            (),
+            (Symbol::new(&env, "admin_transfer_started"), current),
+            new_admin,
         );
     }
 
-    /// Accepts the admin role. Only the pending admin may call this.
+    /// Complete the admin transfer. Only the pending admin may call this.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the pending admin set via `set_admin`.
     ///
     /// # Panics
-    /// * If no admin transfer is pending (`"no admin transfer pending"`).
-    pub fn accept_admin(env: Env) {
+    /// * If no pending admin is set (`"no pending admin"`).
+    /// * If the caller is not the pending admin (`"unauthorized: caller is not pending admin"`).
+    ///
+    /// # Events
+    /// Emits an `admin_transfer_completed` event with the `new_admin` as a topic.
+    pub fn claim_admin(env: Env, caller: Address) {
+        caller.require_auth();
         let inst = env.storage().instance();
         let pending: Address = inst
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
-            .expect("no admin transfer pending");
-        pending.require_auth();
+            .expect("no pending admin");
 
-        let current = Self::get_admin(env.clone());
+        if caller != pending {
+            panic!("unauthorized: caller is not pending admin");
+        }
+
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
 
-        env.events().publish(
-            (Symbol::new(&env, "admin_accepted"), current, pending),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
     }
 
-    /// Placeholder: record that payment was received (e.g. from vault).
+    /// **Note**: This function is an **event-only helper**. It is **not** a substitute
+    /// for real token settlement and does **not** move any tokens. It exists purely
+    /// for event emission / indexer alignment when configured.
     /// In practice, USDC is received when the vault (or any address) transfers tokens
-    /// to this contract's address; no separate "receive" call is required.
+    /// to this contract's address; no separate "receive_payment" call is required
+    /// for the transfer to succeed.
     ///
     /// This function can be used to emit an event for indexers when the backend
     /// wants to log that a payment was credited from the vault.
@@ -118,7 +131,7 @@ impl RevenuePool {
     /// * `from_vault` - Optional; true if the source was the vault.
     ///
     /// # Panics
-    /// * If the caller does not have the correct authorization.
+    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
     /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of `(amount, from_vault)` as data.
@@ -257,3 +270,6 @@ impl RevenuePool {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_balance;
