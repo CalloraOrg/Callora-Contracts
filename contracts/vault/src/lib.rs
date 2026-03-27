@@ -221,7 +221,7 @@ impl CalloraVault {
     /// Can only be called by the Owner.
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
         caller.require_auth();
-        Self::require_owner(env.clone(), caller.clone());
+        Self::require_owner(env.clone(), caller);
         match depositor {
             Some(addr) => {
                 let mut allowed: Vec<Address> = env
@@ -334,7 +334,7 @@ impl CalloraVault {
             Some(rid) => (Symbol::new(&env, "deduct"), caller.clone(), rid.clone()),
             None => (
                 Symbol::new(&env, "deduct"),
-                caller.clone(),
+                caller,
                 Symbol::new(&env, ""),
             ),
         };
