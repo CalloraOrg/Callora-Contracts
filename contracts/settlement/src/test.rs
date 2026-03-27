@@ -411,18 +411,12 @@ mod settlement_tests {
     }
 
     #[test]
+    #[should_panic(expected = "settlement contract not initialized")]
     fn test_receive_payment_uninitialized() {
         let env = Env::default();
         let vault = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-
-        // This should panic due to uninitialized admin/vault
-        let result = env.as_contract(&addr, || {
-            CalloraSettlement::receive_payment(env.clone(), vault.clone(), 100, true, None)
-        });
-        // Since we are using an expected panic in the original test, let's stick to that pattern
-        // if we were to wrap it, but the existing test used should_panic.
-        // We'll just fix the existing test or leave it if it works.
+        client.receive_payment(&vault, &100, &true, &None);
     }
 }
