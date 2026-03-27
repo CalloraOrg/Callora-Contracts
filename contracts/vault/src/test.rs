@@ -86,11 +86,10 @@ fn init_sets_owner_and_min_deposit() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    let meta = client.init(&owner, &usdc, &Some(500), &None, &Some(10), &None, &None);
+    let config = client.init(&owner, &usdc, &Some(500), &None, &Some(10), &None, &None);
 
-    assert_eq!(meta.balance, 500);
-    assert_eq!(meta.owner, owner);
-    assert_eq!(meta.min_deposit, 10);
+    assert_eq!(config.owner, owner);
+    assert_eq!(config.min_deposit, 10);
     assert_eq!(client.balance(), 500);
     assert_eq!(client.get_admin(), owner);
 }
@@ -125,9 +124,9 @@ fn get_meta_returns_correct_state() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
-    let meta = client.get_meta();
-    assert_eq!(meta.balance, 500);
-    assert_eq!(meta.owner, owner);
+    let config = client.get_config();
+    assert_eq!(client.balance(), 500);
+    assert_eq!(config.owner, owner);
     assert_eq!(client.balance(), 500);
 }
 
@@ -135,7 +134,10 @@ fn get_meta_returns_correct_state() {
 fn get_meta_before_init_fails() {
     let env = Env::default();
     let (_, client) = create_vault(&env);
-    assert!(client.try_get_meta().is_err(), "expected error before init");
+    assert!(
+        client.try_get_config().is_err(),
+        "expected error before init"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -967,8 +969,8 @@ fn transfer_ownership_succeeds() {
 
     client.transfer_ownership(&new_owner);
 
-    let meta = client.get_meta();
-    assert_eq!(meta.owner, new_owner);
+    let config = client.get_config();
+    assert_eq!(config.owner, new_owner);
 }
 
 #[test]
@@ -1242,7 +1244,7 @@ fn vault_full_lifecycle() {
 
     // Init with 500 balance, min_deposit = 10
     fund_vault(&usdc_admin, &vault_address, 500);
-    let meta = client.init(
+    let config = client.init(
         &owner,
         &usdc,
         &Some(500),
@@ -1251,8 +1253,8 @@ fn vault_full_lifecycle() {
         &None,
         &None,
     );
-    assert_eq!(meta.balance, 500);
-    assert_eq!(meta.owner, owner);
+    assert_eq!(client.balance(), 500);
+    assert_eq!(config.owner, owner);
     assert_eq!(client.balance(), 500);
     assert_eq!(client.get_admin(), owner);
 
@@ -1302,10 +1304,10 @@ fn vault_full_lifecycle() {
     assert_eq!(after_withdraw, 350);
     assert_eq!(client.balance(), 350);
 
-    let final_meta = client.get_meta();
-    assert_eq!(final_meta.balance, 350);
-    assert_eq!(final_meta.owner, owner);
-    assert_eq!(final_meta.min_deposit, 10);
+    let final_config = client.get_config();
+    assert_eq!(client.balance(), 350);
+    assert_eq!(final_config.owner, owner);
+    assert_eq!(final_config.min_deposit, 10);
 }
 
 // ---------------------------------------------------------------------------
