@@ -50,9 +50,8 @@ mod settlement_tests {
             assert!(inst.has(&Symbol::new(&env, "developer_balances")));
             assert!(inst.has(&Symbol::new(&env, "global_pool")));
 
-            let balances: Map<Address, i128> = inst
-                .get(&Symbol::new(&env, "developer_balances"))
-                .unwrap();
+            let balances: Map<Address, i128> =
+                inst.get(&Symbol::new(&env, "developer_balances")).unwrap();
             assert_eq!(balances.len(), 0);
         });
 
