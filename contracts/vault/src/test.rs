@@ -1447,7 +1447,6 @@ fn get_settlement_before_set_panics() {
     client.get_settlement();
 }
 
-
 #[test]
 #[should_panic(expected = "vault not initialized")]
 fn deduct_before_init_panics() {
@@ -1543,7 +1542,13 @@ fn batch_deduct_unauthorized_caller_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
     env.mock_all_auths();
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
-    let items = soroban_sdk::vec![&env, DeductItem { amount: 100, request_id: None }];
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 100,
+            request_id: None
+        }
+    ];
     client.batch_deduct(&attacker, &items);
 }
 
@@ -1568,7 +1573,13 @@ fn batch_deduct_invalid_amount_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
     env.mock_all_auths();
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
-    let items = soroban_sdk::vec![&env, DeductItem { amount: 0, request_id: None }];
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 0,
+            request_id: None
+        }
+    ];
     client.batch_deduct(&owner, &items);
 }
 

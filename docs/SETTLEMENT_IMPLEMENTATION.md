@@ -110,14 +110,20 @@ pub struct BalanceCreditedEvent {
    - `get_developer_balance(developer)`
    - `get_all_developer_balances()` (admin only)
      > [!WARNING]
-     > The iteration order of `get_all_developer_balances` is determined by the underlying Soroban `Map` implementation and is not guaranteed to be stable or sorted in a specific way by the contract's business logic. Integrators should not rely on any particular order.
+     > **Map Iteration Behavior**: The iteration order of `get_all_developer_balances` is non-deterministic. It depends on the underlying Soroban `Map` implementation and is not guaranteed to be stable or sorted. Integrators **MUST NOT** rely on any particular order for business logic or UI rendering.
      > 
-     > [!TIP]
-     > For large sets of developer balances, it is recommended to use **off-chain indexing**. The contract emits `BalanceCreditedEvent` whenever a balance is updated, which can be indexed by off-chain services to provide efficient, sorted, and paginated views of all balances.
+     > [!IMPORTANT]
+     > **Safe Usage Patterns**:
+     > - **Off-chain Indexing**: For large sets of developer balances, use off-chain indexing services that monitor `BalanceCreditedEvent`. This allows for efficient, sorted, and paginated views.
+     > - **Deterministic Comparisons**: When testing or comparing results, always use order-agnostic comparisons (e.g., sorting the results or using sets).
+     > - **UI Rendering**: If a specific order is required for the UI, sort the data on the client side after fetching.
 
 4. **Admin Functions**
    - `set_admin()` (admin only)
    - `set_vault()` (admin only)
+   - `remove_developer_balance(developer)` (admin only)
+     - Removes a developer's balance record from the contract storage.
+     - Useful for cleanup or administrative adjustments.
 
 ## Security Features
 

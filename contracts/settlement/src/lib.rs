@@ -173,13 +173,17 @@ impl CalloraSettlement {
     ///
     /// # Warning
     /// This function iterates over all developer balances stored in the contract.
-    /// The iteration order is not guaranteed to be stable and depends on the
-    /// internal implementation of the Soroban `Map`.
+    /// **Important**: Map iteration order is non-deterministic and should not be relied upon.
+    /// The order may change between ledger versions or internal implementation updates.
     ///
     /// # Recommendation
     /// For systems with many developers, off-chain indexing of `BalanceCreditedEvent`
     /// is recommended over calling this function, as its gas cost scales linearly
-    /// with the number of entries.
+    /// with the number of entries and iteration order is unstable.
+    ///
+    /// # Safe Usage
+    /// If you need a deterministic result, sort the returned `Vec` off-chain or
+    /// within your calling code.
     pub fn get_all_developer_balances(env: Env) -> Vec<DeveloperBalance> {
         let inst = env.storage().instance();
         let balances: Map<Address, i128> = inst
@@ -190,6 +194,26 @@ impl CalloraSettlement {
             result.push_back(DeveloperBalance { address, balance });
         }
         result
+    }
+
+    /// Remove a developer balance record (admin only)
+    ///
+    /// # Arguments
+    /// * `caller` - Must be admin
+    /// * `developer` - Developer address to remove
+    pub fn remove_developer_balance(env: Env, caller: Address, developer: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        let inst = env.storage().instance();
+        let mut balances: Map<Address, i128> = inst
+            .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+            .unwrap_or_else(|| Map::new(&env));
+
+        balances.remove(developer);
+        inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &balances);
     }
 
     /// Update admin address (admin only)
