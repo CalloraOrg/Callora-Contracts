@@ -332,11 +332,7 @@ impl CalloraVault {
 
         let topics = match &request_id {
             Some(rid) => (Symbol::new(&env, "deduct"), caller.clone(), rid.clone()),
-            None => (
-                Symbol::new(&env, "deduct"),
-                caller,
-                Symbol::new(&env, ""),
-            ),
+            None => (Symbol::new(&env, "deduct"), caller, Symbol::new(&env, "")),
         };
         env.events().publish(topics, (amount, meta.balance));
         meta.balance

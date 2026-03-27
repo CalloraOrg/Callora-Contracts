@@ -113,7 +113,10 @@ impl CalloraSettlement {
             let current_balance = balances.get(dev_address.clone()).unwrap_or(0);
             let new_balance = current_balance + amount;
             let updated_balances = balances.set(dev_address.clone(), new_balance);
-            inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &updated_balances);
+            inst.set(
+                &Symbol::new(&env, DEVELOPER_BALANCES_KEY),
+                &updated_balances,
+            );
             let payment_event = PaymentReceivedEvent {
                 from_vault: caller.clone(),
                 amount,
@@ -213,7 +216,10 @@ impl CalloraSettlement {
             .unwrap_or_else(|| Map::new(&env));
 
         let updated_balances = balances.remove(developer);
-        inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &updated_balances);
+        inst.set(
+            &Symbol::new(&env, DEVELOPER_BALANCES_KEY),
+            &updated_balances,
+        );
     }
 
     /// Update admin address (admin only)

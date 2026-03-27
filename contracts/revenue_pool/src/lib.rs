@@ -139,12 +139,12 @@ impl RevenuePool {
             .expect("revenue pool not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
 
-        let contract_address = env.current_contract_address();
+        let mut contract_address = env.current_contract_address();
         if usdc.balance(&contract_address) < amount {
             panic!("insufficient USDC balance");
         }
 
-        usdc.transfer(&contract_address, &to, &amount);
+        usdc.transfer(&mut contract_address, &to, &amount);
         env.events()
             .publish((Symbol::new(&env, "distribute"), to), amount);
     }
@@ -191,14 +191,14 @@ impl RevenuePool {
             .expect("revenue pool not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
 
-        let contract_address = env.current_contract_address();
+        let mut contract_address = env.current_contract_address();
         if usdc.balance(&contract_address) < total_amount {
             panic!("insufficient USDC balance");
         }
 
         for payment in payments.iter() {
             let (to, amount) = payment;
-            usdc.transfer(&contract_address, to, amount);
+            usdc.transfer(&mut contract_address, to, amount);
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);
         }
