@@ -176,4 +176,52 @@ Emitted by `receive_payment()` **only** when `to_pool = false`. Follows the `pay
 |---------|--------|
 | 0.1.0   | Initial settlement events: `payment_received`, `balance_credited` |
 
-> If `PaymentReceivedEvent` or `BalanceCreditedEvent` structs gain new fields in future versions, a new row will be added here with the crate semver and a description of the added/changed fields.
+---
+
+## Contract: Callora Revenue Pool (`callora-revenue-pool` v0.0.1)
+
+### `init`
+
+Emitted when the revenue pool is initialized.
+
+| Field   | Location | Type   | Description           |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"init"`              |
+| topic 1 | topics   | Address| admin address         |
+| data    | data     | Address| USDC token address    |
+
+---
+
+### `receive_payment`
+
+Emitted when a payment is logged as received (manually by admin).
+
+| Field   | Location | Type   | Description           |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"receive_payment"`   |
+| topic 1 | topics   | Address| caller (admin)        |
+| data    | data     | (i128, bool) | (amount, from_vault)  |
+
+---
+
+### `distribute`
+
+Emitted when USDC is distributed to a developer.
+
+| Field   | Location | Type   | Description           |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"distribute"`        |
+| topic 1 | topics   | Address| recipient developer   |
+| data    | data     | i128   | distributed amount    |
+
+---
+
+### `batch_distribute`
+
+Emitted for each payment in a batch distribution.
+
+| Field   | Location | Type   | Description           |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"batch_distribute"`  |
+| topic 1 | topics   | Address| recipient developer   |
+| data    | data     | i128   | distributed amount    |
