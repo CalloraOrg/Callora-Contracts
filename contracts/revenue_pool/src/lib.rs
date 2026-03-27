@@ -198,7 +198,7 @@ impl RevenuePool {
 
         for payment in payments.iter() {
             let (to, amount) = payment;
-            usdc.transfer(&contract_address, &to, &amount);
+            usdc.transfer(&contract_address, to, amount);
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);
         }
