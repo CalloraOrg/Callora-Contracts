@@ -162,6 +162,7 @@ impl RevenuePool {
     ///
     /// # Panics
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
+    /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
     /// * If the revenue pool has not been initialized.
     /// * If the total amount exceeds the contract's available balance (`"insufficient USDC balance"`).
@@ -173,6 +174,9 @@ impl RevenuePool {
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             panic!("unauthorized: caller is not admin");
+        }
+        if payments.is_empty() {
+            panic!("batch_distribute requires at least one payment");
         }
 
         let mut total_amount: i128 = 0;

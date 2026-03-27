@@ -348,6 +348,22 @@ fn batch_distribute_zero_amount_panics() {
 }
 
 #[test]
+#[should_panic(expected = "batch_distribute requires at least one payment")]
+fn batch_distribute_empty_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 500);
+
+    let payments: Vec<(Address, i128)> = Vec::new(&env);
+    client.batch_distribute(&admin, &payments);
+}
+
+#[test]
 #[should_panic(expected = "insufficient USDC balance")]
 fn batch_distribute_insufficient_balance_panics() {
     let env = Env::default();
