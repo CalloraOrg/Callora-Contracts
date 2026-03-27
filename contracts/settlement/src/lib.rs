@@ -107,7 +107,7 @@ impl CalloraSettlement {
         } else {
             let dev_address = developer
                 .unwrap_or_else(|| panic!("developer address required when to_pool=false"));
-            let mut balances: Map<Address, i128> = inst
+            let balances: Map<Address, i128> = inst
                 .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
                 .unwrap_or_else(|| Map::new(&env));
             let current_balance = balances.get(dev_address.clone()).unwrap_or(0);
@@ -208,7 +208,7 @@ impl CalloraSettlement {
             panic!("unauthorized: caller is not admin");
         }
         let inst = env.storage().instance();
-        let mut balances: Map<Address, i128> = inst
+        let balances: Map<Address, i128> = inst
             .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
             .unwrap_or_else(|| Map::new(&env));
 

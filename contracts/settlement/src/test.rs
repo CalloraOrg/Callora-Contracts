@@ -365,7 +365,7 @@ mod settlement_tests {
         let all = client.get_all_developer_balances();
         assert_eq!(all.len(), 1);
         assert_eq!(all.get(0).unwrap().address, dev1);
-        assert_eq!(all.get(0).unwrap().balance, 100);
+        assert_eq!(all.get(0).unwrap().balance, 100i128);
     }
 
     #[test]
@@ -381,17 +381,17 @@ mod settlement_tests {
 
         // 1. Insert
         client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()));
-        assert_eq!(client.get_developer_balance(&dev1), 100);
+        assert_eq!(client.get_developer_balance(&dev1), 100i128);
         assert_eq!(client.get_all_developer_balances().len(), 1);
 
         // 2. Remove
         client.remove_developer_balance(&admin, &dev1);
-        assert_eq!(client.get_developer_balance(&dev1), 0);
+        assert_eq!(client.get_developer_balance(&dev1), 0i128);
         assert_eq!(client.get_all_developer_balances().len(), 0);
 
         // 3. Re-insert
         client.receive_payment(&vault, &200i128, &false, &Some(dev1.clone()));
-        assert_eq!(client.get_developer_balance(&dev1), 200);
+        assert_eq!(client.get_developer_balance(&dev1), 200i128);
         assert_eq!(client.get_all_developer_balances().len(), 1);
     }
 
