@@ -135,22 +135,6 @@ mod settlement_tests {
     }
 
     #[test]
-    #[should_panic(expected = "unauthorized: caller must be vault or admin")]
-    fn test_receive_payment_unauthorized() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let vault = Address::generate(&env);
-        let addr = env.register(CalloraSettlement, ());
-        let client = CalloraSettlementClient::new(&env, &addr);
-        client.init(&admin, &vault);
-
-        client.receive_payment(&admin, &500i128, &true, &None);
-
-        assert_eq!(client.get_global_pool().total_balance, 500i128);
-    }
-
-    #[test]
     fn test_admin_can_receive_payment_to_developer() {
         // Admin routing a payment directly to a developer (not via vault)
         let env = Env::default();

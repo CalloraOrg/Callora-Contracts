@@ -234,10 +234,8 @@ impl CalloraSettlement {
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
 
-        env.events().publish(
-            (Symbol::new(&env, "admin_accepted"), current, pending),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin_accepted"), current, pending), ());
     }
 
     /// Update vault address (admin only)

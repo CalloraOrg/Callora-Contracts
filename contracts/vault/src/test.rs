@@ -1540,7 +1540,8 @@ fn init_with_revenue_pool_stores_address() {
     client.init(
         &owner,
         &usdc,
-        &Some(500), &None,
+        &Some(500),
+        &None,
         &None,
         &Some(revenue_pool.clone()),
         &None,
@@ -1728,7 +1729,6 @@ fn get_settlement_before_set_panics() {
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.get_settlement();
 }
-
 
 #[test]
 fn test_clear_allowed_depositors() {
