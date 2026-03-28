@@ -77,9 +77,14 @@ pub enum StorageKey {
     Metadata(String),
     PendingOwner,
     PendingAdmin,
+    Paused,
 }
 
-// Replaced by StorageKey enum variants
+/// Storage key string for the allowed depositors list.
+pub const ALLOWED_KEY: &str = "AllowedDepositors";
+
+/// Maximum number of items permitted in a single `batch_deduct` call.
+pub const MAX_BATCH_SIZE: u32 = 100;
 
 /// Default maximum single deduct amount when not set at init (no cap).
 pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
@@ -183,7 +188,7 @@ impl CalloraVault {
         let allowed: Vec<Address> = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, ALLOWED_KEY))
+            .get(&StorageKey::AllowedDepositors)
             .unwrap_or(Vec::new(&env));
         allowed.contains(&caller)
     }
@@ -433,7 +438,7 @@ impl CalloraVault {
             "unauthorized: only owner or allowed depositor can deposit"
         );
 
-        let meta = Self::get_meta(env.clone());
+        let mut meta = Self::get_meta(env.clone());
         assert!(
             amount >= meta.min_deposit,
             "deposit below minimum: {} < {}",
