@@ -428,7 +428,7 @@ fn set_authorized_caller_sets_and_emits_event() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &Some(200), &None, &None, &None, &None);
 
-    client.set_authorized_caller(&new_caller);
+    client.set_authorized_caller(&owner, &new_caller);
 
     let events = env.events().all();
     let ev = events.last().expect("expected set_auth_caller event");
@@ -1419,6 +1419,7 @@ fn metadata_remains_after_ownership_transfer() {
     client.set_metadata(&owner, &offering_id, &metadata);
 
     client.transfer_ownership(&new_owner);
+    client.accept_ownership();
 
     // Metadata should still be accessible
     assert_eq!(client.get_metadata(&offering_id), Some(metadata.clone()));
@@ -1540,7 +1541,6 @@ fn init_with_revenue_pool_stores_address() {
         &owner,
         &usdc,
         &Some(500), &None,
-        &None,
         &None,
         &Some(revenue_pool.clone()),
         &None,
@@ -1761,7 +1761,7 @@ fn test_set_authorized_caller() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
-    client.set_authorized_caller(&auth_caller);
+    client.set_authorized_caller(&owner, &auth_caller);
     let meta = client.get_meta();
     assert_eq!(meta.authorized_caller, Some(auth_caller));
 }
@@ -1862,6 +1862,7 @@ fn withdraw_to_zero_succeeds() {
     client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
 
     assert_eq!(client.withdraw(&300), 0);
+}
 // ---------------------------------------------------------------------------
 // set_authorized_caller + deduct authorization matrix tests
 // ---------------------------------------------------------------------------
