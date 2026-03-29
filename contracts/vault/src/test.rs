@@ -48,7 +48,7 @@ fn init_with_balance_emits_event() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
     let events = env.events().all();
     let last = events.last().expect("expected at least one event");
@@ -73,7 +73,7 @@ fn init_defaults_balance_to_zero() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     assert_eq!(client.balance(), 0);
 }
 
@@ -86,7 +86,7 @@ fn init_sets_owner_and_min_deposit() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    let meta = client.init(&owner, &usdc, &Some(500), &Some(10), &None, &None);
+    let meta = client.init(&owner, &usdc, &Some(500), &None, &Some(10), &None, &None);
 
     assert_eq!(meta.balance, 500);
     assert_eq!(meta.owner, owner);
@@ -104,9 +104,9 @@ fn double_init_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    let result = client.try_init(&owner, &usdc, &Some(100), &None, &None, &None);
+    let result = client.try_init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     assert!(result.is_err(), "expected error on second init");
 }
 
@@ -123,7 +123,7 @@ fn get_meta_returns_correct_state() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
     let meta = client.get_meta();
     assert_eq!(meta.balance, 500);
@@ -151,7 +151,7 @@ fn get_admin_returns_owner_after_init() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     assert_eq!(client.get_admin(), owner);
 }
@@ -166,7 +166,7 @@ fn set_admin_updates_admin() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     client.set_admin(&owner, &new_admin);
     assert_eq!(client.get_admin(), new_admin);
@@ -183,7 +183,7 @@ fn set_admin_unauthorized_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     let result = client.try_set_admin(&intruder, &new_admin);
     assert!(
@@ -205,7 +205,7 @@ fn owner_can_deposit() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
     // Mint USDC to owner then approve the vault
     usdc_admin.mint(&owner, &200);
@@ -226,7 +226,7 @@ fn allowed_depositor_can_deposit() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
 
     usdc_admin.mint(&depositor, &200);
@@ -248,7 +248,7 @@ fn unauthorized_address_cannot_deposit() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     client.deposit(&unauthorized, &50);
 }
@@ -263,7 +263,7 @@ fn deposit_zero_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.deposit(&owner, &0);
 }
 
@@ -277,7 +277,7 @@ fn deposit_negative_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.deposit(&owner, &-50);
 }
 
@@ -291,7 +291,7 @@ fn deposit_below_minimum_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &Some(50), &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &Some(50), &None, &None);
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
 
     usdc_admin.mint(&depositor, &30);
@@ -310,7 +310,7 @@ fn deposit_at_minimum_succeeds() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &Some(50), &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &Some(50), &None, &None);
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
 
     usdc_admin.mint(&depositor, &50);
@@ -333,7 +333,7 @@ fn owner_can_set_and_clear_allowed_depositor() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     // Set depositor
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
@@ -364,7 +364,7 @@ fn non_owner_cannot_set_allowed_depositor() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.set_allowed_depositor(&non_owner, &Some(depositor));
 }
 
@@ -379,7 +379,7 @@ fn deposit_after_depositor_cleared_is_rejected() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
     client.set_allowed_depositor(&owner, &None);
 
@@ -402,7 +402,15 @@ fn deduct_reduces_balance() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 300);
-    client.init(&owner, &usdc, &Some(300), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(300),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let returned = client.deduct(&caller, &50, &None);
     assert_eq!(returned, 250);
@@ -419,7 +427,15 @@ fn deduct_with_request_id() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let remaining = client.deduct(&caller, &100, &Some(Symbol::new(&env, "req123")));
     assert_eq!(remaining, 900);
@@ -435,7 +451,15 @@ fn deduct_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 10);
-    client.init(&owner, &usdc, &Some(10), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(10),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let result = client.try_deduct(&caller, &100, &None);
     assert!(result.is_err(), "expected error for insufficient balance");
@@ -451,7 +475,15 @@ fn deduct_exact_balance_succeeds() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 75);
-    client.init(&owner, &usdc, &Some(75), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(75),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let remaining = client.deduct(&caller, &75, &None);
     assert_eq!(remaining, 0);
@@ -468,7 +500,15 @@ fn deduct_event_contains_request_id() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(500),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let request_id = Symbol::new(&env, "api_call_42");
     client.deduct(&caller, &150, &Some(request_id.clone()));
@@ -499,7 +539,15 @@ fn deduct_event_no_request_id_uses_empty_symbol() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 300);
-    client.init(&owner, &usdc, &Some(300), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(300),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
     client.deduct(&caller, &100, &None);
 
     let events = env.events().all();
@@ -523,7 +571,7 @@ fn deduct_zero_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
     client.deduct(&caller, &0, &None);
 }
 
@@ -538,7 +586,7 @@ fn deduct_negative_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.deduct(&caller, &-50, &None);
 }
 
@@ -547,14 +595,13 @@ fn deduct_negative_panics() {
 fn deduct_exceeds_balance_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 50);
-    client.init(&owner, &usdc, &Some(50), &None, &None, &None);
-    client.deduct(&caller, &100, &None);
+    client.init(&owner, &usdc, &Some(50), &None, &None, &None, &None);
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]
@@ -567,7 +614,15 @@ fn balance_unchanged_after_failed_deduct() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let _ = client.try_deduct(&caller, &200, &None);
     assert_eq!(client.balance(), 100);
@@ -587,7 +642,15 @@ fn batch_deduct_multiple_items() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let items = soroban_sdk::vec![
         &env,
@@ -620,7 +683,15 @@ fn batch_deduct_events_contain_request_ids() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let rid_a = Symbol::new(&env, "batch_a");
     let rid_b = Symbol::new(&env, "batch_b");
@@ -655,6 +726,45 @@ fn batch_deduct_events_contain_request_ids() {
 }
 
 #[test]
+fn batch_deduct_events_contains_empty_request_id() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 100,
+            request_id: None
+        },
+    ];
+    client.batch_deduct(&caller, &items);
+
+    let all_events = env.events().all();
+    let ev = all_events.last().expect("expected deduct event");
+
+    let topic0: Symbol = ev.1.get(0).unwrap().into_val(&env);
+    let topic2: Symbol = ev.1.get(2).unwrap().into_val(&env);
+
+    assert_eq!(topic0, Symbol::new(&env, "deduct"));
+    assert_eq!(topic2, Symbol::new(&env, ""));
+}
+
+#[test]
 fn batch_deduct_insufficient_balance_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -664,7 +774,15 @@ fn batch_deduct_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let items = soroban_sdk::vec![
         &env,
@@ -694,7 +812,15 @@ fn batch_deduct_empty_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let items: soroban_sdk::Vec<DeductItem> = soroban_sdk::vec![&env];
     let result = client.try_batch_deduct(&caller, &items);
@@ -711,7 +837,15 @@ fn batch_deduct_zero_amount_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
 
     let items = soroban_sdk::vec![
         &env,
@@ -737,7 +871,7 @@ fn withdraw_reduces_balance() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
     let remaining = client.withdraw(&200);
     assert_eq!(remaining, 300);
@@ -753,7 +887,7 @@ fn withdraw_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     let result = client.try_withdraw(&500);
     assert!(result.is_err(), "expected error for insufficient balance");
@@ -768,7 +902,7 @@ fn withdraw_zero_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     let result = client.try_withdraw(&0);
     assert!(result.is_err(), "expected error for zero amount");
@@ -784,7 +918,7 @@ fn withdraw_to_reduces_balance() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
     let remaining = client.withdraw_to(&recipient, &150);
     assert_eq!(remaining, 350);
@@ -802,7 +936,7 @@ fn withdraw_to_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     let result = client.try_withdraw_to(&recipient, &500);
     assert!(result.is_err(), "expected error for insufficient balance");
@@ -822,7 +956,7 @@ fn transfer_ownership_succeeds() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     client.transfer_ownership(&new_owner);
 
@@ -840,7 +974,7 @@ fn transfer_ownership_emits_event() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.transfer_ownership(&new_owner);
 
     let ev = env
@@ -871,7 +1005,7 @@ fn transfer_ownership_same_address_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
     client.transfer_ownership(&owner);
 }
 
@@ -889,7 +1023,7 @@ fn distribute_transfers_usdc_to_recipient() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&admin, &usdc, &Some(0), &None, &None, &None);
+    client.init(&admin, &usdc, &Some(0), &None, &None, &None, &None);
 
     client.distribute(&admin, &developer, &300);
 
@@ -908,7 +1042,7 @@ fn distribute_unauthorized_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&admin, &usdc, &Some(0), &None, &None, &None);
+    client.init(&admin, &usdc, &Some(0), &None, &None, &None, &None);
 
     let result = client.try_distribute(&intruder, &developer, &300);
     assert!(result.is_err(), "expected error when non-admin distributes");
@@ -924,7 +1058,7 @@ fn distribute_insufficient_usdc_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&admin, &usdc, &Some(0), &None, &None, &None);
+    client.init(&admin, &usdc, &Some(0), &None, &None, &None, &None);
 
     let result = client.try_distribute(&admin, &developer, &500);
     assert!(result.is_err(), "expected error for insufficient USDC");
@@ -940,7 +1074,7 @@ fn distribute_zero_amount_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&admin, &usdc, &Some(0), &None, &None, &None);
+    client.init(&admin, &usdc, &Some(0), &None, &None, &None, &None);
 
     let result = client.try_distribute(&admin, &developer, &0);
     assert!(result.is_err(), "expected error for zero amount");
@@ -958,7 +1092,7 @@ fn set_and_retrieve_metadata() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let offering_id = String::from_str(&env, "offering-001");
     let metadata = String::from_str(&env, "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco");
@@ -978,7 +1112,7 @@ fn set_metadata_emits_event() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let offering_id = String::from_str(&env, "offering-002");
     let metadata = String::from_str(
@@ -1014,7 +1148,7 @@ fn update_metadata_and_verify() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let offering_id = String::from_str(&env, "offering-003");
     let old_metadata = String::from_str(&env, "QmOldMetadata123");
@@ -1036,7 +1170,7 @@ fn update_metadata_emits_event() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let offering_id = String::from_str(&env, "offering-004");
     let old_metadata = String::from_str(&env, "https://example.com/old.json");
@@ -1075,7 +1209,7 @@ fn unauthorized_cannot_set_metadata() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let offering_id = String::from_str(&env, "offering-005");
     let metadata = String::from_str(&env, "QmSomeMetadata");
@@ -1101,7 +1235,15 @@ fn vault_full_lifecycle() {
 
     // Init with 500 balance, min_deposit = 10
     fund_vault(&usdc_admin, &vault_address, 500);
-    let meta = client.init(&owner, &usdc, &Some(500), &Some(10), &None, &None);
+    let meta = client.init(
+        &owner,
+        &usdc,
+        &Some(500),
+        &Some(caller.clone()),
+        &Some(10),
+        &None,
+        &None,
+    );
     assert_eq!(meta.balance, 500);
     assert_eq!(meta.owner, owner);
     assert_eq!(client.balance(), 500);
@@ -1178,6 +1320,7 @@ fn init_with_revenue_pool_stores_address() {
         &usdc,
         &Some(500),
         &None,
+        &None,
         &Some(revenue_pool.clone()),
         &None,
     );
@@ -1200,6 +1343,7 @@ fn deduct_with_revenue_pool_transfers_usdc() {
         &owner,
         &usdc_address,
         &Some(1000),
+        &Some(caller.clone()),
         &None,
         &Some(revenue_pool.clone()),
         &None,
@@ -1226,6 +1370,7 @@ fn batch_deduct_with_revenue_pool_transfers_total_usdc() {
         &owner,
         &usdc_address,
         &Some(1000),
+        &Some(caller.clone()),
         &None,
         &Some(revenue_pool.clone()),
         &None,
@@ -1261,7 +1406,7 @@ fn set_settlement_stores_and_get_returns_address() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.set_settlement(&owner, &settlement);
 
     assert_eq!(client.get_settlement(), settlement);
@@ -1278,7 +1423,7 @@ fn set_settlement_unauthorized_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.set_settlement(&attacker, &settlement);
 }
 
@@ -1291,6 +1436,6 @@ fn get_settlement_before_set_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.get_settlement();
 }

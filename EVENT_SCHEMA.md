@@ -8,11 +8,11 @@ Events emitted by the Callora vault contract for indexers and frontends. All top
 
 Emitted when the vault is initialized.
 
-| Field   | Location | Type   | Description           |
-|---------|----------|--------|-----------------------|
-| topic 0 | topics   | Symbol | `"init"`              |
-| topic 1 | topics   | Address| vault owner           |
-| data    | data     | i128   | initial balance       |
+| Field   | Location | Type    | Description     |
+| ------- | -------- | ------- | --------------- |
+| topic 0 | topics   | Symbol  | `"init"`        |
+| topic 1 | topics   | Address | vault owner     |
+| data    | data     | i128    | initial balance |
 
 ---
 
@@ -20,9 +20,9 @@ Emitted when the vault is initialized.
 
 Emitted when balance is increased via `deposit(amount)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"deposit"`   |
+| Field   | Location | Type         | Description           |
+| ------- | -------- | ------------ | --------------------- |
+| topic 0 | topics   | Symbol       | `"deposit"`           |
 | data    | data     | (i128, i128) | (amount, new_balance) |
 
 ---
@@ -31,12 +31,32 @@ Emitted when balance is increased via `deposit(amount)`.
 
 Emitted on each deduction: single `deduct(amount)` or each item in `batch_deduct(items)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"deduct"`    |
-| topic 1 | topics   | Address| caller        |
-| topic 2 | topics   | Symbol | optional request_id (empty symbol if none) |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Field   | Location | Type         | Description                                                           |
+| ------- | -------- | ------------ | --------------------------------------------------------------------- |
+| topic 0 | topics   | Symbol       | `"deduct"`                                                            |
+| topic 1 | topics   | Address      | caller (owner or authorized backend)                                  |
+| topic 2 | topics   | Symbol       | optional `request_id` (**always present**; empty symbol `""` if none) |
+| data    | data     | (i128, i128) | `(amount, new_balance)`                                               |
+
+**Note for Indexers:** To ensure a stable prefix for filters, the `deduct` event **always** contains exactly 3 topics. If a `request_id` was not provided, the third topic is an empty symbol (`""`).
+
+**Example — With `request_id`:**
+
+```json
+{
+  "topics": ["deduct", "G...", "req_abc_123"],
+  "data": [5000000, 45000000]
+}
+```
+
+**Example — Without `request_id` (empty symbol convention):**
+
+```json
+{
+  "topics": ["deduct", "G...", ""],
+  "data": [1000000, 44000000]
+}
+```
 
 ---
 
@@ -44,10 +64,10 @@ Emitted on each deduction: single `deduct(amount)` or each item in `batch_deduct
 
 Emitted when the owner withdraws via `withdraw(amount)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"withdraw"`  |
-| topic 1 | topics   | Address| vault owner   |
+| Field   | Location | Type         | Description           |
+| ------- | -------- | ------------ | --------------------- |
+| topic 0 | topics   | Symbol       | `"withdraw"`          |
+| topic 1 | topics   | Address      | vault owner           |
 | data    | data     | (i128, i128) | (amount, new_balance) |
 
 ---
@@ -56,11 +76,11 @@ Emitted when the owner withdraws via `withdraw(amount)`.
 
 Emitted when the owner withdraws to a designated address via `withdraw_to(to, amount)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"withdraw_to"` |
-| topic 1 | topics   | Address| vault owner   |
-| topic 2 | topics   | Address| recipient `to` |
+| Field   | Location | Type         | Description           |
+| ------- | -------- | ------------ | --------------------- |
+| topic 0 | topics   | Symbol       | `"withdraw_to"`       |
+| topic 1 | topics   | Address      | vault owner           |
+| topic 2 | topics   | Address      | recipient `to`        |
 | data    | data     | (i128, i128) | (amount, new_balance) |
 
 ---
@@ -69,12 +89,12 @@ Emitted when the owner withdraws to a designated address via `withdraw_to(to, am
 
 Emitted when metadata is set for an offering via `set_metadata(offering_id, metadata)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"metadata_set"` |
-| topic 1 | topics   | String | offering_id   |
-| topic 2 | topics   | Address| caller (owner/issuer) |
-| data    | data     | String | metadata (IPFS CID or URI) |
+| Field   | Location | Type    | Description                |
+| ------- | -------- | ------- | -------------------------- |
+| topic 0 | topics   | Symbol  | `"metadata_set"`           |
+| topic 1 | topics   | String  | offering_id                |
+| topic 2 | topics   | Address | caller (owner/issuer)      |
+| data    | data     | String  | metadata (IPFS CID or URI) |
 
 ---
 
@@ -82,11 +102,11 @@ Emitted when metadata is set for an offering via `set_metadata(offering_id, meta
 
 Emitted when existing metadata is updated via `update_metadata(offering_id, metadata)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"metadata_updated"` |
-| topic 1 | topics   | String | offering_id   |
-| topic 2 | topics   | Address| caller (owner/issuer) |
+| Field   | Location | Type             | Description                  |
+| ------- | -------- | ---------------- | ---------------------------- |
+| topic 0 | topics   | Symbol           | `"metadata_updated"`         |
+| topic 1 | topics   | String           | offering_id                  |
+| topic 2 | topics   | Address          | caller (owner/issuer)        |
 | data    | data     | (String, String) | (old_metadata, new_metadata) |
 
 ---
@@ -104,14 +124,14 @@ Emitted when existing metadata is updated via `update_metadata(offering_id, meta
 
 Emitted by `receive_payment()` for every inbound payment regardless of `to_pool` mode.
 
-| Field   | Location | Type    | Description                                                                 |
-|---------|----------|---------|-----------------------------------------------------------------------------|
-| topic 0 | topics   | Symbol  | `"payment_received"`                                                        |
-| topic 1 | topics   | Address | `caller` — the vault or admin address that sent the payment                 |
-| `from_vault` | data | Address | same as topic 1 (vault/admin caller)                                   |
-| `amount`     | data | i128    | payment amount in USDC micro-units (stroops); always > 0                |
-| `to_pool`    | data | bool    | `true` → credited to global pool; `false` → credited to a developer    |
-| `developer`  | data | Option\<Address\> | `None` when `to_pool=true`; developer address when `to_pool=false` |
+| Field        | Location | Type              | Description                                                         |
+| ------------ | -------- | ----------------- | ------------------------------------------------------------------- |
+| topic 0      | topics   | Symbol            | `"payment_received"`                                                |
+| topic 1      | topics   | Address           | `caller` — the vault or admin address that sent the payment         |
+| `from_vault` | data     | Address           | same as topic 1 (vault/admin caller)                                |
+| `amount`     | data     | i128              | payment amount in USDC micro-units (stroops); always > 0            |
+| `to_pool`    | data     | bool              | `true` → credited to global pool; `false` → credited to a developer |
+| `developer`  | data     | Option\<Address\> | `None` when `to_pool=true`; developer address when `to_pool=false`  |
 
 **Example — `to_pool = true` (global pool credit):**
 
@@ -147,13 +167,13 @@ Emitted by `receive_payment()` for every inbound payment regardless of `to_pool`
 
 Emitted by `receive_payment()` **only** when `to_pool = false`. Follows the `payment_received` event for the same call.
 
-| Field         | Location | Type    | Description                                          |
-|---------------|----------|---------|------------------------------------------------------|
-| topic 0       | topics   | Symbol  | `"balance_credited"`                                 |
-| topic 1       | topics   | Address | `developer` — the address whose balance was updated  |
-| `developer`   | data     | Address | same as topic 1                                      |
-| `amount`      | data     | i128    | amount credited in this call (USDC micro-units)      |
-| `new_balance` | data     | i128    | developer's cumulative balance after this credit     |
+| Field         | Location | Type    | Description                                         |
+| ------------- | -------- | ------- | --------------------------------------------------- |
+| topic 0       | topics   | Symbol  | `"balance_credited"`                                |
+| topic 1       | topics   | Address | `developer` — the address whose balance was updated |
+| `developer`   | data     | Address | same as topic 1                                     |
+| `amount`      | data     | i128    | amount credited in this call (USDC micro-units)     |
+| `new_balance` | data     | i128    | developer's cumulative balance after this credit    |
 
 **Example:**
 
@@ -172,8 +192,8 @@ Emitted by `receive_payment()` **only** when `to_pool = false`. Follows the `pay
 
 ### Version notes
 
-| Version | Change |
-|---------|--------|
+| Version | Change                                                            |
+| ------- | ----------------------------------------------------------------- |
 | 0.1.0   | Initial settlement events: `payment_received`, `balance_credited` |
 
 > If `PaymentReceivedEvent` or `BalanceCreditedEvent` structs gain new fields in future versions, a new row will be added here with the crate semver and a description of the added/changed fields.

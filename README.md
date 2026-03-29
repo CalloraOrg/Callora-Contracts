@@ -59,7 +59,6 @@ All tests use `#[should_panic]` assertions for guaranteed validation. This resol
 2. **Build and test:**
 
    ```bash
-   cd callora-contracts
    cargo build
    cargo test
    ```
@@ -80,15 +79,9 @@ All tests use `#[should_panic]` assertions for guaranteed validation. This resol
    - `strip = "symbols"` - remove debug symbols
    - `codegen-units = 1` - better optimization at cost of compile time
 
-   To verify the WASM size stays under 64KB, run:
-   ```bash
-   ./scripts/check-wasm-size.sh
-   ```
-
 ## Development
 
 Use one branch per issue or feature (e.g. `test/minimum-deposit-rejected`, `docs/vault-gas-notes`) to keep PRs small and reduce merge conflicts. Run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` before pushing.
-<<<<<<< HEAD
 
 ## Test coverage
 
@@ -118,41 +111,21 @@ The script will:
 
 ### CI enforcement
 
-`.github/workflows/coverage.yml` runs on every push and pull-request.
-It installs tarpaulin, runs coverage, uploads the HTML report as a downloadable
-artefact, and posts a coverage summary table as a PR comment.
-A result below 95 % causes the workflow — and the required status check — to fail.
-=======
->>>>>>> b0229e42e4d4517da9f548ea3e374a5886304bf2
+`.github/workflows/coverage.yml` runs on every push and pull-request. It installs tarpaulin, runs coverage, uploads the HTML report as a downloadable artefact, and posts a coverage summary table as a PR comment. A result below 95 % causes the workflow — and the required status check — to fail.
 
 ## Project layout
 
-```
+```text
 callora-contracts/
 ├── .github/workflows/
 │   └── ci.yml              # CI: fmt, clippy, test, WASM build
-<<<<<<< HEAD
-├── Cargo.toml                        # Workspace and release profile
-├── BENCHMARKS.md           # Vault operation gas/cost notes
-├── EVENT_SCHEMA.md         # Event names, topics, and payload types
-├── UPGRADE.md              # Vault upgrade and migration path
-├── tarpaulin.toml                    # cargo-tarpaulin config (≥ 95 % enforced)
-├── scripts/
-│   └── coverage.sh                   # One-command local coverage runner
-├── .github/
-│   └── workflows/
-│       └── coverage.yml              # CI: enforces 95 % on every push / PR
-└── contracts/
-    └── vault/
-        ├── Cargo.toml
-        └── src/
-            ├── lib.rs                # Contract logic
-            └── test.rs               # Unit tests (covers all code paths)
-=======
 ├── Cargo.toml              # Workspace and release profile
 ├── BENCHMARKS.md           # Vault operation gas/cost notes
 ├── EVENT_SCHEMA.md         # Event names, topics, and payload types
 ├── UPGRADE.md              # Vault upgrade and migration path
+├── scripts/
+│   ├── coverage.sh         # One-command local coverage runner
+│   └── check-wasm-size.sh  # WASM size verification
 ├── contracts/
 │   ├── vault/
 │   │   ├── Cargo.toml
@@ -165,7 +138,6 @@ callora-contracts/
 │           ├── lib.rs      # Settlement contract
 │           └── test.rs     # Unit tests
 └── README.md
->>>>>>> b0229e42e4d4517da9f548ea3e374a5886304bf2
 ```
 
 ## Security Notes
