@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use crate::{CalloraVault, CalloraVaultClient};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
