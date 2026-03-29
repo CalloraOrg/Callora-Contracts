@@ -17,6 +17,9 @@ This document describes how the Callora smart contracts are deployed, how state 
 
 ## Architecture Overview
 
+| Key    | Type        | Description                     |
+| ------ | ----------- | ------------------------------- |
+| `meta` | `VaultMeta` | Owner, balance, and min_deposit |
 The Callora workspace consists of three independently deployed Soroban smart contracts:
 
 | Contract | Crate | Purpose |
@@ -33,6 +36,10 @@ The Callora workspace consists of three independently deployed Soroban smart con
 
 ### Dependency Flow
 
+2. **Deploy the new contract**
+   - Build and deploy the new WASM (or deploy a new instance of the same WASM).
+   - Call `init(owner, Some(current_balance), Some(min_deposit))` with the exported owner and, if desired, the same balance and min_deposit.
+   - If you are not moving balance on-chain automatically, you may init with `initial_balance: Some(0)` and treat the old vault as “drained” and the new one as the new ledger.
 ```
 User deposits USDC
         │
@@ -42,9 +49,7 @@ User deposits USDC
   │         │   (if revenue_    │              │                    │ Wallet      │
   └─────────┘    pool set)      └──────────────┘                    └─────────────┘
 
-  ┌─────────┐      deduct       ┌────────────┐
-  │  Vault  │ ───────────────► │ Settlement │ (alternative to revenue pool)
-  └─────────┘                  └────────────┘
+         
 ```
 
 ---
@@ -455,6 +460,13 @@ Per the contribution guidelines:
 4. Include summarized test output in PR description
 
 ---
+
+## Event Schema Stability
+
+To support reliable indexing and real-time monitoring:
+
+- **Deduct Event Topics**: The `deduct` event (emitted by both `deduct` and `batch_deduct`) always contains exactly 3 topics: `["deduct", caller, request_id]`.
+- **Empty Symbol Convention**: If no `request_id` is provided by the caller, the contract emits an empty symbol (`""`) as the third topic. This ensures indexers can use a fixed topic count and consistent filtering patterns without breaking on optional fields.
 
 ## Summary
 
