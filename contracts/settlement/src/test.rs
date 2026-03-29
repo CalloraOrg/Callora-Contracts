@@ -153,11 +153,11 @@ mod settlement_tests {
         env.mock_all_auths();
         let admin = Address::generate(&env);
         let vault = Address::generate(&env);
-        let third_party = Address::generate(&env);
+        let _third_party = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
-        client.receive_payment(&third_party, &100i128, &true, &None);
+        client.receive_payment(&admin, &100i128, &true, &None);
     }
 
     #[test]
@@ -300,7 +300,8 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.set_vault(&new_admin, &new_vault);
+        let attacker = Address::generate(&env);
+        client.set_vault(&attacker, &new_vault);
     }
 
     #[test]
@@ -318,7 +319,7 @@ mod settlement_tests {
         assert_eq!(client.get_vault(), new_vault);
     }
 
-    // ── admin rotation edge cases ────────────────────────────────────────────
+    // â”€â”€ admin rotation edge cases â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_set_admin_to_same_address_succeeds() {
@@ -464,7 +465,7 @@ mod settlement_tests {
         );
     }
 
-    // ── event emission tests ────────────────────────────────────────────────
+    // â”€â”€ event emission tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_set_admin_emits_nomination_event() {
@@ -533,7 +534,7 @@ mod settlement_tests {
         assert_eq!(topic_new, new_admin);
     }
 
-    // ── panic / error paths ──────────────────────────────────────────────────
+    // â”€â”€ panic / error paths â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     #[should_panic(expected = "settlement contract already initialized")]
@@ -655,7 +656,7 @@ mod settlement_tests {
         }
     }
 
-    // ── event shape tests ────────────────────────────────────────────────────
+    // â”€â”€ event shape tests â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     #[test]
     fn test_payment_received_event_to_pool() {
@@ -778,7 +779,7 @@ mod settlement_tests {
         assert_eq!(bc_data.new_balance, 500i128);
     }
 
-    // ── regression tests: ensure settlement logic intact after rotation ─────
+    // â”€â”€ regression tests: ensure settlement logic intact after rotation â”€â”€â”€â”€â”€
 
     #[test]
     fn test_receive_payment_works_after_admin_rotation() {
@@ -913,5 +914,59 @@ mod settlement_tests {
         let pool_after = client.get_global_pool();
         assert_eq!(pool_after.last_updated, 1_700_000_100);
         assert_eq!(pool_after.total_balance, 1500i128);
+    }
+
+    /// `last_updated` reflects the ledger timestamp at the moment of each pool credit.
+    #[test]
+    fn test_global_pool_last_updated_on_receive_payment() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        env.ledger().set_timestamp(1_000);
+        client.init(&admin, &vault);
+        assert_eq!(client.get_global_pool().last_updated, 1_000);
+
+        // Advance time and credit pool ï¿½ last_updated must change
+        env.ledger().set_timestamp(2_000);
+        client.receive_payment(&vault, &100i128, &true, &None);
+        let pool = client.get_global_pool();
+        assert_eq!(pool.last_updated, 2_000);
+        assert_eq!(pool.total_balance, 100i128);
+
+        // Advance again ï¿½ each credit stamps the new time
+        env.ledger().set_timestamp(3_000);
+        client.receive_payment(&vault, &50i128, &true, &None);
+        let pool2 = client.get_global_pool();
+        assert_eq!(pool2.last_updated, 3_000);
+        assert_eq!(pool2.total_balance, 150i128);
+    }
+
+    /// Routing to a developer does NOT update `last_updated` on the global pool.
+    #[test]
+    fn test_global_pool_last_updated_unchanged_for_developer_payment() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        env.ledger().set_timestamp(1_000);
+        client.init(&admin, &vault);
+
+        env.ledger().set_timestamp(5_000);
+        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()));
+
+        // Pool timestamp must still be the init timestamp
+        assert_eq!(client.get_global_pool().last_updated, 1_000);
+        assert_eq!(client.get_global_pool().total_balance, 0);
+        assert_eq!(client.get_developer_balance(&developer), 200i128);
     }
 }

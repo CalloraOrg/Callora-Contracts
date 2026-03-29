@@ -308,7 +308,7 @@ impl CalloraSettlement {
     /// Emits `admin_accepted` event with old and new admin addresses.
     ///
     /// # Panics
-    /// Panics if there is no pending admin transfer (i.e., `set_admin()` 
+    /// Panics if there is no pending admin transfer (i.e., `set_admin()`
     /// was not called first).
     pub fn accept_admin(env: Env) {
         let inst = env.storage().instance();
