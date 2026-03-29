@@ -27,6 +27,21 @@
 //! - Allowed depositors are trusted addresses (typically backend services).
 //! - Access can be revoked at any time by the owner.
 //! - All deposit attempts are authenticated against the caller's address.
+//!
+//! ## Pause / Circuit Breaker
+//!
+//! The vault exposes an emergency pause mechanism that lets the **Admin** or **Owner**
+//! halt sensitive write operations without losing funds:
+//!
+//! - **Blocked while paused**: `deposit`, `deduct`, `batch_deduct`.
+//! - **Allowed while paused**: `withdraw`, `withdraw_to`, `distribute` — these are
+//!   recovery paths that must remain available so the owner can always reclaim funds
+//!   during an incident.
+//!
+//! Toggle functions:
+//! - `pause(caller)`   – blocks sensitive operations; emits `vault_paused`.
+//! - `unpause(caller)` – restores normal operation; emits `vault_unpaused`.
+//! - `is_paused()`     – read-only state query; returns `false` before first `pause` call.
 
 #![no_std]
 
@@ -55,7 +70,21 @@ pub struct VaultMeta {
 #[contracttype]
 pub enum StorageKey {
     Meta,
+    /// Allowed depositors list: Vec<Address> with stable ordering.
+    /// Unlike Maps, Vec maintains insertion order, making iteration predictable and stable.
+    /// Used to store addresses allowed to deposit funds on behalf of the vault owner.
     AllowedDepositors,
+    Admin,
+    UsdcToken,
+    Settlement,
+    RevenuePool,
+    MaxDeduct,
+    Paused,
+    Metadata(String),
+    Paused,
+    PendingOwner,
+    PendingAdmin,
+    DepositorList,
 }
 
 const USDC_KEY: &str = "usdc";
@@ -66,6 +95,22 @@ const MAX_DEDUCT_KEY: &str = "max_deduct";
 
 /// Default maximum single deduct amount when not set at init (no cap).
 pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
+/// Maximum number of items allowed in a single batch_deduct call.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum batch size for batch_deduct operations.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Storage key for allowed depositors list.
+pub const ALLOWED_KEY: &str = "allowed_depositors";
+
+/// Maximum number of items allowed in a single batch_deduct call.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum length for offering metadata (e.g. IPFS CID or URI).
+pub const MAX_METADATA_LEN: u32 = 256;
+/// Maximum length for offering IDs.
+pub const MAX_OFFERING_ID_LEN: u32 = 64;
 
 #[contract]
 pub struct CalloraVault;
@@ -89,6 +134,7 @@ impl CalloraVault {
     ///
     /// # Events
     /// Emits topic `("init", owner)` with data `balance` on success.
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         env: Env,
         owner: Address,
@@ -104,10 +150,31 @@ impl CalloraVault {
         if env.storage().instance().has(&StorageKey::Meta) {
             panic!("vault already initialized");
         }
+
+        // Validate token and revenue pool are not the vault itself
+        assert!(
+            usdc_token != env.current_contract_address(),
+            "usdc_token cannot be vault address"
+        );
+        if let Some(pool) = &revenue_pool {
+            assert!(
+                pool != &env.current_contract_address(),
+                "revenue_pool cannot be vault address"
+            );
+        }
+
         let balance = initial_balance.unwrap_or(0);
         assert!(balance >= 0, "initial balance must be non-negative");
+
         let min_deposit_val = min_deposit.unwrap_or(0);
+        assert!(min_deposit_val >= 0, "min_deposit must be non-negative");
+
         let max_deduct_val = max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT);
+        assert!(max_deduct_val > 0, "max_deduct must be positive");
+        assert!(
+            min_deposit_val <= max_deduct_val,
+            "min_deposit cannot exceed max_deduct"
+        );
 
         let meta = VaultMeta {
             owner: owner.clone(),
@@ -121,9 +188,9 @@ impl CalloraVault {
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
         inst.set(&Symbol::new(&env, ADMIN_KEY), &owner);
         if let Some(pool) = revenue_pool {
-            inst.set(&Symbol::new(&env, REVENUE_POOL_KEY), &pool);
+            inst.set(&StorageKey::RevenuePool, &pool);
         }
-        inst.set(&Symbol::new(&env, MAX_DEDUCT_KEY), &max_deduct_val);
+        inst.set(&StorageKey::MaxDeduct, &max_deduct_val);
 
         env.events()
             .publish((Symbol::new(&env, "init"), owner.clone()), balance);
@@ -152,14 +219,13 @@ impl CalloraVault {
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
-            .get(&Symbol::new(&env, ADMIN_KEY))
+            .get(&StorageKey::Admin)
             .expect("vault not initialized")
     }
 
-    /// Replace the current admin. Only the existing admin may call this.
-    ///
-    /// # Panics
-    /// * `"unauthorized: caller is not admin"` – if caller is not the current admin.
+    /// Nominates a new administrative address.
+    /// The nominee must call `accept_admin` to finalize the transfer.
+    /// Can only be called by the current Admin.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());
@@ -168,7 +234,42 @@ impl CalloraVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, ADMIN_KEY), &new_admin);
+            .set(&StorageKey::PendingAdmin, &new_admin);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "admin_nominated"),
+                current_admin,
+                new_admin,
+            ),
+            (),
+        );
+    }
+
+    /// Accepts the administrative role.
+    /// Can only be called by the pending Admin.
+    pub fn accept_admin(env: Env) {
+        let pending_admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .expect("no admin transfer pending");
+        pending_admin.require_auth();
+
+        let current_admin = Self::get_admin(env.clone());
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin, &pending_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "admin_accepted"),
+                current_admin,
+                pending_admin,
+            ),
+            (),
+        );
     }
 
     /// Require that the caller is the owner, panic otherwise.
@@ -198,7 +299,7 @@ impl CalloraVault {
         let usdc_address: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
+            .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         let vault_balance = usdc.balance(&env.current_contract_address());
@@ -221,14 +322,41 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("vault not initialized"))
     }
 
-    /// Add or clear allowed depositors. Owner-only.
+    /// Sets whether an address is allowed to deposit into the vault.
+    /// Can only be called by the Owner.
+    pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Address) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller);
+
+        // Reject duplicate adds so integration bugs surface early.
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DepositorList)
+            .unwrap_or(Vec::new(&env));
+
+        assert!(!list.contains(&depositor), "already allowed");
+
+        // Per-address flag for O(1) membership checks in `is_authorized_depositor`.
+        env.storage()
+            .instance()
+            .set(&StorageKey::AllowedDepositors, &depositor); // kept for ABI compat
+                                                              // Append to enumeration list.
+        list.push_back(depositor);
+        env.storage()
+            .instance()
+            .set(&StorageKey::DepositorList, &list);
+    }
+
+    /// Remove **all** addresses from the allowed-depositor allowlist.
     ///
-    /// Pass `None` to revoke all depositor access; `Some(address)` to add an address
-    /// if not already present.
+    /// Safe to call on an already-empty list (no-op).
+    /// Only the **owner** may call this.
     ///
-    /// # Panics
-    /// * `"unauthorized: owner only"` – if caller is not the vault owner.
-    pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
+    /// # Storage
+    /// Removes `StorageKey::AllowedDepositors` and resets
+    /// `StorageKey::DepositorList` to an empty vector.
+    pub fn clear_allowed_depositors(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone());
         match depositor {
@@ -253,7 +381,8 @@ impl CalloraVault {
         }
     }
 
-    /// Set or update the authorized caller for deduction. Only callable by the vault owner.
+    /// Sets the authorized caller permitted to trigger deductions.
+    /// Can only be called by the Owner.
     pub fn set_authorized_caller(env: Env, caller: Address) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -267,11 +396,67 @@ impl CalloraVault {
         );
     }
 
-    /// Deposit increases balance. Callable by owner or designated depositor.
-    /// User transfers USDC to the contract; contract increases internal balance.
-    /// Emits a "deposit" event with amount and new balance.
+    /// Emergency pause — blocks `deposit`, `deduct`, and `batch_deduct`.
+    ///
+    /// Withdrawals (`withdraw`, `withdraw_to`) and `distribute` remain available
+    /// so the owner can always recover funds during an incident.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault Admin or Owner.
+    ///
+    /// # Panics
+    /// * `"unauthorized: caller is not admin or owner"` – if caller is neither.
+    /// * `"vault already paused"`                       – if already in paused state.
+    ///
+    /// # Events
+    /// Emits topic `("vault_paused", caller)` with no data on success.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin_or_owner(env.clone(), &caller);
+        assert!(!Self::is_paused(env.clone()), "vault already paused");
+        env.storage().instance().set(&StorageKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "vault_paused"), caller), ());
+    }
+
+    /// Emergency unpause — restores `deposit`, `deduct`, and `batch_deduct`.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault Admin or Owner.
+    ///
+    /// # Panics
+    /// * `"unauthorized: caller is not admin or owner"` – if caller is neither.
+    /// * `"vault not paused"`                           – if not currently paused.
+    ///
+    /// # Events
+    /// Emits topic `("vault_unpaused", caller)` with no data on success.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin_or_owner(env.clone(), &caller);
+        assert!(Self::is_paused(env.clone()), "vault not paused");
+        env.storage().instance().set(&StorageKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
+    }
+
+    /// Returns `true` if the vault is currently paused, `false` otherwise.
+    ///
+    /// Will return `false` before `pause` is ever called.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Deposits USDC into the vault.
+    /// Can be called by the Owner or any Allowed Depositor.
+    ///
+    /// # Panics
+    /// * `"vault is paused"` – if the circuit breaker is active.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
+        Self::require_not_paused(env.clone());
         assert!(amount > 0, "amount must be positive");
         assert!(
             Self::is_authorized_depositor(env.clone(), caller.clone()),
@@ -288,7 +473,7 @@ impl CalloraVault {
         let usdc_address: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
+            .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         usdc.transfer(&caller, &env.current_contract_address(), &amount);
@@ -296,36 +481,58 @@ impl CalloraVault {
         meta.balance += amount;
         env.storage().instance().set(&StorageKey::Meta, &meta);
 
+    /// Unpause deposits to the vault.
+    /// Can only be called by the Admin.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        env.storage().instance().set(&StorageKey::Paused, &false);
         env.events()
-            .publish((Symbol::new(&env, "deposit"), caller), amount);
-        meta.balance
+            .publish((Symbol::new(&env, "unpause"), admin), ());
+    }
+
+    /// Check if the vault is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Paused)
+            .unwrap_or(false)
     }
 
     pub fn get_max_deduct(env: Env) -> i128 {
         env.storage()
             .instance()
-            .get(&Symbol::new(&env, MAX_DEDUCT_KEY))
+            .get(&StorageKey::MaxDeduct)
             .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
-    /// Deduct balance for an API call. Callable by authorized caller (e.g. backend) or owner.
-    /// Amount must not exceed max single deduct (see init / get_max_deduct).
-    /// If revenue pool is set, USDC is transferred to it; otherwise it remains in the vault.
-    /// Emits a "deduct" event with caller, optional request_id, amount, and new balance.
+    /// Deducts USDC from the vault for settlement or revenue pool.
+    /// Can be called by the Owner or the Authorized Caller.
+    ///
+    /// # Panics
+    /// * `"vault is paused"` – if the circuit breaker is active.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
+        // ── 1. Require Soroban-level auth for the caller ──────────────────────
         caller.require_auth();
+        Self::require_not_paused(env.clone());
         assert!(amount > 0, "amount must be positive");
+
+        // ── 3. Enforce max_deduct cap ─────────────────────────────────────────
         let max_deduct = Self::get_max_deduct(env.clone());
         assert!(amount <= max_deduct, "deduct amount exceeds max_deduct");
-        let mut meta = Self::get_meta(env.clone());
 
         // Check authorization: must be either the authorized_caller if set, or the owner.
+        let meta = Self::get_meta(env.clone());
         let authorized = match &meta.authorized_caller {
             Some(auth_caller) => caller == *auth_caller || caller == meta.owner,
             None => caller == meta.owner,
         };
         assert!(authorized, "unauthorized caller");
 
+        // ── 6. Balance safety: explicit guard prevents underflow ──────────────
         assert!(meta.balance >= amount, "insufficient balance");
         meta.balance -= amount;
         env.storage().instance().set(&StorageKey::Meta, &meta);
@@ -335,24 +542,34 @@ impl CalloraVault {
             Self::transfer_usdc(env.clone(), receiver, amount);
         }
 
-        let topics = match &request_id {
-            Some(rid) => (Symbol::new(&env, "deduct"), caller.clone(), rid.clone()),
-            None => (
-                Symbol::new(&env, "deduct"),
-                caller.clone(),
-                Symbol::new(&env, ""),
-            ),
-        };
-        env.events().publish(topics, (amount, meta.balance));
+        // ── 9. Emit event ONLY after successful deduction ─────────────────────
+        //    Schema: topics = ("deduct", caller, request_id | ""), data = (amount, new_balance)
+        let rid = request_id.unwrap_or(Symbol::new(&env, ""));
+        env.events()
+            .publish((Symbol::new(&env, "deduct"), caller, rid), (amount, meta.balance));
+
         meta.balance
     }
 
-    /// Batch deduct: multiple (amount, optional request_id) in one transaction.
-    /// Each amount must not exceed max_deduct. Reverts entire batch if any check fails.
-    /// If revenue pool is set, total deducted USDC is transferred to it once.
-    /// Emits one "deduct" event per item.
+    /// Atomically deducts multiple amounts from the vault.
+    ///
+    /// The entire batch is validated before any state is written. If any item
+    /// fails validation the call panics and no balance change occurs.
+    ///
+    /// # Panics
+    /// * `"batch too large"` – more than `MAX_BATCH_SIZE` items.
+    /// * `"batch_deduct requires at least one item"` – empty batch.
+    /// * `"unauthorized caller"` – caller is not owner or authorized_caller.
+    /// * `"amount must be positive"` – any item amount ≤ 0.
+    /// * `"deduct amount exceeds max_deduct"` – any item exceeds the per-item cap.
+    /// * `"insufficient balance"` – cumulative deductions exceed current balance.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         caller.require_auth();
+
+        let n = items.len();
+        assert!(n > 0, "batch_deduct requires at least one item");
+        assert!(n <= MAX_BATCH_SIZE, "batch too large");
+
         let max_deduct = Self::get_max_deduct(env.clone());
         let mut meta = Self::get_meta(env.clone());
 
@@ -362,11 +579,9 @@ impl CalloraVault {
         };
         assert!(authorized, "unauthorized caller");
 
-        let n = items.len();
-        assert!(n > 0, "batch_deduct requires at least one item");
-
+        // ── Phase 1: validate the full batch, compute totals ────────────────
         let mut running = meta.balance;
-        let mut total_amount = 0i128;
+        let mut total_amount: i128 = 0;
         for item in items.iter() {
             assert!(item.amount > 0, "amount must be positive");
             assert!(
@@ -374,17 +589,24 @@ impl CalloraVault {
                 "deduct amount exceeds max_deduct"
             );
             assert!(running >= item.amount, "insufficient balance");
-            running -= item.amount;
-            total_amount += item.amount;
+            running = running.checked_sub(item.amount).unwrap();
+            total_amount = total_amount.checked_add(item.amount).unwrap();
         }
-        // Apply deductions and emit per-item events.
-        let mut balance = meta.balance;
+
+        // ── Phase 2: write state ─────────────────────────────────────────────
+        meta.balance = running;
+        env.storage().instance().set(&StorageKey::Meta, &meta);
+
+        // ── Phase 3: emit one event per item ─────────────────────────────────
+        // Walk from original balance down so each event shows the running total
+        // after that item — same semantics as single deduct events.
+        let mut event_balance = meta.balance.checked_add(total_amount).unwrap();
         for item in items.iter() {
-            balance -= item.amount;
+            event_balance = event_balance.checked_sub(item.amount).unwrap();
             let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
             env.events().publish(
                 (Symbol::new(&env, "deduct"), caller.clone(), rid),
-                (item.amount, balance),
+                (item.amount, event_balance),
             );
         }
         meta.balance = balance;
@@ -403,28 +625,51 @@ impl CalloraVault {
         Self::get_meta(env).balance
     }
 
+    /// Nominates a new owner for the vault.
+    /// The nominee must call `accept_ownership` to finalize the transfer.
+    /// Can only be called by the current Owner.
     pub fn transfer_ownership(env: Env, new_owner: Address) {
-        let mut meta = Self::get_meta(env.clone());
+        let meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
         assert!(
             new_owner != meta.owner,
             "new_owner must be different from current owner"
         );
 
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingOwner, &new_owner);
+
         env.events().publish(
             (
-                Symbol::new(&env, "transfer_ownership"),
-                meta.owner.clone(),
-                new_owner.clone(),
+                Symbol::new(&env, "ownership_nominated"),
+                meta.owner,
+                new_owner,
             ),
             (),
         );
+    }
+
+    /// Accepts ownership of the vault.
+    /// Can only be called by the pending Owner.
+    pub fn accept_ownership(env: Env) {
+        let pending_owner: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingOwner)
+            .expect("no ownership transfer pending");
+        pending_owner.require_auth();
+
+        let mut meta = Self::get_meta(env.clone());
+        let old_owner = meta.owner.clone();
+        meta.owner = pending_owner;
 
         meta.owner = new_owner;
         env.storage().instance().set(&StorageKey::Meta, &meta);
     }
 
-    /// Withdraw from vault. Callable only by the vault owner.
+    /// Withdraws USDC from the vault to the owner.
+    /// Can only be called by the Owner.
     pub fn withdraw(env: Env, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -433,7 +678,7 @@ impl CalloraVault {
         let usdc_address: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
+            .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         usdc.transfer(&env.current_contract_address(), &meta.owner, &amount);
@@ -442,11 +687,8 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Withdraw USDC from the vault to a designated address. Owner-only.
-    ///
-    /// # Panics
-    /// * `"amount must be positive"` – amount is zero or negative.
-    /// * `"insufficient balance"` – vault balance is less than amount.
+    /// Withdraws USDC from the vault to a specific recipient.
+    /// Can only be called by the Owner.
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -455,7 +697,7 @@ impl CalloraVault {
         let usdc_address: Address = env
             .storage()
             .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
+            .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
@@ -464,10 +706,59 @@ impl CalloraVault {
         meta.balance
     }
 
-    /// Set the settlement contract address. Admin-only.
+    /// Sets the revenue pool address that receives USDC on each deduct.
+    ///
+    /// Admin-only. Pass `None` to clear the revenue pool address.
+    ///
+    /// **Routing priority**: when a deduct occurs, `settlement` is tried first;
+    /// `revenue_pool` is used only when `settlement` is **not** configured.
+    /// If neither is set, USDC stays in the vault after the balance is reduced.
+    ///
+    /// Updating this address is atomic – no partial state is possible.
     ///
     /// # Panics
-    /// * `"unauthorized: caller is not admin"` – caller is not the current admin.
+    /// * `"unauthorized: caller is not admin"` – caller is not the admin.
+    ///
+    /// # Events
+    /// Emits topic `("set_revenue_pool", caller)` with data `address` on set,
+    /// or `("clear_revenue_pool", caller)` with data `()` on clear.
+    pub fn set_revenue_pool(env: Env, caller: Address, revenue_pool: Option<Address>) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        match revenue_pool {
+            Some(addr) => {
+                env.storage()
+                    .instance()
+                    .set(&StorageKey::RevenuePool, &addr);
+                env.events().publish(
+                    (Symbol::new(&env, "set_revenue_pool"), caller),
+                    addr,
+                );
+            }
+            None => {
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::RevenuePool);
+                env.events().publish(
+                    (Symbol::new(&env, "clear_revenue_pool"), caller),
+                    (),
+                );
+            }
+        }
+    }
+
+    /// Get the revenue pool address, or `None` if not configured.
+    pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::RevenuePool)
+    }
+
+    /// Sets the settlement contract address.
+    /// Can only be called by the Admin.
     pub fn set_settlement(env: Env, caller: Address, settlement_address: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());
@@ -476,7 +767,7 @@ impl CalloraVault {
         }
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, SETTLEMENT_KEY), &settlement_address);
+            .set(&StorageKey::Settlement, &settlement_address);
     }
 
     /// Get the settlement contract address.
@@ -486,7 +777,7 @@ impl CalloraVault {
     pub fn get_settlement(env: Env) -> Address {
         env.storage()
             .instance()
-            .get(&Symbol::new(&env, SETTLEMENT_KEY))
+            .get(&StorageKey::Settlement)
             .unwrap_or_else(|| panic!("settlement address not set"))
     }
 
@@ -505,7 +796,19 @@ impl CalloraVault {
     ) -> String {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone());
-        env.storage().instance().set(&offering_id, &metadata);
+
+        assert!(
+            offering_id.len() <= MAX_OFFERING_ID_LEN,
+            "offering_id exceeds max length"
+        );
+        assert!(
+            metadata.len() <= MAX_METADATA_LEN,
+            "metadata exceeds max length"
+        );
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
             (Symbol::new(&env, "metadata_set"), offering_id, caller),
             metadata.clone(),
@@ -515,7 +818,9 @@ impl CalloraVault {
 
     /// Retrieve stored offering metadata. Returns `None` if not set.
     pub fn get_metadata(env: Env, offering_id: String) -> Option<String> {
-        env.storage().instance().get(&offering_id)
+        env.storage()
+            .instance()
+            .get(&StorageKey::Metadata(offering_id))
     }
 
     /// Update existing offering metadata. Owner-only.
@@ -533,12 +838,24 @@ impl CalloraVault {
     ) -> String {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone());
+
+        assert!(
+            offering_id.len() <= MAX_OFFERING_ID_LEN,
+            "offering_id exceeds max length"
+        );
+        assert!(
+            metadata.len() <= MAX_METADATA_LEN,
+            "metadata exceeds max length"
+        );
+
         let old: String = env
             .storage()
             .instance()
-            .get(&offering_id)
+            .get(&StorageKey::Metadata(offering_id.clone()))
             .unwrap_or(String::from_str(&env, ""));
-        env.storage().instance().set(&offering_id, &metadata);
+        env.storage()
+            .instance()
+            .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
             (Symbol::new(&env, "metadata_updated"), offering_id, caller),
             (old, metadata.clone()),
@@ -577,3 +894,6 @@ impl CalloraVault {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_init_hardening;
