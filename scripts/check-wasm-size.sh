@@ -1,31 +1,52 @@
 #!/bin/bash
-# Check that vault contract WASM binary stays under 64KB limit
+# Check that all contract WASM binaries stay under the 64KB Soroban limit.
 
 set -e
 
-# Build the vault contract in release mode
-echo "Building vault contract..."
-cargo build --target wasm32-unknown-unknown --release -p callora-vault
+MAX_SIZE=$((64 * 1024))
+FAILED=0
 
-# Get the WASM file size
-WASM_FILE="target/wasm32-unknown-unknown/release/callora_vault.wasm"
-SIZE=$(wc -c < "$WASM_FILE")
-SIZE_KB=$((SIZE / 1024))
-MAX_SIZE=$((64 * 1024))  # 64KB in bytes
+check_wasm() {
+  local crate="$1"
+  local wasm_name="$2"
+  local wasm_file="target/wasm32-unknown-unknown/release/${wasm_name}.wasm"
 
-echo "Vault WASM size: $SIZE bytes (${SIZE_KB}KB)"
-echo "Maximum allowed: $MAX_SIZE bytes (64KB)"
+  if [ ! -f "$wasm_file" ]; then
+    echo "ERROR: $wasm_file not found — did the build run?"
+    FAILED=1
+    return
+  fi
 
-# Check if size exceeds limit
-if [ "$SIZE" -gt "$MAX_SIZE" ]; then
-    echo "❌ ERROR: WASM binary exceeds 64KB limit!"
-    echo "   Current: ${SIZE_KB}KB"
-    echo "   Limit: 64KB"
-    exit 1
-else
-    REMAINING=$((MAX_SIZE - SIZE))
-    REMAINING_KB=$((REMAINING / 1024))
-    echo "✅ WASM size check passed!"
-    echo "   Remaining headroom: ${REMAINING_KB}KB"
-    exit 0
+  local size
+  size=$(wc -c < "$wasm_file")
+  local size_kb=$((size / 1024))
+
+  if [ "$size" -gt "$MAX_SIZE" ]; then
+    echo "FAIL  $crate: ${size_kb}KB — exceeds 64KB limit"
+    FAILED=1
+  else
+    local headroom=$(( (MAX_SIZE - size) / 1024 ))
+    echo "OK    $crate: ${size_kb}KB (${headroom}KB headroom)"
+  fi
+}
+
+echo "Building all contracts for wasm32-unknown-unknown (release)..."
+cargo build --target wasm32-unknown-unknown --release \
+  -p callora-vault \
+  -p callora-revenue-pool \
+  -p callora-settlement
+
+echo ""
+echo "WASM size check (limit: 64KB)"
+echo "------------------------------"
+check_wasm "callora-vault"        "callora_vault"
+check_wasm "callora-revenue-pool" "callora_revenue_pool"
+check_wasm "callora-settlement"   "callora_settlement"
+echo ""
+
+if [ $FAILED -ne 0 ]; then
+  echo "One or more contracts exceed the size limit."
+  exit 1
 fi
+
+echo "All contracts within size limit."

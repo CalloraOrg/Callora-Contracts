@@ -20,17 +20,32 @@ This document describes the implementation of revenue settlement functionality t
 
 ### Flow Diagram
 
-```
-API Call → Vault deduct() → USDC Transfer → Settlement receive_payment() → Balance Update
+```mermaid
+sequenceDiagram
+    participant API as API Client
+    participant Vault as Vault Contract
+    participant USDC as USDC Contract
+    participant Settlement as Settlement Contract
+    
+    API->>Vault: deduct(env, caller, amount, request_id)
+    Vault->>Vault: Validate Auth & Balance
+    Vault->>Vault: Update internal balance
+    Vault->>USDC: transfer(vault, settlement, amount)
+    USDC-->>Vault: Transfer complete
+    Vault->>Settlement: receive_payment(env, vault, amount, ...)
+    Settlement->>Settlement: Validate caller (vault)
+    Settlement->>Settlement: Update Global Pool or Dev Balance
+    Settlement-->>Vault: Payment successful
+    Vault-->>API: Return new balance
 ```
 
 ## Implementation Details
 
 ### Vault Contract Changes
 
-#### New Constants
+#### Storage Keys
 ```rust
-const SETTLEMENT_KEY: &str = "settlement";
+StorageKey::Settlement
 ```
 
 #### New Functions
@@ -44,18 +59,18 @@ const SETTLEMENT_KEY: &str = "settlement";
    - Returns the configured settlement contract address
    - Panic: "settlement address not set"
 
-3. **`transfer_to_settlement(env, amount)`** (Internal)
-   - Transfers USDC from vault to settlement contract
-   - Used internally by deduct functions
-   - Emits: `transfer_to_settlement` event
+3. **`transfer_funds(env, usdc_token, to, amount)`** (Internal)
+   - Transfers USDC from vault to a specified destination (e.g., settlement contract or revenue pool)
+   - Used internally by `deduct` and `batch_deduct`
+   - Uses underlying `token::Client` to execute transfer
 
 #### Modified Functions
 
-1. **`deduct()`**
-   - Added automatic transfer to settlement contract
-   - Flow: Validate → Update balance → Transfer to settlement → Emit event
+1. **`deduct(env, caller, amount, request_id)`**
+   - Added automatic transfer to settlement contract if `StorageKey::Settlement` is set
+   - Flow: Validate → Update balance → Transfer bounds (transfer_funds) → Emit `deduct` event using `request_id`
 
-2. **`batch_deduct()`**
+2. **`batch_deduct(env, caller, items)`**
    - Added automatic transfer of total amount to settlement
    - Calculates total batch amount for settlement transfer
    - Maintains atomic batch operation

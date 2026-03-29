@@ -31,3 +31,7 @@ timeout       = "120s"
 
 # Exclude auto-generated or build-only source files from the line counts.
 exclude-files = ["*/build.rs", "hidden/*"]
+
+# Upload HTML report as a CI artifact when running in GitHub Actions.
+# The workflow step should use: actions/upload-artifact with path: coverage/
+

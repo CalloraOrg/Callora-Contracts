@@ -12,10 +12,12 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Arithmetic Safety
 
-- [ ] No integer overflow/underflow possible
+- [x] No integer overflow/underflow possible
 - [ ] Solidity ^0.8.x overflow checks relied upon or SafeMath used where required
-- [ ] For Soroban/Rust: `checked_add` / `checked_sub` used for all balance mutations
-- [ ] `overflow-checks` enabled in both dev and release profiles
+- [x] For Soroban/Rust: `checked_add` / `checked_sub` used for all balance mutations
+- [x] `overflow-checks` enabled in both dev and release profiles
+
+> All balance mutations in `callora-vault` (`deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`) and `callora-revenue-pool` (`batch_distribute`) use `checked_add` / `checked_sub` and panic with a descriptive message on overflow. `callora-settlement` (`receive_payment`) does the same. The workspace `Cargo.toml` sets `overflow-checks = true` for both `dev` and `release` profiles, so even plain arithmetic would trap in debug builds — the explicit checked calls make the intent clear and guarantee the same behaviour in all build configurations.
 
 ### Initialization / Re-initialization
 
@@ -32,7 +34,7 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Ownership Transfer
 
-- [ ] Ownership transfer is two-step (optional but recommended)
+- [x] Ownership transfer is two-step (optional but recommended)
 - [ ] Ownership transfer emits events
 - [ ] Renounce ownership reviewed and justified
 
