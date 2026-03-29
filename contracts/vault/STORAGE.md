@@ -1,240 +1,141 @@
 # Vault Storage Layout
 
-This document describes the storage layout of the Callora Vault contract, including storage keys, data types, and upgrade implications.
+This document describes the storage layout of the Callora Vault contract, including all `DataKey` variants, their value types, and upgrade implications.
 
 ## Storage Overview
 
-The Callora Vault contract uses Soroban's instance storage to persist contract state. Data is stored under a small set of typed keys defined by the `StorageKey` enum.
+All contract state is stored in Soroban **instance storage** under a single unified `DataKey` enum. Using a typed enum prevents key collisions, enables exhaustive auditing, and matches the idiomatic Soroban storage pattern used across this workspace.
 
-## Storage Keys
-
-### Instance Storage
-
-| Key | Type | Description | Usage |
-|-----|------|-------------|-------|
-| `Symbol("meta")` | `VaultMeta` | Primary vault metadata (owner, balance, min_deposit) | Core vault state |
-| `Symbol("usdc")` | `Address` | USDC token contract address | Token transfers |
-| `Symbol("admin")` | `Address` | Admin (e.g. backend) for distribute | Access control |
-| `Symbol("revenue_pool")` | `Option<Address>` | Optional settlement contract; receives USDC on deduct | Deduct flow |
-| `Symbol("max_deduct")` | `i128` | Maximum amount per single deduct (configurable at init) | Deduct limit |
-| `StorageKey::OfferingMetadata(offering_id)` | `String` | Off-chain metadata reference (IPFS CID or URI) per offering | Offering metadata |
-The contract defines the following storage keys:
+## DataKey Enum
 
 ```rust
 #[contracttype]
-pub enum StorageKey {
+pub enum DataKey {
     Meta,
-    AllowedDepositor,
-    ApiPrice(Symbol),
+    AllowedDepositors,
+    Admin,
+    UsdcToken,
+    Settlement,
+    RevenuePool,
+    MaxDeduct,
+    Metadata(String),
 }
 ```
 
-They are used as follows:
+## Storage Key Reference
 
-| Key Variant | Value Type | Description | Usage |
-|------------|-----------|-------------|-------|
-| `Meta` | `VaultMeta` | Primary vault metadata (owner, balance) | Core vault state |
-| `AllowedDepositor` | `Address` | Optional backend/admin address allowed to deposit and manage pricing | Access control |
-| `ApiPrice(Symbol(api_id))` | `i128` | Price per API call (smallest USDC units) for a given `api_id` | API pricing |
+| Variant | Value Type | Description | Set by | Required |
+|---------|-----------|-------------|--------|----------|
+| `DataKey::Meta` | `VaultMeta` | Primary vault state: owner, balance, authorized_caller, min_deposit | `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`, `transfer_ownership`, `set_authorized_caller` | Yes |
+| `DataKey::AllowedDepositors` | `Vec<Address>` | Ordered list of addresses permitted to deposit. Absent when no depositors are set. | `set_allowed_depositor` | No |
+| `DataKey::Admin` | `Address` | Administrative address for privileged operations (distribute, set_settlement). Set to owner at init. | `init`, `set_admin` | Yes |
+| `DataKey::UsdcToken` | `Address` | USDC token contract address used for all token transfers. | `init` | Yes |
+| `DataKey::Settlement` | `Address` | Optional settlement contract address. When present, deduct transfers USDC here (takes priority over RevenuePool). | `set_settlement` | No |
+| `DataKey::RevenuePool` | `Address` | Optional revenue pool address. Receives USDC on deduct when Settlement is not set. | `init` | No |
+| `DataKey::MaxDeduct` | `i128` | Maximum amount per single deduct call. Defaults to `i128::MAX` (no cap) if not set at init. | `init` | Yes (defaults) |
+| `DataKey::Metadata(String)` | `String` | Per-offering metadata reference (IPFS CID or HTTPS URI). Keyed by `offering_id`. | `set_metadata`, `update_metadata` | No |
 
-### Data Structures
+## Data Structures
 
-#### VaultMeta
+### VaultMeta
 
 ```rust
 #[contracttype]
 #[derive(Clone)]
 pub struct VaultMeta {
-    pub owner: Address,
-    pub balance: i128,
+    pub owner: Address,       // Vault owner; always permitted to deposit
+    pub balance: i128,        // Current tracked balance in USDC micro-units
+    pub authorized_caller: Option<Address>, // Optional address permitted to call deduct
+    pub min_deposit: i128,    // Minimum deposit amount (0 = no minimum)
 }
 ```
-
-**Fields:**
-- `owner`: `Address` - The address that owns the vault and can perform operations
-- `balance`: `i128` - Current vault balance, can be positive or zero
 
 ## Storage Operations
 
 ### Write Operations
-- `init()`: Creates initial `VaultMeta` and stores under `StorageKey::Meta`
-- `set_allowed_depositor()`: Sets or clears `StorageKey::AllowedDepositor`
-- `deposit()`: Reads `VaultMeta`, updates balance, writes back under `StorageKey::Meta`
-- `deduct()`: Reads `VaultMeta`, validates balance, updates, writes back under `StorageKey::Meta`
-- `set_price()`: Writes the price for a given `api_id` under `StorageKey::ApiPrice(api_id)`
+
+| Function | Keys Written |
+|----------|-------------|
+| `init` | `Meta`, `UsdcToken`, `Admin`, optionally `RevenuePool`, `MaxDeduct` |
+| `deposit` | `Meta` (balance update) |
+| `deduct` | `Meta` (balance update) |
+| `batch_deduct` | `Meta` (balance update) |
+| `withdraw` | `Meta` (balance update) |
+| `withdraw_to` | `Meta` (balance update) |
+| `transfer_ownership` | `Meta` (owner update) |
+| `set_authorized_caller` | `Meta` (authorized_caller update) |
+| `set_admin` | `Admin` |
+| `set_settlement` | `Settlement` |
+| `set_allowed_depositor(Some(addr))` | `AllowedDepositors` |
+| `set_allowed_depositor(None)` | removes `AllowedDepositors` |
+| `set_metadata` | `Metadata(offering_id)` |
+| `update_metadata` | `Metadata(offering_id)` |
 
 ### Read Operations
-- `get_meta()`: Reads and returns `VaultMeta` from `StorageKey::Meta`
-- `balance()`: Reads `VaultMeta` and returns balance field
-- `get_price()`: Reads and returns the price for a given `api_id` from `StorageKey::ApiPrice(api_id)` (or `None` if unset)
 
-## Storage Layout Visualization
+| Function | Keys Read |
+|----------|----------|
+| `get_meta` | `Meta` |
+| `balance` | `Meta` |
+| `get_admin` | `Admin` |
+| `get_settlement` | `Settlement` |
+| `get_max_deduct` | `MaxDeduct` |
+| `get_metadata` | `Metadata(offering_id)` |
+| `is_authorized_depositor` | `Meta`, `AllowedDepositors` |
+| `distribute` | `Admin`, `UsdcToken` |
+| `deduct` / `batch_deduct` | `Meta`, `MaxDeduct`, `Settlement`, `RevenuePool`, `UsdcToken` |
 
-```
-Instance Storage
-├── Symbol("meta")
-│   └── VaultMeta
-│       ├── owner: Address
-│       └── balance: i128
-├── Symbol("AllowedDepositor")
-│   └── Option<Address>
-└── StorageKey::OfferingMetadata(offering_id: String)
-    └── String (IPFS CID or URI, max 256 chars)
-├── StorageKey::Meta
-│   └── VaultMeta
-│       ├── owner: Address
-│       └── balance: i128
-├── StorageKey::AllowedDepositor
-│   └── Address (optional key; present only when set)
-└── StorageKey::ApiPrice(Symbol(api_id))
-    └── i128 (price per call in smallest USDC units)
-```
+## Deduct Transfer Priority
+
+When a deduct or batch_deduct is executed, USDC is transferred according to this priority:
+
+1. If `DataKey::Settlement` is set → transfer to settlement contract
+2. Else if `DataKey::RevenuePool` is set → transfer to revenue pool
+3. Else → USDC remains in the vault contract
+
+## AllowedDepositors: Vec vs Map
+
+The allowed depositors list uses `Vec<Address>` (not `Map`) intentionally:
+
+- **Stable ordering**: Vec preserves insertion order; iteration is deterministic
+- **Deduplication**: `set_allowed_depositor` checks for duplicates before appending
+- **Clear semantics**: `set_allowed_depositor(None)` removes the entire key
+- **O(n) lookup**: Acceptable for small depositor lists (typically 1–5 addresses)
 
 ## Upgrade Implications
 
-### Offering Metadata Storage
+### Adding Fields to VaultMeta
 
-The contract supports per-offering metadata storage, allowing issuers to attach off-chain references (IPFS CIDs or HTTPS URIs) to individual offerings.
+Create a `VaultMetaV2` struct and migrate during a one-time upgrade call:
 
-**Storage Pattern:**
-- Each offering's metadata is stored under a unique key: `StorageKey::OfferingMetadata(offering_id)`
-- Metadata is a string with a maximum length of 256 characters
-- Multiple offerings can have independent metadata entries
-
-**Access Control:**
-- Only the vault owner (issuer) can set or update metadata
-- Metadata operations emit events for indexing and tracking
-
-**Off-chain Usage Pattern:**
-Clients should:
-1. Call `get_metadata(offering_id)` to retrieve the reference
-2. If IPFS CID: Fetch from IPFS gateway (e.g., `https://ipfs.io/ipfs/{CID}`)
-3. If HTTPS URI: Fetch directly via HTTP GET
-4. Parse the JSON metadata (expected fields: name, description, image, attributes, etc.)
-
-**Storage Constraints:**
-- Maximum metadata length: 256 characters (sufficient for IPFS CIDv0/v1 and reasonable URIs)
-- Empty strings are allowed (can be used to clear metadata semantically)
-- Oversized input is rejected with a panic
-
-### Current Layout Considerations
-- **Single Key Design**: All vault state is consolidated under one storage key, simplifying migrations
-- **Immutable Structure**: `VaultMeta` structure fields are not optional, ensuring data consistency
-- **Type Safety**: Strong typing prevents data corruption
-
-### Potential Upgrade Paths
-
-#### 1. Adding New Fields
-To add new fields to `VaultMeta`:
 ```rust
-#[contracttype]
-#[derive(Clone)]
-pub struct VaultMetaV2 {
-    pub owner: Address,
-    pub balance: i128,
-    pub new_field: SomeType,  // New field
-}
+// Read old, transform, write new
+let old: VaultMeta = inst.get(&DataKey::Meta).unwrap();
+let new = VaultMetaV2 { ..old, new_field: default_value };
+inst.set(&DataKey::Meta, &new);
 ```
 
-**Migration Strategy:**
-- Read existing `VaultMeta` from `"meta"` key
-- Transform to `VaultMetaV2` with default values for new fields
-- Write back to same `"meta"` key
-- Update contract code to use `VaultMetaV2`
+### Adding New DataKey Variants
 
-#### 2. Adding New Storage Keys
-For additional data that doesn't fit in `VaultMeta`:
-```rust
-// New storage key for additional data
-env.storage().instance().set(&Symbol::new(&env, "new_key"), &new_data);
-```
+Adding new variants to `DataKey` is non-breaking. Existing stored values are unaffected.
 
-**Benefits:**
-- Non-breaking change to existing `VaultMeta`
-- Allows separation of concerns
-- Easier to manage optional data
+### Renaming DataKey Variants
 
-#### 3. Storage Key Renaming
-If renaming storage keys becomes necessary:
-```rust
-// Migration pattern
-let old_data = env.storage().instance().get(&Symbol::new(&env, "old_key"));
-env.storage().instance().set(&Symbol::new(&env, "new_key"), &old_data);
-env.storage().instance().remove(&Symbol::new(&env, "old_key"));
-```
+Renaming a variant changes its on-chain discriminant. A migration function must:
+1. Read from the old key
+2. Write to the new key
+3. Remove the old key
 
 ## Security Considerations
 
-### Access Control
-- Storage operations are protected by contract functions
-- `deduct()` includes balance validation to prevent underflow
-- No direct storage access from external callers
-
-### Data Integrity
-- `VaultMeta` is atomic - all fields updated together
-- Balance operations include assertions to prevent invalid states
-- Storage writes are transactional within Soroban
-
-## Gas Efficiency
-
-### Current Optimizations
-- Single storage key reduces read/write overhead
-- Composite structure minimizes storage entries
-- Efficient `i128` type for balance calculations
-
-### Potential Optimizations
-- Consider packed storage for very large-scale deployments
-- Evaluate temporary vs. persistent storage for frequently accessed data
-- Batch operations where possible
-
-## Testing Considerations
-
-### Storage Tests
-Current test suite covers:
-- Initial storage setup in `init_and_balance()`
-- Storage updates in `deposit_and_deduct()`
-- Event emission verification
-
-### Recommended Additional Tests
-- Storage migration scenarios
-- Edge cases (maximum balance, zero balance)
-- Storage upgrade/downgrade compatibility
-- Gas usage benchmarks for storage operations
-
-## Monitoring and Debugging
-
-### Storage Inspection
-Use Soroban CLI to inspect storage:
-```bash
-soroban contract storage \
-  --contract-id <CONTRACT_ID> \
-  --key "meta" \
-  --output json
-```
-
-### Event Monitoring
-Monitor storage-related events:
-- `init` events for vault creation
-- Future events could track significant balance changes
+- All storage writes are gated behind authorization checks in contract functions
+- `DataKey::Admin` and `DataKey::Meta.owner` are separate roles — admin controls distribution and settlement; owner controls deposits and withdrawals
+- Balance operations use `assert!` to prevent underflow
+- No direct external storage access is possible in Soroban
 
 ## Version History
 
-| Version | Storage Layout | Changes |
-|---------|----------------|---------|
-| 1.0 | Single `"meta"` key with `VaultMeta` | Initial implementation |
-
-## Future Considerations
-
-### Scalability
-- Current design suitable for single-tenant vaults
-- Multi-tenant support would require storage key redesign
-- Consider sharding strategies for high-volume deployments
-
-### Compliance
-- Storage layout supports audit trails through events
-- Transparent state structure for regulatory compliance
-- Upgrade paths maintain data integrity
-
----
-
-**Note**: This storage layout documentation should be updated whenever contract storage is modified. Always test storage migrations thoroughly before deployment.
+| Version | Change |
+|---------|--------|
+| 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
+| 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |

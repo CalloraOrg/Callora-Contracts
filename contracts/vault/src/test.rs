@@ -1561,3 +1561,242 @@ fn allowed_depositors_warning_vec_is_stable() {
 
     // Safe for all use cases - Vec iteration has stable semantics
 }
+
+// ---------------------------------------------------------------------------
+// DataKey coverage: missing-key and edge-case tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_admin_before_init_fails() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    assert!(
+        client.try_get_admin().is_err(),
+        "expected error when get_admin called before init"
+    );
+}
+
+#[test]
+fn get_metadata_missing_key_returns_none() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let result = client.get_metadata(&String::from_str(&env, "nonexistent-offering"));
+    assert_eq!(result, None, "expected None for missing metadata key");
+}
+
+#[test]
+fn get_max_deduct_returns_default_when_not_set() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert_eq!(client.get_max_deduct(), i128::MAX);
+}
+
+#[test]
+fn get_max_deduct_returns_configured_value() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(500));
+
+    assert_eq!(client.get_max_deduct(), 500);
+}
+
+#[test]
+fn deduct_exceeds_max_deduct_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &Some(100),
+    );
+
+    let result = client.try_deduct(&caller, &200, &None);
+    assert!(result.is_err(), "expected error when deduct exceeds max_deduct");
+}
+
+#[test]
+fn set_authorized_caller_updates_meta() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 500);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+
+    client.set_authorized_caller(&new_caller);
+
+    // new_caller should now be able to deduct
+    let remaining = client.deduct(&new_caller, &100, &None);
+    assert_eq!(remaining, 400);
+}
+
+#[test]
+fn owner_can_deduct_without_authorized_caller() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 300);
+    client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
+
+    let remaining = client.deduct(&owner, &100, &None);
+    assert_eq!(remaining, 200);
+}
+
+#[test]
+fn unauthorized_caller_deduct_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 300);
+    client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
+
+    let result = client.try_deduct(&attacker, &100, &None);
+    assert!(result.is_err(), "expected error for unauthorized deduct caller");
+}
+
+#[test]
+fn deduct_with_settlement_transfers_usdc() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc_address,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
+    client.set_settlement(&owner, &settlement);
+
+    client.deduct(&caller, &250, &None);
+
+    assert_eq!(client.balance(), 750);
+    assert_eq!(usdc_client.balance(&settlement), 250);
+}
+
+#[test]
+fn batch_deduct_with_settlement_transfers_total_usdc() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(
+        &owner,
+        &usdc_address,
+        &Some(1000),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
+    client.set_settlement(&owner, &settlement);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 100,
+            request_id: None
+        },
+        DeductItem {
+            amount: 150,
+            request_id: None
+        },
+    ];
+    client.batch_deduct(&caller, &items);
+
+    assert_eq!(client.balance(), 750);
+    assert_eq!(usdc_client.balance(&settlement), 250);
+}
+
+#[test]
+fn withdraw_to_zero_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let result = client.try_withdraw_to(&recipient, &0);
+    assert!(result.is_err(), "expected error for zero withdraw_to amount");
+}
+
+#[test]
+fn is_authorized_depositor_returns_true_for_owner() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert!(client.is_authorized_depositor(&owner));
+}
+
+#[test]
+fn is_authorized_depositor_returns_false_for_unknown() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert!(!client.is_authorized_depositor(&stranger));
+}
