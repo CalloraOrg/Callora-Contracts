@@ -1435,9 +1435,9 @@ fn allowed_depositors_vec_maintains_insertion_order() {
     client.set_allowed_depositor(&owner, &Some(depositor3.clone()));
 
     // Vec ordering is stable; all should be allowed to deposit
-    assert!(client.try_is_allowed(&depositor1).is_ok());
-    assert!(client.try_is_allowed(&depositor2).is_ok());
-    assert!(client.try_is_allowed(&depositor3).is_ok());
+    assert!(client.try_is_authorized_depositor(&depositor1).is_ok());
+    assert!(client.try_is_authorized_depositor(&depositor2).is_ok());
+    assert!(client.try_is_authorized_depositor(&depositor3).is_ok());
 }
 
 #[test]
@@ -1479,7 +1479,7 @@ fn allowed_depositors_duplicate_add_ignored() {
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
 
     // Should not cause errors or double entries
-    assert!(client.try_is_allowed(&depositor).is_ok());
+    assert!(client.try_is_authorized_depositor(&depositor).is_ok());
 }
 
 #[test]
@@ -1555,9 +1555,9 @@ fn allowed_depositors_warning_vec_is_stable() {
     client.set_allowed_depositor(&owner, &Some(dep_c.clone()));
 
     // All three are authorized (order doesn't affect authorization logic)
-    assert!(client.try_is_allowed(&dep_a).is_ok());
-    assert!(client.try_is_allowed(&dep_b).is_ok());
-    assert!(client.try_is_allowed(&dep_c).is_ok());
+    assert!(client.try_is_authorized_depositor(&dep_a).is_ok());
+    assert!(client.try_is_authorized_depositor(&dep_b).is_ok());
+    assert!(client.try_is_authorized_depositor(&dep_c).is_ok());
 
     // Safe for all use cases - Vec iteration has stable semantics
 }
