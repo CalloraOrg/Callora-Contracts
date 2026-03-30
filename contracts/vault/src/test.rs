@@ -505,11 +505,11 @@ fn fuzz_deposit_and_deduct() {
         if rng.gen_bool(0.5) {
             let amount = rng.gen_range(1..=500);
             client.deposit(&owner, &amount);
-            expected += amount;
+            expected = expected.checked_add(amount).expect("local expected overflow");
         } else if expected > 0 {
             let amount = rng.gen_range(1..=expected.min(500));
             client.deduct(&owner, &amount);
-            expected -= amount;
+            expected = expected.checked_sub(amount).expect("local expected underflow");
         }
 
         let balance = client.balance();
@@ -618,7 +618,19 @@ fn init_unauthorized_owner_panics() {
     let contract_id = env.register(CalloraVault {}, ());
     let client = CalloraVaultClient::new(&env, &contract_id);
 
-    // Call init without mocking authorization for `owner`.
     // It should panic at `owner.require_auth()`, preventing unauthorized or zero-address initialization.
     client.init(&owner, &Some(100));
+}
+
+#[test]
+#[should_panic(expected = "balance overflow")]
+fn deposit_overflow_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let contract_id = env.register(CalloraVault, ());
+    let client = CalloraVaultClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.init(&owner, &Some(i128::MAX));
+    client.deposit(&owner, &1);
 }

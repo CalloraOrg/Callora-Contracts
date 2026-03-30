@@ -15,9 +15,9 @@ fn create_usdc<'a>(
     (address, client, admin_client)
 }
 
-fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
-    let address = env.register(RevenuePool, ());
-    let client = RevenuePoolClient::new(env, &address);
+fn create_pool(env: &Env) -> (Address, SettlementClient<'_>) {
+    let address = env.register(Settlement, ());
+    let client = SettlementClient::new(env, &address);
     (address, client)
 }
 

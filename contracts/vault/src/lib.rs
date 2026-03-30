@@ -155,7 +155,7 @@ impl CalloraVault {
         );
 
         let mut meta = Self::get_meta(env.clone());
-        meta.balance += amount;
+        meta.balance = meta.balance.checked_add(amount).expect("balance overflow");
         env.storage().instance().set(&StorageKey::Meta, &meta);
 
         env.events()
@@ -195,7 +195,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         assert!(amount > 0, "amount must be positive");
         assert!(meta.balance >= amount, "insufficient balance");
-        meta.balance -= amount;
+        meta.balance = meta.balance.checked_sub(amount).expect("balance underflow");
         env.storage().instance().set(&StorageKey::Meta, &meta);
         meta.balance
     }

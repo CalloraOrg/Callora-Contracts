@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["contracts/vault", "contracts/revenue_pool"]
+members = ["contracts/vault", "contracts/settlement"]
 
 [workspace.dependencies]
 soroban-sdk = "22"

@@ -9,10 +9,10 @@ const ADMIN_KEY: &str = "admin";
 const USDC_KEY: &str = "usdc";
 
 #[contract]
-pub struct RevenuePool;
+pub struct Settlement;
 
 #[contractimpl]
-impl RevenuePool {
+impl Settlement {
     /// Initialize the revenue pool with an admin and the USDC token address.
     ///
     /// # Arguments
@@ -131,7 +131,7 @@ impl RevenuePool {
             if amount <= 0 {
                 panic!("amount must be positive");
             }
-            total_amount += amount;
+            total_amount = total_amount.checked_add(amount).expect("total amount overflow");
         }
 
         let usdc_address: Address = env
