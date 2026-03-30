@@ -1,0 +1,37 @@
+# cargo-tarpaulin configuration for Callora Contracts
+# https://github.com/xd009642/tarpaulin
+#
+# Run locally:  ./scripts/coverage.sh
+# Run directly: cargo tarpaulin
+#
+# The `lib` flag avoids linker errors that arise from the `cdylib` crate-type
+# required by Soroban — tests are still compiled and executed in full.
+
+[coverage]
+# Hard-fail the command (non-zero exit) when coverage drops below this.
+fail-under    = 95.0
+
+# Emit three report formats at once:
+#   Stdout  – instant human-readable summary in the terminal
+#   Html    – interactive per-file report; open coverage/tarpaulin-report.html
+#   Xml     – Cobertura-compatible; consumed by the GitHub Actions PR comment
+out           = ["Stdout", "Html", "Xml"]
+output-dir    = "coverage"
+
+# Measure every crate in the workspace (currently just callora-vault).
+workspace     = true
+
+# Compile and instrument the library target only.
+# Soroban contracts declare crate-type = ["cdylib", "rlib"]; instrumenting the
+# cdylib target causes linker failures during coverage builds.
+lib           = true
+
+# Give each test binary a generous window before tarpaulin kills it.
+timeout       = "120s"
+
+# Exclude auto-generated or build-only source files from the line counts.
+exclude-files = ["*/build.rs", "hidden/*"]
+
+# Upload HTML report as a CI artifact when running in GitHub Actions.
+# The workflow step should use: actions/upload-artifact with path: coverage/
+

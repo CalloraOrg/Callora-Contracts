@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, 'feature/**']
+    branches: [main, master, develop, 'feature/**', 'chore/**', 'ci/**']
   pull_request:
     branches: [main, master, develop]
 
@@ -60,9 +60,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build WASM
+      - name: Check WASM size
         run: |
-          cd contracts/vault
-          cargo build --target wasm32-unknown-unknown --release
-          cd ../revenue_pool
-          cargo build --target wasm32-unknown-unknown --release
+          chmod +x scripts/check-wasm-size.sh
+          ./scripts/check-wasm-size.sh

@@ -7,3 +7,5 @@ Cargo.lock
 .env.*
 /target/
 /target_local/
+.md-*
+hidden

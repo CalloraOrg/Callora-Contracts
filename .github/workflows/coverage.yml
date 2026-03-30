@@ -1,0 +1,74 @@
+name: Test Coverage
+
+# Run on every push to the main branches and on every pull-request targeting them.
+# Also triggers manually from the Actions UI (workflow_dispatch).
+on:
+  push:
+    branches: [main, master, "chore/**", "ci/**", "feature/**"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: "Cargo Test Coverage (≥ 95 %)"
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Source
+      # -----------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Rust toolchain — stable is sufficient for Soroban unit tests
+      # -----------------------------------------------------------------------
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # -----------------------------------------------------------------------
+      # 3. Cache — speeds up subsequent runs considerably
+      # -----------------------------------------------------------------------
+      - name: Cache Cargo registry and build artefacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          # Key rotates when Cargo.lock changes; falls back to any prior entry.
+          key: ${{ runner.os }}-cargo-tarpaulin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-tarpaulin-
+            ${{ runner.os }}-cargo-
+
+      # -----------------------------------------------------------------------
+      # 4. Install cargo-tarpaulin via the taiki-e installer — faster than
+      #    `cargo install` because it downloads a pre-built binary.
+      # -----------------------------------------------------------------------
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+
+      # -----------------------------------------------------------------------
+      # 5. Run coverage
+      #    Configuration lives in tarpaulin.toml (workspace root).
+      #    A non-zero exit here means coverage fell below the 95 % threshold —
+      #    this deliberately fails the workflow.
+      # -----------------------------------------------------------------------
+      - name: Run test coverage
+        run: cargo tarpaulin --config tarpaulin.toml
+
+      # -----------------------------------------------------------------------
+      # 6. Upload HTML + XML report as a downloadable workflow artefact.
+      #    Always runs so the report is available even when coverage fails.
+      # -----------------------------------------------------------------------
+      - name: Upload coverage report artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
