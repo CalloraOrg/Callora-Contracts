@@ -137,7 +137,7 @@ Sets up the vault with initial state:
 - Maximum string length: no hard limit enforced, but should be kept reasonable
 - Empty strings are allowed
 
-## Storage Layout Visualization
+### Read Operations
 
 ```
 Instance Storage
@@ -273,22 +273,7 @@ Monitor storage-related events:
 
 ## Version History
 
-| Version | Storage Layout | Changes |
-|---------|----------------|---------|
-| 1.0 | Single `"meta"` key with `VaultMeta` | Initial implementation |
-
-## Future Considerations
-
-### Scalability
-- Current design suitable for single-tenant vaults
-- Multi-tenant support would require storage key redesign
-- Consider sharding strategies for high-volume deployments
-
-### Compliance
-- Storage layout supports audit trails through events
-- Transparent state structure for regulatory compliance
-- Upgrade paths maintain data integrity
-
----
-
-**Note**: This storage layout documentation should be updated whenever contract storage is modified. Always test storage migrations thoroughly before deployment.
+| Version | Change |
+|---------|--------|
+| 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
+| 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |

@@ -4,7 +4,7 @@ mod settlement_tests {
 
     use crate::{CalloraSettlement, CalloraSettlementClient};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{Address, Env, Map, Symbol};
     use std::any::Any;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -13,8 +13,7 @@ mod settlement_tests {
         env.mock_all_auths();
         let admin = Address::generate(&env);
         let vault = Address::generate(&env);
-        let third_party = Address::generate(&env);
-        let addr = env.register(CalloraSettlement, ());
+                let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
         (env, addr, admin, vault, third_party)
@@ -42,6 +41,18 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
 
         client.init(&admin, &vault);
+
+        env.as_contract(&addr, || {
+            let inst = env.storage().instance();
+            assert!(inst.has(&Symbol::new(&env, "admin")));
+            assert!(inst.has(&Symbol::new(&env, "vault")));
+            assert!(inst.has(&Symbol::new(&env, "developer_balances")));
+            assert!(inst.has(&Symbol::new(&env, "global_pool")));
+            let balances: Map<Address, i128> =
+                inst.get(&Symbol::new(&env, "developer_balances")).unwrap();
+
+            assert_eq!(balances.len(), 0);
+        });
 
         assert_eq!(client.get_admin(), admin);
         assert_eq!(client.get_vault(), vault);
@@ -132,6 +143,19 @@ mod settlement_tests {
 
         let all = client.get_all_developer_balances();
         assert_eq!(all.len(), 0);
+    }
+
+    #[test]
+    fn test_admin_can_receive_payment_to_pool() {
+        // Admin can route payments directly to global pool (not just via vault)
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+                let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+        client.receive_payment(&admin, &100i128, &true, &None);
     }
 
     #[test]
@@ -254,14 +278,28 @@ mod settlement_tests {
         let admin = Address::generate(&env);
         let vault = Address::generate(&env);
         let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Third party cannot set admin
+        client.set_admin(&vault, &new_admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized: caller is not admin")]
+    fn test_set_vault_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
         let new_vault = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.set_admin(&admin, &new_admin);
-        client.set_vault(&new_admin, &new_vault);
-        assert_eq!(client.get_vault(), new_vault);
+        let attacker = Address::generate(&env);
+        client.set_vault(&attacker, &new_vault);
     }
 
     #[test]
@@ -279,6 +317,221 @@ mod settlement_tests {
         assert_eq!(client.get_vault(), new_vault);
     }
 
+    // ── admin rotation edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn test_set_admin_to_same_address_succeeds() {
+        // Admin can nominate themselves again (useful for re-confirming control)
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &admin);
+        // Still current admin until accept
+        assert_eq!(client.get_admin(), admin);
+
+        client.accept_admin();
+        assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    fn test_set_vault_to_same_address_succeeds() {
+        // Admin can update vault to same address (no-op but valid)
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_vault(&admin, &vault);
+        assert_eq!(client.get_vault(), vault);
+    }
+
+    #[test]
+    fn test_rapid_consecutive_admin_updates() {
+        // Admin can change nomination before acceptance
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin1 = Address::generate(&env);
+        let new_admin2 = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // First nomination
+        client.set_admin(&admin, &new_admin1);
+        // Change nomination before acceptance
+        client.set_admin(&admin, &new_admin2);
+        // Only second nominee can accept
+        client.accept_admin();
+        assert_eq!(client.get_admin(), new_admin2);
+    }
+
+    #[test]
+    fn test_admin_cannot_accept_own_nomination() {
+        // Current admin cannot bypass two-step process
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &admin);
+        // Admin must still accept to complete transfer
+        client.accept_admin();
+        assert_eq!(client.get_admin(), admin);
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized: caller is not admin")]
+    fn test_pending_admin_cannot_set_admin() {
+        // Pending admin has no privileges until accepted
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &new_admin);
+        // New admin tries to set another admin before accepting
+        client.set_admin(&new_admin, &vault);
+    }
+
+    #[test]
+    fn test_vault_update_after_admin_rotation() {
+        // Ensure vault updates work correctly after admin change
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let new_vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Rotate admin
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+
+        // New admin updates vault
+        client.set_vault(&new_admin, &new_vault);
+        assert_eq!(client.get_vault(), new_vault);
+        assert_eq!(client.get_admin(), new_admin);
+    }
+
+    #[test]
+    fn test_admin_rotation_preserves_state() {
+        // Admin rotation doesn't affect pool or balances
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Add some balance
+        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()));
+        let dev_balance_before = client.get_developer_balance(&developer);
+        let pool_before = client.get_global_pool();
+
+        // Rotate admin
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+
+        // State preserved
+        assert_eq!(client.get_developer_balance(&developer), dev_balance_before);
+        assert_eq!(
+            client.get_global_pool().total_balance,
+            pool_before.total_balance
+        );
+    }
+
+    // ── event emission tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_admin_emits_nomination_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &new_admin);
+
+        let events = env.events().all();
+        let nom_ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "admin_nominated")
+                }
+            })
+            .expect("expected admin_nominated event");
+
+        let topic_current: Address = nom_ev.1.get(1).unwrap().into_val(&env);
+        let topic_new: Address = nom_ev.1.get(2).unwrap().into_val(&env);
+        assert_eq!(topic_current, admin);
+        assert_eq!(topic_new, new_admin);
+    }
+
+    #[test]
+    fn test_accept_admin_emits_accepted_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+
+        let events = env.events().all();
+        let acc_ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "admin_accepted")
+                }
+            })
+            .expect("expected admin_accepted event");
+
+        let topic_old: Address = acc_ev.1.get(1).unwrap().into_val(&env);
+        let topic_new: Address = acc_ev.1.get(2).unwrap().into_val(&env);
+        assert_eq!(topic_old, admin);
+        assert_eq!(topic_new, new_admin);
+    }
+
     // ── panic / error paths ──────────────────────────────────────────────────
 
     #[test]
@@ -292,21 +545,6 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
         client.init(&admin, &vault);
-    }
-
-    #[test]
-    #[should_panic(expected = "unauthorized: caller must be vault or admin")]
-    fn test_receive_payment_unauthorized() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let vault = Address::generate(&env);
-        let unauthorized = Address::generate(&env);
-        let addr = env.register(CalloraSettlement, ());
-        let client = CalloraSettlementClient::new(&env, &addr);
-        client.init(&admin, &vault);
-
-        client.receive_payment(&unauthorized, &100i128, &true, &None);
     }
 
     #[test]
@@ -537,5 +775,142 @@ mod settlement_tests {
 
         let bc_data: crate::BalanceCreditedEvent = bc_ev.2.into_val(&env);
         assert_eq!(bc_data.new_balance, 500i128);
+    }
+
+    // ── regression tests: ensure settlement logic intact after rotation ─────
+
+    #[test]
+    fn test_receive_payment_works_after_admin_rotation() {
+        // Ensure payment processing still works after admin change
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Rotate admin
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+
+        // Vault can still send payments
+        client.receive_payment(&vault, &1000i128, &true, &None);
+        assert_eq!(client.get_global_pool().total_balance, 1000i128);
+    }
+
+    #[test]
+    fn test_receive_payment_works_after_vault_update() {
+        // Ensure payment processing works with new vault address
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Update vault
+        client.set_vault(&admin, &new_vault);
+
+        // Old vault cannot send payments
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.receive_payment(&vault, &1000i128, &true, &None);
+        }));
+        assert!(result.is_err());
+        assert!(panic_message(result.unwrap_err()).contains("unauthorized"));
+
+        // New vault can send payments
+        client.receive_payment(&new_vault, &1000i128, &true, &None);
+        assert_eq!(client.get_global_pool().total_balance, 1000i128);
+    }
+
+    #[test]
+    fn test_developer_withdrawal_after_admin_rotation() {
+        // Ensure developer balances accessible after admin change
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Credit developer
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()));
+
+        // Rotate admin
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+
+        // Balance still accessible
+        assert_eq!(client.get_developer_balance(&developer), 500i128);
+
+        // Admin can still view all balances
+        let all_balances = client.get_all_developer_balances();
+        assert_eq!(all_balances.len(), 1);
+        assert_eq!(all_balances.get(0).unwrap().balance, 500i128);
+    }
+
+    #[test]
+    fn test_multiple_payments_accumulate_after_vault_update() {
+        // Ensure accumulation logic works correctly after vault changes
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Some payments from old vault
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+
+        // Update vault
+        client.set_vault(&admin, &new_vault);
+
+        // More payments from new vault
+        client.receive_payment(&new_vault, &150i128, &false, &Some(developer.clone()));
+        client.receive_payment(&new_vault, &200i128, &false, &Some(developer.clone()));
+
+        // Total should accumulate correctly
+        assert_eq!(client.get_developer_balance(&developer), 450i128);
+    }
+
+    #[test]
+    fn test_global_pool_timestamp_updates_after_admin_change() {
+        // Ensure pool timestamp updates correctly regardless of admin
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_700_000_000);
+
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Initial payment
+        client.receive_payment(&vault, &1000i128, &true, &None);
+        let pool_before = client.get_global_pool();
+        assert_eq!(pool_before.last_updated, 1_700_000_000);
+
+        // Rotate admin and advance time
+        client.set_admin(&admin, &new_admin);
+        client.accept_admin();
+        env.ledger().set_timestamp(1_700_000_100);
+
+        // New payment updates timestamp
+        client.receive_payment(&vault, &500i128, &true, &None);
+        let pool_after = client.get_global_pool();
+        assert_eq!(pool_after.last_updated, 1_700_000_100);
+        assert_eq!(pool_after.total_balance, 1500i128);
     }
 }

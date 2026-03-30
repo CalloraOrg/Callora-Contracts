@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::token;
 use soroban_sdk::TryFromVal;
-use soroban_sdk::{Address, Env, Symbol, TryIntoVal, Vec};
+use soroban_sdk::{Address, Env, Symbol, Vec};
 
 fn create_usdc<'a>(
     env: &'a Env,
@@ -41,6 +41,22 @@ fn init_success() {
 }
 
 #[test]
+fn init_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    let events = env.events().all();
+    let init_event = events.last().unwrap();
+    let event_name = Symbol::try_from_val(&env, &init_event.1.get(0).unwrap()).unwrap();
+    assert_eq!(event_name, Symbol::new(&env, "init"));
+}
+
+#[test]
 #[should_panic(expected = "revenue pool already initialized")]
 fn init_double_panics() {
     let env = Env::default();
@@ -51,6 +67,45 @@ fn init_double_panics() {
 
     client.init(&admin, &usdc);
     client.init(&admin, &usdc);
+}
+
+#[test]
+#[should_panic(expected = "revenue pool already initialized")]
+fn init_double_different_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let other_admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+    let (usdc2, _, _) = create_usdc(&env, &other_admin);
+
+    client.init(&admin, &usdc);
+    client.init(&other_admin, &usdc2);
+}
+
+#[test]
+#[should_panic(expected = "invalid config: usdc_token cannot be the contract itself")]
+fn init_usdc_token_is_contract_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+
+    // Passing the contract's own address as usdc_token should be rejected.
+    client.init(&admin, &pool_addr);
+}
+
+#[test]
+#[should_panic(expected = "invalid config: usdc_token cannot be the admin address")]
+fn init_usdc_token_is_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+
+    // Passing the admin address as usdc_token should be rejected.
+    client.init(&admin, &admin);
 }
 
 #[test]

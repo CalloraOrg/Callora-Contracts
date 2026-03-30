@@ -5,6 +5,14 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
 /// Flow: vault deduct → vault transfers USDC to this contract → admin calls distribute(to, amount).
+///
+/// # Security Assumptions
+/// - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
+/// - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
+/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
+///   increase balance without breaking logic.
+///
+/// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const USDC_KEY: &str = "usdc";
@@ -32,6 +40,12 @@ impl RevenuePool {
     /// Emits an `init` event with the `admin` address as a topic and `usdc_token` address as data.
     pub fn init(env: Env, admin: Address, usdc_token: Address) {
         admin.require_auth();
+        if usdc_token == env.current_contract_address() {
+            panic!("invalid config: usdc_token cannot be the contract itself");
+        }
+        if usdc_token == admin {
+            panic!("invalid config: usdc_token cannot be the admin address");
+        }
         let inst = env.storage().instance();
         if inst.has(&Symbol::new(&env, ADMIN_KEY)) {
             panic!("revenue pool already initialized");
@@ -151,6 +165,14 @@ impl RevenuePool {
         );
     }
 
+    fn validate_recipient(recipient: &Address, contract_self: &Address) {
+        // Rule 1 — no self-distributions (the contract sending to itself is almost
+        // certainly a logic bug; if you want to "reclaim" funds use a dedicated fn).
+        if recipient == contract_self {
+            panic!("invalid recipient: cannot distribute to the contract itself");
+        }
+    }
+
     /// Distribute USDC from this contract to a developer wallet.
     ///
     /// Only the admin may call. Transfers USDC from this contract to `to`.
@@ -187,6 +209,15 @@ impl RevenuePool {
         let usdc = token::Client::new(&env, &usdc_address);
 
         let contract_address = env.current_contract_address();
+        Self::validate_recipient(&to, &contract_address);
+
+        let _ = usdc.try_balance(&to).unwrap_or_else(|_| {
+            panic!(
+                "invalid recipient: account does not exist \
+                                      or has no USDC trustline"
+            )
+        });
+
         if usdc.balance(&contract_address) < amount {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
@@ -241,12 +272,14 @@ impl RevenuePool {
         let usdc = token::Client::new(&env, &usdc_address);
 
         let contract_address = env.current_contract_address();
+
         if usdc.balance(&contract_address) < total_amount {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
         for payment in payments.iter() {
             let (to, amount) = payment;
+            Self::validate_recipient(&to, &contract_address);
             usdc.transfer(&contract_address, &to, &amount);
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);

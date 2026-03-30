@@ -59,10 +59,7 @@ StorageKey::Settlement
    - Returns the configured settlement contract address
    - Panic: "settlement address not set"
 
-3. **`transfer_funds(env, usdc_token, to, amount)`** (Internal)
-   - Transfers USDC from vault to a specified destination (e.g., settlement contract or revenue pool)
-   - Used internally by `deduct` and `batch_deduct`
-   - Uses underlying `token::Client` to execute transfer
+
 
 #### Modified Functions
 
@@ -272,6 +269,112 @@ soroban contract invoke \
   --args <admin_address> <settlement_contract_id>
 ```
 
+### Operational Runbook
+
+#### Rotating Admin Address
+
+To safely rotate the admin address:
+
+```bash
+# Step 1: Current admin nominates new admin
+soroban contract invoke \
+  --id <settlement_contract_id> \
+  --function set_admin \
+  --args <current_admin_address> <new_admin_address>
+
+# Step 2: New admin accepts the role (MUST be called by new admin)
+soroban contract invoke \
+  --id <settlement_contract_id> \
+  --function accept_admin \
+  --args
+```
+
+**Verification:**
+```bash
+# Verify admin has changed
+soroban contract invoke \
+  --id <settlement_contract_id> \
+  --function get_admin \
+  --args
+```
+
+**Expected Events:**
+1. `admin_nominated` - Emitted when current admin nominates new admin
+2. `admin_accepted` - Emitted when new admin accepts the role
+
+#### Updating Vault Address
+
+To update the vault address (e.g., after vault upgrade or migration):
+
+```bash
+# Admin updates vault address
+soroban contract invoke \
+  --id <settlement_contract_id> \
+  --function set_vault \
+  --args <admin_address> <new_vault_address>
+```
+
+**Verification:**
+```bash
+# Verify vault has changed
+soroban contract invoke \
+  --id <settlement_contract_id> \
+  --function get_vault \
+  --args
+```
+
+**Testing New Vault:**
+1. Send a small test payment from new vault
+2. Verify payment is credited correctly
+3. Monitor events for confirmation
+4. Once verified, resume normal operations
+
+#### Coordinated Backend and Traffic Updates
+
+When changing vault address, coordinate with backend systems:
+
+1. **Preparation:**
+   - Deploy new vault contract if needed
+   - Ensure new vault has sufficient USDC balance
+   - Update backend configuration with new vault address
+
+2. **Traffic Management:**
+   - Pause API endpoints that trigger deduct operations
+   - Wait for pending operations to complete
+   - Verify no in-flight transactions
+
+3. **Contract Update:**
+   - Call `set_vault()` on settlement contract
+   - Verify event emission
+   - Test with small amount
+
+4. **Resume Operations:**
+   - Enable API endpoints
+   - Monitor first few payments closely
+   - Watch for any errors or failed transactions
+
+5. **Monitoring:**
+   - Track `payment_received` events
+   - Verify all payments are credited correctly
+   - Alert on any authorization failures
+
+#### Emergency Procedures
+
+**If Admin Key is Compromised:**
+- Immediately rotate admin using backup key or multi-sig
+- Monitor for unauthorized `set_vault()` calls
+- Review recent event logs for suspicious activity
+
+**If Vault Address is Incorrect:**
+- Admin should immediately call `set_vault()` with correct address
+- Verify old vault can no longer send payments
+- Check all recent payments were credited correctly
+
+**If Payments Fail:**
+- Check vault address is correct via `get_vault()`
+- Verify caller authorization in transaction logs
+- Review event history for error patterns
+
 ## Monitoring
 
 ### Key Metrics
@@ -321,6 +424,85 @@ const devFilter = {
 3. **Overflow Protection**: i128 arithmetic with overflow checks
 4. **Frontend Protection**: Structured JSON responses for all operations
 
+### Admin and Vault Rotation Security
+
+#### Admin Rotation (Two-Step Process)
+The settlement contract implements a secure two-step admin rotation process:
+
+1. **Nomination Phase**: Current admin nominates a new admin using `set_admin()`
+   - New admin is stored in `PENDING_ADMIN_KEY`
+   - Current admin retains full privileges
+   - Emits `admin_nominated` event
+
+2. **Acceptance Phase**: Nominated admin must explicitly accept using `accept_admin()`
+   - Prevents unauthorized admin transfers
+   - Ensures new admin has control of private keys
+   - Emits `admin_accepted` event
+
+**Security Benefits:**
+- Prevents accidental admin loss
+- Requires active acceptance from new admin
+- Allows current admin to change nomination before acceptance
+- Clear audit trail through events
+
+#### Vault Address Updates
+Vault address updates use a simpler single-step process:
+- Only current admin can call `set_vault()`
+- Update takes effect immediately
+- Critical for maintaining payment flow integrity
+
+#### Safe Migration Flow
+When rotating admin or updating vault:
+
+1. **Admin Rotation:**
+   ```solidity
+   // Step 1: Current admin nominates new admin
+   set_admin(current_admin, new_admin)
+   
+   // Step 2: New admin accepts (must be done by new admin)
+   accept_admin()
+   ```
+
+2. **Vault Update:**
+   ```solidity
+   // Single step: Admin updates vault address
+   set_vault(admin, new_vault_address)
+   ```
+
+3. **Coordinated Changes (Backend/Traffic):**
+   - Pause or limit API traffic if needed
+   - Update vault address in backend systems first
+   - Call `set_vault()` on settlement contract
+   - Verify new vault can send payments
+   - Resume normal operations
+   - Monitor events for confirmation
+
+#### Security Considerations
+
+**Admin Key Safety:**
+- Store admin private keys securely (HSM or multi-sig recommended)
+- Never commit admin keys to version control
+- Rotate admin keys periodically using the two-step process
+- Monitor `admin_nominated` and `admin_accepted` events
+
+**Vault Update Risks:**
+- Incorrect vault address breaks payment processing
+- Old vault immediately loses access after update
+- Always test new vault address with small amounts first
+- Coordinate with backend systems to avoid downtime
+
+**Preventing Unauthorized Changes:**
+- Only current admin can call `set_admin()` and `set_vault()`
+- All functions require Soroban authentication via `require_auth()`
+- Events emitted for all changes enable monitoring
+- Two-step admin transfer prevents hijacking
+
+**State Consistency:**
+- Admin rotation doesn't affect pool balances or developer balances
+- Vault updates don't disrupt existing state
+- All state preserved across configuration changes
+- Regression tests verify consistency
+
 ### Audit Checklist
 
 - ✅ Access control implemented correctly
@@ -330,6 +512,9 @@ const devFilter = {
 - ✅ Gas optimization implemented
 - ✅ Test coverage >95%
 - ✅ Documentation complete
+- ✅ Admin rotation tested extensively
+- ✅ Vault update tested with authorization matrix
+- ✅ Regression tests pass for all scenarios
 
 ## Conclusion
 

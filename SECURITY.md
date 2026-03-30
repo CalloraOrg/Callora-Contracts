@@ -6,9 +6,9 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Access Control
 
-- [ ] All privileged functions protected by onlyOwner / role-based access
-- [ ] No public or external access to admin functions
-- [ ] Ownership transfer tested and documented
+- [ ] All privileged functions protected by `require_auth()` or `require_auth_for_args()` via `Address`
+- [ ] Admin state stored securely (e.g., using `env.storage().instance()`)
+- [ ] Admin rotation/transfer tested and documented
 
 ### Arithmetic Safety
 
@@ -21,18 +21,18 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Initialization / Re-initialization
 
-- [ ] Initializer protected against multiple calls
-- [ ] Upgradeable patterns use initializer guards
+- [ ] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
+- [ ] Contract upgrades (`env.deployer().update_current_contract_wasm()`) protected by `require_auth()`
 - [ ] No unprotected re-init functions
-- [ ] `init` validates all input parameters (rejects negative values where appropriate)
+- [ ] `initialize` validates all input parameters
 
 ### Pause / Circuit Breaker
 
-- [ ] Emergency pause mechanism implemented
-- [ ] Paused state blocks fund movement
+- [ ] Emergency pause mechanism implemented via state flag in `instance()` storage
+- [ ] Paused state blocks fund movement (e.g., reverting via `panic_with_error!`)
 - [ ] Pause/unpause flows tested
 
-### Ownership Transfer
+### Admin Transfer
 
 - [x] Ownership transfer is two-step (optional but recommended)
 - [ ] Ownership transfer emits events
@@ -40,10 +40,30 @@ This document outlines security best practices and checklist items for Callora v
 
 ### External Calls
 
+- [ ] Token transfers strictly rely on `soroban_sdk::token::Client`
+- [ ] Cross-contract calls handle potential errors/panics gracefully
+- [ ] State changes are persisted before making cross-contract calls to mitigate subtle state-caching issues
 - [ ] Checks-effects-interactions pattern followed
-- [ ] Reentrancy protection where external calls exist
-- [ ] No untrusted delegatecalls
-- [ ] Token transfers use safe transfer patterns
+
+### Revenue Routing External Transfers (Issue #110)
+
+The vault performs USDC transfers to configurable counterpart addresses on every
+`deduct` and `batch_deduct` call. These external transfers are justified as follows:
+
+- **settlement address**: set and updated exclusively by the on-chain admin via
+  `set_settlement`. Transfers to this address implement the documented
+  `Vault → Settlement` revenue flow described in `SETTLEMENT_IMPLEMENTATION.md`.
+- **revenue_pool address**: set and updated exclusively by the on-chain admin via
+  `set_revenue_pool`. Transfers to this address route product revenue to the
+  designated pool contract.
+- **Priority rule**: when both are configured, `settlement` takes priority and
+  `revenue_pool` is not used in the same deduct. This prevents "half updated"
+  routing states where funds could be split unexpectedly across two recipients.
+- **Unset behavior**: if neither address is configured the deducted amount stays
+  inside the vault (balance is reduced but no token transfer occurs). This state
+  is valid and explicitly documented—no funds are lost.
+- Both addresses can only be changed by the admin in a single atomic storage
+  write, ensuring no partial update is observable by other callers.
 
 ### Vault-Specific Risks
 
@@ -52,8 +72,21 @@ This document outlines security best practices and checklist items for Callora v
 - [ ] Funds cannot be locked permanently
 - [ ] Minimum deposit requirements enforced
 - [ ] Maximum deduction limits enforced
-- [ ] Revenue pool transfers validated
+- [x] Revenue pool transfers validated
 - [ ] Batch operations respect individual limits
+
+### Revenue Pool Security Assumptions
+
+The Revenue Pool contract (`contracts/revenue_pool`) operates under the following security assumptions and threat models:
+
+- **Malicious Admin:** The `admin` role has the authority to distribute funds and replace the admin address. A compromised or malicious admin could drain the pool's USDC balance.
+  - *Mitigation:* The `admin` should always be a heavily guarded multisig account or a rigorously audited governance contract.
+
+- **Wrong USDC Token Initialization:** The `usdc_token` address is set once during `init`. If initialized with a malicious or incorrect token address, the pool will process the wrong asset.
+  - *Mitigation:* The deployment process must verify the official Stellar USDC (or appropriate wrapped USDC) contract address before initialization. The `init` function guards against re-initialization.
+
+- **Operational Griefing (Balances):** Anyone can effectively transfer USDC to the revenue pool. If an attacker sends unsolicited funds, it increases the `balance()` but does not disrupt the `distribute` logic, as distribution is explicitly controlled by the admin.
+  - *Mitigation:* The pool does not rely on strict balance equality invariants for its core operations, mitigating balance-based operational griefing. Off-chain monitoring should track `receive_payment` events and native token transfers to reconcile expected vs. actual balances.
 
 ### Input Validation
 
@@ -103,10 +136,11 @@ Before any mainnet deployment:
 
 ### Soroban-Specific Security
 
-- [ ] WASM compilation verified and reproducible
-- [ ] Stellar network parameters validated (fees, limits)
-- [ ] Cross-contract call security reviewed
-- [ ] Storage patterns optimized and secure
+- [ ] WASM compilation verified and reproducible (`stellar contract build` / `cargo build --target wasm32-unknown-unknown --release`)
+- [ ] Storage lifespan (`extend_ttl`) implemented to prevent state archiving for critical data
+- [ ] Stellar network parameters validated (budget, CPU/RAM limits)
+- [ ] Cross-contract call security and generic type usage (`Val`) reviewed
+- [ ] Storage patterns optimized and secure (e.g., correct usage of `persistent` vs `instance` vs `temporary` keys)
 
 ### Economic Security
 

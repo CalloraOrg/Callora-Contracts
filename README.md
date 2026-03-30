@@ -124,12 +124,27 @@ callora-contracts/
 ├── scripts/
 │   ├── coverage.sh         # Local coverage runner
 │   └── check-wasm-size.sh  # WASM size verification
+├── docs/
+│   ├── interfaces/         # JSON contract interface summaries (vault, settlement, revenue_pool)
+│   └── ACCESS_CONTROL.md   # Role-based access control overview
 ├── BENCHMARKS.md           # Gas/cost notes
 ├── EVENT_SCHEMA.md         # Event topics and payloads
 ├── UPGRADE.md              # Upgrade and migration path
 ├── SECURITY.md             # Security checklist
 └── tarpaulin.toml          # cargo-tarpaulin configuration
 ```
+
+## Contract interface summaries
+
+Machine-readable JSON summaries of every public function and parameter for each contract are maintained under [`docs/interfaces/`](docs/interfaces/). They serve as the canonical reference for backend integrators using `@stellar/stellar-sdk`.
+
+| File | Contract |
+|------|----------|
+| [`docs/interfaces/vault.json`](docs/interfaces/vault.json) | `callora-vault` |
+| [`docs/interfaces/settlement.json`](docs/interfaces/settlement.json) | `callora-settlement` |
+| [`docs/interfaces/revenue_pool.json`](docs/interfaces/revenue_pool.json) | `callora-revenue-pool` |
+
+See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema description and regeneration steps.
 
 ## Security Notes
 
