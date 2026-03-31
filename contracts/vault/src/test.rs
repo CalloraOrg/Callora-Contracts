@@ -97,6 +97,36 @@ fn init_sets_owner_and_min_deposit() {
 }
 
 #[test]
+fn init_succeeds_when_onchain_usdc_balance_covers_initial_balance() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 500);
+
+    let meta = client.init(&owner, &usdc, &Some(400), &None, &None, &None, &None);
+
+    assert_eq!(meta.balance, 400);
+    assert_eq!(client.balance(), 400);
+}
+
+#[test]
+#[should_panic(expected = "initial_balance exceeds on-ledger USDC balance")]
+fn init_fails_when_initial_balance_exceeds_onchain_usdc_balance() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 99);
+
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+}
+
+#[test]
 fn double_init_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -539,10 +569,11 @@ fn set_authorized_caller_sets_and_emits_event() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let new_caller = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 200);
     client.init(&owner, &usdc, &Some(200), &None, &None, &None, &None);
 
     client.set_authorized_caller(&new_caller);

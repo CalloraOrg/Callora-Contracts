@@ -77,6 +77,14 @@ impl CalloraVault {
         let max_d = max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT);
         assert!(max_d > 0, "max_deduct must be positive");
         assert!(min_d <= max_d, "min_deposit cannot exceed max_deduct");
+        if balance > 0 {
+            let onchain_usdc_balance =
+                token::Client::new(&env, &usdc_token).balance(&env.current_contract_address());
+            assert!(
+                onchain_usdc_balance >= balance,
+                "initial_balance exceeds on-ledger USDC balance"
+            );
+        }
         let meta = VaultMeta {
             owner: owner.clone(),
             balance,

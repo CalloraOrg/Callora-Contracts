@@ -13,9 +13,9 @@ fn test_double_initialization_fails() {
     let client = CalloraVaultClient::new(&env, &addr);
 
     // First init
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(0), &None, &None, &None, &None);
     // Second init should panic
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(0), &None, &None, &None, &None);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn test_init_validates_successfully() {
     client.init(
         &owner,
         &usdc,
-        &Some(100),
+        &Some(0),
         &None,
         &Some(10),
         &Some(pool.clone()),

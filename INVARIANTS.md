@@ -35,13 +35,14 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 **Pre-conditions**
 - Vault is not already initialized:
   - `!env.storage().instance().has(META_KEY)`
+- `initial_balance.unwrap_or(0) >= 0`
 - `max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT) > 0`
-- If `initial_balance > 0`, the contract already holds at least that much USDC:
-  - `usdc.balance(current_contract_address) >= initial_balance`
+- The on-ledger USDC balance already covers the requested internal starting balance:
+  - `usdc.balance(current_contract_address) >= initial_balance.unwrap_or(0)`
 
 **Post-conditions**
 - `VaultMeta.balance == initial_balance.unwrap_or(0)`
-- `VaultMeta.balance >= 0` (since `initial_balance` is an `i128` and enforced via the token-balance check).
+- `VaultMeta.balance >= 0` (because `initial_balance.unwrap_or(0)` is explicitly checked to be non-negative before storage is written).
 
 ---
 
