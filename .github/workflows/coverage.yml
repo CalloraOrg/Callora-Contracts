@@ -4,7 +4,7 @@ name: Test Coverage
 # Also triggers manually from the Actions UI (workflow_dispatch).
 on:
   push:
-    branches: [main, master, "chore/coverage-report"]
+    branches: [main, master, "chore/**", "ci/**", "feature/**"]
   pull_request:
     branches: [main, master]
   workflow_dispatch:

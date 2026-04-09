@@ -14,10 +14,11 @@ The Callora Vault implements role-based access control for deposit operations to
 - Typically represents the end user's account in production
 
 ### Allowed Depositor
-- Optional address that can be explicitly approved by the owner
-- Mutable - can be set, changed, or cleared at any time by the owner
-- Commonly used for backend services that handle automated deposits
-- When set, has the same deposit privileges as the owner
+- One or more addresses explicitly approved by the owner via `set_allowed_depositor()`
+- Mutable — addresses can be added or the entire list cleared at any time by the owner
+- Commonly used for backend service hot-wallets that handle automated deposits
+- When added, each address has the same deposit privileges as the owner
+- The full allowlist is publicly auditable via `get_allowed_depositors()`
 
 ### Unauthorized Addresses
 - Any address that is neither the owner nor the allowed depositor

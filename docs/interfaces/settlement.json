@@ -1,0 +1,198 @@
+{
+  "contract": "callora-settlement",
+  "version": "0.1.0",
+  "description": "Advanced settlement contract with per-developer balance tracking. Receives USDC forwarded by the vault and credits either a shared global pool or an individual developer's balance.",
+  "crate": "callora-settlement",
+  "source": "contracts/settlement/src/lib.rs",
+
+  "types": {
+    "DeveloperBalance": {
+      "description": "Snapshot of a single developer's tracked balance.",
+      "fields": {
+        "address": { "type": "Address", "description": "Developer Stellar address." },
+        "balance": { "type": "i128",    "description": "Credited balance in USDC base units (stroops)." }
+      }
+    },
+    "GlobalPool": {
+      "description": "Aggregate pool state.",
+      "fields": {
+        "total_balance": { "type": "i128", "description": "Total USDC credited to the global pool." },
+        "last_updated":  { "type": "u64",  "description": "Ledger timestamp of the last pool update." }
+      }
+    },
+    "PaymentReceivedEvent": {
+      "description": "Event payload emitted on every receive_payment call.",
+      "fields": {
+        "from_vault":  { "type": "Address",       "description": "Address of the caller (typically the vault)." },
+        "amount":      { "type": "i128",           "description": "Payment amount in USDC base units." },
+        "to_pool":     { "type": "bool",           "description": "True when credited to the global pool; false when credited to a developer." },
+        "developer":   { "type": "Address | null", "description": "Developer address when to_pool=false; null otherwise." }
+      }
+    },
+    "BalanceCreditedEvent": {
+      "description": "Event payload emitted when a developer balance is increased (to_pool=false).",
+      "fields": {
+        "developer":   { "type": "Address", "description": "Developer address that was credited." },
+        "amount":      { "type": "i128",    "description": "Amount credited." },
+        "new_balance": { "type": "i128",    "description": "Developer's balance after crediting." }
+      }
+    }
+  },
+
+  "functions": [
+    {
+      "name": "init",
+      "description": "Initialize the settlement contract. Can only be called once. Sets admin, registers the vault address, creates an empty developer balance map, and initializes the global pool.",
+      "access": "any (no auth requirement on init itself; admin address is stored)",
+      "params": [
+        { "name": "admin",         "type": "Address", "optional": false, "description": "Address that may call set_admin and set_vault." },
+        { "name": "vault_address", "type": "Address", "optional": false, "description": "Vault contract address permitted to call receive_payment." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"settlement contract already initialized\" — called more than once."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "receive_payment",
+      "description": "Receive a payment from the vault and credit the global pool or a specific developer. The caller must be the registered vault or the admin.",
+      "access": "registered vault OR admin",
+      "params": [
+        { "name": "caller",    "type": "Address",      "optional": false, "description": "Must be the registered vault or admin; must authorize." },
+        { "name": "amount",    "type": "i128",          "optional": false, "description": "Payment amount in USDC base units; must be > 0." },
+        { "name": "to_pool",   "type": "bool",          "optional": false, "description": "If true, credit the global pool. If false, credit the specified developer." },
+        { "name": "developer", "type": "Address | null", "optional": true,  "description": "Required when to_pool=false; the developer to credit. Ignored when to_pool=true." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller must be vault or admin\" — caller is neither.",
+        "\"amount must be positive\" — amount <= 0.",
+        "\"developer address required when to_pool=false\" — developer is null and to_pool=false.",
+        "\"pool balance overflow\" — extremely unlikely arithmetic overflow.",
+        "\"developer balance overflow\" — extremely unlikely arithmetic overflow."
+      ],
+      "events": [
+        {
+          "always": true,
+          "topics": ["\"payment_received\"", "caller"],
+          "data": "PaymentReceivedEvent"
+        },
+        {
+          "condition": "to_pool=false",
+          "topics": ["\"balance_credited\"", "developer"],
+          "data": "BalanceCreditedEvent"
+        }
+      ]
+    },
+
+    {
+      "name": "get_developer_balance",
+      "description": "Return the tracked USDC balance for a developer. Returns 0 if the developer has never received a payment.",
+      "access": "any",
+      "params": [
+        { "name": "developer", "type": "Address", "optional": false, "description": "Developer address to query." }
+      ],
+      "returns": "i128",
+      "panics": [
+        "\"settlement contract not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_all_developer_balances",
+      "description": "Return a list of all developer balances. Intended for admin use; may be expensive if the map is large.",
+      "access": "any",
+      "params": [],
+      "returns": "Vec<DeveloperBalance>",
+      "panics": [
+        "\"settlement contract not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_global_pool",
+      "description": "Return the global pool state (total balance and timestamp of last update).",
+      "access": "any",
+      "params": [],
+      "returns": "GlobalPool",
+      "panics": [
+        "\"settlement contract not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_admin",
+      "description": "Return the current admin address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": [
+        "\"settlement contract not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_vault",
+      "description": "Return the registered vault contract address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": [
+        "\"settlement contract not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "set_admin",
+      "description": "Nominate a new admin. The nominee must call accept_admin to finalize.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",    "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_admin", "type": "Address", "optional": false, "description": "Proposed new admin address." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin."
+      ],
+      "events": [
+        { "topics": ["\"admin_nominated\"", "current_admin", "new_admin"], "data": "void" }
+      ]
+    },
+
+    {
+      "name": "accept_admin",
+      "description": "Finalize the admin transfer. Must be called by the pending admin.",
+      "access": "pending admin (must sign)",
+      "params": [],
+      "returns": "void",
+      "panics": [
+        "\"no admin transfer pending\" — set_admin was not called first."
+      ],
+      "events": [
+        { "topics": ["\"admin_accepted\"", "old_admin", "new_admin"], "data": "void" }
+      ]
+    },
+
+    {
+      "name": "set_vault",
+      "description": "Update the registered vault address. Only admin may call this.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",    "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_vault", "type": "Address", "optional": false, "description": "New vault contract address." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin."
+      ],
+      "events": []
+    }
+  ]
+}
