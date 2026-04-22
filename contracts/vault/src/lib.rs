@@ -264,6 +264,50 @@ impl CalloraVault {
             .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
     }
 
+    /// Returns the current pause state of the vault.
+    ///
+    /// # Purpose
+    /// Exposes the pause circuit-breaker state to enable off-chain indexers,
+    /// monitoring systems, and external contracts to query whether the vault
+    /// is currently paused. This allows reliable tracking of contract availability
+    /// for deposit, deduct, and batch_deduct operations.
+    ///
+    /// # Return Value
+    /// Returns `true` if the vault is currently paused, `false` otherwise.
+    /// Before the first `pause()` call, this function returns `false` (the safe
+    /// default state), ensuring that uninitialized pause state does not block
+    /// legitimate operations.
+    ///
+    /// # Safety Guarantees
+    /// - **Read-only**: This function performs no state mutation or side effects.
+    /// - **Deterministic**: Identical storage state always produces identical output.
+    /// - **Non-panicking**: Never panics, even before initialization or when pause
+    ///   state is unset. Returns `false` as the safe default.
+    /// - **Consistent**: Always reflects the latest committed pause/unpause state
+    ///   from contract storage, never stale or cached values.
+    ///
+    /// # Indexer Usage
+    /// Safe for external indexers and off-chain monitoring systems. Call this
+    /// function to determine whether the vault is accepting deposits and processing
+    /// deductions. When `is_paused()` returns `true`, the following operations are
+    /// blocked:
+    /// - `deposit()`
+    /// - `deduct()`
+    /// - `batch_deduct()`
+    ///
+    /// The pause state is consistent with emitted events:
+    /// - `vault_paused` event → `is_paused()` returns `true`
+    /// - `vault_unpaused` event → `is_paused()` returns `false`
+    ///
+    /// # Example
+    /// ```ignore
+    /// if vault.is_paused() {
+    ///     // Vault is paused - deposits and deductions are blocked
+    ///     // Only admin/owner operations like withdraw() are allowed
+    /// } else {
+    ///     // Vault is operational - all functions available
+    /// }
+    /// ```
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()

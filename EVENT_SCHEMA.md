@@ -144,6 +144,73 @@ Emitted when the vault is unpaused by the admin.
 
 ---
 
+### `vault_paused`
+
+Emitted when the vault circuit-breaker is activated by admin or owner.
+
+| Field   | Location | Type    | Description                                      |
+|---------|----------|---------|--------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"vault_paused"`                                 |
+| topic 1 | topics   | Address | `caller` — admin or owner who triggered pause   |
+| data    | data     | ()      | empty                                            |
+
+**Indexer Note:** After this event is emitted, `is_paused()` view function returns `true`.
+The following operations are blocked until unpause: `deposit()`, `deduct()`, `batch_deduct()`.
+
+---
+
+### `vault_unpaused`
+
+Emitted when the vault circuit-breaker is deactivated by admin or owner.
+
+| Field   | Location | Type    | Description                                      |
+|---------|----------|---------|--------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"vault_unpaused"`                               |
+| topic 1 | topics   | Address | `caller` — admin or owner who triggered unpause |
+| data    | data     | ()      | empty                                            |
+
+**Indexer Note:** After this event is emitted, `is_paused()` view function returns `false`.
+All vault operations are restored: `deposit()`, `deduct()`, `batch_deduct()`.
+
+---
+
+### View Function: `is_paused()`
+
+The vault exposes a read-only view function for off-chain systems to query the current pause state.
+
+**Signature:** `pub fn is_paused(env: Env) -> bool`
+
+**Return Value:**
+- `true` — Vault is currently paused (circuit-breaker active)
+- `false` — Vault is operational (normal state)
+
+**Safety Guarantees:**
+- **Read-only**: No state mutation or side effects
+- **Deterministic**: Identical state always produces identical output
+- **Non-panicking**: Never panics, even before initialization
+- **Safe default**: Returns `false` when pause state is unset
+
+**Indexer Usage:**
+```javascript
+// Check if vault is paused before processing transactions
+const isPaused = await vault.isPaused();
+if (isPaused) {
+  // Vault is paused - deposits and deductions are blocked
+  // Only admin/owner operations like withdraw() are allowed
+} else {
+  // Vault is operational - all functions available
+}
+```
+
+**Consistency with Events:**
+- `vault_paused` event emitted → `is_paused()` returns `true`
+- `vault_unpaused` event emitted → `is_paused()` returns `false`
+
+Indexers should use `is_paused()` for current state queries and subscribe to
+`vault_paused`/`vault_unpaused` events for state change notifications.
+
+---
+
 ## Contract: Callora Settlement (`callora-settlement` v0.1.0)
 
 ### `payment_received`

@@ -3328,6 +3328,164 @@ fn admin_can_pause_and_unpause() {
     assert!(!client.is_paused());
 }
 
+// ---------------------------------------------------------------------------
+// is_paused() view function tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn is_paused_returns_false_after_init() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+    // After initialization, vault should not be paused
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn is_paused_returns_true_after_pause() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+    client.pause(&owner);
+    // After pause, should return true
+    assert!(client.is_paused());
+}
+
+#[test]
+fn is_paused_returns_false_after_unpause() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+    client.pause(&owner);
+    assert!(client.is_paused());
+    client.unpause(&owner);
+    // After unpause, should return false
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn is_paused_multiple_pause_unpause_cycles() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+
+    // Multiple cycles of pause/unpause
+    for _ in 0..5 {
+        assert!(!client.is_paused());
+        client.pause(&owner);
+        assert!(client.is_paused());
+        client.unpause(&owner);
+        assert!(!client.is_paused());
+    }
+}
+
+#[test]
+fn is_paused_consistent_consecutive_calls() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+
+    // Call is_paused multiple times - should return consistent values
+    for _ in 0..10 {
+        assert!(!client.is_paused());
+    }
+
+    client.pause(&owner);
+
+    for _ in 0..10 {
+        assert!(client.is_paused());
+    }
+
+    client.unpause(&owner);
+
+    for _ in 0..10 {
+        assert!(!client.is_paused());
+    }
+}
+
+#[test]
+fn is_paused_no_state_mutation() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+
+    // Get balance before calling is_paused
+    let balance_before = client.balance();
+
+    // Call is_paused multiple times
+    for _ in 0..100 {
+        let _ = client.is_paused();
+    }
+
+    // Balance should remain unchanged (no state mutation)
+    assert_eq!(client.balance(), balance_before);
+}
+
+#[test]
+fn is_paused_reflects_latest_committed_state() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    let rp = Address::generate(&env);
+    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
+
+    // Initial state
+    assert!(!client.is_paused());
+
+    // Pause and verify immediate reflection
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Unpause and verify immediate reflection
+    client.unpause(&owner);
+    assert!(!client.is_paused());
+
+    // Admin change shouldn't affect pause state
+    client.set_admin(&owner, &new_admin);
+    client.accept_admin();
+    assert!(!client.is_paused());
+
+    // New admin can pause
+    client.pause(&new_admin);
+    assert!(client.is_paused());
+}
+
+#[test]
+fn is_paused_safe_default_before_init() {
+    let env = Env::default();
+    let (_, client) = create_vault(&env);
+    // Before initialization, is_paused should return false (safe default)
+    // and must not panic
+    assert!(!client.is_paused());
+}
+
 #[test]
 #[should_panic(expected = "vault is paused")]
 fn deduct_while_paused_fails() {

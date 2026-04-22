@@ -28,9 +28,12 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Pause / Circuit Breaker
 
-- [ ] Emergency pause mechanism implemented via state flag in `instance()` storage
-- [ ] Paused state blocks fund movement (e.g., reverting via `panic_with_error!`)
-- [ ] Pause/unpause flows tested
+- [x] Emergency pause mechanism implemented via state flag in `instance()` storage
+- [x] Paused state blocks fund movement (e.g., reverting via `panic_with_error!`)
+- [x] Pause/unpause flows tested
+- [x] `is_paused()` view function exposed for off-chain monitoring
+- [x] View function is read-only, deterministic, and non-panicking
+- [x] Safe default state (returns `false` when unset)
 
 ### Admin Transfer
 
