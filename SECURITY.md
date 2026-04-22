@@ -38,6 +38,32 @@ This document outlines security best practices and checklist items for Callora v
 - [ ] Ownership transfer emits events
 - [ ] Renounce ownership reviewed and justified
 
+### Authorized Caller Role Management (Vault)
+
+The vault's `authorized_caller` role is a non-owner principal permitted to invoke
+`deduct` and `batch_deduct`. Because it can move funds out of the vault balance,
+its lifecycle must be tightly controlled. Reviewers and operators should confirm
+the following before mainnet deployment or any admin rotation:
+
+- [x] `authorized_caller` is `Option<Address>` in `VaultMeta` and defaults to `None` when omitted at `init`
+- [x] `set_authorized_caller` requires `meta.owner.require_auth()` — only the vault owner can assign or rotate the role
+- [x] `deduct` and `batch_deduct` reject callers other than the owner or the configured `authorized_caller` (panic: `unauthorized caller`)
+- [x] Role assignment emits a `set_auth_caller` event (topic: owner; data: the newly assigned caller address) for off-chain monitoring
+- [ ] Authorized caller is a hardware-backed or multisig account, not a hot key
+- [ ] Rotation playbook documented: owner calls `set_authorized_caller(new_addr)`; the previous address loses access atomically on the next ledger
+- [ ] Revocation path tested: assigning a benign placeholder removes privileges from a compromised key without requiring a contract upgrade
+- [ ] Off-chain indexer subscribes to `set_auth_caller` events and alerts on every change
+- [ ] `get_meta().authorized_caller` is reconciled periodically against the expected value from the deployment manifest
+- [ ] Unit tests cover: authorized deduct succeeds, unauthorized deduct reverts, owner can always deduct, rotation revokes prior caller, and the documented behaviour when `authorized_caller` is `None` (any `caller.require_auth()`-satisfying address is accepted) is asserted explicitly
+- [ ] Emergency pause (`pause`) flow exercised while an `authorized_caller` is set to confirm the role cannot bypass the circuit breaker
+
+> **Security note:** `set_authorized_caller` is single-step (unlike `set_admin`,
+> which uses nominate/accept). This is intentional — the role is operational
+> rather than custodial, and immediate rotation is required to revoke a leaked
+> key. Compensating controls are: (1) owner-only authorization, (2) pause as a
+> kill-switch that blocks all deducts regardless of role, and (3) the
+> `set_auth_caller` event for real-time detection of unexpected changes.
+
 ### External Calls
 
 - [ ] Token transfers strictly rely on `soroban_sdk::token::Client`
