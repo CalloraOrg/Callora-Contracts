@@ -57,7 +57,7 @@ The vault uses **instance storage** with the following keys:
 
 | StorageKey | Type | Description |
 |------------|------|-------------|
-| `Meta` | `VaultMeta` | Owner address, tracked balance, authorized caller, min deposit |
+| `MetaKey` | `VaultMeta` | Owner address, tracked balance, authorized caller, min deposit |
 | `AllowedDepositors` | `Vec<Address>` | List of addresses permitted to deposit |
 | `Admin` | `Address` | Admin address (defaults to owner at init) |
 | `UsdcToken` | `Address` | USDC token contract address |

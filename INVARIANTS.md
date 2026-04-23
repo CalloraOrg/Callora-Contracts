@@ -34,7 +34,7 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 
 **Pre-conditions**
 - Vault is not already initialized:
-  - `!env.storage().instance().has(META_KEY)`
+  - `!env.storage().instance().has(MetaKey)`
 - `initial_balance.unwrap_or(0) >= 0`
 - `max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT) > 0`
 - The on-ledger USDC balance already covers the requested internal starting balance:

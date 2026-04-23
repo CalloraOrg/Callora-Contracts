@@ -59,7 +59,7 @@ impl CalloraVault {
     ) -> VaultMeta {
         owner.require_auth();
         let inst = env.storage().instance();
-        if inst.has(&StorageKey::Meta) {
+        if inst.has(&StorageKey::MetaKey) {
             panic!("vault already initialized");
         }
         assert!(
@@ -93,7 +93,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::Meta, &meta);
+        inst.set(&StorageKey::MetaKey, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -246,7 +246,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
         meta.authorized_caller = Some(caller.clone());
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "set_auth_caller"), meta.owner.clone()),
             caller,
@@ -411,9 +411,8 @@ impl CalloraVault {
             running = running.checked_sub(item.amount).unwrap_or_else(|| panic!("balance underflow"));
             total = total.checked_add(item.amount).unwrap_or_else(|| panic!("total overflow"));
         }
-        meta.balance = running;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
-        let mut eb = meta.balance.checked_add(total).unwrap();
+
+        let mut eb = meta.balance;
         for item in items.iter() {
             eb = eb.checked_sub(item.amount).unwrap();
             let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
@@ -422,6 +421,7 @@ impl CalloraVault {
                 (item.amount, eb),
             );
         }
+
         let inst = env.storage().instance();
         if let Some(s) = inst.get(&StorageKey::Settlement) {
             let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
@@ -432,6 +432,9 @@ impl CalloraVault {
         {
             Self::transfer_to_revenue_pool(env.clone(), total);
         }
+
+        meta.balance = running;
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         meta.balance
     }
 
@@ -469,7 +472,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
