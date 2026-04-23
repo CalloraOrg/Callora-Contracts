@@ -591,6 +591,21 @@ mod settlement_tests {
     }
 
     #[test]
+    #[should_panic(expected = "developer address must be None when to_pool=true")]
+    fn test_receive_payment_pool_true_with_developer() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.receive_payment(&vault, &100i128, &true, &Some(developer));
+    }
+
+    #[test]
     fn test_receive_payment_authorization_matrix() {
         enum CallerRole {
             Vault,

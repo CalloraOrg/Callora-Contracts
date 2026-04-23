@@ -121,6 +121,9 @@ impl CalloraSettlement {
         }
         let inst = env.storage().instance();
         if to_pool {
+            if developer.is_some() {
+                panic!("developer address must be None when to_pool=true");
+            }
             let mut global_pool = Self::get_global_pool(env.clone());
             global_pool.total_balance = global_pool
                 .total_balance
