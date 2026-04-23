@@ -352,10 +352,10 @@ impl CalloraVault {
         meta.balance
     }
 
-   pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
-    caller.require_auth();
-    Self::require_not_paused(env.clone());
-    let n = items.len();
+    pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
+        caller.require_auth();
+        Self::require_not_paused(env.clone());
+        let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
         let max_d = Self::get_max_deduct(env.clone());
