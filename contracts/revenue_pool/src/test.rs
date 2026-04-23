@@ -403,3 +403,30 @@ fn batch_distribute_zero_amount_panics() {
     payments.push_back((dev, 0));
     client.batch_distribute(&admin, &payments);
 }
+
+#[test]
+fn batch_distribute_max_balance_overflow_panic() {
+    // Explicit test for max-balance overflow in batch_distribute.
+    // Exercises the checked_add(...).unwrap_or_else(|| panic!("total overflow")) path.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+
+    let half_max = i128::MAX / 2 + 1;
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev1, half_max));
+    payments.push_back((dev2, half_max));
+
+    // The sum of two (i128::MAX/2 + 1) will overflow i128
+    let result = client.try_batch_distribute(&admin, &payments);
+    assert!(
+        result.is_err(),
+        "batch_distribute must fail safely when total amount overflows i128::MAX"
+    );
+}

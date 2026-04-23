@@ -2401,6 +2401,36 @@ fn get_revenue_pool_consistency_with_zero_balance() {
 }
 
 #[test]
+fn deposit_max_balance_overflow_panic() {
+    // Explicit test for max-balance overflow near i128::MAX.
+    // Exercises the checked_add(...).unwrap_or_else(|| panic!("balance overflow")) path.
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+
+    // 1. Setup vault balance near i128::MAX
+    let near_max = i128::MAX - 1;
+    let overflow_amount = 2;
+
+    fund_vault(&usdc_admin, &vault_address, near_max);
+    client.init(&owner, &usdc, &Some(near_max), &None, &None, &None, &None);
+
+    // 2. Prepare overflow deposit
+    usdc_admin.mint(&owner, &overflow_amount);
+    usdc_client.approve(&owner, &vault_address, &overflow_amount, &1000);
+
+    // 3. Confirm it panics safely on overflow
+    let result = client.try_deposit(&owner, &overflow_amount);
+    assert!(
+        result.is_err(),
+        "contract must fail safely when balance would overflow i128::MAX"
+    );
+}
+
+#[test]
 fn get_revenue_pool_after_multiple_sequential_updates() {
     // Test multiple sequential set/clear operations before query
     let env = Env::default();

@@ -968,4 +968,68 @@ mod settlement_tests {
         assert_eq!(client.get_global_pool().total_balance, 0);
         assert_eq!(client.get_developer_balance(&developer), 200i128);
     }
+
+    #[test]
+    fn test_pool_balance_overflow_panic() {
+        // Explicit test for global pool balance overflow.
+        // Exercises the checked_add(...).unwrap_or_else(|| panic!("pool balance overflow")) path.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // 1. Manually set global pool near i128::MAX
+        let near_max = i128::MAX - 10;
+        env.as_contract(&addr, || {
+            let inst = env.storage().instance();
+            let mut pool: crate::GlobalPool = inst.get(&Symbol::new(&env, "global_pool")).unwrap();
+            pool.total_balance = near_max;
+            inst.set(&Symbol::new(&env, "global_pool"), &pool);
+        });
+
+        // 2. Try payment that causes overflow
+        let result = client.try_receive_payment(&vault, &11i128, &true, &None);
+        assert!(
+            result.is_err(),
+            "global pool must fail safely when balance would overflow i128::MAX"
+        );
+    }
+
+    #[test]
+    fn test_developer_balance_overflow_panic() {
+        // Explicit test for developer balance overflow.
+        // Exercises the checked_add(...).unwrap_or_else(|| panic!("developer balance overflow")) path.
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let dev = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // 1. Manually set developer balance near i128::MAX
+        let near_max = i128::MAX - 5;
+        env.as_contract(&addr, || {
+            let mut balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&Symbol::new(&env, "developer_balances"))
+                .unwrap();
+            balances.set(dev.clone(), near_max);
+            env.storage()
+                .instance()
+                .set(&Symbol::new(&env, "developer_balances"), &balances);
+        });
+
+        // 2. Try payment that causes overflow
+        let result = client.try_receive_payment(&vault, &6i128, &false, &Some(dev));
+        assert!(
+            result.is_err(),
+            "developer balance must fail safely when balance would overflow i128::MAX"
+        );
+    }
 }
