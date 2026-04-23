@@ -450,7 +450,11 @@ fn owner_deposit_increases_balance_and_emits_event() {
         })
         .expect("expected deposit event");
 
-    assert_eq!(deposit_event.1.len(), 2, "topics must have exactly 2 entries");
+    assert_eq!(
+        deposit_event.1.len(),
+        2,
+        "topics must have exactly 2 entries"
+    );
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "deposit"));
     let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);

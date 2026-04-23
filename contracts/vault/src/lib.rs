@@ -358,8 +358,10 @@ impl CalloraVault {
             .checked_add(amount)
             .unwrap_or_else(|| panic!("balance overflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
-        env.events()
-            .publish((Symbol::new(&env, "deposit"), caller), (amount, meta.balance));
+        env.events().publish(
+            (Symbol::new(&env, "deposit"), caller),
+            (amount, meta.balance),
+        );
         meta.balance
     }
 
