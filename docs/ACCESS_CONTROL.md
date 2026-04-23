@@ -1,116 +1,51 @@
-# Vault Access Control
+# Access Control
 
-## Overview
+## 1. Vault Access Control
 
+### Overview
 The Callora Vault implements role-based access control for deposit operations to ensure only authorized parties can increase the vault balance.
 
-## Roles
+### Roles
+- **Owner**: Set during contract initialization. Exclusive authority to manage allowed depositors and withdraw funds.
+- **Allowed Depositor**: Addresses approved by the owner to handle automated deposits.
+- **Authorized Caller**: Optional address permitted to trigger `deduct` operations.
 
-### Owner
-- Set during contract initialization via `init()`
-- Immutable after initialization
-- Always permitted to deposit
-- Exclusive authority to manage the allowed depositor
-- Typically represents the end user's account in production
+---
 
-### Allowed Depositor
-- One or more addresses explicitly approved by the owner via `set_allowed_depositor()`
-- Mutable — addresses can be added or the entire list cleared at any time by the owner
-- Commonly used for backend service hot-wallets that handle automated deposits
-- When added, each address has the same deposit privileges as the owner
-- The full allowlist is publicly auditable via `get_allowed_depositors()`
+## 2. Settlement Access Control
 
-### Unauthorized Addresses
-- Any address that is neither the owner nor the allowed depositor
-- Deposit attempts are rejected with: `"unauthorized: only owner or allowed depositor can deposit"`
+### Overview
+The Callora Settlement contract tracks individual developer balances and global protocol revenue. It enforces strict access control for incoming payments and administrative updates.
 
-## Production Usage
+### Roles
+- **Admin**: Primary authority over contract configuration and sensitive data.
+- **Vault**: The registered vault contract authorized to send payments.
+- **Pending Admin**: Nominee awaiting acceptance of the admin role.
 
-In a typical production deployment:
+### Authorization Matrix
 
-1. **User Account (Owner)**: The end user's wallet address is set as the owner during initialization
-2. **Backend Service (Allowed Depositor)**: A trusted backend service address is set as the allowed depositor to handle automated deposits on behalf of users
-3. **Access Control**: Only these two addresses can increase the vault balance
+| Function | Admin | Vault | Pending Admin | Others |
+|----------|-------|-------|---------------|--------|
+| `receive_payment` | ✅ | ✅ | ❌ | ❌ |
+| `set_admin` | ✅ | ❌ | ❌ | ❌ |
+| `accept_admin` | ❌ | ❌ | ✅ | ❌ |
+| `set_vault` | ✅ | ❌ | ❌ | ❌ |
+| `get_all_developer_balances` | ✅ | ❌ | ❌ | ❌ |
 
-## Managing the Allowed Depositor
-
-### Setting or Updating
-```rust
-// Owner sets the allowed depositor
-vault.set_allowed_depositor(owner_address, Some(backend_service_address));
-```
-
-### Clearing (Revoking Access)
-```rust
-// Owner revokes depositor access
-vault.set_allowed_depositor(owner_address, None);
-```
-
-### Rotating the Depositor
-```rust
-// Owner can change the allowed depositor at any time
-vault.set_allowed_depositor(owner_address, Some(new_backend_address));
-```
-
-## Security Model
-
-### Trust Assumptions
-- The owner has full control over deposit permissions
-- The allowed depositor is a trusted address (typically a backend service under the owner's control)
-- Access can be revoked instantly by the owner at any time
-
-### Authorization Flow
-1. Caller invokes `deposit()` with their address
-2. Contract verifies caller is either:
-   - The owner (always authorized), OR
-   - The currently set allowed depositor (if any)
-3. If neither condition is met, the transaction fails with an authorization error
-
-### Best Practices
-- Rotate the allowed depositor address periodically for security
-- Clear the allowed depositor when not actively needed
-- Monitor deposit events to detect unauthorized access attempts
-- Use secure key management for both owner and depositor addresses
-
-## API Reference
-
-### `set_allowed_depositor(caller: Address, depositor: Option<Address>)`
-Owner-only function to manage the allowed depositor.
-
-**Parameters:**
-- `caller`: Must be the owner address (authenticated via `require_auth()`)
-- `depositor`: 
-  - `Some(address)` - Sets or updates the allowed depositor
-  - `None` - Clears the allowed depositor (revokes access)
-
-**Errors:**
-- Panics with `"unauthorized: owner only"` if caller is not the owner
-
-### `deposit(caller: Address, amount: i128) -> i128`
-Increases the vault balance by the specified amount.
-
-**Parameters:**
-- `caller`: Must be either the owner or allowed depositor (authenticated via `require_auth()`)
-- `amount`: Amount to add to the balance
-
-**Returns:**
-- The new balance after deposit
-
-**Errors:**
-- Panics with `"unauthorized: only owner or allowed depositor can deposit"` if caller is not authorized
+### Security Model
+- **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
+- **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
 
 ## Test Coverage
-
 The implementation includes comprehensive tests covering:
-- ✅ Owner can deposit successfully
-- ✅ Allowed depositor can deposit successfully
-- ✅ Unauthorized addresses cannot deposit (expect auth error)
-- ✅ Owner can set and clear allowed depositor
-- ✅ Non-owner cannot call `set_allowed_depositor`
-- ✅ Deposit after allowed depositor is cleared is rejected
-- ✅ All existing tests continue to pass
+- ✅ Admin and Vault can call `receive_payment`
+- ✅ Unauthorized callers are rejected from `receive_payment`
+- ✅ Only Admin can call `set_admin` and `set_vault`
+- ✅ Only Pending Admin can call `accept_admin`
+- ✅ Only Admin can call `get_all_developer_balances`
+- ✅ All rotation and update logic preserves state integrity
 
 Run tests with:
 ```bash
-cargo test --manifest-path contracts/vault/Cargo.toml
+cargo test -p callora-settlement
 ```

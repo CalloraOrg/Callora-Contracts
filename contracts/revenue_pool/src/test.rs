@@ -264,6 +264,41 @@ fn receive_payment_emits_event() {
 }
 
 #[test]
+#[should_panic(expected = "unauthorized: caller is not admin")]
+fn receive_payment_non_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.receive_payment(&attacker, &250, &true);
+}
+
+#[test]
+fn receive_payment_is_event_only_and_does_not_move_tokens() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 500);
+
+    let before_pool = usdc_client.balance(&pool_addr);
+    let before_developer = usdc_client.balance(&developer);
+
+    client.receive_payment(&admin, &250, &true);
+
+    assert_eq!(usdc_client.balance(&pool_addr), before_pool);
+    assert_eq!(usdc_client.balance(&developer), before_developer);
+}
+
+#[test]
 fn batch_distribute_success() {
     let env = Env::default();
     env.mock_all_auths();
@@ -402,4 +437,235 @@ fn batch_distribute_zero_amount_panics() {
     let mut payments: Vec<(Address, i128)> = Vec::new(&env);
     payments.push_back((dev, 0));
     client.batch_distribute(&admin, &payments);
+}
+
+// ---------------------------------------------------------------------------
+// Event schema tests (Issue #256)
+// Each test below pins the exact topic/data layout documented in EVENT_SCHEMA.md
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_event_topics_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    // topic 0 = "init"
+    let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(t0, Symbol::new(&env, "init"));
+
+    // topic 1 = admin address
+    let t1 = Address::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap();
+    assert_eq!(t1, admin);
+
+    // data = usdc_token address
+    let data = Address::try_from_val(&env, &ev.2).unwrap();
+    assert_eq!(data, usdc);
+}
+
+#[test]
+fn admin_transfer_started_event_topics_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.set_admin(&admin, &new_admin);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    // topic 0 = "admin_transfer_started"
+    let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(t0, Symbol::new(&env, "admin_transfer_started"));
+
+    // topic 1 = current admin
+    let t1 = Address::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap();
+    assert_eq!(t1, admin);
+
+    // data = pending admin
+    let data = Address::try_from_val(&env, &ev.2).unwrap();
+    assert_eq!(data, new_admin);
+}
+
+#[test]
+fn admin_transfer_completed_event_topics_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.set_admin(&admin, &new_admin);
+    client.claim_admin(&new_admin);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    // topic 0 = "admin_transfer_completed"
+    let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(t0, Symbol::new(&env, "admin_transfer_completed"));
+
+    // topic 1 = new admin
+    let t1 = Address::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap();
+    assert_eq!(t1, new_admin);
+
+    // data = () empty
+    let _: () = ev.2.into_val(&env);
+}
+
+#[test]
+fn receive_payment_event_from_vault_true() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.receive_payment(&admin, &5_000_000, &true);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    // topic 0 = "receive_payment"
+    let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(t0, Symbol::new(&env, "receive_payment"));
+
+    // topic 1 = caller (admin)
+    let t1 = Address::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap();
+    assert_eq!(t1, admin);
+
+    // data = (amount, from_vault)
+    let (amount, from_vault): (i128, bool) = ev.2.into_val(&env);
+    assert_eq!(amount, 5_000_000);
+    assert!(from_vault);
+}
+
+#[test]
+fn receive_payment_event_from_vault_false() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.receive_payment(&admin, &1_000_000, &false);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    let (amount, from_vault): (i128, bool) = ev.2.into_val(&env);
+    assert_eq!(amount, 1_000_000);
+    assert!(!from_vault);
+}
+
+#[test]
+fn distribute_event_topics_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 1_000_000);
+    client.distribute(&admin, &developer, &1_000_000);
+
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+
+    // topic 0 = "distribute"
+    let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(t0, Symbol::new(&env, "distribute"));
+
+    // topic 1 = recipient
+    let t1 = Address::try_from_val(&env, &ev.1.get(1).unwrap()).unwrap();
+    assert_eq!(t1, developer);
+
+    // data = amount
+    let amount: i128 = ev.2.into_val(&env);
+    assert_eq!(amount, 1_000_000);
+}
+
+#[test]
+fn batch_distribute_event_topics_and_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let dev3 = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 3_500_000);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev1.clone(), 1_000_000_i128));
+    payments.push_back((dev2.clone(), 2_000_000_i128));
+    payments.push_back((dev3.clone(), 500_000_i128));
+    client.batch_distribute(&admin, &payments);
+
+    let all_events = env.events().all();
+    let batch_events: std::vec::Vec<_> = all_events
+        .iter()
+        .filter(|e| {
+            e.1.get(0)
+                .and_then(|v| Symbol::try_from_val(&env, &v).ok())
+                .map(|s| s == Symbol::new(&env, "batch_distribute"))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    // 3 payments → 3 batch_distribute events
+    assert_eq!(batch_events.len(), 3);
+
+    // verify each event has correct topic 0 and a positive amount
+    for ev in batch_events.iter() {
+        let t0 = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+        assert_eq!(t0, Symbol::new(&env, "batch_distribute"));
+        let amount: i128 = ev.2.into_val(&env);
+        assert!(amount > 0);
+    }
+}
+
+#[test]
+fn batch_distribute_is_atomic_all_or_nothing() {
+    // If any payment fails the entire batch reverts — no events emitted.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 100);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev1.clone(), 60_i128));
+    payments.push_back((dev2.clone(), 60_i128)); // total 120 > balance 100
+
+    let result = client.try_batch_distribute(&admin, &payments);
+    assert!(result.is_err());
+
+    // balance unchanged
+    assert_eq!(client.balance(), 100);
 }

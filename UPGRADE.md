@@ -57,7 +57,7 @@ The vault uses **instance storage** with the following keys:
 
 | StorageKey | Type | Description |
 |------------|------|-------------|
-| `Meta` | `VaultMeta` | Owner address, tracked balance, authorized caller, min deposit |
+| `MetaKey` | `VaultMeta` | Owner address, tracked balance, authorized caller, min deposit |
 | `AllowedDepositors` | `Vec<Address>` | List of addresses permitted to deposit |
 | `Admin` | `Address` | Admin address (defaults to owner at init) |
 | `UsdcToken` | `Address` | USDC token contract address |
@@ -91,6 +91,12 @@ pub fn init(
     max_deduct: Option<i128>,
 ) -> VaultMeta
 ```
+
+**Behavior note (pause semantics):**
+
+- `pause()` is a circuit breaker for **deposit-like** flows.
+- While paused, `deposit()` is rejected, but **`deduct()` and `batch_deduct()` still execute and still emit `deduct` events**.
+- If you rely on “pause stops all balance movement”, you must update your operational assumptions and monitoring.
 
 ### Revenue Pool (`contracts/revenue_pool/src/lib.rs`)
 
