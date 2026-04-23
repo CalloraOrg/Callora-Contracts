@@ -2561,8 +2561,8 @@ fn get_allowed_depositors_returns_list() {
     let (usdc, _, _) = create_usdc(&env, &owner);
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.set_allowed_depositor(&owner, &d1);
-    client.set_allowed_depositor(&owner, &d2);
+    client.set_allowed_depositor(&owner, &Some(d1.clone()));
+    client.set_allowed_depositor(&owner, &Some(d2.clone()));
     let list = client.get_allowed_depositors();
     assert_eq!(list.len(), 2);
 }
@@ -2631,37 +2631,45 @@ mod fuzz {
             &None,
             &Some(max_deduct_val),
         );
-
-        // Give the depositor (owner) plenty of USDC.
-        let deposit_reserve: i128 = initial * 10 + 1_000_000;
+// Give the depositor (owner) plenty of USDC.
+        // Cap at i128::MAX / 2 to avoid overflow when max_deduct_val is very large.
+        let deposit_reserve: i128 = (initial * 10 + 1_000_000).min(i128::MAX / 2);
         usdc_admin.mint(&owner, &deposit_reserve);
         usdc_client.approve(&owner, &vault_addr, &deposit_reserve, &999_999);
 
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
         let mut paused = false;
+        // Effective deposit cap: never generate a deposit larger than what the owner has approved.
+        let deposit_cap: i128 = deposit_reserve.min(max_deduct_val);
 
         for _ in 0..steps {
             // Pick an operation: 0=deposit, 1=deduct, 2=batch_deduct, 3=toggle_pause
             let op: u8 = rng.gen_range(0..4);
 
             match op {
-                // --- deposit ---
+    // --- deposit ---
                 0 => {
-                    let amount: i128 = rng.gen_range(1..=max_deduct_val);
+                    let amount: i128 = rng.gen_range(1..=deposit_cap);
                     if paused {
                         // deposit must fail while paused
                         assert!(client.try_deposit(&owner, &amount).is_err());
                     } else {
-                        sim += amount;
-                        client.deposit(&owner, &amount);
+                        let owner_usdc = usdc_client.balance(&owner);
+                        if owner_usdc >= amount {
+                            sim += amount;
+                            client.deposit(&owner, &amount);
+                        }
                     }
                 }
 
                 // --- single deduct ---
+               // --- single deduct ---
                 1 => {
                     let amount: i128 = rng.gen_range(1..=max_deduct_val);
-                    if sim >= amount {
+                    if paused {
+                        assert!(client.try_deduct(&caller, &amount, &None).is_err());
+                    } else if sim >= amount {
                         sim -= amount;
                         client.deduct(&caller, &amount, &None);
                     } else {
@@ -2685,7 +2693,11 @@ mod fuzz {
                         };
                         items.push_back(DeductItem { amount: amt, request_id: None });
                     }
-                    if valid && sim >= batch_total {
+                if paused {
+                        let before = client.balance();
+                        let _ = client.try_batch_deduct(&caller, &items);
+                        assert_eq!(client.balance(), before, "paused batch must not change balance");
+                    } else if valid && sim >= batch_total {
                         sim -= batch_total;
                         client.batch_deduct(&caller, &items);
                     } else {
@@ -3084,4 +3096,94 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
         },
     ];
     client.batch_deduct(&owner, &items);
+}
+
+// ---------------------------------------------------------------------------
+// get_contract_addresses tests  (Issue #257)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_contract_addresses_returns_usdc_only_after_init() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, None);
+    assert_eq!(got_pool, None);
+}
+
+#[test]
+fn get_contract_addresses_reflects_set_settlement() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_settlement(&owner, &settlement);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, Some(settlement));
+    assert_eq!(got_pool, None);
+}
+
+#[test]
+fn get_contract_addresses_reflects_set_revenue_pool() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool.clone()), &None);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, None);
+    assert_eq!(got_pool, Some(pool));
+}
+
+#[test]
+fn get_contract_addresses_reflects_all_three_configured() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool.clone()), &None);
+    client.set_settlement(&owner, &settlement);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, Some(settlement));
+    assert_eq!(got_pool, Some(pool));
+}
+
+#[test]
+fn get_contract_addresses_updates_after_clear_revenue_pool() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool), &None);
+    client.set_revenue_pool(&owner, &None); // clear it
+
+    let (_, _, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_pool, None);
 }

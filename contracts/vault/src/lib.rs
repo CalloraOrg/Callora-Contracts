@@ -45,9 +45,16 @@ pub struct CalloraVault;
 #[contractimpl]
 impl CalloraVault {
     #[allow(clippy::too_many_arguments)]
-    pub fn init(env: Env, owner: Address, usdc_token: Address, initial_balance: Option<i128>,
-        authorized_caller: Option<Address>, min_deposit: Option<i128>,
-        revenue_pool: Option<Address>, max_deduct: Option<i128>) -> VaultMeta {
+    pub fn init(
+        env: Env,
+        owner: Address,
+        usdc_token: Address,
+        initial_balance: Option<i128>,
+        authorized_caller: Option<Address>,
+        min_deposit: Option<i128>,
+        revenue_pool: Option<Address>,
+        max_deduct: Option<i128>,
+    ) -> VaultMeta {
         owner.require_auth();
         let inst = env.storage().instance();
         if inst.has(&StorageKey::Meta) {
@@ -110,7 +117,10 @@ impl CalloraVault {
     }
 
     pub fn get_admin(env: Env) -> Address {
-        env.storage().instance().get(&StorageKey::Admin).expect("vault not initialized")
+        env.storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("vault not initialized")
     }
 
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
@@ -165,11 +175,15 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        env.events().publish((Symbol::new(&env, "distribute"), to), amount);
+        env.events()
+            .publish((Symbol::new(&env, "distribute"), to), amount);
     }
 
     pub fn get_meta(env: Env) -> VaultMeta {
-        env.storage().instance().get(&StorageKey::Meta).unwrap_or_else(|| panic!("vault not initialized"))
+        env.storage()
+            .instance()
+            .get(&StorageKey::Meta)
+            .unwrap_or_else(|| panic!("vault not initialized"))
     }
 
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
@@ -215,7 +229,10 @@ impl CalloraVault {
     }
 
     pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
-        env.storage().instance().get(&StorageKey::DepositorList).unwrap_or(Vec::new(&env))
+        env.storage()
+            .instance()
+            .get(&StorageKey::DepositorList)
+            .unwrap_or(Vec::new(&env))
     }
 
     pub fn set_authorized_caller(env: Env, caller: Address) {
@@ -243,17 +260,22 @@ impl CalloraVault {
         Self::require_admin_or_owner(env.clone(), &caller);
         assert!(Self::is_paused(env.clone()), "vault not paused");
         env.storage().instance().set(&StorageKey::Paused, &false);
-        env.events().publish((Symbol::new(&env, "vault_unpaused"), caller), ());
+        env.events()
+            .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
     }
 
     pub fn is_paused(env: Env) -> bool {
-        env.storage().instance().get(&StorageKey::Paused).unwrap_or(false)
+        env.storage()
+            .instance()
+            .get(&StorageKey::Paused)
+            .unwrap_or(false)
     }
 
-    pub fn get_max_deduct(env: Env) -> i128 {
-        env.storage().instance().get(&StorageKey::MaxDeduct).unwrap_or(DEFAULT_MAX_DEDUCT)
-    }
-
+    /// Return the configured maximum amount that may be deducted in a single call.
+    ///
+    /// Defaults to [`DEFAULT_MAX_DEDUCT`] (`i128::MAX`) when not explicitly set during
+    /// [`init`]. Backend operators should compare this value against the per-call price
+    /// before submitting a `deduct` or `batch_deduct` to avoid unnecessary tx failures.
     pub fn get_max_deduct(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -284,7 +306,10 @@ impl CalloraVault {
         let usdc = token::Client::new(&env, &usdc_addr);
         usdc.transfer(&caller, &env.current_contract_address(), &amount);
         let mut meta = Self::get_meta(env.clone());
-        meta.balance = meta.balance.checked_add(amount).unwrap_or_else(|| panic!("balance overflow"));
+        meta.balance = meta
+            .balance
+            .checked_add(amount)
+            .unwrap_or_else(|| panic!("balance overflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "deposit"), caller.clone()),
@@ -327,9 +352,10 @@ impl CalloraVault {
         meta.balance
     }
 
-    pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
-        caller.require_auth();
-        let n = items.len();
+   pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
+    caller.require_auth();
+    Self::require_not_paused(env.clone());
+    let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
         let max_d = Self::get_max_deduct(env.clone());
@@ -482,6 +508,19 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::RevenuePool)
     }
 
+    /// Store the settlement contract address (admin only).
+    ///
+    /// Once set, every `deduct` / `batch_deduct` call transfers the deducted USDC to
+    /// this address. Settlement takes priority over `revenue_pool` when both are
+    /// configured.
+    ///
+    /// # Panics
+    /// Panics if `caller` is not the current admin.
+    ///
+    /// # Operator note
+    /// Record the address returned by `stellar contract deploy` for the settlement
+    /// contract and pass it here. Confirm with `get_settlement()` before routing
+    /// live traffic.
     pub fn set_settlement(env: Env, caller: Address, settlement_address: Address) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
@@ -493,9 +532,50 @@ impl CalloraVault {
             .set(&StorageKey::Settlement, &settlement_address);
     }
 
+    /// Return the currently registered settlement contract address.
+    ///
+    /// # Panics
+    /// Panics with `"settlement address not set"` if `set_settlement` has not been
+    /// called yet.
     pub fn get_settlement(env: Env) -> Address {
-        env.storage().instance().get(&StorageKey::Settlement)
+        env.storage()
+            .instance()
+            .get(&StorageKey::Settlement)
             .unwrap_or_else(|| panic!("settlement address not set"))
+    }
+
+    /// Return all three configurable contract addresses in one read-only call.
+    ///
+    /// Backend operators call this view after deployment to verify that every address
+    /// is configured correctly before routing live traffic through the vault.
+    ///
+    /// # Returns
+    /// A tuple `(usdc_token, settlement, revenue_pool)`:
+    /// - `usdc_token`   — always `Some` after `init`; the USDC token contract address.
+    /// - `settlement`   — `Some` after `set_settlement` is called, otherwise `None`.
+    /// - `revenue_pool` — `Some` after `set_revenue_pool` is called, otherwise `None`.
+    ///
+    /// When both `settlement` and `revenue_pool` are `Some`, **`settlement` takes
+    /// priority** and the revenue pool is not used in the same deduct call.
+    ///
+    /// # Example — Stellar CLI
+    /// ```text
+    /// stellar contract invoke --id <VAULT_CONTRACT_ID> \
+    ///     --source <OPERATOR_KEY> --network testnet \
+    ///     -- get_contract_addresses
+    /// ```
+    ///
+    /// # Operator checklist
+    /// 1. `usdc_token` must be the canonical Stellar USDC issuer
+    ///    (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` on mainnet).
+    /// 2. `settlement` should be `Some` before routing production traffic.
+    /// 3. `revenue_pool` is optional; only active when `settlement` is `None`.
+    pub fn get_contract_addresses(env: Env) -> (Option<Address>, Option<Address>, Option<Address>) {
+        let inst = env.storage().instance();
+        let usdc: Option<Address> = inst.get(&StorageKey::UsdcToken);
+        let settlement: Option<Address> = inst.get(&StorageKey::Settlement);
+        let revenue_pool: Option<Address> = inst.get(&StorageKey::RevenuePool);
+        (usdc, settlement, revenue_pool)
     }
 
     pub fn set_metadata(
@@ -551,8 +631,13 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Metadata(offering_id.clone()))
             .unwrap_or(String::from_str(&env, ""));
-        env.storage().instance().set(&StorageKey::Metadata(offering_id.clone()), &metadata);
-        env.events().publish((Symbol::new(&env, "metadata_updated"), offering_id, caller), (old, metadata.clone()));
+        env.storage()
+            .instance()
+            .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
+        env.events().publish(
+            (Symbol::new(&env, "metadata_updated"), offering_id, caller),
+            (old, metadata.clone()),
+        );
         metadata
     }
 
@@ -576,9 +661,16 @@ impl CalloraVault {
     }
 
     fn require_admin_or_owner(env: Env, caller: &Address) {
-        let admin: Address = env.storage().instance().get(&StorageKey::Admin).expect("vault not initialized");
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("vault not initialized");
         let meta = Self::get_meta(env);
-        assert!(*caller == admin || *caller == meta.owner, "unauthorized: caller is not admin or owner");
+        assert!(
+            *caller == admin || *caller == meta.owner,
+            "unauthorized: caller is not admin or owner"
+        );
     }
 }
 
