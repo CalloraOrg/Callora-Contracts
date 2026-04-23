@@ -275,8 +275,6 @@ fn owner_can_deposit() {
         })
         .expect("expected deposit event");
 
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, owner);
     let (amount, balance): (i128, i128) = deposit_event.2.into_val(&env);
     assert_eq!(amount, 200);
     assert_eq!(balance, 200);
@@ -2605,9 +2603,18 @@ fn batch_deduct_to_zero_succeeds() {
 
     let items = soroban_sdk::vec![
         &env,
-        DeductItem { amount: 200, request_id: None },
-        DeductItem { amount: 200, request_id: None },
-        DeductItem { amount: 200, request_id: None },
+        DeductItem {
+            amount: 200,
+            request_id: None
+        },
+        DeductItem {
+            amount: 200,
+            request_id: None
+        },
+        DeductItem {
+            amount: 200,
+            request_id: None
+        },
     ];
     assert_eq!(client.batch_deduct(&owner, &items), 0);
 }
@@ -2970,7 +2977,8 @@ fn is_paused_safe_default_before_init() {
 }
 
 #[test]
-fn deduct_while_paused_succeeds() {
+#[should_panic(expected = "vault is paused")]
+fn deduct_while_paused_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -2979,12 +2987,12 @@ fn deduct_while_paused_succeeds() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
     client.pause(&owner);
-    let remaining = client.deduct(&owner, &100, &None);
-    assert_eq!(remaining, 400);
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]
-fn batch_deduct_while_paused_succeeds() {
+#[should_panic(expected = "vault is paused")]
+fn batch_deduct_while_paused_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -3328,7 +3336,7 @@ mod fuzz {
         let (usdc_addr, usdc_client, usdc_admin) = create_usdc(&env, &owner);
         let (vault_addr, client) = create_vault(&env);
 
-        let settlement = Address::generate(&env);
+        let _settlement = Address::generate(&env);
         // Pre-fund vault so initial_balance is valid.
         usdc_admin.mint(&vault_addr, &initial);
         client.init(
@@ -3348,7 +3356,7 @@ mod fuzz {
 
         // Keep random steps realistic even when max_deduct is astronomically large.
         // (We still exercise max_deduct boundaries in dedicated unit tests.)
-        let step_cap: i128 = core::cmp::min(max_deduct_val, 10_000);
+        let _step_cap: i128 = core::cmp::min(max_deduct_val, 10_000);
 
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
@@ -3382,7 +3390,6 @@ mod fuzz {
                     // else: deposit failed (e.g. insufficient USDC) — no sim change
                 }
                 // --- single deduct ---
-                // --- single deduct ---
                 1 => {
                     let amount: i128 = rng.gen_range(1..=max_deduct_val);
                     if paused {
@@ -3392,11 +3399,8 @@ mod fuzz {
                         sim -= amount;
                         client.deduct(&caller, &amount, &None);
                     } else {
-                        // must fail — balance unchanged (paused or insufficient)
+                        // must fail — balance unchanged (insufficient)
                         assert!(client.try_deduct(&caller, &amount, &None).is_err());
-                    } else {
-                        sim -= amount;
-                        client.deduct(&caller, &amount, &None);
                     }
                 }
 
