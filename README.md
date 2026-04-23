@@ -183,6 +183,7 @@ See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema desc
 - **Input validation**: Enforced `amount > 0` for all deposits and deductions.
 - **Overflow checks**: Enabled in both dev and release profiles.
 - **Role-Based Access**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+- **Dedup hardening**: Duplicate `get_max_deduct` declaration removed in `callora-vault`; allowed depositor duplicate-path test now asserts list cardinality.
 
 ## Security
 

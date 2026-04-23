@@ -2,6 +2,10 @@
 
 Events emitted by the Callora vault contract for indexers and frontends. All topic/data types refer to Soroban/Stellar XDR values.
 
+## Change Note (2026-04)
+
+The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
+
 ## Contract: Callora Vault
 
 ### `init`

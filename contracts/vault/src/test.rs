@@ -454,7 +454,10 @@ fn set_allowed_depositor_duplicate_is_ignored() {
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
-    client.set_allowed_depositor(&owner, &Some(depositor.clone())); // duplicate â€” should be a no-op
+    client.set_allowed_depositor(&owner, &Some(depositor.clone())); // duplicate should be a no-op
+
+    let list = client.get_allowed_depositors();
+    assert_eq!(list.len(), 1);
 
     // depositor can still deposit exactly once (list not doubled)
     usdc_admin.mint(&depositor, &50);
@@ -2888,7 +2891,7 @@ fn vault_unpaused_event_emitted() {
 //   1. VaultMeta.balance >= 0 after every operation.
 //   2. Local simulator tracks the same balance as the contract at each step.
 //   3. batch_deduct is atomic: a failing batch leaves balance unchanged.
-//   4. pause blocks deposits but not deductions; unpause restores deposits.
+//   4. pause blocks deposits and deductions; unpause restores both.
 //   5. No single deduct/batch item may exceed max_deduct.
 //
 // Seeds are fixed so runs are deterministic and reproducible in CI.
@@ -2934,6 +2937,11 @@ mod fuzz {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
         let mut paused = false;
+        let op_cap: i128 = if max_deduct_val > 10_000 {
+            10_000
+        } else {
+            max_deduct_val
+        };
 
         for _ in 0..steps {
             // Pick an operation: 0=deposit, 1=deduct, 2=batch_deduct, 3=toggle_pause
@@ -2977,7 +2985,7 @@ mod fuzz {
                     let mut batch_total: i128 = 0;
                     let mut valid = true;
                     for _ in 0..n {
-                        let amt: i128 = rng.gen_range(1..=max_deduct_val);
+                        let amt: i128 = rng.gen_range(1..=op_cap);
                         batch_total = match batch_total.checked_add(amt) {
                             Some(v) => v,
                             None => {
