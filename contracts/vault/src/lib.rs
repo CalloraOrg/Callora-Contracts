@@ -254,13 +254,6 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::MaxDeduct).unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
-    pub fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
-    }
-
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
         Self::require_not_paused(env.clone());
@@ -329,6 +322,7 @@ impl CalloraVault {
 
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         caller.require_auth();
+        Self::require_not_paused(env.clone());
         let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
