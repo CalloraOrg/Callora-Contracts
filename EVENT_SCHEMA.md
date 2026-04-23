@@ -187,7 +187,7 @@ Emitted when admin distributes funds.
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"distribute"` |
 | data    | data     | Address| recipient     |
-| data    | data     | i128   | amount        |
+| topic 1 | data     | i128   | amount        |
 
 ---
 
