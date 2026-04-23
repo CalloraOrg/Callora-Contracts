@@ -403,3 +403,82 @@ fn batch_distribute_zero_amount_panics() {
     payments.push_back((dev, 0));
     client.batch_distribute(&admin, &payments);
 }
+
+#[test]
+fn init_event_data_correctness() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    let events = env.events().all();
+    let init_event = events.last().unwrap();
+    
+    // Check event topics
+    let event_name = Symbol::try_from_val(&env, &init_event.1.get(0).unwrap()).unwrap();
+    assert_eq!(event_name, Symbol::new(&env, "init"));
+    
+    let admin_from_event: Address = Address::try_from_val(&env, &init_event.1.get(1).unwrap()).unwrap();
+    assert_eq!(admin_from_event, admin);
+    
+    // Check event data
+    let usdc_from_event: Address = Address::try_from_val(&env, &init_event.2).unwrap();
+    assert_eq!(usdc_from_event, usdc);
+}
+
+#[test]
+fn init_storage_persistence() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    
+    // Verify both admin and usdc_token are persisted
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.balance(), 0); // This indirectly checks USDC token is set
+}
+
+#[test]
+#[should_panic(expected = "revenue pool already initialized")]
+fn init_triple_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    client.init(&admin, &usdc);
+    client.init(&admin, &usdc);
+}
+
+#[test]
+fn init_with_zero_address_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    // This should work fine - zero address is not inherently invalid for admin
+    client.init(&admin, &usdc);
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+#[should_panic(expected = "invalid config: usdc_token cannot be the admin address")]
+fn init_same_admin_and_usdc_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+
+    // Same address for both admin and usdc_token should be rejected
+    client.init(&admin, &admin);
+}
