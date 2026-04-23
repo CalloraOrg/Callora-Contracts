@@ -32,8 +32,8 @@ pub enum StorageKey {
 | `AllowedDepositors` | `Vec<Address>` | List of addresses allowed to deposit into the vault | Access control for deposits | `set_allowed_depositor()`, readable via `is_authorized_depositor()` |
 | `Admin` | `Address` | Administrator address authorized to call `distribute()` and `set_admin()` | Access control for distributions | `get_admin()`, `set_admin()` (admin-only) |
 | `UsdcToken` | `Address` | USDC token contract address | Token transfers for deposits, deducts, distributions | Set during `init()`, used by token operations |
-| `Settlement` | `Option<Address>` | Settlement contract address; receives USDC on deduct operations | Deduct routing (priority over RevenuePool) | `set_settlement()`, `get_settlement()` (admin-only) |
-| `RevenuePool` | `Option<Address>` | Revenue pool contract address; receives USDC on deduct if Settlement is not set | Deduct routing (fallback) | Set during `init()`, used if Settlement not configured |
+| `Settlement` | `Option<Address>` | Settlement contract address; receives USDC on deduct operations | Deduct routing (priority over RevenuePool) | `set_settlement()`, `get_settlement()` (admin-only write, public read) |
+| `RevenuePool` | `Option<Address>` | Revenue pool contract address; receives USDC on deduct if Settlement is not set | Deduct routing (fallback) | `set_revenue_pool()`, `get_revenue_pool()` (admin-only write, public read) |
 | `MaxDeduct` | `i128` | Maximum USDC amount per single deduct operation | Deduct limit enforcement | Set during `init()`, read by `deduct()` and `batch_deduct()` |
 | `Metadata(offering_id)` | `String` | Off-chain metadata reference (IPFS CID or URI) for a specific offering | Offering metadata | `set_metadata()`, `get_metadata()`, `update_metadata()` (owner-only) |
 
@@ -116,12 +116,21 @@ Sets up the vault with initial state:
 | Operation | Reads | Writes | Authorization |
 |-----------|-------|--------|-----------------|
 | `set_settlement(settlement_address)` | Admin | Settlement | Admin only |
-| `get_settlement()` | Settlement | — | Public read |
+| `get_settlement()` | Settlement | — | Public read (view-only, no mutation) |
+| `set_revenue_pool(revenue_pool)` | Admin | RevenuePool | Admin only |
+| `get_revenue_pool()` | RevenuePool | — | Public read (view-only, no mutation) |
 
 **Deduct Routing Logic:**
 1. If `StorageKey::Settlement` is set: transfer USDC to settlement
 2. Else if `StorageKey::RevenuePool` is set: transfer USDC to revenue pool
 3. Else: USDC remains in vault
+
+**View Function Safety:**
+- Both `get_settlement()` and `get_revenue_pool()` are read-only operations
+- They return only final committed state, never intermediate or pending values
+- Safe for external indexers and off-chain queries
+- Deterministic: identical state inputs always produce identical outputs
+- `get_settlement()` panics if not configured; `get_revenue_pool()` returns `None` gracefully
 
 ### Metadata Operations
 
@@ -216,8 +225,8 @@ env.storage().instance().set(&StorageKey::Meta, &new_meta);
 ### Access Control
 
 - **Owner-Only Operations:** `set_allowed_depositor()`, `set_authorized_caller()`, `transfer_ownership()`, `withdraw()`, `withdraw_to()`, metadata operations
-- **Admin-Only Operations:** `distribute()`, `set_admin()`, `set_settlement()`
-- **Public Operations:** `balance()`, `get_meta()`, `get_metadata()`, `is_authorized_depositor()`, `get_settlement()` (read-only)
+- **Admin-Only Operations:** `distribute()`, `set_admin()`, `set_settlement()`, `set_revenue_pool()`
+- **Public Operations:** `balance()`, `get_meta()`, `get_metadata()`, `is_authorized_depositor()`, `get_settlement()`, `get_revenue_pool()` (all read-only)
 - **Depositor Operations:** `deposit()` (owner or allowed depositor); `deduct()` and `batch_deduct()` (owner or authorized_caller)
 
 ### Data Integrity

@@ -46,10 +46,12 @@ fn test_get_developer_balance_uninitialized_panics() {
 #[should_panic(expected = "settlement contract not initialized")]
 fn test_get_all_developer_balances_uninitialized_panics() {
     let env = Env::default();
+    env.mock_all_auths();
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
+    let dummy = Address::generate(&env);
 
-    client.get_all_developer_balances();
+    client.get_all_developer_balances(&dummy);
 }
 
 #[test]
