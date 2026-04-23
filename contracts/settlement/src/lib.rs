@@ -217,12 +217,18 @@ impl CalloraSettlement {
         balances.get(developer).unwrap_or(0)
     }
 
-    /// Get all developer balances (for admin use)
+    /// Get all developer balances (admin only)
     ///
     /// **CRITICAL**: Map iteration order is **NOT stable** and should not be relied upon.
     /// Use this function only for administrative queries or reporting purposes.
     /// For production integrations with many developers (>100), implement off-chain indexing
     /// by listening to `BalanceCreditedEvent` and maintaining a local database.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin address.
+    ///
+    /// # Access Control
+    /// Only the current admin can call this function.
     ///
     /// # Iteration Behavior
     /// - **Small maps (< 100 entries)**: Safe to iterate; yields current state but order is unstable
@@ -244,9 +250,11 @@ impl CalloraSettlement {
     /// - 50 developers: ~500 gas
     /// - 100 developers: ~1,000 gas
     /// - 500 developers: ~5,000 gas (consider off-chain indexing)
-    pub fn get_all_developer_balances(env: Env) -> Vec<DeveloperBalance> {
-        if !env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
-            panic!("settlement contract not initialized");
+    pub fn get_all_developer_balances(env: Env, caller: Address) -> Vec<DeveloperBalance> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
         }
         let inst = env.storage().instance();
         let balances: Map<Address, i128> = inst
