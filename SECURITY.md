@@ -95,8 +95,10 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 `deduct` and `batch_deduct` call. These external transfers are justified as follows:
 
 - **settlement address**: set and updated exclusively by the on-chain admin via
-  `set_settlement`. Transfers to this address implement the documented
-  `Vault → Settlement` revenue flow described in `SETTLEMENT_IMPLEMENTATION.md`.
+  `set_settlement`. This function emits a `set_settlement` event to provide a 
+  clear audit trail for address rotation. Transfers to this address implement 
+  the documented `Vault → Settlement` revenue flow described in 
+  `SETTLEMENT_IMPLEMENTATION.md`.
 - **revenue_pool address**: set and updated exclusively by the on-chain admin via
   `set_revenue_pool`. Transfers to this address route product revenue to the
   designated pool contract.

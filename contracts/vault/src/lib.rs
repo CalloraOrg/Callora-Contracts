@@ -563,6 +563,10 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&StorageKey::Settlement, &settlement_address);
+        env.events().publish(
+            (Symbol::new(&env, "set_settlement"), caller),
+            settlement_address,
+        );
     }
 
     /// Return the currently registered settlement contract address.

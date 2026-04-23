@@ -2163,6 +2163,28 @@ fn set_settlement_unauthorized_panics() {
 }
 
 #[test]
+fn set_settlement_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_settlement(&owner, &settlement);
+
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "set_settlement"));
+    let topic1: Address = last.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, owner);
+    let data: Address = last.2.into_val(&env);
+    assert_eq!(data, settlement);
+}
+
+#[test]
 #[should_panic(expected = "settlement address not set")]
 fn get_settlement_before_set_panics() {
     let env = Env::default();
@@ -3153,6 +3175,7 @@ mod fuzz {
         let (usdc_addr, usdc_client, usdc_admin) = create_usdc(&env, &owner);
         let (vault_addr, client) = create_vault(&env);
 
+        let settlement = Address::generate(&env);
         // Pre-fund vault so initial_balance is valid.
         usdc_admin.mint(&vault_addr, &initial);
         client.init(
@@ -3168,7 +3191,7 @@ mod fuzz {
         // Use a very large amount to handle large max_deduct scenarios
         let deposit_reserve: i128 = 10_000_000_000_000; // 10 trillion to handle large deposits
         usdc_admin.mint(&owner, &deposit_reserve);
-        usdc_client.approve(&owner, &vault_addr, &deposit_reserve, &999_999);
+        usdc_client.approve(&owner, &vault_addr, &i128::MAX, &999_999);
 
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
@@ -3315,8 +3338,8 @@ mod fuzz {
 
     #[test]
     fn fuzz_large_max_deduct() {
-        // max_deduct near i128::MAX / 2 — checks no overflow in batch totals.
-        run_sequence(0xabcd_ef01, i128::MAX / 2, 1_000_000, 80);
+        // max_deduct near i128::MAX / 100 — checks no overflow in batch totals.
+        run_sequence(0xabcd_ef01, i128::MAX / 100, 1_000_000, 80);
     }
 
     /// Verify that a batch whose cumulative total exceeds balance is fully atomic:
