@@ -18,7 +18,7 @@ Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) an
 The primary storage and metering contract.
 
 - `init(owner, usdc_token, ..., authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration.
-- `deposit(caller, amount)` — Owner or allowed depositor increases ledger balance.
+- `deposit(depositor, amount)` — Owner or allowed depositor increases ledger balance.
 - `deduct(caller, amount, request_id)` — Decrease balance for an API call; routes funds to settlement.
 - `batch_deduct(caller, items)` — Atomically process multiple deductions.
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.

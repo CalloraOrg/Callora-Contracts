@@ -18,11 +18,12 @@ Emitted when the vault is initialized.
 
 ### `deposit`
 
-Emitted when balance is increased via `deposit(amount)`.
+Emitted when balance is increased via `deposit(depositor, amount)`.
 
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"deposit"`   |
+| topic 1 | topics   | Address| depositor     |
 | data    | data     | (i128, i128) | (amount, new_balance) |
 
 ---
