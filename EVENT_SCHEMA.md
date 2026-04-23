@@ -132,15 +132,6 @@ Emitted when the vault is unpaused by the admin.
 ## Not yet implemented
 
 - **OwnershipTransfer**: not present in current vault; would list old_owner, new_owner.
-### `admin_nominated`
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"admin_nominated"` |
-| topic 1 | topics   | Address| current admin |
-| topic 2 | topics   | Address| nominee       |
-| data    | data     | ()     | empty         |
-
-
 
 ---
 
@@ -213,6 +204,32 @@ Emitted by `receive_payment()` **only** when `to_pool = false`. Follows the `pay
   }
 }
 ```
+
+---
+
+### `admin_nominated`
+
+Emitted when the current admin nominates a successor.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"admin_nominated"` |
+| topic 1 | topics   | Address| current admin |
+| topic 2 | topics   | Address| nominee       |
+| data    | data     | ()     | empty         |
+
+---
+
+### `admin_accepted`
+
+Emitted when the nominee accepts the admin role.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|-----------------------|
+| topic 0 | topics   | Symbol | `"admin_accepted"` |
+| topic 1 | topics   | Address| old admin     |
+| topic 2 | topics   | Address| new admin     |
+| data    | data     | ()     | empty         |
 
 > **Note:** `balance_credited` is never emitted when `to_pool = true`. Indexers tracking developer earnings should subscribe to this event; indexers tracking total protocol revenue should subscribe to `payment_received` with `to_pool = true`.
 

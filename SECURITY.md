@@ -184,3 +184,10 @@ have been audited for `require_auth()` coverage as part of Issue #160.
 ### Cross-reference
 - Audit branch: `test/require-auth-sweep`
 - Tests: `contracts/vault/src/test.rs`, `contracts/revenue_pool/src/test.rs`, `contracts/settlement/src/test.rs`
+
+## Authorization Matrix Update (Settlement)
+
+As part of the authorization matrix hardening for the `callora-settlement` contract:
+- `get_all_developer_balances` now requires `admin` authorization via `require_auth()`. This prevents bulk data scraping while allowing administrative oversight.
+- Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
+- Admin rotation (two-step) has been verified to correctly gate access during the transition period.
