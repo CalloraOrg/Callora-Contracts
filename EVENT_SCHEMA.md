@@ -23,6 +23,7 @@ Emitted when balance is increased via `deposit(amount)`.
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"deposit"`   |
+| topic 1 | topics   | Address| caller        |
 | data    | data     | (i128, i128) | (amount, new_balance) |
 
 ---

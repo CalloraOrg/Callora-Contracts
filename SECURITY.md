@@ -100,6 +100,7 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - [ ] All state changes emit appropriate events
 - [ ] Event schema documented and indexed
 - [ ] Critical operations (deposit, withdraw, deduct) logged with full context
+- [x] Unit tests assert `deposit` and `deduct` event topics/data (caller, request_id semantics, and resulting balance).
 
 ### Testing Coverage
 

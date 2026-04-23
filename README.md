@@ -24,6 +24,7 @@ The primary storage and metering contract.
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
 - `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
 - `get_price(api_id)` — returns `Option<i128>` with the configured price per call for `api_id`.
+- `deposit`/`deduct` events include caller context and post-operation balance; see `EVENT_SCHEMA.md`.
 
 ## Architecture & Flow
 
