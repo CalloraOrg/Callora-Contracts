@@ -44,11 +44,12 @@ Emitted on each deduction: single `deduct(amount)` or each item in `batch_deduct
 
 Emitted when the owner withdraws via `withdraw(amount)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"withdraw"`  |
-| topic 1 | topics   | Address| vault owner   |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw"`                                         |
+| topic 1       | topics   | Address| vault owner                                          |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 
 ---
 
@@ -56,12 +57,13 @@ Emitted when the owner withdraws via `withdraw(amount)`.
 
 Emitted when the owner withdraws to a designated address via `withdraw_to(to, amount)`.
 
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"withdraw_to"` |
-| topic 1 | topics   | Address| vault owner   |
-| topic 2 | topics   | Address| recipient `to` |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw_to"`                                      |
+| topic 1       | topics   | Address| vault owner                                          |
+| topic 2       | topics   | Address| recipient `to`                                       |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 
 ---
 
