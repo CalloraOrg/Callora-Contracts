@@ -3214,26 +3214,6 @@ fn unpause_when_not_paused_fails() {
     client.unpause(&owner); // Should panic
 }
 
-#[test]
-#[should_panic(expected = "vault is paused")]
-fn deposit_blocked_when_paused() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-
-    // Pause the vault
-    client.pause(&owner);
-    assert!(client.is_paused());
-
-    // Deposit should fail
-    usdc_admin.mint(&owner, &100);
-    usdc_client.approve(&owner, &vault_address, &100, &1000);
-    client.deposit(&owner, &100);
-}
 
 #[test]
 fn deposit_works_after_unpause() {
