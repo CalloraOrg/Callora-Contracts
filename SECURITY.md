@@ -38,6 +38,44 @@ This document outlines security best practices and checklist items for Callora v
 - [ ] Ownership transfer emits events
 - [ ] Renounce ownership reviewed and justified
 
+### Authorized Caller Role Management
+
+The vault exposes a dedicated `authorized_caller` role (stored in `VaultMeta`
+and settable via `set_authorized_caller`) that is permitted to invoke
+balance-mutating operations such as `deduct` and `batch_deduct`. This role is
+distinct from `owner` and `admin`, and reviewers should confirm the following
+controls are in place:
+
+- [x] `authorized_caller` is stored in `VaultMeta` under the `Meta` instance
+  storage key and is not duplicated in any other location
+- [x] Only the current `owner` can set or rotate `authorized_caller` via
+  `set_authorized_caller` (enforced by `meta.owner.require_auth()`)
+- [x] `set_authorized_caller` emits a `set_auth_caller` event with the owner
+  as topic and the new caller address as data, enabling off-chain monitoring
+  of role changes
+- [x] `deduct` and `batch_deduct` reject callers that are not the currently
+  configured `authorized_caller` (panic: `unauthorized: caller is not the authorized caller`)
+- [x] When `authorized_caller` is `None`, privileged caller-only operations
+  are rejected rather than defaulting to owner/admin, preventing accidental
+  over-privileged execution
+- [ ] Rotation flow (set → use → rotate → old caller rejected) covered by
+  unit tests in `contracts/vault/src/test.rs`
+- [ ] Role changes are reviewed as part of the operational runbook; the new
+  caller address is verified off-chain (e.g. multisig or governance) before
+  the owner signs `set_authorized_caller`
+- [ ] `authorized_caller` is scoped strictly to deduct-class operations and
+  does **not** grant the ability to withdraw, distribute, pause, or upgrade
+  the contract
+
+> **Security note:** `authorized_caller` is intentionally a narrow-privilege
+> role meant for the off-chain billing/settlement driver. It can spend vault
+> balance via `deduct` / `batch_deduct` within the configured `max_deduct`
+> limit, so the owning key should rotate it immediately if the off-chain
+> driver's signing key is suspected of compromise. Because rotation is a
+> single-call owner-only operation with an emitted event, recovery is
+> observable and atomic.
+
+
 ### External Calls
 
 - [ ] Token transfers strictly rely on `soroban_sdk::token::Client`
@@ -184,3 +222,10 @@ have been audited for `require_auth()` coverage as part of Issue #160.
 ### Cross-reference
 - Audit branch: `test/require-auth-sweep`
 - Tests: `contracts/vault/src/test.rs`, `contracts/revenue_pool/src/test.rs`, `contracts/settlement/src/test.rs`
+
+## Authorization Matrix Update (Settlement)
+
+As part of the authorization matrix hardening for the `callora-settlement` contract:
+- `get_all_developer_balances` now requires `admin` authorization via `require_auth()`. This prevents bulk data scraping while allowing administrative oversight.
+- Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
+- Admin rotation (two-step) has been verified to correctly gate access during the transition period.

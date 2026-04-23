@@ -2582,8 +2582,8 @@ fn batch_deduct_while_paused_fails() {
         &env,
         DeductItem {
             amount: 100,
-            request_id: None
-        }
+            request_id: None,
+        },
     ];
     client.batch_deduct(&owner, &items);
 }
@@ -2620,8 +2620,8 @@ fn batch_deduct_unauthorized_caller_fails() {
         &env,
         DeductItem {
             amount: 100,
-            request_id: None
-        }
+            request_id: None,
+        },
     ];
     client.batch_deduct(&attacker, &items);
 }
@@ -2653,8 +2653,8 @@ fn batch_deduct_item_exceeds_max_deduct_fails() {
         &env,
         DeductItem {
             amount: 100,
-            request_id: None
-        }
+            request_id: None,
+        },
     ];
     client.batch_deduct(&owner, &items);
 }
@@ -2753,11 +2753,11 @@ fn batch_deduct_no_routing_stays_in_vault() {
         &env,
         DeductItem {
             amount: 100,
-            request_id: None
+            request_id: None,
         },
         DeductItem {
             amount: 50,
-            request_id: None
+            request_id: None,
         },
     ];
     client.batch_deduct(&owner, &items);
@@ -3153,8 +3153,8 @@ mod fuzz {
                 &env,
                 DeductItem {
                     amount: amt,
-                    request_id: None
-                }
+                    request_id: None,
+                },
             ];
             if exceed {
                 assert!(

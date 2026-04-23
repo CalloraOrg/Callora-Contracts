@@ -11,6 +11,35 @@ Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) an
 - Contract compiles to WebAssembly and deploys to Stellar/Soroban
 - Minimal WASM size (~17.5KB for vault)
 
+## Contract Quickstart
+
+A minimal set of commands to build, test, and produce release WASM for the Soroban contracts in this workspace. Run them from the repository root.
+
+**Prerequisites:** [Rust](https://rustup.rs/) (stable) with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
+
+```bash
+# 1. Format & lint (fails on any warning)
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 2. Build and run the full test suite
+cargo build
+cargo test
+
+# 3. Release WASM for a specific contract
+cargo build --target wasm32-unknown-unknown --release -p callora-vault
+cargo build --target wasm32-unknown-unknown --release -p callora-revenue-pool
+cargo build --target wasm32-unknown-unknown --release -p callora-settlement
+
+# 4. Or build all contracts and verify WASM size limits in one step
+./scripts/check-wasm-size.sh
+
+# 5. Line-coverage check (must stay ≥ 95%)
+./scripts/coverage.sh
+```
+
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
+
 ## What’s included
 
 ### 1. `callora-vault`
