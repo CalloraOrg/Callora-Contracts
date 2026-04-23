@@ -178,7 +178,7 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        env.events().publish((Symbol::new(&env, "distribute"), to), amount);
+        env.events().publish((Symbol::new(&env, "distribute"), to, amount), ());
     }
 
     pub fn get_meta(env: Env) -> VaultMeta {
