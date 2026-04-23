@@ -73,7 +73,8 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - [ ] Minimum deposit requirements enforced
 - [ ] Maximum deduction limits enforced
 - [x] Revenue pool transfers validated
-- [x] Settlement developer address required when routing to specific developer
+- [x] Settlement developer address required when routing to specific developer.
+- [x] Settlement developer address must be None when routing to global pool.
 - [ ] Batch operations respect individual limits
 
 ### Revenue Pool Security Assumptions

@@ -278,7 +278,6 @@ impl CalloraVault {
             .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
-
     pub fn deposit(env: Env, caller: Address, amount: i128) -> i128 {
         caller.require_auth();
         Self::require_not_paused(env.clone());
