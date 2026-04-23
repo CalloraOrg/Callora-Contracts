@@ -3124,7 +3124,6 @@ mod fuzz {
             &None,
             &Some(max_deduct_val),
         );
-
         // Give the depositor (owner) plenty of USDC.
         // Use a very large amount to handle large max_deduct scenarios
         let deposit_reserve: i128 = 10_000_000_000_000; // 10 trillion to handle large deposits
@@ -3154,11 +3153,15 @@ mod fuzz {
                         // deposit must fail while paused
                         assert!(client.try_deposit(&owner, &amount).is_err());
                     } else {
-                        sim += amount;
-                        client.deposit(&owner, &amount);
+                        let owner_usdc = usdc_client.balance(&owner);
+                        if owner_usdc >= amount {
+                            sim += amount;
+                            client.deposit(&owner, &amount);
+                        }
                     }
                 }
 
+                // --- single deduct ---
                 // --- single deduct ---
                 1 => {
                     let amount: i128 = rng.gen_range(1..=max_deduct_val);
@@ -3626,4 +3629,110 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
         },
     ];
     client.batch_deduct(&owner, &items);
+}
+
+// ---------------------------------------------------------------------------
+// get_contract_addresses tests  (Issue #257)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_contract_addresses_returns_usdc_only_after_init() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, None);
+    assert_eq!(got_pool, None);
+}
+
+#[test]
+fn get_contract_addresses_reflects_set_settlement() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_settlement(&owner, &settlement);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, Some(settlement));
+    assert_eq!(got_pool, None);
+}
+
+#[test]
+fn get_contract_addresses_reflects_set_revenue_pool() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(
+        &owner,
+        &usdc,
+        &None,
+        &None,
+        &None,
+        &Some(pool.clone()),
+        &None,
+    );
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, None);
+    assert_eq!(got_pool, Some(pool));
+}
+
+#[test]
+fn get_contract_addresses_reflects_all_three_configured() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(
+        &owner,
+        &usdc,
+        &None,
+        &None,
+        &None,
+        &Some(pool.clone()),
+        &None,
+    );
+    client.set_settlement(&owner, &settlement);
+
+    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_usdc, Some(usdc));
+    assert_eq!(got_settlement, Some(settlement));
+    assert_eq!(got_pool, Some(pool));
+}
+
+#[test]
+fn get_contract_addresses_updates_after_clear_revenue_pool() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool), &None);
+    client.set_revenue_pool(&owner, &None); // clear it
+
+    let (_, _, got_pool) = client.get_contract_addresses();
+    assert_eq!(got_pool, None);
 }

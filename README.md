@@ -138,8 +138,9 @@ callora-contracts/
 │   ├── coverage.sh         # Local coverage runner
 │   └── check-wasm-size.sh  # WASM size verification
 ├── docs/
-│   ├── interfaces/         # JSON contract interface summaries (vault, settlement, revenue_pool)
-│   └── ACCESS_CONTROL.md   # Role-based access control overview
+│   ├── interfaces/                        # JSON contract interface summaries
+│   ├── ACCESS_CONTROL.md                  # Role-based access control overview
+│   └── CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
 ├── BENCHMARKS.md           # Gas/cost notes
 ├── EVENT_SCHEMA.md         # Event topics and payloads
 ├── UPGRADE.md              # Upgrade and migration path
@@ -158,6 +159,13 @@ Machine-readable JSON summaries of every public function and parameter for each 
 | [`docs/interfaces/revenue_pool.json`](docs/interfaces/revenue_pool.json) | `callora-revenue-pool` |
 
 See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema description and regeneration steps.
+
+## Operator Guide
+
+Backend operators setting up a new deployment should follow the step-by-step checklist in
+[`docs/CONTRACT_ADDRESS_CONFIGURATION.md`](docs/CONTRACT_ADDRESS_CONFIGURATION.md).
+It covers deploying and linking the USDC token, settlement contract, and revenue pool,
+plus how to verify all addresses with the `get_contract_addresses()` view function.
 
 ## Security Notes
 

@@ -540,6 +540,19 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::RevenuePool)
     }
 
+    /// Store the settlement contract address (admin only).
+    ///
+    /// Once set, every `deduct` / `batch_deduct` call transfers the deducted USDC to
+    /// this address. Settlement takes priority over `revenue_pool` when both are
+    /// configured.
+    ///
+    /// # Panics
+    /// Panics if `caller` is not the current admin.
+    ///
+    /// # Operator note
+    /// Record the address returned by `stellar contract deploy` for the settlement
+    /// contract and pass it here. Confirm with `get_settlement()` before routing
+    /// live traffic.
     pub fn set_settlement(env: Env, caller: Address, settlement_address: Address) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
@@ -551,11 +564,50 @@ impl CalloraVault {
             .set(&StorageKey::Settlement, &settlement_address);
     }
 
+    /// Return the currently registered settlement contract address.
+    ///
+    /// # Panics
+    /// Panics with `"settlement address not set"` if `set_settlement` has not been
+    /// called yet.
     pub fn get_settlement(env: Env) -> Address {
         env.storage()
             .instance()
             .get(&StorageKey::Settlement)
             .unwrap_or_else(|| panic!("settlement address not set"))
+    }
+
+    /// Return all three configurable contract addresses in one read-only call.
+    ///
+    /// Backend operators call this view after deployment to verify that every address
+    /// is configured correctly before routing live traffic through the vault.
+    ///
+    /// # Returns
+    /// A tuple `(usdc_token, settlement, revenue_pool)`:
+    /// - `usdc_token`   — always `Some` after `init`; the USDC token contract address.
+    /// - `settlement`   — `Some` after `set_settlement` is called, otherwise `None`.
+    /// - `revenue_pool` — `Some` after `set_revenue_pool` is called, otherwise `None`.
+    ///
+    /// When both `settlement` and `revenue_pool` are `Some`, **`settlement` takes
+    /// priority** and the revenue pool is not used in the same deduct call.
+    ///
+    /// # Example — Stellar CLI
+    /// ```text
+    /// stellar contract invoke --id <VAULT_CONTRACT_ID> \
+    ///     --source <OPERATOR_KEY> --network testnet \
+    ///     -- get_contract_addresses
+    /// ```
+    ///
+    /// # Operator checklist
+    /// 1. `usdc_token` must be the canonical Stellar USDC issuer
+    ///    (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` on mainnet).
+    /// 2. `settlement` should be `Some` before routing production traffic.
+    /// 3. `revenue_pool` is optional; only active when `settlement` is `None`.
+    pub fn get_contract_addresses(env: Env) -> (Option<Address>, Option<Address>, Option<Address>) {
+        let inst = env.storage().instance();
+        let usdc: Option<Address> = inst.get(&StorageKey::UsdcToken);
+        let settlement: Option<Address> = inst.get(&StorageKey::Settlement);
+        let revenue_pool: Option<Address> = inst.get(&StorageKey::RevenuePool);
+        (usdc, settlement, revenue_pool)
     }
 
     pub fn set_metadata(
