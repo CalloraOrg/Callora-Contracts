@@ -1,12 +1,12 @@
 ## Vault Balance Invariant
 
-**Invariant**: For every reachable state of the `CalloraVault` contract, the stored balance in `VaultMeta.balance` is always **greater than or equal to 0**.
+**Invariant**: For every reachable state of the `CalloraVault` contract, the stored balance in `VaultMeta.balance` is always **greater than or equal to 0** and **less than or equal to i128::MAX**.
 
 - **Storage field**: `VaultMeta.balance : i128`
 - **Accessors**:
   - `get_meta(env: Env) -> VaultMeta`
   - `balance(env: Env) -> i128`
-- **Guarantee**: Any value returned by `get_meta(env).balance` or `balance(env)` is **never negative**.
+- **Guarantee**: Any value returned by `get_meta(env).balance` or `balance(env)` is **never negative** and **cannot overflow** the `i128` numeric boundary. Any operation that would cause an overflow (e.g., `deposit` past `i128::MAX`) will panic and revert the transaction.
 
 This document lists all functions that can change the stored balance and the pre-/post-conditions that preserve this invariant.
 

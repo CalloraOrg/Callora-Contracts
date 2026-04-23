@@ -18,7 +18,7 @@ fail-under    = 95.0
 out           = ["Stdout", "Html", "Xml"]
 output-dir    = "coverage"
 
-# Measure every crate in the workspace (currently just callora-vault).
+# Measure every crate in the workspace (callora-vault, callora-settlement, callora-revenue-pool).
 workspace     = true
 
 # Compile and instrument the library target only.

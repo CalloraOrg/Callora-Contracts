@@ -144,7 +144,7 @@ impl RevenuePool {
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
-    /// * `caller` - Must be admin (or could be extended to allow vault to call).
+    /// * `caller` - Must be the current admin.
     /// * `amount` - Amount received (for event logging).
     /// * `from_vault` - Optional; true if the source was the vault.
     ///
@@ -152,7 +152,8 @@ impl RevenuePool {
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
-    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of `(amount, from_vault)` as data.
+    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of
+    /// `(amount, from_vault)` as data.
     pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
