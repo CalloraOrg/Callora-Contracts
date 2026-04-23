@@ -3231,7 +3231,9 @@ fn deposit_blocked_when_paused() {
     // Deposit should fail
     usdc_admin.mint(&owner, &100);
     usdc_client.approve(&owner, &vault_address, &100, &1000);
-    let result = client.try_deposit(&owner, &100);
+    let result = std::panic::catch_unwind(|| {
+        client.deposit(&owner, &100);
+    });
     assert!(result.is_err());
 
     // Unpause and deposit should work
@@ -3257,7 +3259,9 @@ fn deduct_blocked_when_paused() {
     assert!(client.is_paused());
 
     // Deduct should fail
-    let result = client.try_deduct(&owner, &100, &None);
+    let result = std::panic::catch_unwind(|| {
+        client.deduct(&owner, &100, &None);
+    });
     assert!(result.is_err());
 
     // Unpause and deduct should work
