@@ -3085,3 +3085,314 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
     ];
     client.batch_deduct(&owner, &items);
 }
+
+// ---------------------------------------------------------------------------
+// Pause Circuit Breaker Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pause_unpause_flow_works() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Initially unpaused
+    assert!(!client.is_paused());
+
+    // Pause by owner
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Check pause event
+    let events = env.events().all();
+    let pause_event = events
+        .iter()
+        .find(|e| {
+            e.0 == vault_address && 
+            !e.1.is_empty() && 
+            {
+                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
+                s == Symbol::new(&env, "vault_paused")
+            }
+        })
+        .expect("expected vault_paused event");
+    
+    let caller: Address = pause_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(caller, owner);
+
+    // Unpause by owner
+    client.unpause(&owner);
+    assert!(!client.is_paused());
+
+    // Check unpause event
+    let events = env.events().all();
+    let unpause_event = events
+        .iter()
+        .find(|e| {
+            e.0 == vault_address && 
+            !e.1.is_empty() && 
+            {
+                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
+                s == Symbol::new(&env, "vault_unpaused")
+            }
+        })
+        .expect("expected vault_unpaused event");
+    
+    let caller: Address = unpause_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(caller, owner);
+}
+
+#[test]
+fn admin_can_pause_and_unpause() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    
+    // Transfer admin to separate address
+    client.set_admin(&owner, &admin);
+    client.accept_admin();
+
+    // Admin can pause
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // Admin can unpause
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not admin or owner")]
+fn unauthorized_pause_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    client.pause(&unauthorized);
+}
+
+#[test]
+#[should_panic(expected = "vault already paused")]
+fn double_pause_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    client.pause(&owner);
+    client.pause(&owner); // Should panic
+}
+
+#[test]
+#[should_panic(expected = "vault not paused")]
+fn unpause_when_not_paused_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    client.unpause(&owner); // Should panic
+}
+
+#[test]
+fn deposit_blocked_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Deposit should fail
+    usdc_admin.mint(&owner, &100);
+    usdc_client.approve(&owner, &vault_address, &100, &1000);
+    let result = client.try_deposit(&owner, &100);
+    assert!(result.is_err());
+
+    // Unpause and deposit should work
+    client.unpause(&owner);
+    assert!(!client.is_paused());
+    client.deposit(&owner, &100);
+    assert_eq!(client.balance(), 100);
+}
+
+#[test]
+fn deduct_blocked_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Deduct should fail
+    let result = client.try_deduct(&owner, &100, &None);
+    assert!(result.is_err());
+
+    // Unpause and deduct should work
+    client.unpause(&owner);
+    assert!(!client.is_paused());
+    client.deduct(&owner, &100, &None);
+    assert_eq!(client.balance(), 900);
+}
+
+#[test]
+fn batch_deduct_blocked_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Batch deduct should fail
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem { amount: 50, request_id: None },
+        DeductItem { amount: 30, request_id: None }
+    ];
+    let result = client.try_batch_deduct(&owner, &items);
+    assert!(result.is_err());
+
+    // Unpause and batch deduct should work
+    client.unpause(&owner);
+    assert!(!client.is_paused());
+    client.batch_deduct(&owner, &items);
+    assert_eq!(client.balance(), 920);
+}
+
+#[test]
+fn withdraw_allowed_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Withdraw should still work (owner recovery)
+    let remaining = client.withdraw(&500);
+    assert_eq!(remaining, 500);
+    assert_eq!(client.balance(), 500);
+}
+
+#[test]
+fn withdraw_to_allowed_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Withdraw to should still work (owner recovery)
+    let remaining = client.withdraw_to(&recipient, &300);
+    assert_eq!(remaining, 700);
+    assert_eq!(client.balance(), 700);
+    assert_eq!(usdc_client.balance(&recipient), 300);
+}
+
+#[test]
+fn configuration_functions_work_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let revenue_pool = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Configuration functions should still work
+    client.set_admin(&owner, &new_admin);
+    client.set_allowed_depositor(&owner, &Some(depositor));
+    client.set_revenue_pool(&owner, &Some(revenue_pool));
+    client.set_settlement(&owner, &settlement);
+    client.set_metadata(&owner, &String::from_str(&env, "test_id"), &String::from_str(&env, "test_metadata"));
+    
+    // Verify they worked
+    assert_eq!(client.get_admin(), owner); // Still pending
+    assert!(client.get_allowed_depositors().contains(&depositor));
+    assert_eq!(client.get_revenue_pool(), Some(revenue_pool));
+    assert_eq!(client.get_settlement(), settlement);
+    assert_eq!(client.get_metadata(&String::from_str(&env, "test_id")), Some(String::from_str(&env, "test_metadata")));
+}
+
+#[test]
+fn distribute_works_when_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Distribute should still work (admin function)
+    client.distribute(&owner, &recipient, &300);
+    assert_eq!(usdc_client.balance(&recipient), 300);
+    assert_eq!(usdc_client.balance(&vault_address), 700);
+}

@@ -91,17 +91,34 @@ Emitted when existing metadata is updated via `update_metadata(offering_id, meta
 
 ---
 
----
+### `vault_paused`
 
-### `pause`
-
-Emitted when the vault is paused by the admin.
+Emitted when the vault is paused by admin or owner.
 
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"pause"`     |
-| topic 1 | topics   | Address| admin         |
+| topic 0 | topics   | Symbol | `"vault_paused"` |
+| topic 1 | topics   | Address| caller (admin/owner) |
+| data    | data     | ()     | empty         |
+
+---
+
+### `vault_unpaused`
+
+Emitted when the vault is unpaused by admin or owner.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"vault_unpaused"` |
+| topic 1 | topics   | Address| caller (admin/owner) |
+| data    | data     | ()     | empty         |
+
+---
+
 ### `ownership_nominated`
+
+Emitted when ownership transfer is initiated.
+
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"ownership_nominated"` |
@@ -111,15 +128,10 @@ Emitted when the vault is paused by the admin.
 
 ---
 
-### `unpause`
-
-Emitted when the vault is unpaused by the admin.
-
-| Field   | Location | Type   | Description   |
-|---------|----------|--------|---------------|
-| topic 0 | topics   | Symbol | `"unpause"`   |
-| topic 1 | topics   | Address| admin         |
 ### `ownership_accepted`
+
+Emitted when ownership transfer is completed.
+
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"ownership_accepted"` |
@@ -129,16 +141,83 @@ Emitted when the vault is unpaused by the admin.
 
 ---
 
-## Not yet implemented
-
-- **OwnershipTransfer**: not present in current vault; would list old_owner, new_owner.
 ### `admin_nominated`
+
+Emitted when admin transfer is initiated.
+
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"admin_nominated"` |
 | topic 1 | topics   | Address| current admin |
 | topic 2 | topics   | Address| nominee       |
 | data    | data     | ()     | empty         |
+
+---
+
+### `admin_accepted`
+
+Emitted when admin transfer is completed.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"admin_accepted"` |
+| topic 1 | topics   | Address| old admin     |
+| topic 2 | topics   | Address| new admin     |
+| data    | data     | ()     | empty         |
+
+---
+
+### `set_auth_caller`
+
+Emitted when authorized caller is set.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"set_auth_caller"` |
+| topic 1 | topics   | Address| vault owner   |
+| data    | data     | Address| authorized caller |
+
+---
+
+### `distribute`
+
+Emitted when admin distributes funds.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"distribute"` |
+| data    | data     | Address| recipient     |
+| data    | data     | i128   | amount        |
+
+---
+
+### `set_revenue_pool`
+
+Emitted when revenue pool address is set.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"set_revenue_pool"` |
+| topic 1 | topics   | Address| caller (admin) |
+| data    | data     | Address| revenue pool  |
+
+---
+
+### `clear_revenue_pool`
+
+Emitted when revenue pool address is cleared.
+
+| Field   | Location | Type   | Description   |
+|---------|----------|--------|---------------|
+| topic 0 | topics   | Symbol | `"clear_revenue_pool"` |
+| topic 1 | topics   | Address| caller (admin) |
+| data    | data     | ()     | empty         |
+
+---
+
+## Not yet implemented
+
+- **OwnershipTransfer**: not present in current vault; would list old_owner, new_owner.
 
 
 

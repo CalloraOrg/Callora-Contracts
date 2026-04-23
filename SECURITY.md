@@ -28,9 +28,13 @@ This document outlines security best practices and checklist items for Callora v
 
 ### Pause / Circuit Breaker
 
-- [ ] Emergency pause mechanism implemented via state flag in `instance()` storage
-- [ ] Paused state blocks fund movement (e.g., reverting via `panic_with_error!`)
-- [ ] Pause/unpause flows tested
+- [x] Emergency pause mechanism implemented via state flag in `instance()` storage
+- [x] Paused state blocks sensitive operations (deposits, deducts, batch_deducts)
+- [x] Pause/unpause flows tested with comprehensive coverage
+- [x] Only privileged roles (admin/owner) can toggle pause state
+- [x] Owner withdrawals permitted while paused (recovery access)
+- [x] Configuration functions remain available when paused
+- [x] Pause events emitted for monitoring and indexing
 
 ### Admin Transfer
 
