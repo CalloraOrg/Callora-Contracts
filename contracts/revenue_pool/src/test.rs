@@ -669,3 +669,95 @@ fn batch_distribute_is_atomic_all_or_nothing() {
     // balance unchanged
     assert_eq!(client.balance(), 100);
 }
+
+// ---------------------------------------------------------------------------
+// get_admin() and get_usdc_token() getter tests  (Issue #265)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_admin_returns_correct_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn get_admin_reflects_updated_admin_after_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    assert_eq!(client.get_admin(), admin);
+
+    // Pending phase: get_admin() still returns old admin
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_admin(), admin);
+
+    // After claim: admin updated
+    client.claim_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn get_admin_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, client) = create_pool(&env);
+
+    client.get_admin();
+}
+
+#[test]
+fn get_usdc_token_returns_correct_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    assert_eq!(client.get_usdc_token(), usdc);
+}
+
+#[test]
+fn get_usdc_token_is_immutable_after_init() {
+    // The USDC token address must never change after initialization —
+    // this test guards against accidental mutation.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+    let token_before = client.get_usdc_token();
+
+    // Admin transfer must not affect the token address
+    client.set_admin(&admin, &new_admin);
+    client.claim_admin(&new_admin);
+
+    assert_eq!(client.get_usdc_token(), token_before);
+}
+
+#[test]
+#[should_panic(expected = "revenue pool not initialized")]
+fn get_usdc_token_before_init_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, client) = create_pool(&env);
+
+    client.get_usdc_token();
+}
