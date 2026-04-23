@@ -347,6 +347,14 @@ impl CalloraVault {
         meta.balance
     }
 
+    /// Deduct multiple items atomically.
+    ///
+    /// Full-batch validation is completed before any external transfer,
+    /// state update, or event emission. If validation or transfer fails,
+    /// the invocation reverts with no partial effects.
+    ///
+    /// `MAX_BATCH_SIZE` is an explicit practical cap to bound Soroban
+    /// CPU/memory work and emitted events in a single invocation.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         caller.require_auth();
         Self::require_not_paused(env.clone());
@@ -369,17 +377,9 @@ impl CalloraVault {
             running = running.checked_sub(item.amount).unwrap();
             total = total.checked_add(item.amount).unwrap();
         }
+
         meta.balance = running;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
-        let mut eb = meta.balance.checked_add(total).unwrap();
-        for item in items.iter() {
-            eb = eb.checked_sub(item.amount).unwrap();
-            let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
-            env.events().publish(
-                (Symbol::new(&env, "deduct"), caller.clone(), rid),
-                (item.amount, eb),
-            );
-        }
+
         let inst = env.storage().instance();
         if let Some(s) = inst.get::<StorageKey, Address>(&StorageKey::Settlement) {
             let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
@@ -390,6 +390,19 @@ impl CalloraVault {
         {
             Self::transfer_to_revenue_pool(env.clone(), total);
         }
+
+        env.storage().instance().set(&StorageKey::Meta, &meta);
+
+        let mut eb = meta.balance.checked_add(total).unwrap();
+        for item in items.iter() {
+            eb = eb.checked_sub(item.amount).unwrap();
+            let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
+            env.events().publish(
+                (Symbol::new(&env, "deduct"), caller.clone(), rid),
+                (item.amount, eb),
+            );
+        }
+
         meta.balance
     }
 

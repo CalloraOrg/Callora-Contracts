@@ -954,7 +954,7 @@ fn batch_deduct_too_large_fails() {
 
 #[test]
 fn batch_deduct_fail_mid_batch_leaves_balance_unchanged() {
-    // Second item exceeds balance â€” entire batch must revert.
+    // Second item exceeds balance - entire batch must revert.
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -979,6 +979,72 @@ fn batch_deduct_fail_mid_batch_leaves_balance_unchanged() {
     assert!(result.is_err(), "expected insufficient balance error");
     // Balance must be completely unchanged
     assert_eq!(client.balance(), 100);
+}
+
+#[test]
+fn batch_deduct_fail_mid_batch_has_no_transfer_or_deduct_events() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller = Address::generate(&env);
+    let settlement = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(
+        &owner,
+        &usdc_address,
+        &Some(100),
+        &Some(caller.clone()),
+        &None,
+        &None,
+        &None,
+    );
+    client.set_settlement(&owner, &settlement);
+
+    let deduct_events_before = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            !e.1.is_empty() && {
+                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
+                s == Symbol::new(&env, "deduct")
+            }
+        })
+        .count();
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 60,
+            request_id: Some(Symbol::new(&env, "x1"))
+        },
+        DeductItem {
+            amount: 60,
+            request_id: Some(Symbol::new(&env, "x2"))
+        },
+    ];
+
+    let result = client.try_batch_deduct(&caller, &items);
+    assert!(result.is_err(), "expected insufficient balance error");
+
+    assert_eq!(client.balance(), 100);
+    assert_eq!(usdc_client.balance(&settlement), 0);
+
+    let deduct_events_after = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            !e.1.is_empty() && {
+                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
+                s == Symbol::new(&env, "deduct")
+            }
+        })
+        .count();
+    assert_eq!(deduct_events_after, deduct_events_before);
 }
 
 // ---------------------------------------------------------------------------
