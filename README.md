@@ -11,81 +11,49 @@ Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) an
 - Contract compiles to WebAssembly and deploys to Stellar/Soroban
 - Minimal WASM size (~17.5 KB for vault)
 
-## What's included
+## Contract Quickstart
+
+A minimal set of commands to build, test, and produce release WASM for the Soroban contracts in this workspace. Run them from the repository root.
+
+**Prerequisites:** [Rust](https://rustup.rs/) (stable) with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
+
+```bash
+# 1. Format & lint (fails on any warning)
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 2. Build and run the full test suite
+cargo build
+cargo test
+
+# 3. Release WASM for a specific contract
+cargo build --target wasm32-unknown-unknown --release -p callora-vault
+cargo build --target wasm32-unknown-unknown --release -p callora-revenue-pool
+cargo build --target wasm32-unknown-unknown --release -p callora-settlement
+
+# 4. Or build all contracts and verify WASM size limits in one step
+./scripts/check-wasm-size.sh
+
+# 5. Line-coverage check (must stay ≥ 95%)
+./scripts/coverage.sh
+```
+
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
+
+## What’s included
 
 ### 1. `callora-vault`
 
 The primary storage and metering contract. Holds USDC on behalf of API consumers and deducts balances on every metered call.
 
-**Initialization**
-- `init(owner, usdc_token, initial_balance, authorized_caller, min_deposit, revenue_pool, max_deduct)` — One-time setup; validates all parameters and verifies on-ledger USDC balance.
-
-**Deposits & withdrawals**
-- `deposit(caller, amount)` — Owner or allowed depositor transfers USDC into the vault.
-- `withdraw(amount)` — Owner withdraws USDC to their own address.
-- `withdraw_to(to, amount)` — Owner withdraws USDC to an arbitrary address.
-
-**Deductions**
-- `deduct(caller, amount, request_id)` — Decrease balance for one API call; routes funds to settlement or revenue pool.
-- `batch_deduct(caller, items)` — Atomically process up to 50 deductions; all-or-nothing.
-
-**Pricing**
-- `set_price(caller, api_id, price)` — Owner-only; configure the per-call price for `api_id`.
-- `get_price(api_id)` — Returns `Option<i128>` with the configured price.
-
-**Metadata**
-- `set_metadata(caller, offering_id, metadata)` — Owner-only; attach off-chain data (IPFS/URI) to an offering.
-- `update_metadata(caller, offering_id, metadata)` — Owner-only; replace existing metadata.
-- `get_metadata(offering_id)` — Returns `Option<String>` for the stored value.
-
-**Balance & configuration views**
-- `balance()` — Current tracked USDC balance.
-- `get_meta()` — Full `VaultMeta` struct (owner, balance, authorized caller, min deposit).
-- `get_max_deduct()` — Per-call deduction cap.
-
-**Routing configuration** *(admin-only)*
-- `set_settlement(caller, settlement_address)` / `get_settlement()` — Settlement contract address.
-- `set_revenue_pool(caller, revenue_pool)` / `get_revenue_pool()` — Revenue pool address.
-
-**Access control**
-- `set_admin(caller, new_admin)` / `accept_admin()` / `get_admin()` — Two-step admin transfer.
-- `transfer_ownership(new_owner)` / `accept_ownership()` — Two-step owner transfer.
-- `set_allowed_depositor(caller, depositor)` / `clear_allowed_depositors(caller)` / `get_allowed_depositors()` — Deposit allowlist.
-- `set_authorized_caller(caller)` — Owner-only; set who may call `deduct`.
-- `is_authorized_depositor(caller)` — Returns `bool`.
-
-**Circuit breaker**
-- `pause(caller)` / `unpause(caller)` / `is_paused()` — Admin or owner; blocks deposits and deductions.
-- `distribute(caller, to, amount)` — Admin-only; direct USDC transfer from vault.
-
----
-
-### 2. `callora-revenue-pool`
-
-Simple distribution contract. Accumulates USDC from vault deductions and lets an admin send it to developers.
-
-- `init(admin, usdc_token)` — One-time setup; validates neither address is the contract itself.
-- `distribute(caller, to, amount)` — Admin sends USDC to a single recipient.
-- `batch_distribute(caller, payments)` — Atomically distribute to multiple recipients; pre-validates total balance.
-- `balance()` — Contract's current USDC balance.
-- `receive_payment(caller, amount, from_vault)` — Emits an indexer event; does not move tokens.
-- `get_admin()` / `set_admin(caller, new_admin)` / `claim_admin()` — Two-step admin transfer.
-
----
-
-### 3. `callora-settlement`
-
-Advanced settlement with per-developer balance tracking. Receives USDC from the vault and credits either a global pool or individual developers.
-
-- `init(admin, vault_address)` — One-time setup; links to the vault.
-- `receive_payment(caller, amount, to_pool, developer)` — Credits global pool or a specific developer.
-- `get_developer_balance(developer)` — Tracked balance for one developer (`i128`).
-- `get_all_developer_balances()` — Returns a `Map<Address, i128>` of all recorded balances.
-- `get_global_pool()` — Returns `GlobalPool { total_balance, last_updated }`.
-- `get_admin()` / `set_admin(caller, new_admin)` / `accept_admin()` — Two-step admin transfer.
-- `get_vault()` / `set_vault(caller, new_vault)` — View or update the linked vault address (admin-only).
-
----
+- `init(owner, usdc_token, ..., authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration.
+- `deposit(caller, amount)` — Owner or allowed depositor increases ledger balance.
+- `deduct(caller, amount, request_id)` — Decrease balance for an API call; routes funds to settlement.
+- `batch_deduct(caller, items)` — Atomically process multiple deductions.
+- `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
+- `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
+- `set_price(caller, api_id, price)` — Owner-only; configure the price per call for `api_id`.
+- `get_price(api_id)` — returns `Option<i128>` with the configured price per call for `api_id`.
 
 ## Architecture & Flow
 
@@ -194,6 +162,7 @@ See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema desc
 - **Input validation**: `amount > 0` enforced on all deposits and deductions.
 - **Overflow checks**: Enabled in both dev and release profiles (`Cargo.toml`).
 - **Role-Based Access**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+- **Dedup hardening**: Duplicate `get_max_deduct` declaration removed in `callora-vault`; allowed depositor duplicate-path test now asserts list cardinality.
 
 See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit recommendations.
 
