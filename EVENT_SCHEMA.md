@@ -186,8 +186,9 @@ Emitted when admin distributes funds.
 | Field   | Location | Type   | Description   |
 |---------|----------|--------|---------------|
 | topic 0 | topics   | Symbol | `"distribute"` |
-| data    | data     | Address| recipient     |
-| topic 1 | data     | i128   | amount        |
+| topic 1 | topics   | Address| recipient     |
+| topic 2 | topics   | i128   | amount        |
+| data    | data     | ()     | empty         |
 
 ---
 
