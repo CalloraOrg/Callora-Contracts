@@ -86,7 +86,7 @@ Advanced settlement with individual developer balance tracking.
    cargo fmt --all
    cargo clippy --all-targets --all-features -- -D warnings
    cargo build
-   cargo test
+   cargo test --workspace
    ```
 
 3. **Build WASM:**
@@ -101,7 +101,7 @@ Advanced settlement with individual developer balance tracking.
 
 ## Development
 
-Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
+Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
 
 ### Test coverage
 
