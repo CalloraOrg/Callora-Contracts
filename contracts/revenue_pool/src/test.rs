@@ -416,14 +416,15 @@ fn init_event_data_correctness() {
 
     let events = env.events().all();
     let init_event = events.last().unwrap();
-    
+
     // Check event topics
     let event_name = Symbol::try_from_val(&env, &init_event.1.get(0).unwrap()).unwrap();
     assert_eq!(event_name, Symbol::new(&env, "init"));
-    
-    let admin_from_event: Address = Address::try_from_val(&env, &init_event.1.get(1).unwrap()).unwrap();
+
+    let admin_from_event: Address =
+        Address::try_from_val(&env, &init_event.1.get(1).unwrap()).unwrap();
     assert_eq!(admin_from_event, admin);
-    
+
     // Check event data
     let usdc_from_event: Address = Address::try_from_val(&env, &init_event.2).unwrap();
     assert_eq!(usdc_from_event, usdc);
@@ -438,7 +439,7 @@ fn init_storage_persistence() {
     let (usdc, _, _) = create_usdc(&env, &admin);
 
     client.init(&admin, &usdc);
-    
+
     // Verify both admin and usdc_token are persisted
     assert_eq!(client.get_admin(), admin);
     assert_eq!(client.balance(), 0); // This indirectly checks USDC token is set
@@ -481,4 +482,22 @@ fn init_same_admin_and_usdc_panics() {
 
     // Same address for both admin and usdc_token should be rejected
     client.init(&admin, &admin);
+}
+
+#[test]
+fn distribute_edge_cases() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    
+    // Test with exact balance
+    fund_pool(&usdc_admin, &pool_addr, 500);
+    client.distribute(&admin, &developer, &500);
+    assert_eq!(usdc_client.balance(&pool_addr), 0);
+    assert_eq!(usdc_client.balance(&developer), 500);
 }
