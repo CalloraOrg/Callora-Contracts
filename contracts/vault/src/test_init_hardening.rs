@@ -56,7 +56,7 @@ fn test_init_revenue_pool_self_address_fails() {
 }
 
 #[test]
-#[should_panic(expected = "min_deposit must be non-negative")]
+#[should_panic(expected = "min_deposit must be positive")]
 fn test_init_negative_min_deposit_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -67,6 +67,20 @@ fn test_init_negative_min_deposit_fails() {
     let client = CalloraVaultClient::new(&env, &addr);
 
     client.init(&owner, &usdc, &Some(0), &None, &Some(-10), &None, &None);
+}
+
+#[test]
+#[should_panic(expected = "min_deposit must be positive")]
+fn test_init_zero_min_deposit_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let usdc = Address::generate(&env);
+    env.mock_all_auths();
+
+    let addr = env.register(CalloraVault, ());
+    let client = CalloraVaultClient::new(&env, &addr);
+
+    client.init(&owner, &usdc, &Some(0), &None, &Some(0), &None, &None);
 }
 
 #[test]
