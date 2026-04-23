@@ -87,6 +87,23 @@ impl RevenuePool {
     ///
     /// # Events
     /// Emits an `admin_transfer_started` event with the `current_admin` as a topic and `new_admin` as data.
+    /// Return the USDC token address configured for this pool.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    ///
+    /// # Returns
+    /// The `Address` of the USDC token contract.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect("revenue pool not initialized")
+    }
+
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
