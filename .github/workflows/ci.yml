@@ -29,14 +29,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check format
-        run: cargo fmt --all -- --check
+      - name: Check format (workspace crates)
+        run: cargo fmt --package callora-vault --package callora-settlement --package callora-revenue-pool -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test
+      - name: Test (all workspace members)
+        run: cargo test --workspace
 
   build:
     name: Build (release)

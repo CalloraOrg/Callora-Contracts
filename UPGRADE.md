@@ -92,6 +92,12 @@ pub fn init(
 ) -> VaultMeta
 ```
 
+**Behavior note (pause semantics):**
+
+- `pause()` is a circuit breaker for **deposit-like** flows.
+- While paused, `deposit()` is rejected, but **`deduct()` and `batch_deduct()` still execute and still emit `deduct` events**.
+- If you rely on “pause stops all balance movement”, you must update your operational assumptions and monitoring.
+
 ### Revenue Pool (`contracts/revenue_pool/src/lib.rs`)
 
 | Key | Type | Description |
