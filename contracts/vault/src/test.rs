@@ -1,7 +1,7 @@
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol};
+use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol, Vec};
 
 use super::*;
 
