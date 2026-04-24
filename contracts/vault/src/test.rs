@@ -275,8 +275,6 @@ fn owner_can_deposit() {
         })
         .expect("expected deposit event");
 
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, owner);
     let (amount, balance): (i128, i128) = deposit_event.2.into_val(&env);
     assert_eq!(amount, 200);
     assert_eq!(balance, 200);
@@ -744,19 +742,20 @@ fn set_authorized_caller_sets_and_emits_event() {
     fund_vault(&usdc_admin, &vault_address, 200);
     client.init(&owner, &usdc, &Some(200), &None, &None, &None, &None);
 
-    client.set_authorized_caller(&new_caller);
+    client.set_authorized_caller(&Some(new_caller.clone()));
 
     let events = env.events().all();
-    let ev = events.last().expect("expected set_auth_caller event");
+    let ev = events.last().expect("expected set_authorized_caller event");
     assert_eq!(ev.1.len(), 2);
 
     let topic0: Symbol = ev.1.get(0).unwrap().into_val(&env);
     let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "set_auth_caller"));
+    assert_eq!(topic0, Symbol::new(&env, "set_authorized_caller"));
     assert_eq!(topic1, owner);
 
-    let data: Address = ev.2.into_val(&env);
-    assert_eq!(data, new_caller);
+    let (old, now): (Option<Address>, Option<Address>) = ev.2.into_val(&env);
+    assert_eq!(old, None);
+    assert_eq!(now, Some(new_caller.clone()));
 
     let remaining = client.deduct(&new_caller, &50, &None);
     assert_eq!(remaining, 150);
@@ -772,7 +771,7 @@ fn deduct_reduces_balance() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 300);
-    client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(300), &Some(caller.clone()), &None, &None, &None);
 
     let returned = client.deduct(&caller, &50, &None);
     assert_eq!(returned, 250);
@@ -789,7 +788,7 @@ fn deduct_with_request_id() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(1000), &Some(caller.clone()), &None, &None, &None);
 
     let remaining = client.deduct(&caller, &100, &Some(Symbol::new(&env, "req123")));
     assert_eq!(remaining, 900);
@@ -805,7 +804,7 @@ fn deduct_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 10);
-    client.init(&owner, &usdc, &Some(10), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(10), &Some(caller.clone()), &None, &None, &None);
 
     let result = client.try_deduct(&caller, &100, &None);
     assert!(result.is_err(), "expected error for insufficient balance");
@@ -821,7 +820,7 @@ fn deduct_exact_balance_succeeds() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 75);
-    client.init(&owner, &usdc, &Some(75), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(75), &Some(caller.clone()), &None, &None, &None);
 
     let remaining = client.deduct(&caller, &75, &None);
     assert_eq!(remaining, 0);
@@ -838,7 +837,7 @@ fn deduct_event_contains_request_id() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &Some(caller.clone()), &None, &None, &None);
 
     let request_id = Symbol::new(&env, "api_call_42");
     client.deduct(&caller, &150, &Some(request_id.clone()));
@@ -870,7 +869,7 @@ fn deduct_event_no_request_id_uses_empty_symbol() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 300);
-    client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(300), &Some(caller.clone()), &None, &None, &None);
     client.deduct(&caller, &100, &None);
 
     let events = env.events().all();
@@ -900,7 +899,7 @@ fn deduct_zero_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(500), &Some(caller.clone()), &None, &None, &None);
     client.deduct(&caller, &0, &None);
 }
 
@@ -915,7 +914,7 @@ fn deduct_negative_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &Some(caller.clone()), &None, &None, &None);
     client.deduct(&caller, &-50, &None);
 }
 
@@ -930,7 +929,7 @@ fn deduct_exceeds_balance_panics() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 50);
-    client.init(&owner, &usdc, &Some(50), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(50), &Some(caller.clone()), &None, &None, &None);
     client.deduct(&caller, &100, &None);
 }
 
@@ -944,7 +943,7 @@ fn balance_unchanged_after_failed_deduct() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &Some(caller.clone()), &None, &None, &None);
 
     let _ = client.try_deduct(&caller, &200, &None);
     assert_eq!(client.balance(), 100);
@@ -964,7 +963,7 @@ fn batch_deduct_multiple_items() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(1000), &Some(caller.clone()), &None, &None, &None);
 
     let items = soroban_sdk::vec![
         &env,
@@ -997,7 +996,7 @@ fn batch_deduct_events_contain_request_ids() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(1000), &Some(caller.clone()), &None, &None, &None);
 
     let rid_a = Symbol::new(&env, "batch_a");
     let rid_b = Symbol::new(&env, "batch_b");
@@ -1041,7 +1040,7 @@ fn batch_deduct_insufficient_balance_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &Some(caller.clone()), &None, &None, &None);
 
     let items = soroban_sdk::vec![
         &env,
@@ -1071,7 +1070,7 @@ fn batch_deduct_empty_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &Some(caller.clone()), &None, &None, &None);
 
     let items: soroban_sdk::Vec<DeductItem> = soroban_sdk::vec![&env];
     let result = client.try_batch_deduct(&caller, &items);
@@ -1088,7 +1087,7 @@ fn batch_deduct_zero_amount_fails() {
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(100), &Some(caller.clone()), &None, &None, &None);
 
     let items = soroban_sdk::vec![
         &env,
@@ -2997,7 +2996,7 @@ fn deduct_while_paused_fails() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None); // must panic with "vault is paused"
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]

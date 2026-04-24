@@ -145,6 +145,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - **Operational Griefing (Balances):** Anyone can effectively transfer USDC to the revenue pool. If an attacker sends unsolicited funds, it increases the `balance()` but does not disrupt the `distribute` logic, as distribution is explicitly controlled by the admin.
   - *Mitigation:* The pool does not rely on strict balance equality invariants for its core operations, mitigating balance-based operational griefing. The `receive_payment` entrypoint is admin-only and event-only (no token movement), so indexers should reconcile `receive_payment` logs with actual token transfers.
 
+- **Resource Exhaustion via Unbounded Batch:** `batch_distribute` accepts a `Vec<(Address, i128)>`. Without a cap, a compromised admin key could submit thousands of entries, exhausting Soroban's per-transaction CPU/memory budget and causing unpredictable mid-execution failures.
+  - *Mitigation:* `batch_distribute` enforces `1 <= payments.len() <= MAX_BATCH_SIZE` (currently **50**), matching the vault's `batch_deduct` cap. Empty vectors and oversized vectors are rejected before any iteration or USDC transfer occurs. The cap keeps resource consumption well within Soroban network limits.
+
 ### Input Validation
 
 - [ ] All amounts validated to be > 0

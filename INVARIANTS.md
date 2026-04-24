@@ -447,6 +447,8 @@ Pure accessors such as [`get_admin`](contracts/settlement/src/lib.rs#L140), [`ge
 - `distribute` / `batch_distribute` also require:
   - Positive amount(s)
   - Sufficient on-contract USDC balance before transfer
+- `batch_distribute` additionally requires:
+  - `1 <= payments.len() <= MAX_BATCH_SIZE` (50)
 
 **Post-conditions**
 - No address other than the current revenue-pool admin can emit administrative payment events or move USDC out of the revenue pool.
