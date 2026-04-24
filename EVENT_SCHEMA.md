@@ -73,12 +73,24 @@ Emitted on each deduction — once per `deduct()` call and once per item in `bat
 - **Indexer rule**: treat `Symbol("")` as “no request_id provided”.
 - **Ambiguity note**: `Some(Symbol(""))` is indistinguishable from `None` on-chain. Clients **SHOULD NOT** intentionally pass an empty symbol as a real request id.
 
+**Precondition (Issue #263):** `deduct` / `batch_deduct` require a settlement
+address to be configured via `set_settlement`. If the settlement address is
+not set, the call panics with `"settlement address not set"` **before** any
+`deduct` event is emitted — indexers will therefore never observe a `deduct`
+event for a call that lacked a configured settlement destination.
+
 ---
 
 ### `withdraw`
 
 Emitted when the vault owner withdraws to their own address.
 
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw"`                                         |
+| topic 1       | topics   | Address| vault owner                                          |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 | Index   | Location | Type         | Description           |
 |---------|----------|--------------|-----------------------|
 | topic 0 | topics   | Symbol       | `"withdraw"`          |
@@ -98,6 +110,13 @@ Emitted when the vault owner withdraws to their own address.
 
 Emitted when the vault owner withdraws to a designated recipient.
 
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw_to"`                                      |
+| topic 1       | topics   | Address| vault owner                                          |
+| topic 2       | topics   | Address| recipient `to`                                       |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 | Index   | Location | Type         | Description           |
 |---------|----------|--------------|-----------------------|
 | topic 0 | topics   | Symbol       | `"withdraw_to"`       |
@@ -406,8 +425,6 @@ Emitted when the nominee accepts the admin role.
 | topic 2 | topics   | Address| new admin     |
 | data    | data     | ()     | empty         |
 
-> **Note:** `balance_credited` is never emitted when `to_pool = true`. Indexers tracking developer earnings should subscribe to this event; indexers tracking total protocol revenue should subscribe to `payment_received` with `to_pool = true`.
-
 ---
 
 ## Contract: `callora-revenue-pool` (v0.0.1)
@@ -574,20 +591,50 @@ three payments, three `batch_distribute` events are emitted in order.
 
 ## Contract: `callora-settlement` (v0.1.0)
 
+Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
+
+**Amount units.** All `amount` / `new_balance` fields are `i128` in USDC
+micro-units (7-decimal scaled integers), matching the Stellar USDC contract.
+Legacy text elsewhere in this document calls this "stroops" — same scalar type,
+same integer semantics; the settlement contract never handles native XLM.
+
+**Data payload encoding.** The `data` column describes the Soroban
+`contracttype` struct published by `env.events().publish(...)`. On the wire
+each struct is a single XDR value whose field names match the Rust struct;
+the JSON examples below are the logical field view an indexer sees after
+decoding, not a raw array. The struct layouts live in `lib.rs`:
+`PaymentReceivedEvent` and `BalanceCreditedEvent`.
+
+**Emit atomicity and ordering.** Both events originate inside one
+`receive_payment()` call, so they share the same transaction and ledger
+sequence. When `to_pool = false`, `payment_received` is always emitted
+**before** `balance_credited`. If any guard panics (see "Panic modes" below)
+no events are emitted and state is rolled back.
+
+**Panic modes (no events emitted).**
+- Caller is not the registered vault or admin (`require_authorized_caller`).
+- `amount <= 0` — `"amount must be positive"`.
+- `to_pool = true` with `developer = Some(_)` — `"developer address must be None when to_pool=true"`.
+- `to_pool = false` with `developer = None` — `"developer address required when to_pool=false"`.
+- Arithmetic overflow on pool or developer balance — `"pool balance overflow"` / `"developer balance overflow"`.
+
+---
+
 ### `payment_received`
 
-Emitted by `receive_payment()` for every inbound payment regardless of routing.
+Emitted by `receive_payment()` for every successful inbound payment,
+regardless of routing.
 
-| Index        | Location | Type             | Description                                                              |
-|--------------|----------|------------------|--------------------------------------------------------------------------|
-| topic 0      | topics   | Symbol           | `"payment_received"`                                                     |
-| topic 1      | topics   | Address          | `caller` — vault or admin address                                        |
-| `from_vault` | data     | Address          | same as topic 1                                                          |
-| `amount`     | data     | i128             | payment amount in stroops; always > 0                                    |
-| `to_pool`    | data     | bool             | `true` → credited to global pool; `false` → credited to a developer     |
-| `developer`  | data     | Option\<Address\>| `None` when `to_pool=true`; developer address when `to_pool=false`      |
+| Index        | Location | Type              | Description                                                                       |
+|--------------|----------|-------------------|-----------------------------------------------------------------------------------|
+| topic 0      | topics   | Symbol            | `"payment_received"`                                                              |
+| topic 1      | topics   | Address           | `caller` — authorized vault or admin address (same as `from_vault` field)         |
+| `from_vault` | data     | Address           | originator of the payment; duplicates topic 1 for indexers that key by data only  |
+| `amount`     | data     | i128              | payment amount in USDC micro-units; invariant `amount > 0`                        |
+| `to_pool`    | data     | bool              | `true` → credited to global pool; `false` → credited to an individual developer   |
+| `developer`  | data     | Option\<Address\> | `None` when `to_pool = true`; `Some(address)` when `to_pool = false`              |
 
-**Example — global pool credit:**
+**Example — global pool credit (`to_pool = true`):**
 
 ```json
 {
@@ -601,7 +648,10 @@ Emitted by `receive_payment()` for every inbound payment regardless of routing.
 }
 ```
 
-**Example — developer credit:**
+Side effect: `GlobalPool.total_balance += amount` and
+`GlobalPool.last_updated = env.ledger().timestamp()`.
+
+**Example — developer credit (`to_pool = false`):**
 
 ```json
 {
@@ -615,19 +665,32 @@ Emitted by `receive_payment()` for every inbound payment regardless of routing.
 }
 ```
 
+Side effect: developer balance map entry for `GDEV...` is incremented by
+`amount`. `GlobalPool.last_updated` is **not** touched on developer credits.
+
+**Indexer guidance.**
+- `topic 1` is always the caller; filter on it to isolate payments from a
+  specific vault or admin.
+- `developer` is the only field that distinguishes pool vs. developer credits
+  in the data payload; the `to_pool` boolean is redundant but stable and
+  cheaper to filter on.
+- A `payment_received` with `to_pool = false` is always paired with exactly
+  one `balance_credited` event in the same transaction.
+
 ---
 
 ### `balance_credited`
 
-Emitted by `receive_payment()` **only** when `to_pool = false`.
+Emitted by `receive_payment()` **only** when `to_pool = false`, immediately
+after the matching `payment_received` event.
 
-| Index         | Location | Type    | Description                                      |
-|---------------|----------|---------|--------------------------------------------------|
-| topic 0       | topics   | Symbol  | `"balance_credited"`                             |
-| topic 1       | topics   | Address | `developer` — address whose balance was updated  |
-| `developer`   | data     | Address | same as topic 1                                  |
-| `amount`      | data     | i128    | amount credited (stroops)                        |
-| `new_balance` | data     | i128    | developer's cumulative balance after this credit |
+| Index         | Location | Type    | Description                                                     |
+|---------------|----------|---------|-----------------------------------------------------------------|
+| topic 0       | topics   | Symbol  | `"balance_credited"`                                            |
+| topic 1       | topics   | Address | `developer` — address whose balance was updated                 |
+| `developer`   | data     | Address | same as topic 1; duplicated for data-only indexers              |
+| `amount`      | data     | i128    | amount credited to the developer in USDC micro-units            |
+| `new_balance` | data     | i128    | developer's cumulative balance after this credit (post-state)   |
 
 ```json
 {
@@ -640,9 +703,21 @@ Emitted by `receive_payment()` **only** when `to_pool = false`.
 }
 ```
 
-> `balance_credited` is never emitted when `to_pool = true`. Indexers tracking
-> developer earnings should subscribe to this event; indexers tracking total
-> protocol revenue should subscribe to `payment_received` with `to_pool = true`.
+**Invariants.**
+- `new_balance = prior_balance + amount`, checked for `i128` overflow; overflow
+  panics and rolls back both events.
+- `new_balance` equals `CalloraSettlement::get_developer_balance(developer)`
+  immediately after the emitting transaction.
+- `amount` in `balance_credited` equals `amount` in the paired
+  `payment_received`.
+
+**Indexer guidance.**
+- Track developer earnings by subscribing to `balance_credited` — it already
+  carries the post-credit balance, so no separate read is required.
+- Track total protocol inflow by summing `payment_received.amount` across
+  both routing modes, or filter `to_pool = true` for pool-only inflow.
+- `balance_credited` is **never** emitted when `to_pool = true`; do not wait
+  for one on pool credits.
 
 ---
 

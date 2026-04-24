@@ -79,17 +79,24 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 **Pre-conditions**
 - Caller is authorized:
   - `caller.require_auth()`
-- Vault is initialized.
+- Vault is initialized and not paused.
 - Amount constraints:
   - `amount > 0`
   - `amount <= get_max_deduct(env)`
 - Sufficient balance:
   - `meta.balance >= amount`
+- **Settlement configured (Issue #263)**:
+  - `StorageKey::Settlement` is present — i.e. `set_settlement` has been called.
+  - If absent, the call panics with `"settlement address not set"` before any
+    balance mutation, guaranteeing no partial state update.
 
 **Post-conditions**
 - `VaultMeta.balance' = balance - amount`
 - Because of the `meta.balance >= amount` assertion and `amount > 0`, we have:
   - `VaultMeta.balance' >= 0`
+- The on-ledger USDC decrease at the vault equals the internal balance decrease
+  (both equal `amount`), because the deducted USDC is always transferred to the
+  settlement address.
 
 ---
 
@@ -100,11 +107,18 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 
 **Pre-conditions**
 - Caller is authorized: `caller.require_auth()`
-- Vault is initialized.
+- Vault is initialized and not paused.
 - `1 <= items.len() <= MAX_BATCH_SIZE` (50)
+- The explicit batch cap is a practical Soroban resource bound:
+  it limits looped validation work, transfer/event overhead, and invocation
+  footprint in one call. Tune this cap conservatively if production
+  workloads approach network CPU or budget limits.
 - For every item: `item.amount > 0` and `item.amount <= get_max_deduct(env)`
 - Cumulative deductions do not exceed balance:
   - Validated in a single pass before any state is written.
+- **Settlement configured (Issue #263)**: `StorageKey::Settlement` is present;
+  missing settlement causes `"settlement address not set"` panic before any
+  state write, so the batch is atomically reverted.
 
 **Post-conditions**
 - `VaultMeta.balance' = balance - sum_i(amount_i) >= 0`
@@ -447,6 +461,8 @@ Pure accessors such as [`get_admin`](contracts/settlement/src/lib.rs#L140), [`ge
 - `distribute` / `batch_distribute` also require:
   - Positive amount(s)
   - Sufficient on-contract USDC balance before transfer
+- `batch_distribute` additionally requires:
+  - `1 <= payments.len() <= MAX_BATCH_SIZE` (50)
 
 **Post-conditions**
 - No address other than the current revenue-pool admin can emit administrative payment events or move USDC out of the revenue pool.

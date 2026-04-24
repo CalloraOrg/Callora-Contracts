@@ -20,14 +20,14 @@ This document outlines security best practices and checklist items for Callora v
 > All balance mutations in `callora-vault` (`deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`) and `callora-revenue-pool` (`batch_distribute`) use `checked_add` / `checked_sub` and panic with a descriptive message on overflow. `callora-settlement` (`receive_payment`) does the same. The workspace `Cargo.toml` sets `overflow-checks = true` for both `dev` and `release` profiles, so even plain arithmetic would trap in debug builds — the explicit checked calls make the intent clear and guarantee the same behaviour in all build configurations.
 
 Additional hardening note:
-- Removed a duplicated `get_max_deduct` entrypoint declaration in `callora-vault` to avoid ambiguous review surfaces and keep ABI-facing code paths singular.
+- Removed a duplicated `get_max_deduct` entrypoint declaration in `callora-vault` to avoid ambiguous review surfaces and keep ABI-facing code paths singular. The function is retained as a private internal helper called by `deduct` and `batch_deduct`.
 
 ### Initialization / Re-initialization
 
-- [ ] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
+- [x] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
 - [ ] Contract upgrades (`env.deployer().update_current_contract_wasm()`) protected by `require_auth()`
 - [ ] No unprotected re-init functions
-- [ ] `initialize` validates all input parameters
+- [x] `initialize` validates all input parameters
 
 ### Pause / Circuit Breaker
 
@@ -95,21 +95,19 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 `deduct` and `batch_deduct` call. These external transfers are justified as follows:
 
 - **settlement address**: set and updated exclusively by the on-chain admin via
-  `set_settlement`. This function emits a `set_settlement` event to provide a 
-  clear audit trail for address rotation. Transfers to this address implement 
-  the documented `Vault → Settlement` revenue flow described in 
+  `set_settlement`. This function emits a `set_settlement` event to provide a
+  clear audit trail for address rotation. Transfers to this address implement
+  the documented `Vault → Settlement` revenue flow described in
   `SETTLEMENT_IMPLEMENTATION.md`.
-- **revenue_pool address**: set and updated exclusively by the on-chain admin via
-  `set_revenue_pool`. Transfers to this address route product revenue to the
-  designated pool contract.
-- **Priority rule**: when both are configured, `settlement` takes priority and
-  `revenue_pool` is not used in the same deduct. This prevents "half updated"
-  routing states where funds could be split unexpectedly across two recipients.
-- **CRITICAL - Routing Required**: At least one routing address (settlement OR
-  revenue_pool) MUST be configured before any deduct operations can succeed.
-  If neither is configured, `deduct()` and `batch_deduct()` will panic with
-  `"routing not configured: set settlement or revenue_pool address"`. This
-  prevents silent fund retention and ensures explicit routing configuration.
+- **revenue_pool address**: retained as an informational configuration slot via
+  `set_revenue_pool` / `get_revenue_pool`. It is **no longer consulted during
+  deducts** — `deduct` and `batch_deduct` always route to the settlement address.
+- **CRITICAL — Settlement Required (Issue #263)**: `deduct` and `batch_deduct`
+  panic with `"settlement address not set"` when `set_settlement` has not been
+  called. The panic occurs before any balance mutation or event emission, so
+  the transaction reverts atomically with no observable state change. This
+  closes the silent-loss-of-accounting window where the internal `balance`
+  could previously decrement without a corresponding on-ledger USDC transfer.
 - **Address Validation**: Both `set_settlement()` and `set_revenue_pool()` validate
   that the provided address is NOT the vault's own address, preventing
   self-referential routing loops.
@@ -144,6 +142,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 
 - **Operational Griefing (Balances):** Anyone can effectively transfer USDC to the revenue pool. If an attacker sends unsolicited funds, it increases the `balance()` but does not disrupt the `distribute` logic, as distribution is explicitly controlled by the admin.
   - *Mitigation:* The pool does not rely on strict balance equality invariants for its core operations, mitigating balance-based operational griefing. The `receive_payment` entrypoint is admin-only and event-only (no token movement), so indexers should reconcile `receive_payment` logs with actual token transfers.
+
+- **Resource Exhaustion via Unbounded Batch:** `batch_distribute` accepts a `Vec<(Address, i128)>`. Without a cap, a compromised admin key could submit thousands of entries, exhausting Soroban's per-transaction CPU/memory budget and causing unpredictable mid-execution failures.
+  - *Mitigation:* `batch_distribute` enforces `1 <= payments.len() <= MAX_BATCH_SIZE` (currently **50**), matching the vault's `batch_deduct` cap. Empty vectors and oversized vectors are rejected before any iteration or USDC transfer occurs. The cap keeps resource consumption well within Soroban network limits.
 
 ### Input Validation
 
