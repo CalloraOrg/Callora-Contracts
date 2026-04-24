@@ -20,14 +20,14 @@ This document outlines security best practices and checklist items for Callora v
 > All balance mutations in `callora-vault` (`deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`) and `callora-revenue-pool` (`batch_distribute`) use `checked_add` / `checked_sub` and panic with a descriptive message on overflow. `callora-settlement` (`receive_payment`) does the same. The workspace `Cargo.toml` sets `overflow-checks = true` for both `dev` and `release` profiles, so even plain arithmetic would trap in debug builds — the explicit checked calls make the intent clear and guarantee the same behaviour in all build configurations.
 
 Additional hardening note:
-- Removed a duplicated `get_max_deduct` entrypoint declaration in `callora-vault` to avoid ambiguous review surfaces and keep ABI-facing code paths singular.
+- Removed a duplicated `get_max_deduct` entrypoint declaration in `callora-vault` to avoid ambiguous review surfaces and keep ABI-facing code paths singular. The function is retained as a private internal helper called by `deduct` and `batch_deduct`.
 
 ### Initialization / Re-initialization
 
-- [ ] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
+- [x] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
 - [ ] Contract upgrades (`env.deployer().update_current_contract_wasm()`) protected by `require_auth()`
 - [ ] No unprotected re-init functions
-- [ ] `initialize` validates all input parameters
+- [x] `initialize` validates all input parameters
 
 ### Pause / Circuit Breaker
 
@@ -144,6 +144,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 
 - **Operational Griefing (Balances):** Anyone can effectively transfer USDC to the revenue pool. If an attacker sends unsolicited funds, it increases the `balance()` but does not disrupt the `distribute` logic, as distribution is explicitly controlled by the admin.
   - *Mitigation:* The pool does not rely on strict balance equality invariants for its core operations, mitigating balance-based operational griefing. The `receive_payment` entrypoint is admin-only and event-only (no token movement), so indexers should reconcile `receive_payment` logs with actual token transfers.
+
+- **Resource Exhaustion via Unbounded Batch:** `batch_distribute` accepts a `Vec<(Address, i128)>`. Without a cap, a compromised admin key could submit thousands of entries, exhausting Soroban's per-transaction CPU/memory budget and causing unpredictable mid-execution failures.
+  - *Mitigation:* `batch_distribute` enforces `1 <= payments.len() <= MAX_BATCH_SIZE` (currently **50**), matching the vault's `batch_deduct` cap. Empty vectors and oversized vectors are rejected before any iteration or USDC transfer occurs. The cap keeps resource consumption well within Soroban network limits.
 
 ### Input Validation
 
