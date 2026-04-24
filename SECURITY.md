@@ -95,21 +95,19 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 `deduct` and `batch_deduct` call. These external transfers are justified as follows:
 
 - **settlement address**: set and updated exclusively by the on-chain admin via
-  `set_settlement`. This function emits a `set_settlement` event to provide a 
-  clear audit trail for address rotation. Transfers to this address implement 
-  the documented `Vault → Settlement` revenue flow described in 
+  `set_settlement`. This function emits a `set_settlement` event to provide a
+  clear audit trail for address rotation. Transfers to this address implement
+  the documented `Vault → Settlement` revenue flow described in
   `SETTLEMENT_IMPLEMENTATION.md`.
-- **revenue_pool address**: set and updated exclusively by the on-chain admin via
-  `set_revenue_pool`. Transfers to this address route product revenue to the
-  designated pool contract.
-- **Priority rule**: when both are configured, `settlement` takes priority and
-  `revenue_pool` is not used in the same deduct. This prevents "half updated"
-  routing states where funds could be split unexpectedly across two recipients.
-- **CRITICAL - Routing Required**: At least one routing address (settlement OR
-  revenue_pool) MUST be configured before any deduct operations can succeed.
-  If neither is configured, `deduct()` and `batch_deduct()` will panic with
-  `"routing not configured: set settlement or revenue_pool address"`. This
-  prevents silent fund retention and ensures explicit routing configuration.
+- **revenue_pool address**: retained as an informational configuration slot via
+  `set_revenue_pool` / `get_revenue_pool`. It is **no longer consulted during
+  deducts** — `deduct` and `batch_deduct` always route to the settlement address.
+- **CRITICAL — Settlement Required (Issue #263)**: `deduct` and `batch_deduct`
+  panic with `"settlement address not set"` when `set_settlement` has not been
+  called. The panic occurs before any balance mutation or event emission, so
+  the transaction reverts atomically with no observable state change. This
+  closes the silent-loss-of-accounting window where the internal `balance`
+  could previously decrement without a corresponding on-ledger USDC transfer.
 - **Address Validation**: Both `set_settlement()` and `set_revenue_pool()` validate
   that the provided address is NOT the vault's own address, preventing
   self-referential routing loops.

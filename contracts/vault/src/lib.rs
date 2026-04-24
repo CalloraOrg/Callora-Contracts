@@ -59,7 +59,7 @@ impl CalloraVault {
     ) -> VaultMeta {
         owner.require_auth();
         let inst = env.storage().instance();
-        if inst.has(&StorageKey::MetaKey) {
+        if inst.has(&StorageKey::Meta) {
             panic!("vault already initialized");
         }
         assert!(
@@ -93,7 +93,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::MetaKey, &meta);
+        inst.set(&StorageKey::Meta, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -118,6 +118,7 @@ impl CalloraVault {
         list.contains(&caller)
     }
 
+    #[allow(dead_code)]
     fn migrate(env: &Env) {
         let inst = env.storage().instance();
 
@@ -246,7 +247,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
         meta.authorized_caller = Some(caller.clone());
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "set_auth_caller"), meta.owner.clone()),
             caller,
@@ -355,7 +356,25 @@ impl CalloraVault {
         meta.balance
     }
 
+    /// Deduct USDC from the vault and transfer it to the configured settlement address.
+    ///
+    /// # Preconditions
+    /// - The settlement address must have been registered via `set_settlement`
+    ///   before this function can succeed. Attempting to deduct without a
+    ///   configured settlement address panics with `"settlement address not set"`
+    ///   and reverts the transaction, leaving vault state unchanged.
+    /// - `amount` must be positive and less than or equal to `max_deduct`.
+    /// - `caller` must be either the owner or the `authorized_caller` (if set).
+    /// - The vault's internal balance must cover `amount`.
+    ///
+    /// # Panics
+    /// - `"settlement address not set"` — `set_settlement` has not been called.
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"deduct amount exceeds max_deduct"` — `amount > max_deduct`.
+    /// - `"unauthorized caller"` — caller is not owner or authorized caller.
+    /// - `"insufficient balance"` — vault balance below `amount`.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
+        Self::require_not_paused(env.clone());
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
         let max_d = Self::get_max_deduct(env.clone());
@@ -367,19 +386,19 @@ impl CalloraVault {
         };
         assert!(auth, "unauthorized caller");
         assert!(meta.balance >= amount, "insufficient balance");
+        let settlement = Self::require_settlement(&env);
         let mut meta = Self::get_meta(env.clone());
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
-        let inst = env.storage().instance();
-        if let Some(s) = inst.get(&StorageKey::Settlement) {
-            let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
-            Self::transfer_funds(&env, &ut, &s, amount);
-        } else if inst
-            .get::<StorageKey, Address>(&StorageKey::RevenuePool)
-            .is_some()
-        {
-            Self::transfer_to_revenue_pool(env.clone(), amount);
-        }
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .unwrap();
+        Self::transfer_funds(&env, &ut, &settlement, amount);
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
             (Symbol::new(&env, "deduct"), caller, rid),
@@ -388,6 +407,20 @@ impl CalloraVault {
         meta.balance
     }
 
+    /// Deduct multiple USDC amounts atomically and transfer the sum to the
+    /// configured settlement address.
+    ///
+    /// # Preconditions
+    /// Same as [`Self::deduct`]: the settlement address must have been registered
+    /// via `set_settlement` before this function can succeed. A missing settlement
+    /// address panics with `"settlement address not set"` and reverts, leaving
+    /// vault state unchanged. Every per-item validation (positive, within
+    /// `max_deduct`, sufficient running balance) is enforced before any transfer.
+    ///
+    /// # Panics
+    /// In addition to [`Self::deduct`]'s panics:
+    /// - `"batch_deduct requires at least one item"` — empty batch.
+    /// - `"batch too large"` — batch exceeds `MAX_BATCH_SIZE`.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         Self::require_not_paused(env.clone());
         caller.require_auth();
@@ -408,9 +441,15 @@ impl CalloraVault {
             assert!(item.amount > 0, "amount must be positive");
             assert!(item.amount <= max_d, "deduct amount exceeds max_deduct");
             assert!(running >= item.amount, "insufficient balance");
-            running = running.checked_sub(item.amount).unwrap_or_else(|| panic!("balance underflow"));
-            total = total.checked_add(item.amount).unwrap_or_else(|| panic!("total overflow"));
+            running = running
+                .checked_sub(item.amount)
+                .unwrap_or_else(|| panic!("balance underflow"));
+            total = total
+                .checked_add(item.amount)
+                .unwrap_or_else(|| panic!("total overflow"));
         }
+
+        let settlement = Self::require_settlement(&env);
 
         let mut eb = meta.balance;
         for item in items.iter() {
@@ -422,19 +461,15 @@ impl CalloraVault {
             );
         }
 
-        let inst = env.storage().instance();
-        if let Some(s) = inst.get(&StorageKey::Settlement) {
-            let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
-            Self::transfer_funds(&env, &ut, &s, total);
-        } else if inst
-            .get::<StorageKey, Address>(&StorageKey::RevenuePool)
-            .is_some()
-        {
-            Self::transfer_to_revenue_pool(env.clone(), total);
-        }
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .unwrap();
+        Self::transfer_funds(&env, &ut, &settlement, total);
 
         meta.balance = running;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         meta.balance
     }
 
@@ -472,7 +507,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
@@ -492,7 +527,10 @@ impl CalloraVault {
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &ua);
         usdc.transfer(&env.current_contract_address(), &meta.owner, &amount);
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
@@ -513,7 +551,10 @@ impl CalloraVault {
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &ua);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
@@ -551,8 +592,9 @@ impl CalloraVault {
     /// Store the settlement contract address (admin only).
     ///
     /// Once set, every `deduct` / `batch_deduct` call transfers the deducted USDC to
-    /// this address. Settlement takes priority over `revenue_pool` when both are
-    /// configured.
+    /// this address. `set_settlement` is a hard precondition: `deduct` and
+    /// `batch_deduct` panic with `"settlement address not set"` until this function
+    /// has been called. `revenue_pool` is no longer consulted during deductions.
     ///
     /// # Panics
     /// Panics if `caller` is not the current admin.
@@ -597,10 +639,10 @@ impl CalloraVault {
     /// A tuple `(usdc_token, settlement, revenue_pool)`:
     /// - `usdc_token`   — always `Some` after `init`; the USDC token contract address.
     /// - `settlement`   — `Some` after `set_settlement` is called, otherwise `None`.
+    ///   Must be `Some` before any `deduct` / `batch_deduct` call can succeed.
     /// - `revenue_pool` — `Some` after `set_revenue_pool` is called, otherwise `None`.
-    ///
-    /// When both `settlement` and `revenue_pool` are `Some`, **`settlement` takes
-    /// priority** and the revenue pool is not used in the same deduct call.
+    ///   Informational only; `deduct` / `batch_deduct` always route to `settlement`
+    ///   and never fall back to the revenue pool.
     ///
     /// # Example — Stellar CLI
     /// ```text
@@ -612,8 +654,9 @@ impl CalloraVault {
     /// # Operator checklist
     /// 1. `usdc_token` must be the canonical Stellar USDC issuer
     ///    (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` on mainnet).
-    /// 2. `settlement` should be `Some` before routing production traffic.
-    /// 3. `revenue_pool` is optional; only active when `settlement` is `None`.
+    /// 2. `settlement` must be `Some` before any deduct call; it is the sole
+    ///    destination for deducted USDC.
+    /// 3. `revenue_pool` is informational only and is not consulted during deducts.
     pub fn get_contract_addresses(env: Env) -> (Option<Address>, Option<Address>, Option<Address>) {
         let inst = env.storage().instance();
         let usdc: Option<Address> = inst.get(&StorageKey::UsdcToken);
@@ -689,15 +732,18 @@ impl CalloraVault {
         token::Client::new(env, usdc_token).transfer(&env.current_contract_address(), to, &amount);
     }
 
-    fn transfer_to_revenue_pool(env: Env, amount: i128) {
-        let inst = env.storage().instance();
-        let rp: Address = inst
-            .get(&StorageKey::RevenuePool)
-            .expect("revenue pool address not set");
-        let ua: Address = inst
-            .get(&StorageKey::UsdcToken)
-            .expect("vault not initialized");
-        token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &rp, &amount);
+    fn require_settlement(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Settlement)
+            .unwrap_or_else(|| panic!("settlement address not set"))
+    }
+
+    fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     fn require_not_paused(env: Env) {

@@ -77,24 +77,18 @@ StorageKey::RevenuePool    // Fallback routing address (used if Settlement not s
 
 #### Routing Validation
 
-**CRITICAL**: The vault enforces that at least one routing address MUST be configured before any deduct operations can succeed. This is validated via `require_routing_configured()` which is called at the beginning of both `deduct()` and `batch_deduct()`.
+**CRITICAL**: The vault enforces that the settlement address MUST be configured before any deduct operation can succeed. This is validated via `require_settlement()` which is consulted by both `deduct()` and `batch_deduct()`.
 
-- If neither `settlement` nor `revenue_pool` is configured: **PANIC** with `"routing not configured: set settlement or revenue_pool address"`
-- This prevents silent fund retention and ensures explicit routing configuration
-- Both addresses are validated to prevent self-referential routing (vault → vault)
+- If `settlement` is not configured: **PANIC** with `"settlement address not set"` and the transaction reverts with no state change.
+- This prevents silent loss-of-accounting where the vault's internal `balance` could drift from the on-ledger USDC balance.
+- The settlement address is validated at configuration time to prevent self-referential routing (vault → vault).
 
-#### Routing Priority
+#### Routing
 
-When deduct operations occur, funds are routed according to this priority:
+Every `deduct` / `batch_deduct` call routes the deducted USDC to the configured settlement address. `revenue_pool` is **not** consulted during deducts; it is retained as an informational configuration slot only.
 
-1. **If `settlement` is configured** → Route to settlement contract (highest priority)
-2. **Else if `revenue_pool` is configured** → Route to revenue pool contract
-3. **Else** → Deduct operation FAILS (routing not configured)
-
-This priority system ensures:
-- No "half-configured" states where funds could be split unexpectedly
-- Deterministic routing behavior
-- Clear audit trail for all fund movements
+- **`settlement` set** → funds transferred to settlement contract.
+- **`settlement` unset** → deduct panics with `"settlement address not set"`, no balance change, no event emitted.
 
 
 

@@ -1047,8 +1047,6 @@ mod settlement_tests {
         assert_eq!(client.get_admin(), new_admin);
     }
 
-
-
     #[test]
     fn test_get_all_developer_balances_authorization_matrix() {
         let (env, addr, admin, vault, third_party) = setup_contract();
