@@ -3627,6 +3627,9 @@ fn withdraw_emits_event() {
             }
         })
         .expect("expected withdraw event");
+    let payload: WithdrawEventData = ev.2.into_val(&env);
+    assert_eq!(payload.amount, 100);
+    assert_eq!(payload.new_balance, 200);
     let (amt, bal): (i128, i128) = ev.2.into_val(&env);
     assert_eq!(amt, 100);
     assert_eq!(bal, 200);
@@ -3653,6 +3656,9 @@ fn withdraw_to_emits_event() {
             }
         })
         .expect("expected withdraw_to event");
+    let payload: WithdrawEventData = ev.2.into_val(&env);
+    assert_eq!(payload.amount, 150);
+    assert_eq!(payload.new_balance, 150);
     let (amt, bal): (i128, i128) = ev.2.into_val(&env);
     assert_eq!(amt, 150);
     assert_eq!(bal, 150);
@@ -3693,8 +3699,8 @@ fn get_allowed_depositors_returns_list() {
     let (usdc, _, _) = create_usdc(&env, &owner);
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.set_allowed_depositor(&owner, &Some(d1));
-    client.set_allowed_depositor(&owner, &Some(d2));
+    client.set_allowed_depositor(&owner, &Some(d1.clone()));
+    client.set_allowed_depositor(&owner, &Some(d2.clone()));
     let list = client.get_allowed_depositors();
     assert_eq!(list.len(), 2);
 }
@@ -3779,6 +3785,7 @@ mod fuzz {
 
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
+        let mut token_sim: i128 = initial;
         let mut paused = false;
         let op_cap: i128 = if max_deduct_val > 10_000 {
             10_000
@@ -3799,12 +3806,12 @@ mod fuzz {
                     if paused {
                         // deposit must fail while paused
                         assert!(client.try_deposit(&owner, &amount).is_err());
-                    } else {
-                        let owner_usdc = usdc_client.balance(&owner);
-                        if owner_usdc >= amount {
-                            sim += amount;
-                            client.deposit(&owner, &amount);
-                        }
+                    } else if let (Some(new_sim), Some(new_token_sim)) = (sim.checked_add(amount), token_sim.checked_add(amount)) {
+                        // mint amount to owner to avoid insufficient balance on large fuzz tests
+                        usdc_admin.mint(&owner, &amount);
+                        sim = new_sim;
+                        token_sim = new_token_sim;
+                        client.deposit(&owner, &amount);
                     }
                     // else: deposit failed (e.g. insufficient USDC) — no sim change
                 }
@@ -3831,6 +3838,11 @@ mod fuzz {
                     let mut batch_total: i128 = 0;
                     let mut valid = true;
                     for _ in 0..n {
+                        let amt: i128 = rng.gen_range(1..=max_deduct_val);
+                        items.push_back(DeductItem {
+                            amount: amt,
+                            request_id: None,
+                        });
                         let amt: i128 = rng.gen_range(1..=op_cap);
                         batch_total = match batch_total.checked_add(amt) {
                             Some(v) => v,

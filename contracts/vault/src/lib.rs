@@ -31,6 +31,16 @@ pub struct VaultMeta {
     pub min_deposit: i128,
 }
 
+/// Payload for `withdraw` and `withdraw_to` events.
+#[contracttype]
+#[derive(Clone)]
+pub struct WithdrawEventData {
+    /// Amount withdrawn in USDC stroops.
+    pub amount: i128,
+    /// Vault balance after the withdrawal.
+    pub new_balance: i128,
+}
+
 /// Canonical storage keys for Vault contract.
 /// Eliminates duplication and ensures audit clarity.
 #[contracttype]
@@ -544,7 +554,10 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
-            (amount, meta.balance),
+            WithdrawEventData {
+                amount,
+                new_balance: meta.balance,
+            },
         );
         meta.balance
     }
@@ -568,7 +581,10 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
-            (amount, meta.balance),
+            WithdrawEventData {
+                amount,
+                new_balance: meta.balance,
+            },
         );
         meta.balance
     }
