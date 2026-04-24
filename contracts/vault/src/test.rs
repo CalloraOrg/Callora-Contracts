@@ -2669,12 +2669,13 @@ mod fuzz {
         );
 
         // Give the depositor (owner) plenty of USDC.
-        let deposit_reserve: i128 = i128::MAX;
+        let deposit_reserve: i128 = initial * 10 + 1_000_000;
         usdc_admin.mint(&owner, &deposit_reserve);
-        usdc_client.approve(&owner, &vault_addr, &deposit_reserve, &999_999);
+        usdc_client.approve(&owner, &vault_addr, &i128::MAX, &999_999);
 
         let mut rng = StdRng::seed_from_u64(seed);
         let mut sim: i128 = initial;
+        let mut token_sim: i128 = initial;
         let mut paused = false;
 
         for _ in 0..steps {
@@ -2688,11 +2689,16 @@ mod fuzz {
                     if paused {
                         // deposit must fail while paused
                         assert!(client.try_deposit(&owner, &amount).is_err());
-                    } else {
-                        sim += amount;
+                    } else if let (Some(new_sim), Some(new_token_sim)) = (sim.checked_add(amount), token_sim.checked_add(amount)) {
+                        // mint amount to owner to avoid insufficient balance on large fuzz tests
+                        usdc_admin.mint(&owner, &amount);
+                        sim = new_sim;
+                        token_sim = new_token_sim;
                         client.deposit(&owner, &amount);
                     }
                 }
+
+
 
                 // --- single deduct ---
                 1 => {
@@ -2717,6 +2723,10 @@ mod fuzz {
                     let mut valid = true;
                     for _ in 0..n {
                         let amt: i128 = rng.gen_range(1..=max_deduct_val);
+                        items.push_back(DeductItem {
+                            amount: amt,
+                            request_id: None,
+                        });
                         batch_total = match batch_total.checked_add(amt) {
                             Some(v) => v,
                             None => {
@@ -2724,10 +2734,6 @@ mod fuzz {
                                 break;
                             }
                         };
-                        items.push_back(DeductItem {
-                            amount: amt,
-                            request_id: None,
-                        });
                     }
                     if paused {
                         assert!(client.try_batch_deduct(&caller, &items).is_err());
