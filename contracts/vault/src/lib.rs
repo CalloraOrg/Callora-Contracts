@@ -217,8 +217,81 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("vault not initialized"))
     }
 
+    /// Adds a single address to the allowlist of permitted depositors.
+    /// Can only be called by the Owner.
+    /// Prevents duplicate entries.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault owner; requires authorization.
+    /// * `address` – Address to add to the allowlist.
+    ///
+    /// # Panics
+    /// * `"unauthorized: owner only"` – caller is not the owner.
+    ///
+    /// # Events
+    /// Emits topic `("allowlist_add", owner, address)` on success.
+    pub fn add_address(env: Env, caller: Address, address: Address) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone());
+
+        let mut allowed: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::AllowedDepositors)
+            .unwrap_or(Vec::new(&env));
+
+        // Prevent duplicate entries
+        if !allowed.contains(&address) {
+            allowed.push_back(address.clone());
+            env.storage()
+                .instance()
+                .set(&StorageKey::AllowedDepositors, &allowed);
+
+            env.events().publish(
+                (Symbol::new(&env, "allowlist_add"), caller, address.clone()),
+                (),
+            );
+        }
+    }
+
+    /// Removes all addresses from the allowlist.
+    /// Can only be called by the Owner.
+    ///
+    /// # Arguments
+    /// * `caller` – Must be the vault owner; requires authorization.
+    ///
+    /// # Panics
+    /// * `"unauthorized: owner only"` – caller is not the owner.
+    ///
+    /// # Events
+    /// Emits topic `("allowlist_clear", owner)` on success.
+    pub fn clear_all(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone());
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::AllowedDepositors);
+
+        env.events()
+            .publish((Symbol::new(&env, "allowlist_clear"), caller), ());
+    }
+
+    /// Returns the current allowlist of permitted depositors.
+    /// Returns an empty vector if no depositors are configured.
+    pub fn get_allowlist(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::AllowedDepositors)
+            .unwrap_or(Vec::new(&env))
+    }
+
     /// Sets whether an address is allowed to deposit into the vault.
     /// Can only be called by the Owner.
+    ///
+    /// # Deprecated
+    /// Use `add_address` to add individual addresses or `clear_all` to remove all.
+    /// This function is maintained for backward compatibility.
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone());
