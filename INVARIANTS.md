@@ -102,6 +102,10 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - Caller is authorized: `caller.require_auth()`
 - Vault is initialized.
 - `1 <= items.len() <= MAX_BATCH_SIZE` (50)
+- The explicit batch cap is a practical Soroban resource bound:
+  it limits looped validation work, transfer/event overhead, and invocation
+  footprint in one call. Tune this cap conservatively if production
+  workloads approach network CPU or budget limits.
 - For every item: `item.amount > 0` and `item.amount <= get_max_deduct(env)`
 - Cumulative deductions do not exceed balance:
   - Validated in a single pass before any state is written.

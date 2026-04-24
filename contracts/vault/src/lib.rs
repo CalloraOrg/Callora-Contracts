@@ -416,6 +416,14 @@ impl CalloraVault {
         meta.balance
     }
 
+    /// Deduct multiple items atomically.
+    ///
+    /// Full-batch validation is completed before any external transfer,
+    /// state update, or event emission. If validation or transfer fails,
+    /// the invocation reverts with no partial effects.
+    ///
+    /// `MAX_BATCH_SIZE` is an explicit practical cap to bound Soroban
+    /// CPU/memory work and emitted events in a single invocation.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         Self::require_not_paused(env.clone());
         caller.require_auth();
@@ -444,15 +452,7 @@ impl CalloraVault {
                 .unwrap_or_else(|| panic!("total overflow"));
         }
 
-        let mut eb = meta.balance;
-        for item in items.iter() {
-            eb = eb.checked_sub(item.amount).unwrap();
-            let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
-            env.events().publish(
-                (Symbol::new(&env, "deduct"), caller.clone(), rid),
-                (item.amount, eb),
-            );
-        }
+        meta.balance = running;
 
         let inst = env.storage().instance();
         if let Some(s) = inst.get(&StorageKey::Settlement) {
