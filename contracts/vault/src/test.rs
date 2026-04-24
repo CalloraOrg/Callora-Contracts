@@ -448,9 +448,15 @@ fn owner_deposit_increases_balance_and_emits_event() {
         })
         .expect("expected deposit event");
 
-    assert_eq!(deposit_event.1.len(), 1, "topics must have exactly 1 entry");
+    assert_eq!(
+        deposit_event.1.len(),
+        2,
+        "topics must have exactly 2 entries"
+    );
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "deposit"));
+    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, owner);
 
     let (amount, new_balance): (i128, i128) = deposit_event.2.into_val(&env);
     assert_eq!(amount, 300);
@@ -540,11 +546,11 @@ fn deposit_event_schema_alignment() {
         })
         .expect("expected deposit event");
 
-    // Schema alignment: exactly 1 topic
+    // Schema alignment: exactly 2 topics (Symbol + caller Address)
     assert_eq!(
         deposit_event.1.len(),
-        1,
-        "deposit event must have exactly 1 topic"
+        2,
+        "deposit event must have exactly 2 topics"
     );
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(
@@ -552,6 +558,8 @@ fn deposit_event_schema_alignment() {
         Symbol::new(&env, "deposit"),
         "topic[0] must be Symbol(\"deposit\")"
     );
+    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, owner, "topic[1] must be the depositor address");
 
     // Data must decode as (amount: i128, new_balance: i128)
     let (amount, new_balance): (i128, i128) = deposit_event.2.into_val(&env);
@@ -3009,7 +3017,7 @@ fn batch_deduct_while_paused_fails() {
             request_id: None,
         },
     ];
-    client.batch_deduct(&owner, &items);
+    client.batch_deduct(&owner, &items); // must panic with "vault is paused"
 }
 
 #[test]
