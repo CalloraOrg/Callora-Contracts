@@ -55,10 +55,10 @@
 
     {
       "name": "deposit",
-      "description": "Transfer USDC from the caller into the vault and increase the tracked balance. Blocked when paused.",
+      "description": "Transfer USDC from depositor into vault and increase tracked balance. Blocked when paused.",
       "access": "owner OR allowed depositor",
       "params": [
-        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the owner or an allowed depositor; must authorize." },
+        { "name": "depositor", "type": "Address", "optional": false, "description": "Must be owner or an allowed depositor; must authorize." },
         { "name": "amount", "type": "i128",    "optional": false, "description": "Amount to deposit; must be > 0 and >= min_deposit." }
       ],
       "returns": "i128 (new balance)",
@@ -70,7 +70,7 @@
         "\"balance overflow\" — extremely unlikely arithmetic overflow."
       ],
       "events": [
-        { "topics": ["\"deposit\"", "caller"], "data": "amount (i128)" }
+        { "topics": ["\"deposit\"", "depositor"], "data": "(amount, new_balance) tuple" }
       ]
     },
 

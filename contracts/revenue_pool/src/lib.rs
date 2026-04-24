@@ -21,6 +21,11 @@ const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
 
+/// Maximum number of payments allowed in a single `batch_distribute` call.
+/// Caps CPU/memory usage well within Soroban resource limits and aligns with
+/// the vault's `MAX_BATCH_SIZE` for `batch_deduct`.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 #[contract]
 pub struct RevenuePool;
 
@@ -255,8 +260,11 @@ impl RevenuePool {
     /// * `env` - The environment running the contract.
     /// * `caller` - Must be the current admin.
     /// * `payments` - A vector of `(Address, i128)` tuples representing destinations and amounts.
+    ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
     ///
     /// # Panics
+    /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
+    /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
     /// * If the revenue pool has not been initialized.
@@ -269,6 +277,14 @@ impl RevenuePool {
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        let n = payments.len();
+        if n == 0 {
+            panic!("batch_distribute requires at least one payment");
+        }
+        if n > MAX_BATCH_SIZE {
+            panic!("batch too large");
         }
 
         let mut total_amount: i128 = 0;
