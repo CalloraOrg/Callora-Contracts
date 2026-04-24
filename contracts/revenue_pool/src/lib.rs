@@ -87,6 +87,23 @@ impl RevenuePool {
     ///
     /// # Events
     /// Emits an `admin_transfer_started` event with the `current_admin` as a topic and `new_admin` as data.
+    /// Return the USDC token address configured for this pool.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    ///
+    /// # Returns
+    /// The `Address` of the USDC token contract.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect("revenue pool not initialized")
+    }
+
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -144,7 +161,7 @@ impl RevenuePool {
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
-    /// * `caller` - Must be admin (or could be extended to allow vault to call).
+    /// * `caller` - Must be the current admin.
     /// * `amount` - Amount received (for event logging).
     /// * `from_vault` - Optional; true if the source was the vault.
     ///
@@ -152,7 +169,8 @@ impl RevenuePool {
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
-    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of `(amount, from_vault)` as data.
+    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of
+    /// `(amount, from_vault)` as data.
     pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
