@@ -1036,7 +1036,7 @@ mod settlement_tests {
 
     #[test]
     fn test_accept_admin_authorization_matrix() {
-        let (env, addr, admin, vault, third_party) = setup_contract();
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
         let client = CalloraSettlementClient::new(&env, &addr);
         let new_admin = Address::generate(&env);
 
