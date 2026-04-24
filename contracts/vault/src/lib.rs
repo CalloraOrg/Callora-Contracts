@@ -22,7 +22,7 @@ pub struct VaultMeta {
 /// Eliminates duplication and ensures audit clarity.
 #[contracttype]
 pub enum StorageKey {
-    Meta,
+    MetaKey,
     Admin,
     UsdcToken,
     Settlement,
@@ -79,6 +79,12 @@ impl CalloraVault {
         let max_d = max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT);
         assert!(max_d > 0, "max_deduct must be positive");
         assert!(min_d <= max_d, "min_deposit cannot exceed max_deduct");
+        if let Some(ac) = &authorized_caller {
+            assert!(
+                ac != &env.current_contract_address(),
+                "authorized_caller cannot be vault address"
+            );
+        }
         if balance > 0 {
             let onchain_usdc_balance =
                 token::Client::new(&env, &usdc_token).balance(&env.current_contract_address());
@@ -124,7 +130,7 @@ impl CalloraVault {
 
         // Ensure Admin fallback exists
         if !inst.has(&StorageKey::Admin) {
-            if let Some(meta) = inst.get::<_, VaultMeta>(&StorageKey::Meta) {
+            if let Some(meta) = inst.get::<_, VaultMeta>(&StorageKey::MetaKey) {
                 inst.set(&StorageKey::Admin, &meta.owner);
             }
         }
@@ -196,7 +202,7 @@ impl CalloraVault {
     pub fn get_meta(env: Env) -> VaultMeta {
         env.storage()
             .instance()
-            .get(&StorageKey::Meta)
+            .get(&StorageKey::MetaKey)
             .unwrap_or_else(|| panic!("vault not initialized"))
     }
 
@@ -236,6 +242,16 @@ impl CalloraVault {
             .set(&StorageKey::DepositorList, &Vec::<Address>::new(&env));
     }
 
+    fn require_authorized_deduct_caller(env: Env, caller: &Address) {
+        let meta = Self::get_meta(env.clone());
+        let owner = meta.owner.clone();
+        let auth = match meta.authorized_caller {
+            Some(ac) => *caller == ac || *caller == owner,
+            None => *caller == owner,
+        };
+        assert!(auth, "unauthorized caller");
+    }
+
     pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
         env.storage()
             .instance()
@@ -243,14 +259,14 @@ impl CalloraVault {
             .unwrap_or(Vec::new(&env))
     }
 
-    pub fn set_authorized_caller(env: Env, caller: Address) {
+    pub fn set_authorized_caller(env: Env, caller: Option<Address>) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
         meta.authorized_caller = Some(caller.clone());
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
-            (Symbol::new(&env, "set_auth_caller"), meta.owner.clone()),
-            caller,
+            (Symbol::new(&env, "set_authorized_caller"), meta.owner.clone()),
+            (old_authorized_caller, caller),
         );
     }
 
@@ -350,7 +366,7 @@ impl CalloraVault {
             .balance
             .checked_add(amount)
             .unwrap_or_else(|| panic!("balance overflow"));
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events()
             .publish((Symbol::new(&env, "deposit"),), (amount, meta.balance));
         meta.balance
@@ -367,12 +383,8 @@ impl CalloraVault {
             .unwrap_or(DEFAULT_MAX_DEDUCT);
         assert!(amount <= max_d, "deduct amount exceeds max_deduct");
         let meta = Self::get_meta(env.clone());
-        let auth = match &meta.authorized_caller {
-            Some(ac) => caller == *ac || caller == meta.owner,
-            None => true,
-        };
-        assert!(auth, "unauthorized caller");
         assert!(meta.balance >= amount, "insufficient balance");
+        Self::require_authorized_deduct_caller(env.clone(), &caller);
         let mut meta = Self::get_meta(env.clone());
         meta.balance = meta
             .balance
@@ -410,11 +422,7 @@ impl CalloraVault {
             .get(&StorageKey::MaxDeduct)
             .unwrap_or(DEFAULT_MAX_DEDUCT);
         let mut meta = Self::get_meta(env.clone());
-        let auth = match &meta.authorized_caller {
-            Some(ac) => caller == *ac || caller == meta.owner,
-            None => true,
-        };
-        assert!(auth, "unauthorized caller");
+        Self::require_authorized_deduct_caller(env.clone(), &caller);
         let mut running = meta.balance;
         let mut total: i128 = 0;
         for item in items.iter() {
