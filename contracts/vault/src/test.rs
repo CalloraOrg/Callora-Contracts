@@ -1085,6 +1085,8 @@ fn set_authorized_caller_sets_and_emits_event() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 200);
     client.init(&owner, &usdc, &Some(200), &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
 
     client.set_authorized_caller(&Some(new_caller.clone()));
 
@@ -1357,11 +1359,23 @@ fn batch_deduct_events_contain_request_ids() {
     ];
     client.batch_deduct(&caller, &items);
 
-    let all_events = env.events().all();
-    // Last two events are the two deduct events
-    let len = all_events.len();
-    let ev_a = all_events.get(len - 2).unwrap();
-    let ev_b = all_events.get(len - 1).unwrap();
+    // Filter to the two deduct events emitted by the vault (topic 0 == "deduct").
+    // The settlement transfer emits an additional event after the deducts.
+    let deduct_sym = Symbol::new(&env, "deduct");
+    let deduct_events: std::vec::Vec<_> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| {
+            e.0 == vault_address && !e.1.is_empty() && {
+                let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t == deduct_sym
+            }
+        })
+        .collect();
+    assert_eq!(deduct_events.len(), 2, "expected exactly two deduct events");
+    let ev_a = &deduct_events[0];
+    let ev_b = &deduct_events[1];
 
     let req_a: Symbol = ev_a.1.get(2).unwrap().into_val(&env);
     let req_b: Symbol = ev_b.1.get(2).unwrap().into_val(&env);
@@ -2124,6 +2138,10 @@ fn vault_full_lifecycle() {
     assert_eq!(client.balance(), 500);
     assert_eq!(client.get_admin(), owner);
 
+    // Configure settlement address (precondition for deduct/batch_deduct)
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
+
     // Allow depositor and deposit 200
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
     usdc_admin.mint(&depositor, &200);
@@ -2205,13 +2223,15 @@ fn init_with_revenue_pool_stores_address() {
 }
 
 #[test]
-fn deduct_with_revenue_pool_transfers_usdc() {
+#[should_panic(expected = "settlement address not set")]
+fn deduct_with_only_revenue_pool_panics() {
+    // Revenue pool is no longer a deduct destination; settlement is mandatory.
     let env = Env::default();
     let owner = Address::generate(&env);
     let caller = Address::generate(&env);
     let revenue_pool = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
-    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    let (usdc_address, _usdc_client, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
@@ -2221,14 +2241,11 @@ fn deduct_with_revenue_pool_transfers_usdc() {
         &Some(1000),
         &Some(caller.clone()),
         &None,
-        &Some(revenue_pool.clone()),
+        &Some(revenue_pool),
         &None,
     );
 
     client.deduct(&caller, &300, &None);
-
-    assert_eq!(client.balance(), 700);
-    assert_eq!(usdc_client.balance(&revenue_pool), 300);
 }
 
 #[test]
@@ -2260,13 +2277,15 @@ fn deduct_with_settlement_transfers_usdc() {
 }
 
 #[test]
-fn batch_deduct_with_revenue_pool_transfers_total_usdc() {
+#[should_panic(expected = "settlement address not set")]
+fn batch_deduct_with_only_revenue_pool_panics() {
+    // Revenue pool is no longer a deduct destination; settlement is mandatory.
     let env = Env::default();
     let owner = Address::generate(&env);
     let caller = Address::generate(&env);
     let revenue_pool = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
-    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    let (usdc_address, _usdc_client, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
@@ -2276,7 +2295,7 @@ fn batch_deduct_with_revenue_pool_transfers_total_usdc() {
         &Some(1000),
         &Some(caller.clone()),
         &None,
-        &Some(revenue_pool.clone()),
+        &Some(revenue_pool),
         &None,
     );
 
@@ -2292,9 +2311,6 @@ fn batch_deduct_with_revenue_pool_transfers_total_usdc() {
         },
     ];
     client.batch_deduct(&caller, &items);
-
-    assert_eq!(client.balance(), 650);
-    assert_eq!(usdc_client.balance(&revenue_pool), 350);
 }
 
 #[test]
@@ -2491,12 +2507,14 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
         &Some(revenue_pool.clone()),
         &None,
     );
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
 
     // Query revenue pool before deduct
     let before = client.get_revenue_pool();
     assert_eq!(before, Some(revenue_pool.clone()));
 
-    // Perform deduct operation
+    // Perform deduct operation (routes to settlement, not revenue_pool)
     client.deduct(&caller, &200, &None);
 
     // Query revenue pool after deduct - should be unchanged
@@ -2504,9 +2522,10 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
-    // Verify no state mutation occurred
+    // Funds flow to settlement; revenue_pool receives nothing.
     assert_eq!(client.balance(), 800);
-    assert_eq!(usdc_client.balance(&revenue_pool), 200);
+    assert_eq!(usdc_client.balance(&settlement), 200);
+    assert_eq!(usdc_client.balance(&revenue_pool), 0);
 }
 
 #[test]
@@ -2972,6 +2991,8 @@ fn deduct_to_zero_succeeds() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
 
     assert_eq!(client.deduct(&owner, &500, &None), 0);
 }
@@ -3016,6 +3037,8 @@ fn batch_deduct_to_zero_succeeds() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 0);
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     usdc_admin.mint(&owner, &600);
     usdc_client.approve(&owner, &vault_address, &600, &1000);
     client.deposit(&owner, &600);
@@ -3405,6 +3428,8 @@ fn deduct_while_paused_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     client.pause(&owner);
     client.deduct(&owner, &100, &None);
 }
@@ -3419,6 +3444,8 @@ fn batch_deduct_while_paused_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     client.pause(&owner);
     let items = soroban_sdk::vec![
         &env,
@@ -3567,8 +3594,22 @@ fn withdraw_to_negative_fails() {
 }
 
 #[test]
-fn deduct_no_routing_stays_in_vault() {
-    // When neither settlement nor revenue_pool is configured, USDC stays in vault.
+#[should_panic(expected = "settlement address not set")]
+fn deduct_without_settlement_panics() {
+    // Settlement is a hard precondition for deduct; missing address must panic.
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 500);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    client.deduct(&owner, &200, &None);
+}
+
+#[test]
+fn deduct_without_settlement_does_not_mutate_state() {
+    // When deduct panics due to missing settlement, vault state must be unchanged.
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -3576,14 +3617,39 @@ fn deduct_no_routing_stays_in_vault() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
-    client.deduct(&owner, &200, &None);
-    assert_eq!(client.balance(), 300);
-    // USDC stays in vault contract
+
+    let result = client.try_deduct(&owner, &200, &None);
+    assert!(result.is_err(), "expected panic for missing settlement");
+    assert_eq!(client.balance(), 500);
     assert_eq!(usdc_client.balance(&vault_address), 500);
 }
 
 #[test]
-fn batch_deduct_no_routing_stays_in_vault() {
+#[should_panic(expected = "settlement address not set")]
+fn batch_deduct_without_settlement_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 500);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 100,
+            request_id: None,
+        },
+        DeductItem {
+            amount: 50,
+            request_id: None,
+        },
+    ];
+    client.batch_deduct(&owner, &items);
+}
+
+#[test]
+fn batch_deduct_without_settlement_does_not_mutate_state() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -3602,8 +3668,9 @@ fn batch_deduct_no_routing_stays_in_vault() {
             request_id: None,
         },
     ];
-    client.batch_deduct(&owner, &items);
-    assert_eq!(client.balance(), 350);
+    let result = client.try_batch_deduct(&owner, &items);
+    assert!(result.is_err(), "expected panic for missing settlement");
+    assert_eq!(client.balance(), 500);
     assert_eq!(usdc_client.balance(&vault_address), 500);
 }
 
@@ -3773,6 +3840,8 @@ mod fuzz {
             &None,
             &Some(max_deduct_val),
         );
+        // Settlement is a precondition for deduct / batch_deduct.
+        client.set_settlement(&owner, &settlement);
         // Give the depositor (owner) plenty of USDC.
         // Use a very large amount to handle large max_deduct scenarios
         let deposit_reserve: i128 = 10_000_000_000_000; // 10 trillion to handle large deposits
@@ -3959,6 +4028,8 @@ mod fuzz {
             &None,
             &Some(200),
         );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
 
         let mut rng = StdRng::seed_from_u64(0x5eed_0001);
         // Build batches that sometimes overdraw; assert atomicity each time.
@@ -4006,6 +4077,8 @@ mod fuzz {
             &None,
             &Some(max_d),
         );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
 
         let mut rng = StdRng::seed_from_u64(0x5eed_0002);
         for _ in 0..40 {
@@ -4186,6 +4259,8 @@ fn deduct_equal_to_max_deduct_succeeds() {
     fund_vault(&usdc_admin, &vault_address, 500);
     // max_deduct = 100, deposit 200 so balance is sufficient
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &Some(100));
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     usdc_admin.mint(&owner, &200);
     usdc_client.approve(&owner, &vault_address, &200, &1000);
     client.deposit(&owner, &200);
@@ -4221,6 +4296,8 @@ fn deduct_default_cap_is_i128_max() {
     fund_vault(&usdc_admin, &vault_address, 0);
     // no max_deduct supplied — default cap (i128::MAX) applies
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     usdc_admin.mint(&owner, &1_000_000);
     usdc_client.approve(&owner, &vault_address, &1_000_000, &1000);
     client.deposit(&owner, &1_000_000);
@@ -4239,6 +4316,8 @@ fn batch_deduct_each_item_constrained_by_max_deduct() {
     fund_vault(&usdc_admin, &vault_address, 0);
     // max_deduct = 50
     client.init(&owner, &usdc, &None, &None, &None, &None, &Some(50));
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     usdc_admin.mint(&owner, &300);
     usdc_client.approve(&owner, &vault_address, &300, &1000);
     client.deposit(&owner, &300);

@@ -402,6 +402,23 @@ impl CalloraVault {
         meta.balance
     }
 
+    /// Deduct USDC from the vault and transfer it to the configured settlement address.
+    ///
+    /// # Preconditions
+    /// - The settlement address must have been registered via `set_settlement`
+    ///   before this function can succeed. Attempting to deduct without a
+    ///   configured settlement address panics with `"settlement address not set"`
+    ///   and reverts the transaction, leaving vault state unchanged.
+    /// - `amount` must be positive and less than or equal to `max_deduct`.
+    /// - `caller` must be either the owner or the `authorized_caller` (if set).
+    /// - The vault's internal balance must cover `amount`.
+    ///
+    /// # Panics
+    /// - `"settlement address not set"` — `set_settlement` has not been called.
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"deduct amount exceeds max_deduct"` — `amount > max_deduct`.
+    /// - `"unauthorized caller"` — caller is not owner or authorized caller.
+    /// - `"insufficient balance"` — vault balance below `amount`.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
         Self::require_not_paused(env.clone());
         caller.require_auth();
@@ -421,16 +438,12 @@ impl CalloraVault {
             .checked_sub(amount)
             .unwrap_or_else(|| panic!("balance underflow"));
         env.storage().instance().set(&StorageKey::Meta, &meta);
-        let inst = env.storage().instance();
-        if let Some(s) = inst.get(&StorageKey::Settlement) {
-            let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
-            Self::transfer_funds(&env, &ut, &s, amount);
-        } else if inst
-            .get::<StorageKey, Address>(&StorageKey::RevenuePool)
-            .is_some()
-        {
-            Self::transfer_to_revenue_pool(env.clone(), amount);
-        }
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .unwrap();
+        Self::transfer_funds(&env, &ut, &settlement, amount);
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
             (Symbol::new(&env, "deduct"), caller, rid),
@@ -477,16 +490,12 @@ impl CalloraVault {
 
         meta.balance = running;
 
-        let inst = env.storage().instance();
-        if let Some(s) = inst.get(&StorageKey::Settlement) {
-            let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
-            Self::transfer_funds(&env, &ut, &s, total);
-        } else if inst
-            .get::<StorageKey, Address>(&StorageKey::RevenuePool)
-            .is_some()
-        {
-            Self::transfer_to_revenue_pool(env.clone(), total);
-        }
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .unwrap();
+        Self::transfer_funds(&env, &ut, &settlement, total);
 
         meta.balance = running;
         env.storage().instance().set(&StorageKey::Meta, &meta);
@@ -618,8 +627,9 @@ impl CalloraVault {
     /// Store the settlement contract address (admin only).
     ///
     /// Once set, every `deduct` / `batch_deduct` call transfers the deducted USDC to
-    /// this address. Settlement takes priority over `revenue_pool` when both are
-    /// configured.
+    /// this address. `set_settlement` is a hard precondition: `deduct` and
+    /// `batch_deduct` panic with `"settlement address not set"` until this function
+    /// has been called. `revenue_pool` is no longer consulted during deductions.
     ///
     /// # Panics
     /// Panics if `caller` is not the current admin.
@@ -664,10 +674,10 @@ impl CalloraVault {
     /// A tuple `(usdc_token, settlement, revenue_pool)`:
     /// - `usdc_token`   — always `Some` after `init`; the USDC token contract address.
     /// - `settlement`   — `Some` after `set_settlement` is called, otherwise `None`.
+    ///   Must be `Some` before any `deduct` / `batch_deduct` call can succeed.
     /// - `revenue_pool` — `Some` after `set_revenue_pool` is called, otherwise `None`.
-    ///
-    /// When both `settlement` and `revenue_pool` are `Some`, **`settlement` takes
-    /// priority** and the revenue pool is not used in the same deduct call.
+    ///   Informational only; `deduct` / `batch_deduct` always route to `settlement`
+    ///   and never fall back to the revenue pool.
     ///
     /// # Example — Stellar CLI
     /// ```text
@@ -679,8 +689,9 @@ impl CalloraVault {
     /// # Operator checklist
     /// 1. `usdc_token` must be the canonical Stellar USDC issuer
     ///    (`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` on mainnet).
-    /// 2. `settlement` should be `Some` before routing production traffic.
-    /// 3. `revenue_pool` is optional; only active when `settlement` is `None`.
+    /// 2. `settlement` must be `Some` before any deduct call; it is the sole
+    ///    destination for deducted USDC.
+    /// 3. `revenue_pool` is informational only and is not consulted during deducts.
     pub fn get_contract_addresses(env: Env) -> (Option<Address>, Option<Address>, Option<Address>) {
         let inst = env.storage().instance();
         let usdc: Option<Address> = inst.get(&StorageKey::UsdcToken);
@@ -756,15 +767,18 @@ impl CalloraVault {
         token::Client::new(env, usdc_token).transfer(&env.current_contract_address(), to, &amount);
     }
 
-    fn transfer_to_revenue_pool(env: Env, amount: i128) {
-        let inst = env.storage().instance();
-        let rp: Address = inst
-            .get(&StorageKey::RevenuePool)
-            .expect("revenue pool address not set");
-        let ua: Address = inst
-            .get(&StorageKey::UsdcToken)
-            .expect("vault not initialized");
-        token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &rp, &amount);
+    fn require_settlement(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Settlement)
+            .unwrap_or_else(|| panic!("settlement address not set"))
+    }
+
+    fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     fn require_not_paused(env: Env) {

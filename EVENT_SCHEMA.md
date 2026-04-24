@@ -73,6 +73,12 @@ Emitted on each deduction — once per `deduct()` call and once per item in `bat
 - **Indexer rule**: treat `Symbol("")` as “no request_id provided”.
 - **Ambiguity note**: `Some(Symbol(""))` is indistinguishable from `None` on-chain. Clients **SHOULD NOT** intentionally pass an empty symbol as a real request id.
 
+**Precondition (Issue #263):** `deduct` / `batch_deduct` require a settlement
+address to be configured via `set_settlement`. If the settlement address is
+not set, the call panics with `"settlement address not set"` **before** any
+`deduct` event is emitted — indexers will therefore never observe a `deduct`
+event for a call that lacked a configured settlement destination.
+
 ---
 
 ### `withdraw`
