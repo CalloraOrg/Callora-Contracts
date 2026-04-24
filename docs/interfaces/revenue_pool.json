@@ -1,0 +1,146 @@
+{
+  "contract": "callora-revenue-pool",
+  "version": "0.0.1",
+  "description": "Simple revenue distribution contract. Receives USDC when the vault forwards deducted funds and lets the admin distribute those funds to developer wallets individually or in batch.",
+  "crate": "callora-revenue-pool",
+  "source": "contracts/revenue_pool/src/lib.rs",
+
+  "types": {},
+
+  "functions": [
+    {
+      "name": "init",
+      "description": "Initialize the revenue pool with an admin and the USDC token address. Can only be called once. The admin must authorize the call.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "admin",      "type": "Address", "optional": false, "description": "Address that may call distribute, batch_distribute, receive_payment, and set_admin." },
+        { "name": "usdc_token", "type": "Address", "optional": false, "description": "Stellar USDC (or wrapped USDC) token contract address." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"revenue pool already initialized\" — called more than once."
+      ],
+      "events": [
+        { "topics": ["\"init\"", "admin"], "data": "usdc_token (Address)" }
+      ]
+    },
+
+    {
+      "name": "distribute",
+      "description": "Transfer USDC from this contract to a developer wallet. Admin only.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "to",     "type": "Address", "optional": false, "description": "Developer address to receive USDC." },
+        { "name": "amount", "type": "i128",    "optional": false, "description": "Amount in USDC base units; must be > 0." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"amount must be positive\" — amount <= 0.",
+        "\"revenue pool not initialized\" — called before init.",
+        "\"insufficient USDC balance\" — contract holds less than amount."
+      ],
+      "events": [
+        { "topics": ["\"distribute\"", "to"], "data": "amount (i128)" }
+      ]
+    },
+
+    {
+      "name": "batch_distribute",
+      "description": "Atomically distribute USDC to multiple developer wallets. Validates the total against the available balance before any transfer. One event is emitted per payment. Admin only.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",   "type": "Address",              "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "payments", "type": "Vec<(Address, i128)>", "optional": false, "description": "Ordered list of (developer_address, amount) pairs. All amounts must be > 0." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"amount must be positive\" — any individual amount <= 0.",
+        "\"total overflow\" — extremely unlikely sum overflow.",
+        "\"revenue pool not initialized\" — called before init.",
+        "\"insufficient USDC balance\" — total amount exceeds contract balance."
+      ],
+      "events": [
+        { "note": "One event per payment entry.", "topics": ["\"batch_distribute\"", "to"], "data": "amount (i128)" }
+      ]
+    },
+
+    {
+      "name": "receive_payment",
+      "description": "Event-only helper — does NOT move tokens. Emits a receive_payment event for indexer alignment when the backend wants to log a payment credited from the vault. USDC is received passively when any address transfers tokens to this contract; no explicit call is required for token receipt.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",     "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "amount",     "type": "i128",    "optional": false, "description": "Amount received (for event logging only; no tokens are moved)." },
+        { "name": "from_vault", "type": "bool",    "optional": false, "description": "True if the source was the vault contract." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin."
+      ],
+      "events": [
+        { "topics": ["\"receive_payment\"", "caller"], "data": "(amount, from_vault) tuple" }
+      ]
+    },
+
+    {
+      "name": "balance",
+      "description": "Return the contract's current USDC balance.",
+      "access": "any",
+      "params": [],
+      "returns": "i128",
+      "panics": [
+        "\"revenue pool not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_admin",
+      "description": "Return the current admin address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": [
+        "\"revenue pool not initialized\" — called before init."
+      ],
+      "events": []
+    },
+
+    {
+      "name": "set_admin",
+      "description": "Initiate replacement of the current admin. The proposed new admin must call claim_admin to complete the transfer.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",    "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_admin", "type": "Address", "optional": false, "description": "Address of the proposed new admin." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin."
+      ],
+      "events": [
+        { "topics": ["\"admin_transfer_started\"", "current_admin"], "data": "new_admin (Address)" }
+      ]
+    },
+
+    {
+      "name": "claim_admin",
+      "description": "Complete the admin transfer. Must be called by the pending admin set via set_admin.",
+      "access": "pending admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the pending admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"no pending admin\" — set_admin was not called first.",
+        "\"unauthorized: caller is not pending admin\" — caller is not the pending admin."
+      ],
+      "events": [
+        { "topics": ["\"admin_transfer_completed\"", "new_admin"], "data": "void" }
+      ]
+    }
+  ]
+}

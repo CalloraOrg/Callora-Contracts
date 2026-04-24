@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, 'feature/**']
+    branches: [main, master, develop, 'feature/**', 'chore/**', 'ci/**']
   pull_request:
     branches: [main, master, develop]
 
@@ -29,14 +29,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check format
-        run: cargo fmt --all -- --check
+      - name: Check format (workspace crates)
+        run: cargo fmt --package callora-vault --package callora-settlement --package callora-revenue-pool -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Test
-        run: cargo test
+      - name: Test (all workspace members)
+        run: cargo test --workspace
 
   build:
     name: Build (release)
@@ -60,16 +60,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build WASM
-        run: |
-          cd contracts/vault
-          cargo build --target wasm32-unknown-unknown --release
-          cd ../revenue_pool
-          cargo build --target wasm32-unknown-unknown --release
-          cd ../settlement
-          cargo build --target wasm32-unknown-unknown --release
-
       - name: Check WASM size
+        shell: bash
         run: |
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh

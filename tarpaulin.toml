@@ -18,7 +18,7 @@ fail-under    = 95.0
 out           = ["Stdout", "Html", "Xml"]
 output-dir    = "coverage"
 
-# Measure every crate in the workspace (currently just callora-vault).
+# Measure every crate in the workspace (callora-vault, callora-settlement, callora-revenue-pool).
 workspace     = true
 
 # Compile and instrument the library target only.
@@ -31,3 +31,7 @@ timeout       = "120s"
 
 # Exclude auto-generated or build-only source files from the line counts.
 exclude-files = ["*/build.rs", "hidden/*"]
+
+# Upload HTML report as a CI artifact when running in GitHub Actions.
+# The workflow step should use: actions/upload-artifact with path: coverage/
+
