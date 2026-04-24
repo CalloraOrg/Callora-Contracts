@@ -109,6 +109,10 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - Caller is authorized: `caller.require_auth()`
 - Vault is initialized and not paused.
 - `1 <= items.len() <= MAX_BATCH_SIZE` (50)
+- The explicit batch cap is a practical Soroban resource bound:
+  it limits looped validation work, transfer/event overhead, and invocation
+  footprint in one call. Tune this cap conservatively if production
+  workloads approach network CPU or budget limits.
 - For every item: `item.amount > 0` and `item.amount <= get_max_deduct(env)`
 - Cumulative deductions do not exceed balance:
   - Validated in a single pass before any state is written.
@@ -457,6 +461,8 @@ Pure accessors such as [`get_admin`](contracts/settlement/src/lib.rs#L140), [`ge
 - `distribute` / `batch_distribute` also require:
   - Positive amount(s)
   - Sufficient on-contract USDC balance before transfer
+- `batch_distribute` additionally requires:
+  - `1 <= payments.len() <= MAX_BATCH_SIZE` (50)
 
 **Post-conditions**
 - No address other than the current revenue-pool admin can emit administrative payment events or move USDC out of the revenue pool.

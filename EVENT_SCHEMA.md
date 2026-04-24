@@ -85,6 +85,12 @@ event for a call that lacked a configured settlement destination.
 
 Emitted when the vault owner withdraws to their own address.
 
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw"`                                         |
+| topic 1       | topics   | Address| vault owner                                          |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 | Index   | Location | Type         | Description           |
 |---------|----------|--------------|-----------------------|
 | topic 0 | topics   | Symbol       | `"withdraw"`          |
@@ -104,6 +110,13 @@ Emitted when the vault owner withdraws to their own address.
 
 Emitted when the vault owner withdraws to a designated recipient.
 
+| Field         | Location | Type   | Description                                          |
+|---------------|----------|--------|------------------------------------------------------|
+| topic 0       | topics   | Symbol | `"withdraw_to"`                                      |
+| topic 1       | topics   | Address| vault owner                                          |
+| topic 2       | topics   | Address| recipient `to`                                       |
+| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
+| `new_balance` | data     | i128   | vault balance after withdrawal                       |
 | Index   | Location | Type         | Description           |
 |---------|----------|--------------|-----------------------|
 | topic 0 | topics   | Symbol       | `"withdraw_to"`       |
