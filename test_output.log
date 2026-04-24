@@ -1,0 +1,210 @@
+   Compiling cfg-if v1.0.4
+   Compiling typenum v1.19.0
+   Compiling libc v0.2.183
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.0
+   Compiling zeroize v1.8.2
+   Compiling zmij v1.0.21
+   Compiling itoa v1.0.18
+   Compiling subtle v2.6.1
+   Compiling const-oid v0.9.6
+   Compiling semver v1.0.27
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.47
+   Compiling thiserror v1.0.69
+   Compiling data-encoding v2.10.0
+   Compiling getrandom v0.2.17
+   Compiling cpufeatures v0.2.17
+   Compiling rustc_version v0.4.1
+   Compiling generic-array v0.14.9
+   Compiling escape-bytes v0.1.1
+   Compiling rand_core v0.6.4
+   Compiling der v0.7.10
+   Compiling ff v0.13.1
+   Compiling equivalent v1.0.2
+   Compiling base16ct v0.2.0
+   Compiling hashbrown v0.16.1
+   Compiling group v0.13.0
+   Compiling once_cell v1.21.4
+   Compiling base64 v0.13.1
+   Compiling num-integer v0.1.46
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling crypto-bigint v0.5.5
+   Compiling digest v0.10.7
+   Compiling num-bigint v0.4.6
+   Compiling signature v2.2.0
+   Compiling sec1 v0.7.3
+   Compiling indexmap v2.13.0
+   Compiling either v1.15.0
+   Compiling itertools v0.10.5
+   Compiling hmac v0.12.1
+   Compiling libm v0.2.16
+   Compiling wasmparser v0.116.1
+   Compiling rfc6979 v0.4.0
+   Compiling sha2 v0.10.9
+   Compiling curve25519-dalek v4.1.3
+   Compiling downcast-rs v1.2.1
+   Compiling elliptic-curve v0.13.8
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling serde_with v3.18.0
+   Compiling ethnum v1.5.2
+   Compiling static_assertions v1.1.0
+   Compiling indexmap-nostd v0.4.0
+   Compiling wasmparser-nostd v0.100.2
+   Compiling hex v0.4.3
+   Compiling ecdsa v0.16.9
+   Compiling crate-git-revision v0.0.6
+   Compiling wasmi_core v0.13.0
+   Compiling arbitrary v1.3.2
+   Compiling stellar-strkey v0.0.9
+   Compiling stellar-xdr v22.1.0
+   Compiling soroban-env-common v22.1.3
+   Compiling wasmi_arena v0.4.1
+   Compiling spin v0.9.8
+   Compiling smallvec v1.15.1
+   Compiling primeorder v0.13.6
+   Compiling ed25519 v2.2.3
+   Compiling keccak v0.1.6
+   Compiling p256 v0.13.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling ahash v0.8.12
+   Compiling hashbrown v0.13.2
+   Compiling rand_chacha v0.3.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling rand v0.8.5
+   Compiling sha3 v0.10.8
+   Compiling soroban-sdk-macros v22.0.11
+   Compiling k256 v0.13.4
+   Compiling hex-literal v0.4.1
+   Compiling soroban-sdk v22.0.11
+   Compiling ark-std v0.4.0
+   Compiling ark-serialize v0.4.2
+   Compiling soroban-wasmi v0.31.1-soroban.20.0.1
+   Compiling ark-ff v0.4.2
+   Compiling ark-poly v0.4.2
+   Compiling ark-ec v0.4.2
+   Compiling ark-bls12-381 v0.4.0
+   Compiling soroban-spec v22.0.11
+   Compiling soroban-spec-rust v22.0.11
+   Compiling soroban-env-macros v22.1.3
+   Compiling soroban-env-host v22.1.3
+   Compiling soroban-ledger-snapshot v22.0.11
+   Compiling callora-settlement v0.1.0 (/Users/macbook/dev/drips-wave3/Callora-Contracts/contracts/settlement)
+   Compiling callora-revenue-pool v0.0.1 (/Users/macbook/dev/drips-wave3/Callora-Contracts/contracts/revenue_pool)
+   Compiling callora-vault v0.0.1 (/Users/macbook/dev/drips-wave3/Callora-Contracts/contracts/vault)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 32s
+     Running unittests src/lib.rs (target_local/debug/deps/callora_revenue_pool-bcd07bf57e4a0dde)
+
+running 17 tests
+test test::distribute_negative_panics - should panic ... ok
+test test::batch_distribute_zero_amount_panics - should panic ... ok
+test test::distribute_excess_panics - should panic ... ok
+test test::batch_distribute_insufficient_balance_panics - should panic ... ok
+test test::batch_distribute_unauthorized_panics - should panic ... ok
+test test::distribute_success ... ok
+test test::batch_distribute_success ... ok
+test test::distribute_unauthorized_panics - should panic ... ok
+test test::distribute_zero_panics - should panic ... ok
+test test::batch_distribute_success_events ... ok
+test test::init_success ... ok
+test test::init_double_panics - should panic ... ok
+test test::receive_payment_from_non_vault ... ok
+test test::receive_payment_emits_event ... ok
+test test::set_admin_unauthorized_panics - should panic ... ok
+test test::full_lifecycle ... ok
+test test::set_admin_transfers_control ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s
+
+     Running unittests src/lib.rs (target_local/debug/deps/callora_settlement-b173d18b59e05007)
+
+running 14 tests
+test test::settlement_tests::test_receive_payment_unauthorized - should panic ... ok
+test test::settlement_tests::test_double_init_panics - should panic ... ok
+test test::settlement_tests::test_receive_payment_to_pool ... ok
+test test::settlement_tests::test_admin_can_receive_payment ... ok
+test test::settlement_tests::test_receive_multiple_payments_accumulate ... ok
+test test::settlement_tests::test_get_all_developer_balances ... ok
+test test::settlement_tests::test_receive_payment_pool_false_no_developer - should panic ... ok
+test test::settlement_tests::test_receive_payment_to_developer ... ok
+test test::settlement_tests::test_receive_payment_zero_amount - should panic ... ok
+test test::settlement_tests::test_set_admin_unauthorized - should panic ... ok
+test test::settlement_tests::test_set_vault ... ok
+test test::settlement_tests::test_set_vault_unauthorized - should panic ... ok
+test test::settlement_tests::test_settlement_initialization ... ok
+test test::settlement_tests::test_set_admin ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running unittests src/lib.rs (target_local/debug/deps/callora_vault-c5f116b4e446ad47)
+
+running 58 tests
+test test::batch_deduct_insufficient_balance_fails ... ok
+test test::batch_deduct_zero_amount_fails ... ok
+test test::batch_deduct_empty_fails ... ok
+test test::balance_unchanged_after_failed_deduct ... ok
+test test::batch_deduct_multiple_items ... ok
+test test::batch_deduct_events_contain_request_ids ... ok
+test test::allowed_depositor_can_deposit ... ok
+test test::batch_deduct_with_revenue_pool_transfers_total_usdc ... ok
+test test::deduct_event_contains_request_id ... ok
+test test::deduct_event_no_request_id_uses_empty_symbol ... ok
+test test::deduct_exact_balance_succeeds ... ok
+test test::deduct_insufficient_balance_fails ... ok
+test test::deduct_exceeds_balance_panics - should panic ... ok
+test test::deduct_reduces_balance ... ok
+test test::deduct_with_request_id ... ok
+test test::deduct_with_revenue_pool_transfers_usdc ... ok
+test test::deduct_negative_panics - should panic ... ok
+test test::deduct_zero_panics - should panic ... ok
+test test::distribute_insufficient_usdc_fails ... ok
+test test::deposit_negative_panics - should panic ... ok
+test test::deposit_zero_panics - should panic ... ok
+test test::deposit_at_minimum_succeeds ... ok
+test test::deposit_after_depositor_cleared_is_rejected - should panic ... ok
+test test::get_meta_before_init_fails ... ok
+test test::deposit_below_minimum_fails ... ok
+test test::distribute_transfers_usdc_to_recipient ... ok
+test test::distribute_unauthorized_fails ... ok
+test test::distribute_zero_amount_fails ... ok
+test test::get_settlement_before_set_panics - should panic ... ok
+test test::get_meta_returns_correct_state ... ok
+test test::init_defaults_balance_to_zero ... ok
+test test::get_admin_returns_owner_after_init ... ok
+test test::double_init_fails ... ok
+test test::init_with_revenue_pool_stores_address ... ok
+test test::init_sets_owner_and_min_deposit ... ok
+test test::set_admin_updates_admin ... ok
+test test::init_with_balance_emits_event ... ok
+test test::set_and_retrieve_metadata ... ok
+test test::set_admin_unauthorized_fails ... ok
+test test::non_owner_cannot_set_allowed_depositor - should panic ... ok
+test test::set_settlement_stores_and_get_returns_address ... ok
+test test::set_metadata_emits_event ... ok
+test test::unauthorized_cannot_set_metadata - should panic ... ok
+test test::set_settlement_unauthorized_panics - should panic ... ok
+test test::transfer_ownership_same_address_fails - should panic ... ok
+test test::unauthorized_address_cannot_deposit - should panic ... ok
+test test::transfer_ownership_succeeds ... ok
+test test::transfer_ownership_emits_event ... ok
+test test::owner_can_deposit ... ok
+test test::update_metadata_and_verify ... ok
+test test::update_metadata_emits_event ... ok
+test test::withdraw_insufficient_balance_fails ... ok
+test test::withdraw_to_insufficient_balance_fails ... ok
+test test::owner_can_set_and_clear_allowed_depositor ... ok
+test test::withdraw_to_reduces_balance ... ok
+test test::withdraw_reduces_balance ... ok
+test test::withdraw_zero_fails ... ok
+test test::vault_full_lifecycle ... ok
+
+test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.30s
+
+   Doc-tests callora_settlement
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
