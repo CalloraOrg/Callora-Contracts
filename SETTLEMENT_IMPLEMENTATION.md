@@ -45,19 +45,56 @@ sequenceDiagram
 
 #### Storage Keys
 ```rust
-StorageKey::Settlement
+StorageKey::Settlement     // Primary routing address (highest priority)
+StorageKey::RevenuePool    // Fallback routing address (used if Settlement not set)
 ```
 
-#### New Functions
+#### Routing Configuration Functions
 
 1. **`set_settlement(env, caller, settlement_address)`** (Admin only)
-   - Sets the settlement contract address
+   - Sets the settlement contract address (primary routing destination)
    - Authorization: Current admin only
-   - Panic: "unauthorized: caller is not admin"
+   - Validation: Address cannot be the vault's own address
+   - Panic: "unauthorized: caller is not admin" or "cannot route to vault itself"
+   - Event: `set_settlement(admin) → address`
 
-2. **`get_settlement(env)`**
+2. **`get_settlement(env)`** (Public read-only)
    - Returns the configured settlement contract address
-   - Panic: "settlement address not set"
+   - Read-only: No state mutation, safe for indexers
+   - Panic: "settlement address not set" if not configured
+
+3. **`set_revenue_pool(env, caller, revenue_pool)`** (Admin only)
+   - Sets the revenue pool contract address (fallback routing destination)
+   - Authorization: Current admin only
+   - Validation: Address cannot be the vault's own address
+   - Can be set to `None` to clear the configuration
+   - Events: `set_revenue_pool(admin) → address` or `clear_revenue_pool(admin) → ()`
+
+4. **`get_revenue_pool(env)`** (Public read-only)
+   - Returns the configured revenue pool address (Option<Address>)
+   - Read-only: No state mutation, safe for indexers
+   - Returns `None` if not configured (does not panic)
+
+#### Routing Validation
+
+**CRITICAL**: The vault enforces that at least one routing address MUST be configured before any deduct operations can succeed. This is validated via `require_routing_configured()` which is called at the beginning of both `deduct()` and `batch_deduct()`.
+
+- If neither `settlement` nor `revenue_pool` is configured: **PANIC** with `"routing not configured: set settlement or revenue_pool address"`
+- This prevents silent fund retention and ensures explicit routing configuration
+- Both addresses are validated to prevent self-referential routing (vault → vault)
+
+#### Routing Priority
+
+When deduct operations occur, funds are routed according to this priority:
+
+1. **If `settlement` is configured** → Route to settlement contract (highest priority)
+2. **Else if `revenue_pool` is configured** → Route to revenue pool contract
+3. **Else** → Deduct operation FAILS (routing not configured)
+
+This priority system ensures:
+- No "half-configured" states where funds could be split unexpectedly
+- Deterministic routing behavior
+- Clear audit trail for all fund movements
 
 
 
