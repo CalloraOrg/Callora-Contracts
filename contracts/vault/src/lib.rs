@@ -351,7 +351,7 @@ impl CalloraVault {
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
         assert!(
-            Self::is_authorized_depositor(env.clone(), caller.clone()),
+            Self::is_authorized_depositor(env.clone(), depositor.clone()),
             "unauthorized: only owner or allowed depositor can deposit"
         );
         let meta = Self::get_meta(env.clone());
@@ -367,7 +367,7 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_addr);
-        usdc.transfer(&caller, &env.current_contract_address(), &amount);
+        usdc.transfer(&depositor, &env.current_contract_address(), &amount);
         let mut meta = Self::get_meta(env.clone());
         meta.balance = meta
             .balance
