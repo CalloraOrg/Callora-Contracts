@@ -59,7 +59,7 @@ impl CalloraVault {
     ) -> VaultMeta {
         owner.require_auth();
         let inst = env.storage().instance();
-        if inst.has(&StorageKey::MetaKey) {
+        if inst.has(&StorageKey::Meta) {
             panic!("vault already initialized");
         }
         assert!(
@@ -99,7 +99,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::MetaKey, &meta);
+        inst.set(&StorageKey::Meta, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -124,6 +124,7 @@ impl CalloraVault {
         list.contains(&caller)
     }
 
+    #[allow(dead_code)]
     fn migrate(env: &Env) {
         let inst = env.storage().instance();
 
@@ -261,15 +262,8 @@ impl CalloraVault {
     pub fn set_authorized_caller(env: Env, caller: Option<Address>) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
-        if let Some(ref ac) = caller {
-            assert!(
-                ac != &env.current_contract_address(),
-                "authorized_caller cannot be vault address"
-            );
-        }
-        let old_authorized_caller = meta.authorized_caller.clone();
-        meta.authorized_caller = caller.clone();
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        meta.authorized_caller = Some(caller.clone());
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "set_authorized_caller"), meta.owner.clone()),
             (old_authorized_caller, caller),
@@ -379,16 +373,24 @@ impl CalloraVault {
     }
 
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: Option<Symbol>) -> i128 {
+        Self::require_not_paused(env.clone());
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
-        let max_d = Self::get_max_deduct(env.clone());
+        let max_d: i128 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT);
         assert!(amount <= max_d, "deduct amount exceeds max_deduct");
         let meta = Self::get_meta(env.clone());
         assert!(meta.balance >= amount, "insufficient balance");
         Self::require_authorized_deduct_caller(env.clone(), &caller);
         let mut meta = Self::get_meta(env.clone());
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         let inst = env.storage().instance();
         if let Some(s) = inst.get(&StorageKey::Settlement) {
             let ut: Address = inst.get(&StorageKey::UsdcToken).unwrap();
@@ -414,7 +416,11 @@ impl CalloraVault {
         let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
-        let max_d = Self::get_max_deduct(env.clone());
+        let max_d: i128 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT);
         let mut meta = Self::get_meta(env.clone());
         Self::require_authorized_deduct_caller(env.clone(), &caller);
         let mut running = meta.balance;
@@ -423,8 +429,12 @@ impl CalloraVault {
             assert!(item.amount > 0, "amount must be positive");
             assert!(item.amount <= max_d, "deduct amount exceeds max_deduct");
             assert!(running >= item.amount, "insufficient balance");
-            running = running.checked_sub(item.amount).unwrap_or_else(|| panic!("balance underflow"));
-            total = total.checked_add(item.amount).unwrap_or_else(|| panic!("total overflow"));
+            running = running
+                .checked_sub(item.amount)
+                .unwrap_or_else(|| panic!("balance underflow"));
+            total = total
+                .checked_add(item.amount)
+                .unwrap_or_else(|| panic!("total overflow"));
         }
 
         let mut eb = meta.balance;
@@ -449,7 +459,7 @@ impl CalloraVault {
         }
 
         meta.balance = running;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         meta.balance
     }
 
@@ -487,7 +497,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
@@ -507,8 +517,11 @@ impl CalloraVault {
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &ua);
         usdc.transfer(&env.current_contract_address(), &meta.owner, &amount);
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
             (amount, meta.balance),
@@ -528,8 +541,11 @@ impl CalloraVault {
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &ua);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        meta.balance = meta.balance.checked_sub(amount).unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic!("balance underflow"));
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
             (amount, meta.balance),
