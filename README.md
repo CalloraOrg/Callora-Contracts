@@ -1,4 +1,4 @@
-# Callora Contracts 
+# Callora Contracts
 
 Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) and balance deduction for pay-per-call settlement.
 
@@ -9,21 +9,54 @@ Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) an
 
 - **Rust** with **Soroban SDK** (Stellar)
 - Contract compiles to WebAssembly and deploys to Stellar/Soroban
-- Minimal WASM size (~17.5KB for vault)
+- Minimal WASM size (~17.5 KB for vault)
+
+## Contract Quickstart
+
+A minimal set of commands to build, test, and produce release WASM for the Soroban contracts in this workspace. Run them from the repository root.
+
+**Prerequisites:** [Rust](https://rustup.rs/) (stable) with the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
+
+```bash
+# 1. Format & lint (fails on any warning)
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 2. Build and run the full test suite
+cargo build
+cargo test
+
+# 3. Release WASM for a specific contract
+cargo build --target wasm32-unknown-unknown --release -p callora-vault
+cargo build --target wasm32-unknown-unknown --release -p callora-revenue-pool
+cargo build --target wasm32-unknown-unknown --release -p callora-settlement
+
+# 4. Or build all contracts and verify WASM size limits in one step
+./scripts/check-wasm-size.sh
+
+# 5. Line-coverage check (must stay ≥ 95%)
+./scripts/coverage.sh
+```
+
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
 
 ## What’s included
 
 ### 1. `callora-vault`
 
-The primary storage and metering contract.
+The primary storage and metering contract. Holds USDC on behalf of API consumers and deducts balances on every metered call.
 
-- `init(owner, usdc_token, ..., authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration.
+- `init(owner, usdc_token, ..., authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration; `min_deposit` defaults to `1` and must be `> 0`.
 - `deposit(caller, amount)` — Owner or allowed depositor increases ledger balance.
 - `deduct(caller, amount, request_id)` — Decrease balance for an API call; routes funds to settlement.
 - `batch_deduct(caller, items)` — Atomically process multiple deductions.
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
 - `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
+- `set_price(caller, api_id, price)` — Owner-only; configure the price per call for `api_id`.
 - `get_price(api_id)` — returns `Option<i128>` with the configured price per call for `api_id`.
+- `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
+- `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
+- `is_paused()` — View function; returns current pause state for off-chain monitoring.
 
 ## Architecture & Flow
 
@@ -43,36 +76,14 @@ sequenceDiagram
     Note over B,V: Metering & Deduction
     B->>V: deduct(caller, total_amount, request_id)
     V->>V: validate balance & auth
-    
+
     Note over V,S: Fund Movement
     V->>S: USDC Transfer (via token contract)
-    
+
     Note over S,D: Distribution
     S->>D: distribute(to, amount)
     D-->>S: Transaction Complete
 ```
-
-- `get_meta()` / `balance()` — View configuration and current ledger balance.
-- `set_metadata` / `get_metadata` — Attach off-chain metadata (IPFS/URI) to offerings.
-
-### 2. `callora-revenue-pool`
-
-A simple distribution contract for revenue.
-
-- `init(admin, usdc_token)` — Initialize with an admin and USDC token.
-- `distribute(caller, to, amount)` — Admin sends USDC from this contract to a developer.
-- `batch_distribute(caller, payments)` — Atomically distribute to multiple developers.
-- `receive_payment(caller, amount, from_vault)` — Log payment receipt for indexers.
-
-### 3. `callora-settlement`
-
-Advanced settlement with individual developer balance tracking.
-
-- `init(admin, vault_address)` — Link to the vault and set admin.
-- `receive_payment(caller, amount, to_pool, developer)` — Receive funds from vault; credit global pool or specific developer.
-- `get_developer_balance(developer)` — Check tracked balance for a specific developer.
-- `get_global_pool()` — View total accumulated pool balance.
-- `set_vault(caller, new_vault)` — Admin-only; update the linked vault address.
 
 ## Local setup
 
@@ -86,7 +97,7 @@ Advanced settlement with individual developer balance tracking.
    cargo fmt --all
    cargo clippy --all-targets --all-features -- -D warnings
    cargo build
-   cargo test
+   cargo test --workspace
    ```
 
 3. **Build WASM:**
@@ -101,11 +112,11 @@ Advanced settlement with individual developer balance tracking.
 
 ## Development
 
-Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
+Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
 
 ### Test coverage
 
-The project enforces a **minimum of 95% line coverage** on every push via GitHub Actions.
+The project enforces a **minimum of 95% line coverage** on every push via GitHub Actions (see [`.github/workflows/coverage.yml`](.github/workflows/coverage.yml)).
 
 ```bash
 # Run coverage locally
@@ -117,7 +128,7 @@ The project enforces a **minimum of 95% line coverage** on every push via GitHub
 ```
 callora-contracts/
 ├── .github/workflows/
-│   ├── ci.yml              # CI: fmt, clippy, test, WASM build
+│   ├── ci.yml              # CI: workspace fmt gate, clippy, test, WASM build
 │   └── coverage.yml        # CI: enforces 95% coverage on every push
 ├── contracts/
 │   ├── vault/              # Primary storage and metering
@@ -127,8 +138,9 @@ callora-contracts/
 │   ├── coverage.sh         # Local coverage runner
 │   └── check-wasm-size.sh  # WASM size verification
 ├── docs/
-│   ├── interfaces/         # JSON contract interface summaries (vault, settlement, revenue_pool)
-│   └── ACCESS_CONTROL.md   # Role-based access control overview
+│   ├── interfaces/                        # JSON contract interface summaries
+│   ├── ACCESS_CONTROL.md                  # Role-based access control overview
+│   └── CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
 ├── BENCHMARKS.md           # Gas/cost notes
 ├── EVENT_SCHEMA.md         # Event topics and payloads
 ├── UPGRADE.md              # Upgrade and migration path
@@ -148,16 +160,22 @@ Machine-readable JSON summaries of every public function and parameter for each 
 
 See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema description and regeneration steps.
 
+## Operator Guide
+
+Backend operators setting up a new deployment should follow the step-by-step checklist in
+[`docs/CONTRACT_ADDRESS_CONFIGURATION.md`](docs/CONTRACT_ADDRESS_CONFIGURATION.md).
+It covers deploying and linking the USDC token, settlement contract, and revenue pool,
+plus how to verify all addresses with the `get_contract_addresses()` view function.
+
 ## Security Notes
 
-- **Checked arithmetic**: All mutations use `checked_add` / `checked_sub`.
-- **Input validation**: Enforced `amount > 0` for all deposits and deductions.
-- **Overflow checks**: Enabled in both dev and release profiles.
+- **Checked arithmetic**: All balance mutations use `checked_add` / `checked_sub` with explicit panics.
+- **Input validation**: `amount > 0` enforced on all deposits and deductions.
+- **Overflow checks**: Enabled in both dev and release profiles (`Cargo.toml`).
 - **Role-Based Access**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+- **Dedup hardening**: Duplicate `get_max_deduct` declaration removed in `callora-vault`; allowed depositor duplicate-path test now asserts list cardinality.
 
-## Security
-
-See [SECURITY.md](SECURITY.md) for the Vault Security Checklist and audit recommendations.
+See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit recommendations.
 
 ---
 
