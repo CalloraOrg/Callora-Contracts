@@ -1,12 +1,12 @@
 ## Vault Balance Invariant
 
-**Invariant**: For every reachable state of the `CalloraVault` contract, the stored balance in `VaultMeta.balance` is always **greater than or equal to 0**.
+**Invariant**: For every reachable state of the `CalloraVault` contract, the stored balance in `VaultMeta.balance` is always **greater than or equal to 0** and **less than or equal to i128::MAX**.
 
 - **Storage field**: `VaultMeta.balance : i128`
 - **Accessors**:
   - `get_meta(env: Env) -> VaultMeta`
   - `balance(env: Env) -> i128`
-- **Guarantee**: Any value returned by `get_meta(env).balance` or `balance(env)` is **never negative**.
+- **Guarantee**: Any value returned by `get_meta(env).balance` or `balance(env)` is **never negative** and **cannot overflow** the `i128` numeric boundary. Any operation that would cause an overflow (e.g., `deposit` past `i128::MAX`) will panic and revert the transaction.
 
 This document lists all functions that can change the stored balance and the pre-/post-conditions that preserve this invariant.
 
@@ -34,7 +34,7 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 
 **Pre-conditions**
 - Vault is not already initialized:
-  - `!env.storage().instance().has(META_KEY)`
+  - `!env.storage().instance().has(MetaKey)`
 - `initial_balance.unwrap_or(0) >= 0`
 - `max_deduct.unwrap_or(DEFAULT_MAX_DEDUCT) > 0`
 - The on-ledger USDC balance already covers the requested internal starting balance:
@@ -102,6 +102,10 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - Caller is authorized: `caller.require_auth()`
 - Vault is initialized.
 - `1 <= items.len() <= MAX_BATCH_SIZE` (50)
+- The explicit batch cap is a practical Soroban resource bound:
+  it limits looped validation work, transfer/event overhead, and invocation
+  footprint in one call. Tune this cap conservatively if production
+  workloads approach network CPU or budget limits.
 - For every item: `item.amount > 0` and `item.amount <= get_max_deduct(env)`
 - Cumulative deductions do not exceed balance:
   - Validated in a single pass before any state is written.
@@ -447,6 +451,8 @@ Pure accessors such as [`get_admin`](contracts/settlement/src/lib.rs#L140), [`ge
 - `distribute` / `batch_distribute` also require:
   - Positive amount(s)
   - Sufficient on-contract USDC balance before transfer
+- `batch_distribute` additionally requires:
+  - `1 <= payments.len() <= MAX_BATCH_SIZE` (50)
 
 **Post-conditions**
 - No address other than the current revenue-pool admin can emit administrative payment events or move USDC out of the revenue pool.
