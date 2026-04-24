@@ -255,7 +255,7 @@ fn owner_can_deposit() {
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     usdc_admin.mint(&owner, &500);
-    usdc_client.approve(&owner, &vault_address, &500, &1000);
+    usdc_client.approve(&owner, &vault_address, &300, &1000);
 
     let new_balance = client.deposit(&owner, &200);
     assert_eq!(new_balance, 200);
