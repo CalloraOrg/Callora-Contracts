@@ -298,6 +298,10 @@ fn receive_payment_is_event_only_and_does_not_move_tokens() {
     assert_eq!(usdc_client.balance(&developer), before_developer);
 }
 
+// ---------------------------------------------------------------------------
+// Batch distribute tests - Comprehensive coverage
+// ---------------------------------------------------------------------------
+
 #[test]
 fn batch_distribute_success() {
     let env = Env::default();
