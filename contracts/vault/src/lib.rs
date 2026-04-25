@@ -396,9 +396,11 @@ impl CalloraVault {
             .balance
             .checked_add(amount)
             .unwrap_or_else(|| panic!("balance overflow"));
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
-        env.events()
-            .publish((Symbol::new(&env, "deposit"),), (amount, meta.balance));
+        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.events().publish(
+            (Symbol::new(&env, "deposit"), caller),
+            (amount, meta.balance),
+        );
         meta.balance
     }
 
@@ -430,6 +432,8 @@ impl CalloraVault {
             .unwrap_or(DEFAULT_MAX_DEDUCT);
         assert!(amount <= max_d, "deduct amount exceeds max_deduct");
         let meta = Self::get_meta(env.clone());
+        let auth = caller == meta.owner || meta.authorized_caller.as_ref() == Some(&caller);
+        assert!(auth, "unauthorized caller");
         assert!(meta.balance >= amount, "insufficient balance");
         Self::require_authorized_deduct_caller(env.clone(), &caller);
         let mut meta = Self::get_meta(env.clone());
@@ -452,6 +456,13 @@ impl CalloraVault {
         meta.balance
     }
 
+    pub fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
+    }
+
     /// Deduct multiple items atomically.
     ///
     /// Full-batch validation is completed before any external transfer,
@@ -463,7 +474,6 @@ impl CalloraVault {
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         Self::require_not_paused(env.clone());
         caller.require_auth();
-        Self::require_not_paused(env.clone());
         let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
