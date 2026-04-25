@@ -82,7 +82,7 @@ impl CalloraVault {
     ) -> VaultMeta {
         owner.require_auth();
         let inst = env.storage().instance();
-        if inst.has(&StorageKey::Meta) {
+        if inst.has(&StorageKey::MetaKey) {
             panic!("vault already initialized");
         }
         assert!(
@@ -122,7 +122,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::Meta, &meta);
+        inst.set(&StorageKey::MetaKey, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -285,10 +285,14 @@ impl CalloraVault {
     pub fn set_authorized_caller(env: Env, caller: Option<Address>) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
-        meta.authorized_caller = Some(caller.clone());
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        let old_authorized_caller = meta.authorized_caller.clone();
+        meta.authorized_caller = caller.clone();
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
-            (Symbol::new(&env, "set_authorized_caller"), meta.owner.clone()),
+            (
+                Symbol::new(&env, "set_authorized_caller"),
+                meta.owner.clone(),
+            ),
             (old_authorized_caller, caller),
         );
     }
@@ -309,13 +313,6 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
-    }
-
-    fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     /// Returns the current pause state of the vault.
@@ -374,7 +371,7 @@ impl CalloraVault {
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
         assert!(
-            Self::is_authorized_depositor(env.clone(), depositor.clone()),
+            Self::is_authorized_depositor(env.clone(), caller.clone()),
             "unauthorized: only owner or allowed depositor can deposit"
         );
         let meta = Self::get_meta(env.clone());
@@ -390,13 +387,13 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_addr);
-        usdc.transfer(&depositor, &env.current_contract_address(), &amount);
+        usdc.transfer(&caller, &env.current_contract_address(), &amount);
         let mut meta = Self::get_meta(env.clone());
         meta.balance = meta
             .balance
             .checked_add(amount)
             .unwrap_or_else(|| panic!("balance overflow"));
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "deposit"), caller),
             (amount, meta.balance),
@@ -441,12 +438,13 @@ impl CalloraVault {
             .balance
             .checked_sub(amount)
             .unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         let ut: Address = env
             .storage()
             .instance()
             .get(&StorageKey::UsdcToken)
             .unwrap();
+        let settlement = Self::require_settlement(&env);
         Self::transfer_funds(&env, &ut, &settlement, amount);
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
@@ -454,13 +452,6 @@ impl CalloraVault {
             (amount, meta.balance),
         );
         meta.balance
-    }
-
-    pub fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     /// Deduct multiple items atomically.
@@ -505,10 +496,17 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .unwrap();
+        let settlement = Self::require_settlement(&env);
         Self::transfer_funds(&env, &ut, &settlement, total);
 
-        meta.balance = running;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        for item in items.iter() {
+            let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
+            env.events().publish(
+                (Symbol::new(&env, "deduct"), caller.clone(), rid),
+                (item.amount, meta.balance),
+            );
+        }
         meta.balance
     }
 
@@ -546,7 +544,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone());
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
@@ -570,7 +568,7 @@ impl CalloraVault {
             .balance
             .checked_sub(amount)
             .unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
             WithdrawEventData {
@@ -597,7 +595,7 @@ impl CalloraVault {
             .balance
             .checked_sub(amount)
             .unwrap_or_else(|| panic!("balance underflow"));
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
             WithdrawEventData {
@@ -782,13 +780,6 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Settlement)
             .unwrap_or_else(|| panic!("settlement address not set"))
-    }
-
-    fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     fn require_not_paused(env: Env) {
