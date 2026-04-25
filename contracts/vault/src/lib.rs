@@ -288,7 +288,10 @@ impl CalloraVault {
         meta.authorized_caller = Some(caller.clone());
         env.storage().instance().set(&StorageKey::Meta, &meta);
         env.events().publish(
-            (Symbol::new(&env, "set_authorized_caller"), meta.owner.clone()),
+            (
+                Symbol::new(&env, "set_authorized_caller"),
+                meta.owner.clone(),
+            ),
             (old_authorized_caller, caller),
         );
     }
@@ -311,6 +314,11 @@ impl CalloraVault {
             .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
     }
 
+    /// Retrieve the configured maximum deduction amount for a single call.
+    ///
+    /// Returns the value stored in `StorageKey::MaxDeduct`, or `DEFAULT_MAX_DEDUCT`
+    /// if not explicitly configured during initialization. Used internally by `deduct`
+    /// and `batch_deduct` to enforce per-call deduction limits.
     fn get_max_deduct(env: Env) -> i128 {
         env.storage()
             .instance()
