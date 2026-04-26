@@ -1,4 +1,4 @@
-# Event Schema
+﻿# Event Schema
 
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
@@ -49,7 +49,7 @@ Emitted when a depositor increases the vault balance.
 
 ### `deduct`
 
-Emitted on each deduction — once per `deduct()` call and once per item in `batch_deduct()`.
+Emitted on each deduction â€” once per `deduct()` call and once per item in `batch_deduct()`.
 
 | Index   | Location | Type         | Description                                    |
 |---------|----------|--------------|------------------------------------------------|
@@ -69,15 +69,21 @@ Emitted on each deduction — once per `deduct()` call and once per item in `bat
 
 - **Topic is always present**: the vault always emits **exactly 3 topics** for `deduct`.
 - **No optional topic**: Soroban events do not carry an `Option` topic value; instead the vault uses a **sentinel**.
-- **Sentinel for “no request_id”**: when the input `request_id` is `None`, topic 2 is `Symbol("")` (an empty symbol).
-- **Indexer rule**: treat `Symbol("")` as “no request_id provided”.
+- **Sentinel for â€œno request_idâ€**: when the input `request_id` is `None`, topic 2 is `Symbol("")` (an empty symbol).
+- **Indexer rule**: treat `Symbol("")` as â€œno request_id providedâ€.
 - **Ambiguity note**: `Some(Symbol(""))` is indistinguishable from `None` on-chain. Clients **SHOULD NOT** intentionally pass an empty symbol as a real request id.
 
 **Precondition (Issue #263):** `deduct` / `batch_deduct` require a settlement
 address to be configured via `set_settlement`. If the settlement address is
 not set, the call panics with `"settlement address not set"` **before** any
-`deduct` event is emitted — indexers will therefore never observe a `deduct`
+`deduct` event is emitted â€” indexers will therefore never observe a `deduct`
 event for a call that lacked a configured settlement destination.
+
+**Idempotency guard (Issue #249):** when `request_id` is `Some(Symbol)`, the
+value is single-use across successful `deduct` and `batch_deduct` calls.
+Reusing a previously accepted value, or repeating the same value twice inside
+one batch, panics with `"duplicate request_id"` before any balance update,
+transfer, or `deduct` event is emitted.
 
 ---
 
@@ -244,7 +250,7 @@ Emitted when the vault circuit-breaker is activated by admin or owner.
 | Field   | Location | Type    | Description                                      |
 |---------|----------|---------|--------------------------------------------------|
 | topic 0 | topics   | Symbol  | `"vault_paused"`                                 |
-| topic 1 | topics   | Address | `caller` — admin or owner who triggered pause   |
+| topic 1 | topics   | Address | `caller` â€” admin or owner who triggered pause   |
 | data    | data     | ()      | empty                                            |
 
 **Indexer Note:** After this event is emitted, `is_paused()` view function returns `true`.
@@ -259,7 +265,7 @@ Emitted when the vault circuit-breaker is deactivated by admin or owner.
 | Field   | Location | Type    | Description                                      |
 |---------|----------|---------|--------------------------------------------------|
 | topic 0 | topics   | Symbol  | `"vault_unpaused"`                               |
-| topic 1 | topics   | Address | `caller` — admin or owner who triggered unpause |
+| topic 1 | topics   | Address | `caller` â€” admin or owner who triggered unpause |
 | data    | data     | ()      | empty                                            |
 
 **Indexer Note:** After this event is emitted, `is_paused()` view function returns `false`.
@@ -274,8 +280,8 @@ The vault exposes a read-only view function for off-chain systems to query the c
 **Signature:** `pub fn is_paused(env: Env) -> bool`
 
 **Return Value:**
-- `true` — Vault is currently paused (circuit-breaker active)
-- `false` — Vault is operational (normal state)
+- `true` â€” Vault is currently paused (circuit-breaker active)
+- `false` â€” Vault is operational (normal state)
 
 **Safety Guarantees:**
 - **Read-only**: No state mutation or side effects
@@ -296,8 +302,8 @@ if (isPaused) {
 ```
 
 **Consistency with Events:**
-- `vault_paused` event emitted → `is_paused()` returns `true`
-- `vault_unpaused` event emitted → `is_paused()` returns `false`
+- `vault_paused` event emitted â†’ `is_paused()` returns `true`
+- `vault_unpaused` event emitted â†’ `is_paused()` returns `false`
 
 Indexers should use `is_paused()` for current state queries and subscribe to
 `vault_paused`/`vault_unpaused` events for state change notifications.
@@ -382,22 +388,24 @@ Emitted when existing offering metadata is replaced.
 
 ---
 
-### `set_auth_caller`
+### `set_authorized_caller`
 
 Emitted when the owner updates the authorized caller address.
 
-| Index   | Location | Type    | Description               |
-|---------|----------|---------|---------------------------|
-| topic 0 | topics   | Symbol  | `"set_auth_caller"`       |
-| topic 1 | topics   | Address | vault owner               |
-| data    | data     | Address | new authorized caller     |
+| Index   | Location | Type                              | Description                                  |
+|---------|----------|-----------------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                            | `"set_authorized_caller"`                   |
+| topic 1 | topics   | Address                           | vault owner                                  |
+| data    | data     | (Option<Address>, Option<Address>) | (old_authorized_caller, new_authorized_caller) |
 
 ```json
 {
-  "topics": ["set_auth_caller", "GOWNER..."],
-  "data": "GCALLER..."
+  "topics": ["set_authorized_caller", "GOWNER..."],
+  "data": [null, "GCALLER..."]
 }
 ```
+
+---
 
 ---
 
@@ -439,8 +447,8 @@ Emitted once when the revenue pool is initialized.
 | Index   | Location | Type    | Description                          |
 |---------|----------|---------|--------------------------------------|
 | topic 0 | topics   | Symbol  | `"init"`                             |
-| topic 1 | topics   | Address | `admin` — initial admin address      |
-| data    | data     | Address | `usdc_token` — token contract address|
+| topic 1 | topics   | Address | `admin` â€” initial admin address      |
+| data    | data     | Address | `usdc_token` â€” token contract address|
 
 ```json
 {
@@ -461,8 +469,8 @@ Emitted when the current admin nominates a successor (step 1 of 2).
 | Index   | Location | Type    | Description                              |
 |---------|----------|---------|------------------------------------------|
 | topic 0 | topics   | Symbol  | `"admin_transfer_started"`               |
-| topic 1 | topics   | Address | `current_admin` — the nominator          |
-| data    | data     | Address | `pending_admin` — nominee who must accept|
+| topic 1 | topics   | Address | `current_admin` â€” the nominator          |
+| data    | data     | Address | `pending_admin` â€” nominee who must accept|
 
 ```json
 {
@@ -483,7 +491,7 @@ Emitted when the nominee accepts the admin role (step 2 of 2).
 | Index   | Location | Type    | Description                        |
 |---------|-----------|---------|------------------------------------|
 | topic 0 | topics   | Symbol  | `"admin_transfer_completed"`       |
-| topic 1 | topics   | Address | `new_admin` — the accepted admin   |
+| topic 1 | topics   | Address | `new_admin` â€” the accepted admin   |
 | data    | data     | ()      | empty                              |
 
 ```json
@@ -502,15 +510,15 @@ Emitted when the nominee accepts the admin role (step 2 of 2).
 
 Emitted when the admin logs an inbound payment from the vault.
 
-> **Note:** This is an **event-only helper** — it does not move tokens. USDC
+> **Note:** This is an **event-only helper** â€” it does not move tokens. USDC
 > arrives via a direct token transfer from the vault. Call `receive_payment` to
 > emit this event for indexer alignment.
 
 | Index   | Location | Type         | Description                                     |
 |---------|-----------|--------------|-------------------------------------------------|
 | topic 0 | topics   | Symbol       | `"receive_payment"`                             |
-| topic 1 | topics   | Address      | `caller` — typically admin                      |
-| data    | data     | (i128, bool) | `(amount, from_vault)` — amount in stroops; `from_vault=true` when source is the vault |
+| topic 1 | topics   | Address      | `caller` â€” typically admin                      |
+| data    | data     | (i128, bool) | `(amount, from_vault)` â€” amount in stroops; `from_vault=true` when source is the vault |
 
 ```json
 {
@@ -519,7 +527,7 @@ Emitted when the admin logs an inbound payment from the vault.
 }
 ```
 
-**Example — manual top-up (not from vault):**
+**Example â€” manual top-up (not from vault):**
 
 ```json
 {
@@ -540,7 +548,7 @@ Emitted when the admin distributes USDC to a single developer.
 | Index   | Location | Type    | Description              |
 |---------|----------|---------|--------------------------|
 | topic 0 | topics   | Symbol  | `"distribute"`           |
-| topic 1 | topics   | Address | `to` — developer address |
+| topic 1 | topics   | Address | `to` â€” developer address |
 | data    | data     | i128    | `amount` in stroops      |
 
 ```json
@@ -550,7 +558,7 @@ Emitted when the admin distributes USDC to a single developer.
 }
 ```
 
-> A `distribute` event guarantees the token transfer succeeded — the USDC has
+> A `distribute` event guarantees the token transfer succeeded â€” the USDC has
 > left the pool contract and arrived at `to`.
 
 ---
@@ -563,7 +571,7 @@ three payments, three `batch_distribute` events are emitted in order.
 | Index   | Location | Type    | Description              |
 |---------|----------|---------|--------------------------|
 | topic 0 | topics   | Symbol  | `"batch_distribute"`     |
-| topic 1 | topics   | Address | `to` — developer address |
+| topic 1 | topics   | Address | `to` â€” developer address |
 | data    | data     | i128    | `amount` in stroops      |
 
 ```json
@@ -573,7 +581,7 @@ three payments, three `batch_distribute` events are emitted in order.
 }
 ```
 
-**Example — 3-payment batch produces 3 events:**
+**Example â€” 3-payment batch produces 3 events:**
 
 ```json
 [
@@ -583,7 +591,7 @@ three payments, three `batch_distribute` events are emitted in order.
 ]
 ```
 
-> `batch_distribute` is atomic — either all payments succeed and all events are
+> `batch_distribute` is atomic â€” either all payments succeed and all events are
 > emitted, or none are. Indexers can verify atomicity by checking that all events
 > share the same ledger sequence number.
 
@@ -595,7 +603,7 @@ Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
 
 **Amount units.** All `amount` / `new_balance` fields are `i128` in USDC
 micro-units (7-decimal scaled integers), matching the Stellar USDC contract.
-Legacy text elsewhere in this document calls this "stroops" — same scalar type,
+Legacy text elsewhere in this document calls this "stroops" â€” same scalar type,
 same integer semantics; the settlement contract never handles native XLM.
 
 **Data payload encoding.** The `data` column describes the Soroban
@@ -613,10 +621,10 @@ no events are emitted and state is rolled back.
 
 **Panic modes (no events emitted).**
 - Caller is not the registered vault or admin (`require_authorized_caller`).
-- `amount <= 0` — `"amount must be positive"`.
-- `to_pool = true` with `developer = Some(_)` — `"developer address must be None when to_pool=true"`.
-- `to_pool = false` with `developer = None` — `"developer address required when to_pool=false"`.
-- Arithmetic overflow on pool or developer balance — `"pool balance overflow"` / `"developer balance overflow"`.
+- `amount <= 0` â€” `"amount must be positive"`.
+- `to_pool = true` with `developer = Some(_)` â€” `"developer address must be None when to_pool=true"`.
+- `to_pool = false` with `developer = None` â€” `"developer address required when to_pool=false"`.
+- Arithmetic overflow on pool or developer balance â€” `"pool balance overflow"` / `"developer balance overflow"`.
 
 ---
 
@@ -628,13 +636,13 @@ regardless of routing.
 | Index        | Location | Type              | Description                                                                       |
 |--------------|----------|-------------------|-----------------------------------------------------------------------------------|
 | topic 0      | topics   | Symbol            | `"payment_received"`                                                              |
-| topic 1      | topics   | Address           | `caller` — authorized vault or admin address (same as `from_vault` field)         |
+| topic 1      | topics   | Address           | `caller` â€” authorized vault or admin address (same as `from_vault` field)         |
 | `from_vault` | data     | Address           | originator of the payment; duplicates topic 1 for indexers that key by data only  |
 | `amount`     | data     | i128              | payment amount in USDC micro-units; invariant `amount > 0`                        |
-| `to_pool`    | data     | bool              | `true` → credited to global pool; `false` → credited to an individual developer   |
+| `to_pool`    | data     | bool              | `true` â†’ credited to global pool; `false` â†’ credited to an individual developer   |
 | `developer`  | data     | Option\<Address\> | `None` when `to_pool = true`; `Some(address)` when `to_pool = false`              |
 
-**Example — global pool credit (`to_pool = true`):**
+**Example â€” global pool credit (`to_pool = true`):**
 
 ```json
 {
@@ -651,7 +659,7 @@ regardless of routing.
 Side effect: `GlobalPool.total_balance += amount` and
 `GlobalPool.last_updated = env.ledger().timestamp()`.
 
-**Example — developer credit (`to_pool = false`):**
+**Example â€” developer credit (`to_pool = false`):**
 
 ```json
 {
@@ -687,7 +695,7 @@ after the matching `payment_received` event.
 | Index         | Location | Type    | Description                                                     |
 |---------------|----------|---------|-----------------------------------------------------------------|
 | topic 0       | topics   | Symbol  | `"balance_credited"`                                            |
-| topic 1       | topics   | Address | `developer` — address whose balance was updated                 |
+| topic 1       | topics   | Address | `developer` â€” address whose balance was updated                 |
 | `developer`   | data     | Address | same as topic 1; duplicated for data-only indexers              |
 | `amount`      | data     | i128    | amount credited to the developer in USDC micro-units            |
 | `new_balance` | data     | i128    | developer's cumulative balance after this credit (post-state)   |
@@ -712,7 +720,7 @@ after the matching `payment_received` event.
   `payment_received`.
 
 **Indexer guidance.**
-- Track developer earnings by subscribing to `balance_credited` — it already
+- Track developer earnings by subscribing to `balance_credited` â€” it already
   carries the post-credit balance, so no separate read is required.
 - Track total protocol inflow by summing `payment_received.amount` across
   both routing modes, or filter `to_pool = true` for pool-only inflow.
@@ -738,7 +746,7 @@ after the matching `payment_received` event.
 | `admin_accepted`         | vault           | `accept_admin()`                         |
 | `set_revenue_pool`       | vault           | `set_revenue_pool(Some(addr))`           |
 | `clear_revenue_pool`     | vault           | `set_revenue_pool(None)`                 |
-| `set_auth_caller`        | vault           | `set_authorized_caller()`                |
+| `set_authorized_caller` | vault           | `set_authorized_caller()`                |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
@@ -758,6 +766,6 @@ after the matching `payment_received` event.
 | Version | Contract      | Change                                                       |
 |---------|---------------|--------------------------------------------------------------|
 | 0.0.1   | vault         | Initial vault events                                         |
-| 0.0.1   | vault         | Added `set_auth_caller` event (Issue #256)                   |
+| 0.0.1   | vault         | Added `set_authorized_caller` event with old/new value payload (Issue #256) |
 | 0.0.1   | revenue-pool  | Full revenue pool event suite with JSON examples             |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |

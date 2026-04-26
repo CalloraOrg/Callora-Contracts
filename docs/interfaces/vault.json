@@ -1,4 +1,4 @@
-{
+﻿{
   "contract": "callora-vault",
   "version": "0.0.1",
   "description": "Primary USDC prepaid vault for the Callora API marketplace. Handles deposits, per-call deductions, withdrawals, and optional routing of deducted funds to a settlement or revenue-pool contract.",
@@ -12,14 +12,14 @@
         "owner":             { "type": "Address", "description": "Vault owner; always permitted to deposit and withdraw." },
         "balance":           { "type": "i128",    "description": "Tracked USDC balance in token base units (stroops)." },
         "authorized_caller": { "type": "Address | null", "description": "Address permitted to call deduct/batch_deduct. Null means only the owner may deduct." },
-        "min_deposit":       { "type": "i128",    "description": "Minimum accepted deposit amount. 0 means no minimum." }
+        "min_deposit":       { "type": "i128",    "description": "Minimum accepted deposit amount. Defaults to 1." }
       }
     },
     "DeductItem": {
       "description": "Single entry in a batch_deduct call.",
       "fields": {
         "amount":     { "type": "i128",         "description": "Amount to deduct in token base units; must be > 0." },
-        "request_id": { "type": "Symbol | null", "description": "Optional idempotency / tracking identifier." }
+        "request_id": { "type": "Symbol | null", "description": "Optional tracking identifier. When provided it is enforced as a single-use idempotency key." }
       }
     }
   },
@@ -34,19 +34,19 @@
         { "name": "usdc_token",        "type": "Address",      "optional": false, "description": "USDC token contract address (must not equal the vault address)." },
         { "name": "initial_balance",   "type": "i128 | null",  "optional": true,  "description": "Pre-seeded tracked balance. USDC must already be held by the vault. Defaults to 0." },
         { "name": "authorized_caller", "type": "Address | null", "optional": true, "description": "Address allowed to trigger deductions. Defaults to none (owner only)." },
-        { "name": "min_deposit",       "type": "i128 | null",  "optional": true,  "description": "Minimum per-deposit amount. Defaults to 0." },
-        { "name": "revenue_pool",      "type": "Address | null", "optional": true, "description": "Optional revenue-pool contract. Deducted USDC is forwarded here (or to settlement if set). Must not equal vault address." },
+        { "name": "min_deposit",       "type": "i128 | null",  "optional": true,  "description": "Minimum per-deposit amount. Defaults to 1." },
+        { "name": "revenue_pool",      "type": "Address | null", "optional": true, "description": "Optional informational revenue-pool contract address. Must not equal vault address." },
         { "name": "max_deduct",        "type": "i128 | null",  "optional": true,  "description": "Maximum amount per single deduct call. Defaults to i128::MAX (no cap). Must be positive and >= min_deposit." }
       ],
       "returns": "VaultMeta",
       "panics": [
-        "\"vault already initialized\" — called more than once.",
-        "\"initial balance must be non-negative\" — initial_balance < 0.",
-        "\"min_deposit must be non-negative\" — min_deposit < 0.",
-        "\"max_deduct must be positive\" — max_deduct <= 0.",
-        "\"min_deposit cannot exceed max_deduct\" — constraint violation.",
-        "\"usdc_token cannot be vault address\" — self-reference guard.",
-        "\"revenue_pool cannot be vault address\" — self-reference guard."
+        "\"vault already initialized\" â€” called more than once.",
+        "\"initial balance must be non-negative\" â€” initial_balance < 0.",
+        "\"min_deposit must be non-negative\" â€” min_deposit < 0.",
+        "\"max_deduct must be positive\" â€” max_deduct <= 0.",
+        "\"min_deposit cannot exceed max_deduct\" â€” constraint violation.",
+        "\"usdc_token cannot be vault address\" â€” self-reference guard.",
+        "\"revenue_pool cannot be vault address\" â€” self-reference guard."
       ],
       "events": [
         { "topics": ["\"init\"", "owner"], "data": "balance (i128)" }
@@ -63,11 +63,11 @@
       ],
       "returns": "i128 (new balance)",
       "panics": [
-        "\"vault is paused\" — circuit breaker is active.",
-        "\"amount must be positive\" — amount <= 0.",
-        "\"unauthorized: only owner or allowed depositor can deposit\" — auth failure.",
-        "\"deposit below minimum: X < Y\" — below min_deposit.",
-        "\"balance overflow\" — extremely unlikely arithmetic overflow."
+        "\"vault is paused\" â€” circuit breaker is active.",
+        "\"amount must be positive\" â€” amount <= 0.",
+        "\"unauthorized: only owner or allowed depositor can deposit\" â€” auth failure.",
+        "\"deposit below minimum: X < Y\" â€” below min_deposit.",
+        "\"balance overflow\" â€” extremely unlikely arithmetic overflow."
       ],
       "events": [
         { "topics": ["\"deposit\"", "depositor"], "data": "(amount, new_balance) tuple" }
@@ -76,20 +76,20 @@
 
     {
       "name": "deduct",
-      "description": "Deduct USDC for a single API call. Decreases the tracked balance and forwards funds to settlement or revenue_pool if configured. Blocked when paused.",
+      "description": "Deduct USDC for a single API call. Decreases the tracked balance and forwards funds to the configured settlement contract. Blocked when paused.",
       "access": "owner OR authorized_caller",
       "params": [
         { "name": "caller",     "type": "Address",      "optional": false, "description": "Must be the owner or the authorized_caller; must authorize." },
         { "name": "amount",     "type": "i128",         "optional": false, "description": "Amount to deduct; must be > 0 and <= max_deduct." },
-        { "name": "request_id", "type": "Symbol | null", "optional": true,  "description": "Optional idempotency / tracking key emitted in the event." }
+        { "name": "request_id", "type": "Symbol | null", "optional": true,  "description": "Optional tracking key emitted in the event. When provided it must be unique across successful deductions." }
       ],
       "returns": "i128 (new balance)",
       "panics": [
-        "\"vault is paused\" — circuit breaker is active.",
-        "\"amount must be positive\" — amount <= 0.",
-        "\"deduct amount exceeds max_deduct\" — amount > max_deduct.",
-        "\"unauthorized caller\" — caller is not owner or authorized_caller.",
-        "\"insufficient balance\" — balance < amount."
+        "\"vault is paused\" â€” circuit breaker is active.",
+        "\"amount must be positive\" â€” amount <= 0.",
+        "\"deduct amount exceeds max_deduct\" â€” amount > max_deduct.",
+        "\"unauthorized caller\" â€” caller is not owner or authorized_caller.",
+        "\"insufficient balance\" â€” balance < amount."
       ],
       "events": [
         { "topics": ["\"deduct\"", "caller", "request_id (or empty Symbol)"], "data": "(amount, new_balance) tuple" }
@@ -106,12 +106,12 @@
       ],
       "returns": "i128 (final balance after all deductions)",
       "panics": [
-        "\"batch_deduct requires at least one item\" — empty items list.",
-        "\"batch too large\" — items.len() > MAX_BATCH_SIZE.",
-        "\"unauthorized caller\" — caller is not owner or authorized_caller.",
-        "\"amount must be positive\" — any item.amount <= 0.",
-        "\"deduct amount exceeds max_deduct\" — any item.amount > max_deduct.",
-        "\"insufficient balance\" — cumulative deductions exceed current balance."
+        "\"batch_deduct requires at least one item\" â€” empty items list.",
+        "\"batch too large\" â€” items.len() > MAX_BATCH_SIZE.",
+        "\"unauthorized caller\" â€” caller is not owner or authorized_caller.",
+        "\"amount must be positive\" â€” any item.amount <= 0.",
+        "\"deduct amount exceeds max_deduct\" â€” any item.amount > max_deduct.",
+        "\"insufficient balance\" â€” cumulative deductions exceed current balance."
       ],
       "events": [
         { "note": "One event per item in order.", "topics": ["\"deduct\"", "caller", "request_id (or empty Symbol)"], "data": "(item.amount, running_balance) tuple" }
@@ -127,8 +127,8 @@
       ],
       "returns": "i128 (new balance)",
       "panics": [
-        "\"amount must be positive\" — amount <= 0.",
-        "\"insufficient balance\" — balance < amount."
+        "\"amount must be positive\" â€” amount <= 0.",
+        "\"insufficient balance\" â€” balance < amount."
       ],
       "events": []
     },
@@ -143,8 +143,8 @@
       ],
       "returns": "i128 (new balance)",
       "panics": [
-        "\"amount must be positive\" — amount <= 0.",
-        "\"insufficient balance\" — balance < amount."
+        "\"amount must be positive\" â€” amount <= 0.",
+        "\"insufficient balance\" â€” balance < amount."
       ],
       "events": []
     },
@@ -160,9 +160,9 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin\" — caller != admin.",
-        "\"amount must be positive\" — amount <= 0.",
-        "\"insufficient USDC balance\" — vault holds less than amount."
+        "\"unauthorized: caller is not admin\" â€” caller != admin.",
+        "\"amount must be positive\" â€” amount <= 0.",
+        "\"insufficient USDC balance\" â€” vault holds less than amount."
       ],
       "events": [
         { "topics": ["\"distribute\"", "to"], "data": "amount (i128)" }
@@ -176,7 +176,7 @@
       "params": [],
       "returns": "i128",
       "panics": [
-        "\"vault not initialized\" — called before init."
+        "\"vault not initialized\" â€” called before init."
       ],
       "events": []
     },
@@ -188,7 +188,7 @@
       "params": [],
       "returns": "VaultMeta",
       "panics": [
-        "\"vault not initialized\" — called before init."
+        "\"vault not initialized\" â€” called before init."
       ],
       "events": []
     },
@@ -222,8 +222,8 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin or owner\" — auth failure.",
-        "\"vault already paused\" — already in paused state."
+        "\"unauthorized: caller is not admin or owner\" â€” auth failure.",
+        "\"vault already paused\" â€” already in paused state."
       ],
       "events": [
         { "topics": ["\"vault_paused\"", "caller"], "data": "void" }
@@ -239,8 +239,8 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin or owner\" — auth failure.",
-        "\"vault not paused\" — not currently paused."
+        "\"unauthorized: caller is not admin or owner\" â€” auth failure.",
+        "\"vault not paused\" â€” not currently paused."
       ],
       "events": [
         { "topics": ["\"vault_unpaused\"", "caller"], "data": "void" }
@@ -257,7 +257,7 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: owner only\" — caller is not the owner."
+        "\"unauthorized: owner only\" â€” caller is not the owner."
       ],
       "events": []
     },
@@ -276,17 +276,17 @@
 
     {
       "name": "set_authorized_caller",
-      "description": "Set the address permitted to trigger deductions. Replaces any previously set value.",
+      "description": "Set or clear the address permitted to trigger deductions. Replaces any previously set value.",
       "access": "owner (must sign)",
       "params": [
         { "name": "caller", "type": "Address", "optional": false, "description": "New authorized caller address; also used to authorize the call (must be current owner)." }
       ],
       "returns": "void",
       "panics": [
-        "\"vault not initialized\" — called before init."
+        "\"vault not initialized\" â€” called before init."
       ],
       "events": [
-        { "topics": ["\"set_auth_caller\"", "owner"], "data": "caller (Address)" }
+        { "topics": ["\"set_authorized_caller\"", "owner"], "data": "(old_authorized_caller, new_authorized_caller) tuple" }
       ]
     },
 
@@ -299,8 +299,8 @@
       ],
       "returns": "void",
       "panics": [
-        "\"new_owner must be different from current owner\" — same address supplied.",
-        "\"vault not initialized\" — called before init."
+        "\"new_owner must be different from current owner\" â€” same address supplied.",
+        "\"vault not initialized\" â€” called before init."
       ],
       "events": [
         { "topics": ["\"ownership_nominated\"", "current_owner", "new_owner"], "data": "void" }
@@ -314,7 +314,7 @@
       "params": [],
       "returns": "void",
       "panics": [
-        "\"no ownership transfer pending\" — transfer_ownership was not called first."
+        "\"no ownership transfer pending\" â€” transfer_ownership was not called first."
       ],
       "events": [
         { "topics": ["\"ownership_accepted\"", "old_owner", "new_owner"], "data": "void" }
@@ -328,7 +328,7 @@
       "params": [],
       "returns": "Address",
       "panics": [
-        "\"vault not initialized\" — called before init."
+        "\"vault not initialized\" â€” called before init."
       ],
       "events": []
     },
@@ -343,7 +343,7 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin\" — caller != current admin."
+        "\"unauthorized: caller is not admin\" â€” caller != current admin."
       ],
       "events": [
         { "topics": ["\"admin_nominated\"", "current_admin", "new_admin"], "data": "void" }
@@ -357,7 +357,7 @@
       "params": [],
       "returns": "void",
       "panics": [
-        "\"no admin transfer pending\" — set_admin was not called first."
+        "\"no admin transfer pending\" â€” set_admin was not called first."
       ],
       "events": [
         { "topics": ["\"admin_accepted\"", "old_admin", "new_admin"], "data": "void" }
@@ -366,7 +366,7 @@
 
     {
       "name": "set_settlement",
-      "description": "Configure the settlement contract address. Deducted USDC is forwarded here during deduct/batch_deduct (takes priority over revenue_pool).",
+      "description": "Configure the settlement contract address. Deducted USDC is always forwarded here during deduct/batch_deduct.",
       "access": "admin",
       "params": [
         { "name": "caller",             "type": "Address", "optional": false, "description": "Must be current admin; must authorize." },
@@ -374,7 +374,7 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin\" — caller != current admin."
+        "\"unauthorized: caller is not admin\" â€” caller != current admin."
       ],
       "events": []
     },
@@ -386,7 +386,7 @@
       "params": [],
       "returns": "Address",
       "panics": [
-        "\"settlement address not set\" — set_settlement was not called."
+        "\"settlement address not set\" â€” set_settlement was not called."
       ],
       "events": []
     },
@@ -402,9 +402,9 @@
       ],
       "returns": "String (stored metadata)",
       "panics": [
-        "\"unauthorized: owner only\" — caller is not the owner.",
-        "\"offering_id exceeds max length\" — offering_id.len() > 64.",
-        "\"metadata exceeds max length\" — metadata.len() > 256."
+        "\"unauthorized: owner only\" â€” caller is not the owner.",
+        "\"offering_id exceeds max length\" â€” offering_id.len() > 64.",
+        "\"metadata exceeds max length\" â€” metadata.len() > 256."
       ],
       "events": [
         { "topics": ["\"metadata_set\"", "offering_id", "caller"], "data": "metadata (String)" }
@@ -434,9 +434,9 @@
       ],
       "returns": "String (new metadata)",
       "panics": [
-        "\"unauthorized: owner only\" — caller is not the owner.",
-        "\"offering_id exceeds max length\" — offering_id.len() > 64.",
-        "\"metadata exceeds max length\" — metadata.len() > 256."
+        "\"unauthorized: owner only\" â€” caller is not the owner.",
+        "\"offering_id exceeds max length\" â€” offering_id.len() > 64.",
+        "\"metadata exceeds max length\" â€” metadata.len() > 256."
       ],
       "events": [
         { "topics": ["\"metadata_updated\"", "offering_id", "caller"], "data": "(old_metadata, new_metadata) tuple" }
@@ -452,9 +452,11 @@
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: owner only\" — caller is not the owner."
+        "\"unauthorized: owner only\" â€” caller is not the owner."
       ],
       "events": []
     }
   ]
 }
+
+

@@ -1,8 +1,8 @@
-# Security
+﻿# Security
 
 This document outlines security best practices and checklist items for Callora vault contracts to improve audit readiness and reviewer confidence.
 
-## 🔐 Vault Security Checklist
+## ðŸ” Vault Security Checklist
 
 ### Access Control
 
@@ -17,7 +17,7 @@ This document outlines security best practices and checklist items for Callora v
 - [x] For Soroban/Rust: `checked_add` / `checked_sub` used for all balance mutations
 - [x] `overflow-checks` enabled in both dev and release profiles
 
-> All balance mutations in `callora-vault` (`deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`) and `callora-revenue-pool` (`batch_distribute`) use `checked_add` / `checked_sub` and panic with a descriptive message on overflow. `callora-settlement` (`receive_payment`) does the same. The workspace `Cargo.toml` sets `overflow-checks = true` for both `dev` and `release` profiles, so even plain arithmetic would trap in debug builds — the explicit checked calls make the intent clear and guarantee the same behaviour in all build configurations.
+> All balance mutations in `callora-vault` (`deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`) and `callora-revenue-pool` (`batch_distribute`) use `checked_add` / `checked_sub` and panic with a descriptive message on overflow. `callora-settlement` (`receive_payment`) does the same. The workspace `Cargo.toml` sets `overflow-checks = true` for both `dev` and `release` profiles, so even plain arithmetic would trap in debug builds â€” the explicit checked calls make the intent clear and guarantee the same behaviour in all build configurations.
 
 Additional hardening note:
 - Removed a duplicated `get_max_deduct` entrypoint declaration in `callora-vault` to avoid ambiguous review surfaces and keep ABI-facing code paths singular. The function is retained as a private internal helper called by `deduct` and `batch_deduct`.
@@ -56,15 +56,15 @@ controls are in place:
   storage key and is not duplicated in any other location
 - [x] Only the current `owner` can set or rotate `authorized_caller` via
   `set_authorized_caller` (enforced by `meta.owner.require_auth()`)
-- [x] `set_authorized_caller` emits a `set_auth_caller` event with the owner
-  as topic and the new caller address as data, enabling off-chain monitoring
-  of role changes
+- [x] `set_authorized_caller` emits a `set_authorized_caller` event with the
+  owner as topic and `(old_authorized_caller, new_authorized_caller)` as data,
+  enabling off-chain monitoring of role changes and clear audit diffs during
+  rotation
 - [x] `deduct` and `batch_deduct` reject callers that are not the currently
   configured `authorized_caller` (panic: `unauthorized: caller is not the authorized caller`)
-- [x] When `authorized_caller` is `None`, privileged caller-only operations
-  are rejected rather than defaulting to owner/admin, preventing accidental
-  over-privileged execution
-- [ ] Rotation flow (set → use → rotate → old caller rejected) covered by
+- [x] When `authorized_caller` is `None`, deduct-class operations fall back to
+  owner-only execution; non-owner callers remain rejected
+- [ ] Rotation flow (set â†’ use â†’ rotate â†’ old caller rejected) covered by
   unit tests in `contracts/vault/src/test.rs`
 - [ ] Role changes are reviewed as part of the operational runbook; the new
   caller address is verified off-chain (e.g. multisig or governance) before
@@ -81,6 +81,16 @@ controls are in place:
 > single-call owner-only operation with an emitted event, recovery is
 > observable and atomic.
 
+### Request ID Idempotency (Issue #249)
+
+- [x] `deduct` and `batch_deduct` treat `request_id` as a single-use
+  idempotency key when it is provided
+- [x] Duplicate `request_id` values are rejected before any balance mutation,
+  transfer, or event emission
+- [x] Batch validation rejects both replayed request ids from prior calls and
+  duplicate ids repeated inside the same batch
+- [x] Unit tests cover duplicate single-call replay and duplicate-in-batch
+  rejection with atomic balance assertions
 
 ### External Calls
 
@@ -97,12 +107,12 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - **settlement address**: set and updated exclusively by the on-chain admin via
   `set_settlement`. This function emits a `set_settlement` event to provide a
   clear audit trail for address rotation. Transfers to this address implement
-  the documented `Vault → Settlement` revenue flow described in
+  the documented `Vault â†’ Settlement` revenue flow described in
   `SETTLEMENT_IMPLEMENTATION.md`.
 - **revenue_pool address**: retained as an informational configuration slot via
   `set_revenue_pool` / `get_revenue_pool`. It is **no longer consulted during
-  deducts** — `deduct` and `batch_deduct` always route to the settlement address.
-- **CRITICAL — Settlement Required (Issue #263)**: `deduct` and `batch_deduct`
+  deducts** â€” `deduct` and `batch_deduct` always route to the settlement address.
+- **CRITICAL â€” Settlement Required (Issue #263)**: `deduct` and `batch_deduct`
   panic with `"settlement address not set"` when `set_settlement` has not been
   called. The panic occurs before any balance mutation or event emission, so
   the transaction reverts atomically with no observable state change. This
@@ -114,9 +124,9 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - **Atomic Updates**: Each address is updated atomically in a single storage write,
   ensuring no partial update is observable by other callers.
 - **Audit Trail**: All routing configuration changes emit events:
-  - `set_settlement(admin) → address` when setting settlement
-  - `set_revenue_pool(admin) → address` when setting revenue pool
-  - `clear_revenue_pool(admin) → ()` when clearing revenue pool
+  - `set_settlement(admin) â†’ address` when setting settlement
+  - `set_revenue_pool(admin) â†’ address` when setting revenue pool
+  - `clear_revenue_pool(admin) â†’ ()` when clearing revenue pool
 
 ### Vault-Specific Risks
 
@@ -232,7 +242,7 @@ All privileged entrypoints across `vault`, `revenue_pool`, and `settlement` cont
 have been audited for `require_auth()` coverage as part of Issue #160.
 
 ### Findings
-- All privileged functions call `require_auth()` on the caller before executing. ✅
+- All privileged functions call `require_auth()` on the caller before executing. âœ…
 - Negative tests added to each crate's `test.rs` confirming unauthenticated calls are rejected.
 
 ### Intentional Exceptions
@@ -251,3 +261,4 @@ As part of the authorization matrix hardening for the `callora-settlement` contr
 - `get_all_developer_balances` now requires `admin` authorization via `require_auth()`. This prevents bulk data scraping while allowing administrative oversight.
 - Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
 - Admin rotation (two-step) has been verified to correctly gate access during the transition period.
+
