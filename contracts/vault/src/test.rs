@@ -1450,7 +1450,7 @@ fn balance_unchanged_after_failed_deduct() {
 fn batch_deduct_multiple_items() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
+    let _caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -1484,7 +1484,7 @@ fn batch_deduct_multiple_items() {
         },
     ];
 
-    let remaining = client.batch_deduct(&caller, &items);
+    let remaining = client.batch_deduct(&owner, &items);
     assert_eq!(remaining, 650);
     assert_eq!(client.balance(), 650);
 }
@@ -1493,7 +1493,7 @@ fn batch_deduct_multiple_items() {
 fn batch_deduct_events_contain_request_ids() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
+    let _caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -1524,7 +1524,7 @@ fn batch_deduct_events_contain_request_ids() {
             request_id: Some(rid_b.clone())
         },
     ];
-    client.batch_deduct(&caller, &items);
+    client.batch_deduct(&owner, &items);
 
     // Filter to the two deduct events emitted by the vault (topic 0 == "deduct").
     // The settlement transfer emits an additional event after the deducts.

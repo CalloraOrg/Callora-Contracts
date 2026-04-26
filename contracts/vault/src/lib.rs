@@ -151,6 +151,84 @@ impl CalloraVault {
         meta
     }
 
+    // -----------------------------------------------------------------------
+    // View functions
+    // -----------------------------------------------------------------------
+
+    /// Return full vault state. Panics if vault is not initialized.
+    pub fn get_meta(env: Env) -> VaultMeta {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MetaKey)
+            .unwrap_or_else(|| panic!("vault not initialized"))
+    }
+
+    /// Return the current tracked USDC balance. Panics if vault is not initialized.
+    pub fn balance(env: Env) -> i128 {
+        Self::get_meta(env).balance
+    }
+
+    /// Return the current admin address. Panics if vault is not initialized.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("vault not initialized")
+    }
+
+    /// Return the USDC token contract address. Panics if vault is not initialized.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .expect("vault not initialized")
+    }
+
+    /// Return the configured maximum single-deduction amount.
+    /// Returns `i128::MAX` (no cap) if not explicitly set.
+    pub fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
+    }
+
+    /// Return the configured settlement address.
+    /// Panics with `"settlement address not set"` if `set_settlement` has not been called.
+    pub fn get_settlement(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Settlement)
+            .unwrap_or_else(|| panic!("settlement address not set"))
+    }
+
+    /// Return the configured revenue pool address, or `None` if not set.
+    pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        env.storage().instance().get(&StorageKey::RevenuePool)
+    }
+
+    /// Return `(usdc_token, settlement, revenue_pool)` in one call.
+    /// Useful for operators verifying deployment configuration.
+    pub fn get_contract_addresses(env: Env) -> (Option<Address>, Option<Address>, Option<Address>) {
+        let inst = env.storage().instance();
+        (
+            inst.get(&StorageKey::UsdcToken),
+            inst.get(&StorageKey::Settlement),
+            inst.get(&StorageKey::RevenuePool),
+        )
+    }
+
+    /// Return `true` if the vault is currently paused, `false` otherwise.
+    /// Returns `false` before the first `pause()` call (safe default).
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Return `true` if `caller` is the owner or an allowed depositor.
+    /// Panics if vault is not initialized.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
         let meta = Self::get_meta(env.clone());
         if caller == meta.owner {
@@ -174,12 +252,16 @@ impl CalloraVault {
         }
     }
 
-    pub fn get_admin(env: Env) -> Address {
+    /// Return stored offering metadata, or `None` if not set.
+    pub fn get_metadata(env: Env, offering_id: String) -> Option<String> {
         env.storage()
             .instance()
-            .get(&StorageKey::Admin)
-            .expect("vault not initialized")
+            .get(&StorageKey::Metadata(offering_id))
     }
+
+    // -----------------------------------------------------------------------
+    // Mutating functions
+    // -----------------------------------------------------------------------
 
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
@@ -213,35 +295,19 @@ impl CalloraVault {
         assert!(caller == meta.owner, "unauthorized: owner only");
     }
 
-    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("unauthorized: caller is not admin");
-        }
-        if amount <= 0 {
-            panic!("amount must be positive");
-        }
-        let usdc_addr: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::UsdcToken)
-            .expect("vault not initialized");
-        let usdc = token::Client::new(&env, &usdc_addr);
-        let vb = usdc.balance(&env.current_contract_address());
-        if vb < amount {
-            panic!("insufficient USDC balance");
-        }
-        usdc.transfer(&env.current_contract_address(), &to, &amount);
-        env.events()
-            .publish((Symbol::new(&env, "distribute"), to), amount);
-    }
-
-    pub fn get_meta(env: Env) -> VaultMeta {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MetaKey)
-            .unwrap_or_else(|| panic!("vault not initialized"))
+    pub fn set_authorized_caller(env: Env, new_caller: Option<Address>) {
+        let mut meta = Self::get_meta(env.clone());
+        meta.owner.require_auth();
+        let old = meta.authorized_caller.clone();
+        meta.authorized_caller = new_caller.clone();
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.events().publish(
+            (
+                Symbol::new(&env, "set_authorized_caller"),
+                meta.owner.clone(),
+            ),
+            (old, new_caller),
+        );
     }
 
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
@@ -516,8 +582,11 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
-        let usdc = token::Client::new(&env, &ua);
-        usdc.transfer(&env.current_contract_address(), &meta.owner, &amount);
+        token::Client::new(&env, &ua).transfer(
+            &env.current_contract_address(),
+            &meta.owner,
+            &amount,
+        );
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -540,8 +609,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
-        let usdc = token::Client::new(&env, &ua);
-        usdc.transfer(&env.current_contract_address(), &to, &amount);
+        token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &to, &amount);
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -552,6 +620,67 @@ impl CalloraVault {
             (amount, meta.balance),
         );
         meta.balance
+    }
+
+    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .expect("vault not initialized");
+        let usdc = token::Client::new(&env, &usdc_addr);
+        if usdc.balance(&env.current_contract_address()) < amount {
+            panic!("insufficient USDC balance");
+        }
+        usdc.transfer(&env.current_contract_address(), &to, &amount);
+        env.events()
+            .publish((Symbol::new(&env, "distribute"), to), amount);
+    }
+
+    pub fn transfer_ownership(env: Env, new_owner: Address) {
+        let meta = Self::get_meta(env.clone());
+        meta.owner.require_auth();
+        assert!(
+            new_owner != meta.owner,
+            "new_owner must be different from current owner"
+        );
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingOwner, &new_owner);
+        env.events().publish(
+            (
+                Symbol::new(&env, "ownership_nominated"),
+                meta.owner,
+                new_owner,
+            ),
+            (),
+        );
+    }
+
+    pub fn accept_ownership(env: Env) {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingOwner)
+            .expect("no ownership transfer pending");
+        pending.require_auth();
+        let mut meta = Self::get_meta(env.clone());
+        let old = meta.owner.clone();
+        meta.owner = pending;
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().remove(&StorageKey::PendingOwner);
+        env.events().publish(
+            (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
+            (),
+        );
     }
 
     pub fn set_revenue_pool(env: Env, caller: Address, revenue_pool: Option<Address>) {
@@ -574,10 +703,6 @@ impl CalloraVault {
                     .publish((Symbol::new(&env, "clear_revenue_pool"), caller), ());
             }
         }
-    }
-
-    pub fn get_revenue_pool(env: Env) -> Option<Address> {
-        env.storage().instance().get(&StorageKey::RevenuePool)
     }
 
     /// Store the settlement contract address (admin only).
@@ -642,12 +767,6 @@ impl CalloraVault {
         metadata
     }
 
-    pub fn get_metadata(env: Env, offering_id: String) -> Option<String> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Metadata(offering_id))
-    }
-
     pub fn update_metadata(
         env: Env,
         caller: Address,
@@ -677,6 +796,19 @@ impl CalloraVault {
             (old, metadata.clone()),
         );
         metadata
+    }
+
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    fn require_authorized_deduct_caller(env: Env, caller: &Address) {
+        let meta = Self::get_meta(env.clone());
+        let auth = match &meta.authorized_caller {
+            Some(ac) => caller == ac || *caller == meta.owner,
+            None => *caller == meta.owner,
+        };
+        assert!(auth, "unauthorized caller");
     }
 
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
@@ -768,3 +900,6 @@ mod test;
 
 #[cfg(test)]
 mod test_init_hardening;
+
+#[cfg(test)]
+mod test_views;
