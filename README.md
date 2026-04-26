@@ -52,11 +52,18 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `batch_deduct(caller, items)` — Atomically process multiple deductions.
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
 - `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
-- `set_price(caller, api_id, price)` — Owner-only; configure the price per call for `api_id`.
-- `get_price(api_id)` — returns `Option<i128>` with the configured price per call for `api_id`.
 - `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
 - `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
-- `is_paused()` — View function; returns current pause state for off-chain monitoring.
+- `is_paused()` — View; returns current pause state.
+- `get_meta()` — View; returns `VaultMeta` (owner, balance, authorized_caller, min_deposit). Panics if uninitialized.
+- `balance()` — View; returns current USDC balance. Panics if uninitialized.
+- `get_admin()` — View; returns current admin address. Panics if uninitialized.
+- `get_usdc_token()` — View; returns USDC token contract address. Panics if uninitialized.
+- `get_max_deduct()` — View; returns configured max single-deduction (defaults to `i128::MAX`).
+- `get_settlement()` — View; returns settlement address. Panics if not set.
+- `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
+- `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.
+- `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
 
 ## Architecture & Flow
 
