@@ -246,7 +246,8 @@ impl CalloraVault {
 
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
         caller.require_auth();
-        Self::require_owner(env.clone(), caller);
+        Self::require_owner(env.clone(), caller.clone());
+
         match depositor {
             Some(d) => {
                 let mut list: Vec<Address> = env
@@ -297,15 +298,15 @@ impl CalloraVault {
     pub fn set_authorized_caller(env: Env, new_caller: Option<Address>) {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
-        let old = meta.authorized_caller.clone();
-        meta.authorized_caller = new_caller.clone();
+        let old_authorized_caller = meta.authorized_caller.clone();
+        meta.authorized_caller = caller.clone();
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (
                 Symbol::new(&env, "set_authorized_caller"),
                 meta.owner.clone(),
             ),
-            (old, new_caller),
+            (old_authorized_caller, caller),
         );
     }
 
@@ -358,6 +359,7 @@ impl CalloraVault {
             .expect("vault not initialized");
         let usdc = token::Client::new(&env, &usdc_addr);
         usdc.transfer(&caller, &env.current_contract_address(), &amount);
+        let mut meta = Self::get_meta(env.clone());
         meta.balance = meta
             .balance
             .checked_add(amount)
@@ -381,9 +383,12 @@ impl CalloraVault {
         Self::require_not_paused(env.clone());
         caller.require_auth();
         assert!(amount > 0, "amount must be positive");
-        let max_d = Self::get_max_deduct_internal(env.clone());
-        assert!(amount <= max_d, "deduct amount exceeds max_deduct");
         Self::require_authorized_deduct_caller(env.clone(), &caller);
+        let max_d = Self::get_max_deduct(env.clone());
+        assert!(amount <= max_d, "deduct amount exceeds max_deduct");
+        let meta = Self::get_meta(env.clone());
+        assert!(meta.balance >= amount, "insufficient balance");
+        let settlement = Self::require_settlement(&env);
         let mut meta = Self::get_meta(env.clone());
         assert!(meta.balance >= amount, "insufficient balance");
         let settlement = Self::require_settlement(&env);
@@ -417,11 +422,11 @@ impl CalloraVault {
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<DeductItem>) -> i128 {
         Self::require_not_paused(env.clone());
         caller.require_auth();
+        Self::require_authorized_deduct_caller(env.clone(), &caller);
         let n = items.len();
         assert!(n > 0, "batch_deduct requires at least one item");
         assert!(n <= MAX_BATCH_SIZE, "batch too large");
-        let max_d = Self::get_max_deduct_internal(env.clone());
-        Self::require_authorized_deduct_caller(env.clone(), &caller);
+        let max_d = Self::get_max_deduct(env.clone());
         let mut meta = Self::get_meta(env.clone());
         let mut running = meta.balance;
         let mut total: i128 = 0;
@@ -437,6 +442,7 @@ impl CalloraVault {
                 .unwrap_or_else(|| panic!("total overflow"));
         }
         let settlement = Self::require_settlement(&env);
+
         meta.balance = running;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         let ut: Address = env
@@ -445,14 +451,14 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .unwrap();
         Self::transfer_funds(&env, &ut, &settlement, total);
-        // Emit one deduct event per item after the state is committed.
-        let mut running_balance = meta.balance + total; // start from pre-deduct balance
+
+        meta.balance = running;
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         for item in items.iter() {
-            running_balance -= item.amount;
-            let rid = item.request_id.clone().unwrap_or(Symbol::new(&env, ""));
+            let rid = item.request_id.unwrap_or(Symbol::new(&env, ""));
             env.events().publish(
                 (Symbol::new(&env, "deduct"), caller.clone(), rid),
-                (item.amount, running_balance),
+                (item.amount, meta.balance),
             );
         }
         meta.balance
@@ -519,10 +525,7 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
-            WithdrawEventData {
-                amount,
-                new_balance: meta.balance,
-            },
+            (amount, meta.balance),
         );
         meta.balance
     }
@@ -546,10 +549,7 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
-            WithdrawEventData {
-                amount,
-                new_balance: meta.balance,
-            },
+            (amount, meta.balance),
         );
         meta.balance
     }
@@ -690,13 +690,6 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("settlement address not set"))
     }
 
-    fn get_max_deduct_internal(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
-    }
-
     fn require_not_paused(env: Env) {
         assert!(!Self::is_paused(env), "vault is paused");
     }
@@ -712,6 +705,22 @@ impl CalloraVault {
             *caller == admin || *caller == meta.owner,
             "unauthorized: caller is not admin or owner"
         );
+    }
+
+    pub fn add_address(env: Env, caller: Address, depositor: Address) {
+        Self::set_allowed_depositor(env.clone(), caller.clone(), Some(depositor.clone()));
+        env.events()
+            .publish((Symbol::new(&env, "allowlist_add"), caller, depositor), ());
+    }
+
+    pub fn get_allowlist(env: Env) -> Vec<Address> {
+        Self::get_allowed_depositors(env)
+    }
+
+    pub fn clear_all(env: Env, caller: Address) {
+        Self::clear_allowed_depositors(env.clone(), caller.clone());
+        env.events()
+            .publish((Symbol::new(&env, "allowlist_clear"), caller), ());
     }
 }
 
