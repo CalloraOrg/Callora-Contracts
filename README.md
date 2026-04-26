@@ -46,15 +46,24 @@ Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. 
 
 The primary storage and metering contract. Holds USDC on behalf of API consumers and deducts balances on every metered call.
 
-- `init(owner, usdc_token, initial_balance, authorized_caller, min_deposit, revenue_pool, max_deduct)` â€” Initialize with owner and optional configuration. `initial_balance` defaults to `0`; when `> 0` the vault verifies the on-ledger USDC balance covers it. `min_deposit` defaults to `1` and must be `> 0`.
-- `deposit(caller, amount)` â€” Owner or allowed depositor increases ledger balance.
-- `deduct(caller, amount, request_id)` - Decrease balance for an API call; requires `set_settlement()` to be configured. When `request_id` is provided it is treated as a single-use idempotency key and duplicate values are rejected.
-- `batch_deduct(caller, items)` - Atomically process multiple deductions. Duplicate `request_id` values, including duplicates inside the same batch, are rejected before any balance or transfer effect.
-- `set_allowed_depositor(caller, depositor)` â€” Owner-only; delegate deposit rights.
-- `set_authorized_caller(caller)` - Owner-only; set or clear the address permitted to trigger deductions, with an audit event that includes both old and new values.
-- `pause(caller)` â€” Admin/owner-only; activate circuit-breaker to block deposits and deductions.
-- `unpause(caller)` â€” Admin/owner-only; deactivate circuit-breaker to restore operations.
-- `is_paused()` â€” View function; returns current pause state for off-chain monitoring.
+- `init(owner, usdc_token, initial_balance, authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration. `initial_balance` defaults to `0`; when `> 0` the vault verifies the on-ledger USDC balance covers it. `min_deposit` defaults to `1` and must be `> 0`.
+- `deposit(caller, amount)` — Owner or allowed depositor increases ledger balance.
+- `deduct(caller, amount, request_id)` — Decrease balance for an API call; routes funds to settlement.
+- `batch_deduct(caller, items)` — Atomically process multiple deductions.
+- `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
+- `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
+- `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
+- `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
+- `is_paused()` — View; returns current pause state.
+- `get_meta()` — View; returns `VaultMeta` (owner, balance, authorized_caller, min_deposit). Panics if uninitialized.
+- `balance()` — View; returns current USDC balance. Panics if uninitialized.
+- `get_admin()` — View; returns current admin address. Panics if uninitialized.
+- `get_usdc_token()` — View; returns USDC token contract address. Panics if uninitialized.
+- `get_max_deduct()` — View; returns configured max single-deduction (defaults to `i128::MAX`).
+- `get_settlement()` — View; returns settlement address. Panics if not set.
+- `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
+- `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.
+- `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
 
 ## Architecture & Flow
 
