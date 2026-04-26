@@ -315,7 +315,7 @@ impl RevenuePool {
         let mut total_amount: i128 = 0;
         for payment in payments.iter() {
             let (_, amount) = payment;
-            
+
             // Validate each amount is strictly positive
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
@@ -346,7 +346,7 @@ impl RevenuePool {
             let (to, amount) = payment;
             Self::validate_recipient(&to, &contract_address);
             usdc.transfer(&contract_address, &to, &amount);
-            
+
             // Emit event for this leg of the batch
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);
