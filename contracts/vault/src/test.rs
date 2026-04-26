@@ -456,7 +456,6 @@ fn owner_deposit_increases_balance_and_emits_event() {
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
     let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "deposit"));
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, owner);
 
     let (amount, new_balance): (i128, i128) = deposit_event.2.into_val(&env);
@@ -560,7 +559,6 @@ fn deposit_event_schema_alignment() {
         Symbol::new(&env, "deposit"),
         "topic[0] must be Symbol(\"deposit\")"
     );
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, owner, "topic[1] must be the depositor address");
 
     // Data must decode as (amount: i128, new_balance: i128)
@@ -1295,6 +1293,8 @@ fn deduct_authorized_caller_succeeds() {
         &None,
         &None,
     );
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
     let remaining = client.deduct(&authorized, &100, &None);
     assert_eq!(remaining, 900);
 }
@@ -4203,7 +4203,7 @@ mod fuzz {
         env.mock_all_auths();
 
         let owner = Address::generate(&env);
-        let caller = Address::generate(&env);
+        let _caller = Address::generate(&env);
         let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
         let (vault_addr, client) = create_vault(&env);
 
@@ -4234,10 +4234,10 @@ mod fuzz {
             }
             let total: i128 = items.iter().map(|i| i.amount).sum();
             if before >= total {
-                client.batch_deduct(&caller, &items);
+                client.batch_deduct(&owner, &items);
                 assert_eq!(client.balance(), before - total);
             } else {
-                let _ = client.try_batch_deduct(&caller, &items);
+                let _ = client.try_batch_deduct(&owner, &items);
                 assert_eq!(client.balance(), before, "atomic rollback failed");
             }
             assert!(client.balance() >= 0);
@@ -4251,7 +4251,7 @@ mod fuzz {
         env.mock_all_auths();
 
         let owner = Address::generate(&env);
-        let caller = Address::generate(&env);
+        let _caller = Address::generate(&env);
         let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
         let (vault_addr, client) = create_vault(&env);
         let max_d: i128 = 100;
@@ -4287,11 +4287,11 @@ mod fuzz {
             ];
             if exceed {
                 assert!(
-                    client.try_batch_deduct(&caller, &items).is_err(),
+                    client.try_batch_deduct(&owner, &items).is_err(),
                     "item exceeding max_deduct must be rejected"
                 );
             } else if client.balance() >= amt {
-                client.batch_deduct(&caller, &items);
+                client.batch_deduct(&owner, &items);
                 assert!(client.balance() >= 0);
             }
         }
