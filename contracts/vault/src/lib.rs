@@ -468,6 +468,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .unwrap();
+        let settlement = Self::require_settlement(&env);
         Self::transfer_funds(&env, &ut, &settlement, amount);
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
@@ -516,6 +517,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .unwrap();
+        let settlement = Self::require_settlement(&env);
         Self::transfer_funds(&env, &ut, &settlement, total);
 
         meta.balance = running;

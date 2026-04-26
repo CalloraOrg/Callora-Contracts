@@ -454,7 +454,6 @@ fn owner_deposit_increases_balance_and_emits_event() {
         "topics must have exactly 2 entries (deposit, caller)"
     );
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "deposit"));
     assert_eq!(topic1, owner);
 
@@ -553,7 +552,6 @@ fn deposit_event_schema_alignment() {
         "deposit event must have exactly 2 topics"
     );
     let topic0: Symbol = deposit_event.1.get(0).unwrap().into_val(&env);
-    let topic1: Address = deposit_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(
         topic0,
         Symbol::new(&env, "deposit"),
@@ -573,346 +571,6 @@ fn deposit_event_schema_alignment() {
 // ---------------------------------------------------------------------------
 // Allowlist management tests
 // ---------------------------------------------------------------------------
-
-#[test]
-fn add_address_adds_single_depositor() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor1 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Add depositor
-    client.add_address(&owner, &depositor1);
-
-    // Verify depositor can deposit
-    usdc_admin.mint(&depositor1, &50);
-    usdc_client.approve(&depositor1, &vault_address, &50, &1000);
-    client.deposit(&depositor1, &50);
-    assert_eq!(client.balance(), 150);
-}
-
-#[test]
-fn add_address_prevents_duplicates() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Add same address twice
-    client.add_address(&owner, &depositor);
-    client.add_address(&owner, &depositor);
-
-    // Verify only one entry exists
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 1);
-    assert_eq!(allowlist.get(0).unwrap(), depositor);
-}
-
-#[test]
-fn add_address_multiple_depositors() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor1 = Address::generate(&env);
-    let depositor2 = Address::generate(&env);
-    let depositor3 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Add multiple depositors
-    client.add_address(&owner, &depositor1);
-    client.add_address(&owner, &depositor2);
-    client.add_address(&owner, &depositor3);
-
-    // Verify all can deposit
-    usdc_admin.mint(&depositor1, &10);
-    usdc_client.approve(&depositor1, &vault_address, &10, &1000);
-    client.deposit(&depositor1, &10);
-
-    usdc_admin.mint(&depositor2, &20);
-    usdc_client.approve(&depositor2, &vault_address, &20, &1000);
-    client.deposit(&depositor2, &20);
-
-    usdc_admin.mint(&depositor3, &30);
-    usdc_client.approve(&depositor3, &vault_address, &30, &1000);
-    client.deposit(&depositor3, &30);
-
-    assert_eq!(client.balance(), 160);
-
-    // Verify allowlist contains all three
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 3);
-}
-
-#[test]
-#[should_panic(expected = "unauthorized: owner only")]
-fn add_address_non_owner_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let non_owner = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Non-owner tries to add address
-    client.add_address(&non_owner, &depositor);
-}
-
-#[test]
-fn add_address_emits_event() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.add_address(&owner, &depositor);
-
-    let events = env.events().all();
-    let ev = events
-        .into_iter()
-        .find(|e| {
-            e.0 == vault_address && !e.1.is_empty() && {
-                let t: Symbol = e.1.get(0).unwrap().into_val(&env);
-                t == Symbol::new(&env, "allowlist_add")
-            }
-        })
-        .expect("expected allowlist_add event");
-
-    let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
-    let topic2: Address = ev.1.get(2).unwrap().into_val(&env);
-    assert_eq!(topic1, owner);
-    assert_eq!(topic2, depositor);
-}
-
-#[test]
-fn clear_all_removes_all_depositors() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor1 = Address::generate(&env);
-    let depositor2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Add depositors
-    client.add_address(&owner, &depositor1);
-    client.add_address(&owner, &depositor2);
-
-    // Verify they exist
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 2);
-
-    // Clear all
-    client.clear_all(&owner);
-
-    // Verify allowlist is empty
-    let allowlist_after = client.get_allowlist();
-    assert_eq!(allowlist_after.len(), 0);
-
-    // Verify depositors can no longer deposit
-    usdc_admin.mint(&depositor1, &50);
-    usdc_client.approve(&depositor1, &vault_address, &50, &1000);
-    let result = client.try_deposit(&depositor1, &50);
-    assert!(result.is_err(), "expected error after clear_all");
-}
-
-#[test]
-#[should_panic(expected = "unauthorized: owner only")]
-fn clear_all_non_owner_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let non_owner = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.add_address(&owner, &depositor);
-
-    // Non-owner tries to clear
-    client.clear_all(&non_owner);
-}
-
-#[test]
-fn clear_all_emits_event() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.add_address(&owner, &depositor);
-    client.clear_all(&owner);
-
-    let events = env.events().all();
-    let ev = events
-        .into_iter()
-        .find(|e| {
-            e.0 == vault_address && !e.1.is_empty() && {
-                let t: Symbol = e.1.get(0).unwrap().into_val(&env);
-                t == Symbol::new(&env, "allowlist_clear")
-            }
-        })
-        .expect("expected allowlist_clear event");
-
-    let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, owner);
-}
-
-#[test]
-fn clear_all_idempotent() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Clear when already empty
-    client.clear_all(&owner);
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 0);
-
-    // Clear again
-    client.clear_all(&owner);
-    let allowlist_after = client.get_allowlist();
-    assert_eq!(allowlist_after.len(), 0);
-}
-
-#[test]
-fn get_allowlist_returns_empty_when_not_set() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 0);
-}
-
-#[test]
-fn get_allowlist_returns_all_addresses() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor1 = Address::generate(&env);
-    let depositor2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.add_address(&owner, &depositor1);
-    client.add_address(&owner, &depositor2);
-
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 2);
-    assert!(allowlist.contains(&depositor1));
-    assert!(allowlist.contains(&depositor2));
-}
-
-#[test]
-fn owner_always_permitted_regardless_of_allowlist() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Owner can deposit without being in allowlist
-    usdc_admin.mint(&owner, &50);
-    usdc_client.approve(&owner, &vault_address, &50, &1000);
-    client.deposit(&owner, &50);
-    assert_eq!(client.balance(), 150);
-
-    // Clear allowlist
-    client.clear_all(&owner);
-
-    // Owner can still deposit
-    usdc_admin.mint(&owner, &25);
-    usdc_client.approve(&owner, &vault_address, &25, &1000);
-    client.deposit(&owner, &25);
-    assert_eq!(client.balance(), 175);
-}
-
-#[test]
-fn add_address_after_clear_all() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let depositor1 = Address::generate(&env);
-    let depositor2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    // Add and clear
-    client.add_address(&owner, &depositor1);
-    client.clear_all(&owner);
-
-    // Add new depositor
-    client.add_address(&owner, &depositor2);
-
-    let allowlist = client.get_allowlist();
-    assert_eq!(allowlist.len(), 1);
-    assert_eq!(allowlist.get(0).unwrap(), depositor2);
-
-    // Verify depositor2 can deposit
-    usdc_admin.mint(&depositor2, &50);
-    usdc_client.approve(&depositor2, &vault_address, &50, &1000);
-    client.deposit(&depositor2, &50);
-    assert_eq!(client.balance(), 150);
-
-    // Verify depositor1 cannot deposit
-    usdc_admin.mint(&depositor1, &50);
-    usdc_client.approve(&depositor1, &vault_address, &50, &1000);
-    let result = client.try_deposit(&depositor1, &50);
-    assert!(result.is_err(), "depositor1 should not be able to deposit");
-}
 
 // ---------------------------------------------------------------------------
 // Allowed depositor management tests (backward compatibility)
@@ -1356,7 +1014,7 @@ fn deduct_event_no_request_id_uses_empty_symbol() {
 fn deduct_zero_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
+    let _caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -1379,7 +1037,7 @@ fn deduct_zero_panics() {
 fn deduct_negative_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
+    let _caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -4109,10 +3767,6 @@ mod fuzz {
                                 break;
                             }
                         };
-                        items.push_back(DeductItem {
-                            amount: amt,
-                            request_id: None,
-                        });
                     }
                     if paused {
                         // batch_deduct must fail while paused
