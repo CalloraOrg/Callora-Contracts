@@ -1,4 +1,4 @@
-# Callora Contracts
+﻿# Callora Contracts
 
 Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) and balance deduction for pay-per-call settlement.
 
@@ -34,13 +34,13 @@ cargo build --target wasm32-unknown-unknown --release -p callora-settlement
 # 4. Or build all contracts and verify WASM size limits in one step
 ./scripts/check-wasm-size.sh
 
-# 5. Line-coverage check (must stay ≥ 95%)
+# 5. Line-coverage check (must stay â‰¥ 95%)
 ./scripts/coverage.sh
 ```
 
-Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` â€” pass the one you want via `-p`.
 
-## What’s included
+## Whatâ€™s included
 
 ### 1. `callora-vault`
 
@@ -134,25 +134,25 @@ The project enforces a **minimum of 95% line coverage** on every push via GitHub
 
 ```
 callora-contracts/
-├── .github/workflows/
-│   ├── ci.yml              # CI: workspace fmt gate, clippy, test, WASM build
-│   └── coverage.yml        # CI: enforces 95% coverage on every push
-├── contracts/
-│   ├── vault/              # Primary storage and metering
-│   ├── revenue_pool/       # Simple revenue distribution
-│   └── settlement/         # Advanced balance tracking
-├── scripts/
-│   ├── coverage.sh         # Local coverage runner
-│   └── check-wasm-size.sh  # WASM size verification
-├── docs/
-│   ├── interfaces/                        # JSON contract interface summaries
-│   ├── ACCESS_CONTROL.md                  # Role-based access control overview
-│   └── CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
-├── BENCHMARKS.md           # Gas/cost notes
-├── EVENT_SCHEMA.md         # Event topics and payloads
-├── UPGRADE.md              # Upgrade and migration path
-├── SECURITY.md             # Security checklist
-└── tarpaulin.toml          # cargo-tarpaulin configuration
+â”œâ”€â”€ .github/workflows/
+â”‚   â”œâ”€â”€ ci.yml              # CI: workspace fmt gate, clippy, test, WASM build
+â”‚   â””â”€â”€ coverage.yml        # CI: enforces 95% coverage on every push
+â”œâ”€â”€ contracts/
+â”‚   â”œâ”€â”€ vault/              # Primary storage and metering
+â”‚   â”œâ”€â”€ revenue_pool/       # Simple revenue distribution
+â”‚   â””â”€â”€ settlement/         # Advanced balance tracking
+â”œâ”€â”€ scripts/
+â”‚   â”œâ”€â”€ coverage.sh         # Local coverage runner
+â”‚   â””â”€â”€ check-wasm-size.sh  # WASM size verification
+â”œâ”€â”€ docs/
+â”‚   â”œâ”€â”€ interfaces/                        # JSON contract interface summaries
+â”‚   â”œâ”€â”€ ACCESS_CONTROL.md                  # Role-based access control overview
+â”‚   â””â”€â”€ CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
+â”œâ”€â”€ BENCHMARKS.md           # Gas/cost notes
+â”œâ”€â”€ EVENT_SCHEMA.md         # Event topics and payloads
+â”œâ”€â”€ UPGRADE.md              # Upgrade and migration path
+â”œâ”€â”€ SECURITY.md             # Security checklist
+â””â”€â”€ tarpaulin.toml          # cargo-tarpaulin configuration
 ```
 
 ## Contract interface summaries
@@ -187,3 +187,4 @@ See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit r
 ---
 
 Part of [Callora](https://github.com/CalloraOrg).
+
