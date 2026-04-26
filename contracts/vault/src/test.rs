@@ -3950,6 +3950,511 @@ mod fuzz {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Issue #234 — extended deterministic fuzz coverage
+    //
+    // New invariants explicitly validated here (building on existing suite):
+    //   A. Strict alternating deposit→deduct sequence keeps balance non-negative
+    //      and in sync with a local simulator at every step.
+    //   B. A batch_deduct-heavy alternating driver validates atomicity and the
+    //      cumulative-total guard across many random batch sizes.
+    //   C. pause() mid-sequence blocks all mutating ops; unpause() restores them;
+    //      balance stays consistent with the simulator throughout.
+    //   D. max_deduct is enforced per-item in every batch item of an alternating
+    //      sequence; over-limit items are rejected atomically without corrupting
+    //      the simulator balance.
+    //   E. Single-stroop boundary — min_deposit=1 / max_deduct=1 exercises the
+    //      tightest possible constraint across many alternating steps.
+    //   F. Two independent authorized callers interleave deductions; the combined
+    //      simulator still matches the contract balance after every step.
+    // -----------------------------------------------------------------------
+
+    /// A. Strict alternating deposit → single-deduct sequence.
+    ///
+    /// # Invariants under test
+    /// - After every deposit: `balance == sim` and `balance >= 0`.
+    /// - After every deduct (when balance is sufficient): `balance == sim` and
+    ///   `balance >= 0`.
+    /// - A deduct that would go negative is rejected; balance and sim are unchanged.
+    #[test]
+    fn fuzz_strict_alternating_deposit_deduct() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+        let max_d: i128 = 500;
+
+        // Pre-fund so init succeeds with initial_balance = 1_000.
+        usdc_admin.mint(&vault_addr, &1_000);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(1_000),
+            &Some(caller.clone()),
+            &Some(1),    // min_deposit = 1
+            &None,
+            &Some(max_d),
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xA1B2_C3D4);
+        let mut sim: i128 = 1_000;
+
+        for step in 0..400_usize {
+            // Even steps: deposit; odd steps: attempt single deduct.
+            if step % 2 == 0 {
+                let amount: i128 = rng.gen_range(1..=max_d);
+                usdc_admin.mint(&owner, &amount);
+                sim = sim
+                    .checked_add(amount)
+                    .unwrap_or_else(|| panic!("sim overflow at step {step}"));
+                client.deposit(&owner, &amount);
+            } else {
+                let amount: i128 = rng.gen_range(1..=max_d);
+                if sim >= amount {
+                    sim -= amount;
+                    client.deduct(&caller, &amount, &None);
+                } else {
+                    // Must be rejected; balance and sim are unchanged.
+                    assert!(
+                        client.try_deduct(&caller, &amount, &None).is_err(),
+                        "deduct exceeding balance must fail at step {step}"
+                    );
+                }
+            }
+
+            // Invariant assertions after every step.
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+    }
+
+    /// B. Alternating batch_deduct-heavy sequence.
+    ///
+    /// # Invariants under test
+    /// - Each batch is pre-validated against the local simulator.
+    /// - A batch whose cumulative total exceeds the current balance is rejected
+    ///   atomically: balance and sim are restored to the pre-call value.
+    /// - After every call: `balance == sim` and `balance >= 0`.
+    #[test]
+    fn fuzz_alternating_batch_deduct_heavy() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+        let max_d: i128 = 200;
+
+        usdc_admin.mint(&vault_addr, &2_000);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(2_000),
+            &Some(caller.clone()),
+            &Some(1),
+            &None,
+            &Some(max_d),
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xB3C4_D5E6);
+        let mut sim: i128 = 2_000;
+
+        for step in 0..300_usize {
+            if step % 3 == 0 {
+                // Deposit once every third step to keep the vault funded.
+                let amount: i128 = rng.gen_range(1..=max_d);
+                usdc_admin.mint(&owner, &amount);
+                sim += amount;
+                client.deposit(&owner, &amount);
+            } else {
+                // Build a batch of 1–5 items, each within max_d.
+                let n: usize = rng.gen_range(1..=5_usize);
+                let mut items = soroban_sdk::Vec::new(&env);
+                let mut batch_total: i128 = 0;
+                let mut overflow = false;
+                for _ in 0..n {
+                    let amt: i128 = rng.gen_range(1..=max_d);
+                    items.push_back(DeductItem {
+                        amount: amt,
+                        request_id: None,
+                    });
+                    batch_total = match batch_total.checked_add(amt) {
+                        Some(v) => v,
+                        None => {
+                            overflow = true;
+                            break;
+                        }
+                    };
+                }
+                if overflow {
+                    // Overflow means batch total overflowed i128 — must fail.
+                    let before = client.balance();
+                    let _ = client.try_batch_deduct(&caller, &items);
+                    assert_eq!(
+                        client.balance(),
+                        before,
+                        "overflow batch must not change balance at step {step}"
+                    );
+                } else if sim >= batch_total {
+                    sim -= batch_total;
+                    client.batch_deduct(&caller, &items);
+                } else {
+                    // Insufficient balance — must fail atomically.
+                    let before = client.balance();
+                    let _ = client.try_batch_deduct(&caller, &items);
+                    assert_eq!(
+                        client.balance(),
+                        before,
+                        "underfunded batch must not change balance at step {step}"
+                    );
+                }
+            }
+
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+    }
+
+    /// C. Pause circuit-breaker under alternating deposit / deduct sequence.
+    ///
+    /// # Invariants under test
+    /// - While paused: every deposit and deduct attempt is rejected; balance
+    ///   and sim remain unchanged.
+    /// - After unpause: operations resume and balance tracks the simulator.
+    /// - pause / unpause themselves never alter VaultMeta.balance.
+    #[test]
+    fn fuzz_pause_under_alternating_ops() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+        let max_d: i128 = 300;
+
+        usdc_admin.mint(&vault_addr, &5_000);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(5_000),
+            &Some(caller.clone()),
+            &Some(1),
+            &None,
+            &Some(max_d),
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xC5D6_E7F8);
+        let mut sim: i128 = 5_000;
+        let mut paused = false;
+
+        for step in 0..350_usize {
+            // Every ~10 steps, toggle the pause state.
+            if step % 10 == 9 {
+                if paused {
+                    client.unpause(&owner);
+                    paused = false;
+                } else {
+                    client.pause(&owner);
+                    paused = true;
+                }
+                // pause / unpause must not alter balance.
+                assert_eq!(
+                    client.balance(),
+                    sim,
+                    "pause/unpause must not change balance at step {step}"
+                );
+                continue;
+            }
+
+            if step % 2 == 0 {
+                // Even step: attempt deposit.
+                let amount: i128 = rng.gen_range(1..=max_d);
+                if paused {
+                    assert!(
+                        client.try_deposit(&owner, &amount).is_err(),
+                        "deposit must fail while paused at step {step}"
+                    );
+                    // sim unchanged, no mint needed.
+                } else {
+                    usdc_admin.mint(&owner, &amount);
+                    sim += amount;
+                    client.deposit(&owner, &amount);
+                }
+            } else {
+                // Odd step: attempt single deduct.
+                let amount: i128 = rng.gen_range(1..=max_d);
+                if paused {
+                    assert!(
+                        client.try_deduct(&caller, &amount, &None).is_err(),
+                        "deduct must fail while paused at step {step}"
+                    );
+                } else if sim >= amount {
+                    sim -= amount;
+                    client.deduct(&caller, &amount, &None);
+                } else {
+                    assert!(
+                        client.try_deduct(&caller, &amount, &None).is_err(),
+                        "insufficient deduct must fail at step {step}"
+                    );
+                }
+            }
+
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+
+        // Leave vault unpaused for clean teardown.
+        if paused {
+            client.unpause(&owner);
+        }
+    }
+
+    /// D. max_deduct enforced per-item in alternating batch sequence.
+    ///
+    /// # Invariants under test
+    /// - Any batch that contains even one item exceeding max_deduct is rejected
+    ///   atomically regardless of how many other items are within bounds.
+    /// - After rejection: `balance == sim` and `balance >= 0`.
+    /// - Batches fully within bounds: `balance == sim - batch_total`.
+    #[test]
+    fn fuzz_max_deduct_enforced_alternating_batch() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+        let max_d: i128 = 150;
+
+        usdc_admin.mint(&vault_addr, &10_000);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(10_000),
+            &Some(caller.clone()),
+            &Some(1),
+            &None,
+            &Some(max_d),
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xD7E8_F901);
+        let mut sim: i128 = 10_000;
+
+        for step in 0..300_usize {
+            if step % 4 == 0 {
+                // Deposit every fourth step.
+                let amount: i128 = rng.gen_range(1..=max_d);
+                usdc_admin.mint(&owner, &amount);
+                sim += amount;
+                client.deposit(&owner, &amount);
+            } else {
+                // Build a batch; randomly inject one over-limit item ~25 % of the time.
+                let n: usize = rng.gen_range(1..=4_usize);
+                let inject_bad = rng.gen_bool(0.25);
+                let inject_pos: usize = rng.gen_range(0..n);
+                let mut items = soroban_sdk::Vec::new(&env);
+                let mut batch_total: i128 = 0;
+                let mut has_over = false;
+
+                for i in 0..n {
+                    let amt: i128 = if inject_bad && i == inject_pos {
+                        has_over = true;
+                        // Amount strictly above max_d.
+                        rng.gen_range(max_d + 1..=max_d * 2)
+                    } else {
+                        rng.gen_range(1..=max_d)
+                    };
+                    items.push_back(DeductItem {
+                        amount: amt,
+                        request_id: None,
+                    });
+                    batch_total = batch_total.saturating_add(amt);
+                }
+
+                let before = client.balance();
+                if has_over {
+                    // Must be rejected atomically.
+                    assert!(
+                        client.try_batch_deduct(&caller, &items).is_err(),
+                        "batch with over-limit item must fail at step {step}"
+                    );
+                    assert_eq!(
+                        client.balance(),
+                        before,
+                        "atomic reject must not change balance at step {step}"
+                    );
+                    // sim is unchanged.
+                } else if sim >= batch_total {
+                    sim -= batch_total;
+                    client.batch_deduct(&caller, &items);
+                } else {
+                    let _ = client.try_batch_deduct(&caller, &items);
+                    assert_eq!(
+                        client.balance(),
+                        before,
+                        "underfunded batch must not change balance at step {step}"
+                    );
+                }
+            }
+
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+    }
+
+    /// E. Single-stroop boundary — min_deposit = 1, max_deduct = 1.
+    ///
+    /// # Invariants under test
+    /// - The tightest possible constraint: every deposit and deduct touches
+    ///   exactly 1 stroop.
+    /// - Balance and simulator remain in sync and non-negative throughout.
+    #[test]
+    fn fuzz_single_stroop_boundary() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+
+        usdc_admin.mint(&vault_addr, &500);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(500),
+            &Some(caller.clone()),
+            &Some(1), // min_deposit = 1
+            &None,
+            &Some(1), // max_deduct = 1
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xE9FA_0B1C);
+        let mut sim: i128 = 500;
+
+        for step in 0..600_usize {
+            // Alternate strictly: even → deposit 1, odd → deduct 1.
+            if step % 2 == 0 {
+                usdc_admin.mint(&owner, &1);
+                sim += 1;
+                client.deposit(&owner, &1);
+            } else if sim >= 1 {
+                sim -= 1;
+                client.deduct(&caller, &1, &None);
+            } else {
+                // Balance exhausted: deduct must fail.
+                assert!(
+                    client.try_deduct(&caller, &1, &None).is_err(),
+                    "deduct must fail when balance=0 at step {step}"
+                );
+            }
+
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+        // suppress unused warning for rng (used for seeding only in this test)
+        let _ = rng.gen_range(0..1_i32);
+    }
+
+    /// F. Two authorized callers interleave deductions (multi-caller simulation).
+    ///
+    /// # Invariants under test
+    /// - The owner (caller_a) and a stored authorized_caller (caller_b) both
+    ///   issue deductions in random order; a single shared simulator tracks
+    ///   the combined effect.
+    /// - After every operation: `balance == sim` and `balance >= 0`.
+    #[test]
+    fn fuzz_multicaller_interleaved_deductions() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+        let caller_b = Address::generate(&env);
+        let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
+        let (vault_addr, client) = create_vault(&env);
+        let max_d: i128 = 250;
+
+        usdc_admin.mint(&vault_addr, &8_000);
+        client.init(
+            &owner,
+            &usdc_addr,
+            &Some(8_000),
+            &Some(caller_b.clone()), // authorized_caller = caller_b
+            &Some(1),
+            &None,
+            &Some(max_d),
+        );
+        let settlement = Address::generate(&env);
+        client.set_settlement(&owner, &settlement);
+
+        let mut rng = StdRng::seed_from_u64(0xF1A2_B3C4);
+        let mut sim: i128 = 8_000;
+
+        for step in 0..400_usize {
+            // op: 0=deposit, 1=deduct by owner, 2=deduct by caller_b
+            let op: u8 = rng.gen_range(0..3);
+
+            match op {
+                0 => {
+                    let amount: i128 = rng.gen_range(1..=max_d);
+                    usdc_admin.mint(&owner, &amount);
+                    sim += amount;
+                    client.deposit(&owner, &amount);
+                }
+                1 => {
+                    let amount: i128 = rng.gen_range(1..=max_d);
+                    if sim >= amount {
+                        sim -= amount;
+                        client.deduct(&owner, &amount, &None);
+                    } else {
+                        assert!(
+                            client.try_deduct(&owner, &amount, &None).is_err(),
+                            "owner deduct must fail when balance insufficient at step {step}"
+                        );
+                    }
+                }
+                2 => {
+                    let amount: i128 = rng.gen_range(1..=max_d);
+                    if sim >= amount {
+                        sim -= amount;
+                        client.deduct(&caller_b, &amount, &None);
+                    } else {
+                        assert!(
+                            client.try_deduct(&caller_b, &amount, &None).is_err(),
+                            "caller_b deduct must fail when balance insufficient at step {step}"
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            let on_chain = client.balance();
+            assert_eq!(on_chain, sim, "sim mismatch at step {step}");
+            assert!(on_chain >= 0, "balance negative at step {step}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
