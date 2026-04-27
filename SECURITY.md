@@ -134,7 +134,7 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - [ ] Vault balance accounting verified
 - [ ] Funds cannot be locked permanently
 - [ ] Minimum deposit requirements enforced
-- [ ] Maximum deduction limits enforced
+- [x] Maximum deduction limits enforced (`get_max_deduct` / `set_max_deduct`) with explicit positive-value validation and dedicated unit tests.
 - [x] Revenue pool transfers validated
 - [x] Settlement developer address required when routing to specific developer.
 - [x] Settlement developer address must be None when routing to global pool.

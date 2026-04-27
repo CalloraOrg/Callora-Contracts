@@ -60,6 +60,7 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `get_admin()` — View; returns current admin address. Panics if uninitialized.
 - `get_usdc_token()` — View; returns USDC token contract address. Panics if uninitialized.
 - `get_max_deduct()` — View; returns configured max single-deduction (defaults to `i128::MAX`).
+- `set_max_deduct(max_deduct)` — Owner-only; updates max single-deduction limit. Requires `max_deduct > 0`.
 - `get_settlement()` — View; returns settlement address. Panics if not set.
 - `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
 - `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.

@@ -746,6 +746,7 @@ after the matching `payment_received` event.
 | `admin_accepted`         | vault           | `accept_admin()`                         |
 | `set_revenue_pool`       | vault           | `set_revenue_pool(Some(addr))`           |
 | `clear_revenue_pool`     | vault           | `set_revenue_pool(None)`                 |
+| `set_max_deduct`         | vault           | `set_max_deduct()`                       |
 | `set_authorized_caller` | vault           | `set_authorized_caller()`                |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |

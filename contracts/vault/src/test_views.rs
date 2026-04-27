@@ -128,6 +128,27 @@ fn get_max_deduct_returns_configured_value() {
     assert_eq!(client.get_max_deduct(), 500);
 }
 
+#[test]
+fn set_max_deduct_updates_max_deduct_key_and_getter() {
+    let env = Env::default();
+    let (_, client, _) = setup(&env);
+    assert_eq!(client.get_max_deduct(), DEFAULT_MAX_DEDUCT);
+
+    client.set_max_deduct(&250);
+    assert_eq!(client.get_max_deduct(), 250);
+
+    client.set_max_deduct(&900);
+    assert_eq!(client.get_max_deduct(), 900);
+}
+
+#[test]
+#[should_panic(expected = "max_deduct must be positive")]
+fn set_max_deduct_rejects_non_positive_values() {
+    let env = Env::default();
+    let (_, client, _) = setup(&env);
+    client.set_max_deduct(&0);
+}
+
 // ---------------------------------------------------------------------------
 // get_settlement
 // ---------------------------------------------------------------------------
