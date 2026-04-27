@@ -220,9 +220,25 @@ mod settlement_tests {
 
         client.receive_payment(&vault, &300i128, &false, &Some(dev1.clone()));
         client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()));
+        client.receive_payment(&vault, &150i128, &false, &Some(dev1.clone()));
 
         let all = client.get_all_developer_balances(&admin);
         assert_eq!(all.len(), 2);
+        let mut dev1_seen = false;
+        let mut dev2_seen = false;
+        for balance in all.iter() {
+            if balance.address == dev1 {
+                assert_eq!(balance.balance, 450i128);
+                dev1_seen = true;
+            } else if balance.address == dev2 {
+                assert_eq!(balance.balance, 200i128);
+                dev2_seen = true;
+            } else {
+                panic!("unexpected developer in get_all_developer_balances");
+            }
+        }
+        assert!(dev1_seen);
+        assert!(dev2_seen);
     }
 
     #[test]
