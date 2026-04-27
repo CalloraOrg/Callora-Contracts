@@ -3995,7 +3995,7 @@ mod fuzz {
             &usdc_addr,
             &Some(1_000),
             &Some(caller.clone()),
-            &Some(1),    // min_deposit = 1
+            &Some(1), // min_deposit = 1
             &None,
             &Some(max_d),
         );
