@@ -484,6 +484,26 @@ Emitted when the current admin nominates a successor (step 1 of 2).
 
 ---
 
+### `admin_changed`
+
+Emitted when `set_admin()` is called to record the requested admin change.
+This event is emitted immediately before `admin_transfer_started`.
+
+| Index   | Location | Type               | Description                           |
+|---------|----------|--------------------|---------------------------------------|
+| topic 0 | topics   | Symbol             | `"admin_changed"`                     |
+| topic 1 | topics   | Address            | `current_admin` — caller/admin        |
+| data    | data     | (Address, Address) | `(old_admin, new_admin)`              |
+
+```json
+{
+  "topics": ["admin_changed", "GCURRENT_ADMIN..."],
+  "data": ["GCURRENT_ADMIN...", "GPENDING_ADMIN..."]
+}
+```
+
+---
+
 ### `admin_transfer_completed`
 
 Emitted when the nominee accepts the admin role (step 2 of 2).
@@ -752,6 +772,7 @@ after the matching `payment_received` event.
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
 | `init`                   | revenue-pool    | `init()`                                 |
+| `admin_changed`          | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_completed`| revenue-pool   | `claim_admin()`                          |
 | `receive_payment`        | revenue-pool    | `receive_payment()`                      |
@@ -769,4 +790,5 @@ after the matching `payment_received` event.
 | 0.0.1   | vault         | Initial vault events                                         |
 | 0.0.1   | vault         | Added `set_authorized_caller` event with old/new value payload (Issue #256) |
 | 0.0.1   | revenue-pool  | Full revenue pool event suite with JSON examples             |
+| 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |

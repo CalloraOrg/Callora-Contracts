@@ -91,7 +91,9 @@ impl RevenuePool {
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
-    /// Emits an `admin_transfer_started` event with the `current_admin` as a topic and `new_admin` as data.
+    /// Emits an `admin_changed` event with the `current_admin` as a topic and
+    /// `(current_admin, new_admin)` as data, followed by `admin_transfer_started`
+    /// with the `current_admin` as a topic and `new_admin` as data.
     /// Return the USDC token address configured for this pool.
     ///
     /// # Arguments
@@ -117,6 +119,12 @@ impl RevenuePool {
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
+
+        // Emit explicit before/after admin intent for indexers and audit trails.
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"), current.clone()),
+            (current.clone(), new_admin.clone()),
+        );
 
         env.events().publish(
             (Symbol::new(&env, "admin_transfer_started"), current),

@@ -181,6 +181,7 @@ plus how to verify all addresses with the `get_contract_addresses()` view functi
 - **Input validation**: `amount > 0` enforced on all deposits and deductions.
 - **Overflow checks**: Enabled in both dev and release profiles (`Cargo.toml`).
 - **Role-Based Access**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+- **Revenue pool admin audit trail**: `callora-revenue-pool::set_admin` now emits `admin_changed` with `(old_admin, new_admin)` before transfer nomination.
 - **Dedup hardening**: Duplicate `get_max_deduct` declaration removed in `callora-vault`; allowed depositor duplicate-path test now asserts list cardinality.
 
 See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit recommendations.
