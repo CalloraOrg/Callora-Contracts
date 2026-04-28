@@ -42,6 +42,7 @@ pub enum StorageKey {
     UsdcToken,
     Settlement,
     RevenuePool,
+    /// Storage slot for `MAX_DEDUCT_KEY` (maximum allowed amount per deduct call).
     MaxDeduct,
     Paused,
     Metadata(String),
@@ -184,7 +185,7 @@ impl CalloraVault {
             .expect("vault not initialized")
     }
 
-    /// Return the configured maximum single-deduction amount.
+    /// Return the configured `MAX_DEDUCT_KEY` value.
     /// Returns `i128::MAX` (no cap) if not explicitly set.
     pub fn get_max_deduct(env: Env) -> i128 {
         env.storage()
@@ -307,6 +308,25 @@ impl CalloraVault {
                 meta.owner.clone(),
             ),
             (old, new_caller),
+        );
+    }
+
+    /// Set `MAX_DEDUCT_KEY` (owner only).
+    ///
+    /// # Panics
+    /// - `"max_deduct must be positive"` when `max_deduct <= 0`.
+    /// - `"vault not initialized"` if called before `init`.
+    pub fn set_max_deduct(env: Env, max_deduct: i128) {
+        let meta = Self::get_meta(env.clone());
+        meta.owner.require_auth();
+        assert!(max_deduct > 0, "max_deduct must be positive");
+        let old = Self::get_max_deduct(env.clone());
+        env.storage()
+            .instance()
+            .set(&StorageKey::MaxDeduct, &max_deduct);
+        env.events().publish(
+            (Symbol::new(&env, "set_max_deduct"), meta.owner),
+            (old, max_deduct),
         );
     }
 
