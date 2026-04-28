@@ -261,5 +261,6 @@ have been audited for `require_auth()` coverage as part of Issue #160.
 As part of the authorization matrix hardening for the `callora-settlement` contract:
 - `get_all_developer_balances` now requires `admin` authorization via `require_auth()`. This prevents bulk data scraping while allowing administrative oversight.
 - Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
+- Overflow regression tests now assert `receive_payment` panics with `"pool balance overflow"` and `"developer balance overflow"` when credits would exceed `i128::MAX`.
 - Admin rotation (two-step) has been verified to correctly gate access during the transition period.
 

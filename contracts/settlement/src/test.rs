@@ -577,6 +577,52 @@ mod settlement_tests {
     }
 
     #[test]
+    #[should_panic(expected = "pool balance overflow")]
+    fn test_receive_payment_to_pool_overflow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        env.as_contract(&addr, || {
+            let inst = env.storage().instance();
+            let pool = crate::GlobalPool {
+                total_balance: i128::MAX,
+                last_updated: env.ledger().timestamp(),
+            };
+            inst.set(&Symbol::new(&env, "global_pool"), &pool);
+        });
+
+        client.receive_payment(&vault, &1i128, &true, &None);
+    }
+
+    #[test]
+    #[should_panic(expected = "developer balance overflow")]
+    fn test_receive_payment_to_developer_overflow_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        env.as_contract(&addr, || {
+            let inst = env.storage().instance();
+            let mut balances: Map<Address, i128> =
+                inst.get(&Symbol::new(&env, "developer_balances")).unwrap();
+            balances.set(developer.clone(), i128::MAX);
+            inst.set(&Symbol::new(&env, "developer_balances"), &balances);
+        });
+
+        client.receive_payment(&vault, &1i128, &false, &Some(developer));
+    }
+
+    #[test]
     #[should_panic(expected = "developer address required when to_pool=false")]
     fn test_receive_payment_pool_false_no_developer() {
         let env = Env::default();

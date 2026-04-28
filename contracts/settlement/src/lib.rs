@@ -107,6 +107,11 @@ impl CalloraSettlement {
     ///
     /// # Events
     /// Always emits `payment_received`. Also emits `balance_credited` when `to_pool=false`.
+    ///
+    /// # Arithmetic Safety
+    /// Credits use checked arithmetic:
+    /// - Pool credits panic with `"pool balance overflow"` on `i128` overflow.
+    /// - Developer credits panic with `"developer balance overflow"` on `i128` overflow.
     pub fn receive_payment(
         env: Env,
         caller: Address,
