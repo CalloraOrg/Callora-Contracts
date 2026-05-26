@@ -867,6 +867,27 @@ impl CalloraVault {
             .publish((Symbol::new(&env, "allowlist_add"), caller, depositor), ());
     }
 
+    pub fn remove_allowed_depositor(env: Env, caller: Address, depositor: Address) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone());
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DepositorList)
+            .unwrap_or(Vec::new(&env));
+        let mut filtered: Vec<Address> = Vec::new(&env);
+        for item in list.iter() {
+            if item != &depositor {
+                filtered.push_back(item.clone());
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::DepositorList, &filtered);
+        env.events()
+            .publish((Symbol::new(&env, "allowlist_remove"), caller, depositor), ());
+    }
+
     pub fn get_allowlist(env: Env) -> Vec<Address> {
         Self::get_allowed_depositors(env)
     }

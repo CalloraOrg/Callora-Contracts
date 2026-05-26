@@ -2959,7 +2959,60 @@ fn clear_allowed_depositors_on_empty_is_noop() {
 }
 
 #[test]
-fn non_owner_cannot_set_allowed_depositor_issue108() {
+fn remove_allowed_depositor_preserves_other_entries() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let d1 = Address::generate(&env);
+    let d2 = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    client.set_allowed_depositor(&owner, &Some(d1.clone()));
+    client.set_allowed_depositor(&owner, &Some(d2.clone()));
+    client.remove_allowed_depositor(&owner, &d1);
+
+    let list = client.get_allowed_depositors();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list.get(0).unwrap(), d2);
+
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "allowlist_remove"));
+    let data: Address = last.2.into_val(&env);
+    assert_eq!(data, d1);
+}
+
+#[test]
+fn remove_allowed_depositor_on_absent_address_is_noop() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let d1 = Address::generate(&env);
+    let d2 = Address::generate(&env);
+    let absent = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    client.set_allowed_depositor(&owner, &Some(d1.clone()));
+    client.set_allowed_depositor(&owner, &Some(d2.clone()));
+    client.remove_allowed_depositor(&owner, &absent);
+
+    let list = client.get_allowed_depositors();
+    assert_eq!(list.len(), 2);
+    assert!(list.contains(&d1));
+    assert!(list.contains(&d2));
+}
+
+#[test]
+fn non_owner_cannot_remove_allowed_depositor() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let attacker = Address::generate(&env);
@@ -2971,8 +3024,8 @@ fn non_owner_cannot_set_allowed_depositor_issue108() {
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    let result = client.try_set_allowed_depositor(&attacker, &Some(depositor.clone()));
-    assert!(result.is_err(), "non-owner must not mutate allowlist");
+    let result = client.try_remove_allowed_depositor(&attacker, &depositor);
+    assert!(result.is_err(), "non-owner must not remove allowed depositor");
 }
 
 #[test]
