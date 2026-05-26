@@ -16,10 +16,14 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const USDC_KEY: &str = "usdc";
+const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+
+pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
 /// Maximum number of payments allowed in a single `batch_distribute` call.
 /// Caps CPU/memory usage well within Soroban resource limits and aligns with
@@ -196,6 +200,37 @@ impl RevenuePool {
         );
     }
 
+    /// Get the current per-leg distribution cap.
+    /// Defaults to `i128::MAX` when unset.
+    pub fn get_max_distribute(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+    }
+
+    /// Set the maximum amount that may be distributed in a single `distribute`
+    /// call or as an individual payment leg in `batch_distribute`.
+    ///
+    /// Only the current admin may call this. `max_distribute` must be positive.
+    /// Emits `set_max_distribute` with `(old_max, new_max)`.
+    pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        assert!(max_distribute > 0, "max_distribute must be positive");
+        let old_max = Self::get_max_distribute(env.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
+        env.events().publish(
+            (Symbol::new(&env, "set_max_distribute"), admin),
+            (old_max, max_distribute),
+        );
+    }
+
     fn validate_recipient(recipient: &Address, contract_self: &Address) {
         // Rule 1 — no self-distributions (the contract sending to itself is almost
         // certainly a logic bug; if you want to "reclaim" funds use a dedicated fn).
@@ -230,6 +265,10 @@ impl RevenuePool {
         }
         if amount <= 0 {
             panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+        }
+        let max_distribute = Self::get_max_distribute(env.clone());
+        if amount > max_distribute {
+            panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
         }
 
         let usdc_address: Address = env
@@ -320,6 +359,7 @@ impl RevenuePool {
             panic!("batch too large");
         }
 
+        let max_distribute = Self::get_max_distribute(env.clone());
         let mut total_amount: i128 = 0;
         for payment in payments.iter() {
             let (_, amount) = payment;
@@ -327,6 +367,9 @@ impl RevenuePool {
             // Validate each amount is strictly positive
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            }
+            if *amount > max_distribute {
+                panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
             }
             total_amount = total_amount
                 .checked_add(amount)
