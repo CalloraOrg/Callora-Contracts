@@ -83,6 +83,7 @@ impl CalloraSettlement {
     /// Panics if admin is the contract's own address.
     /// Panics if vault_address is the contract's own address.
     pub fn init(env: Env, admin: Address, vault_address: Address) {
+        admin.require_auth();
         let inst = env.storage().instance();
         if inst.has(&Symbol::new(&env, ADMIN_KEY)) {
             panic!("settlement contract already initialized");

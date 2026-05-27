@@ -106,6 +106,19 @@ mod settlement_tests {
     }
 
     #[test]
+    fn test_init_requires_admin_signature() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        env.set_auths(&[]);
+        let result = client.try_init(&admin, &vault);
+        assert!(result.is_err(), "expected init to require the admin signature");
+    }
+
+    #[test]
     fn test_receive_payment_to_pool() {
         let env = Env::default();
         env.mock_all_auths();
