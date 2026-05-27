@@ -557,6 +557,16 @@ impl CalloraVault {
         );
     }
 
+    /// Withdraw USDC from the vault to the owner's address (owner only).
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery.
+    /// The owner can withdraw tracked funds even during a circuit-breaker event.
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"insufficient balance"` — vault balance < `amount`.
+    /// - `"balance underflow"` — arithmetic error (should never occur with proper checks).
     pub fn withdraw(env: Env, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
@@ -567,11 +577,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
-        token::Client::new(&env, &ua).transfer(
-            &env.current_contract_address(),
-            &meta.owner,
-            &amount,
-        );
+        // CEI: update state before external call
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -584,20 +590,56 @@ impl CalloraVault {
             (Symbol::new(&env, "withdraw"), meta.owner.clone()),
             (amount, meta.balance),
         );
+        token::Client::new(&env, &ua).transfer(
+            &env.current_contract_address(),
+            &meta.owner,
+            &amount,
+        );
         meta.balance
     }
 
+    /// Withdraw USDC from the vault to an arbitrary recipient address (owner only).
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery.
+    /// The owner can withdraw tracked funds to any valid recipient even during
+    /// a circuit-breaker event.
+    ///
+    /// ## Recipient Validation
+    /// The recipient address is validated to prevent common mistakes:
+    /// - Cannot send to the vault contract itself (would create accounting confusion)
+    /// - Cannot send to the USDC token contract (funds would be locked)
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"insufficient balance"` — vault balance < `amount`.
+    /// - `"cannot withdraw to vault address"` — `to == vault_address`.
+    /// - `"cannot withdraw to token address"` — `to == usdc_token`.
+    /// - `"balance underflow"` — arithmetic error (should never occur with proper checks).
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
         let mut meta = Self::get_meta(env.clone());
         meta.owner.require_auth();
         assert!(amount > 0, "amount must be positive");
         assert!(meta.balance >= amount, "insufficient balance");
+        
+        // Recipient validation
+        assert!(
+            to != env.current_contract_address(),
+            "cannot withdraw to vault address"
+        );
+        
         let ua: Address = env
             .storage()
             .instance()
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
-        token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &to, &amount);
+        
+        assert!(
+            to != ua,
+            "cannot withdraw to token address"
+        );
+        
+        // CEI: update state before external call
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -607,9 +649,10 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to),
+            (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to.clone()),
             (amount, meta.balance),
         );
+        token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &to, &amount);
         meta.balance
     }
 

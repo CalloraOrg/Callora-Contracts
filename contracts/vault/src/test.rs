@@ -1541,6 +1541,83 @@ fn withdraw_to_insufficient_balance_fails() {
     assert!(result.is_err(), "expected error for insufficient balance");
 }
 
+#[test]
+#[should_panic(expected = "cannot withdraw to vault address")]
+fn withdraw_to_vault_address_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Attempt to withdraw to the vault itself
+    client.withdraw_to(&vault_address, &100);
+}
+
+#[test]
+#[should_panic(expected = "cannot withdraw to token address")]
+fn withdraw_to_token_address_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Attempt to withdraw to the USDC token contract
+    client.withdraw_to(&usdc, &100);
+}
+
+#[test]
+fn withdraw_to_while_paused_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Withdraw should still work while paused (emergency recovery)
+    let remaining = client.withdraw_to(&recipient, &300);
+    assert_eq!(remaining, 700);
+    assert_eq!(client.balance(), 700);
+    assert_eq!(usdc_client.balance(&recipient), 300);
+}
+
+#[test]
+fn withdraw_while_paused_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
+
+    // Pause the vault
+    client.pause(&owner);
+    assert!(client.is_paused());
+
+    // Withdraw should still work while paused (emergency recovery)
+    let remaining = client.withdraw(&200);
+    assert_eq!(remaining, 800);
+    assert_eq!(client.balance(), 800);
+    assert_eq!(usdc_client.balance(&owner), 200);
+}
+
 // ---------------------------------------------------------------------------
 // Transfer ownership tests
 // ---------------------------------------------------------------------------
