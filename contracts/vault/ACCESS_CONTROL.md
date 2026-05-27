@@ -82,6 +82,20 @@ vault.clear_all(&owner);
 - **Event Emission**: Emits `("allowlist_clear", owner)` on success
 - **Owner Unaffected**: The Owner can still deposit after clearing the allowlist
 
+### Removing a Single Depositor
+
+Use `remove_allowed_depositor(caller: Address, depositor: Address)` to revoke a single allowlisted address without clearing the entire list:
+
+```rust
+// Owner removes one backend service from the allowlist
+vault.remove_allowed_depositor(&owner, &backend_service);
+```
+
+- **Access Control**: Only the Owner can remove a depositor
+- **Safe No-op**: If the address is absent, the call does not fail and retains the current allowlist
+- **Event Emission**: Emits `("allowlist_remove", owner, address)` on success
+- **Preserves Remaining Addressees**: Other allowed depositors stay in place
+
 ### Querying the Allowlist
 
 Use `get_allowlist()` to retrieve the current list of allowed depositors:
@@ -120,6 +134,7 @@ The legacy `set_allowed_depositor(caller: Address, depositor: Option<Address>)` 
 | `clear_all`                        |  ✅   |   -   |         -         |         -         |
 | `get_allowlist`                    |  ✅   |  ✅   |        ✅         |        ✅         |
 | `set_allowed_depositor` (legacy)   |  ✅   |   -   |         -         |         -         |
+| `remove_allowed_depositor`         |  ✅   |   -   |         -         |         -         |
 | `set_metadata` / `update_metadata` |  ✅   |   -   |         -         |         -         |
 | `transfer_ownership`               |  ✅   |   -   |         -         |         -         |
 

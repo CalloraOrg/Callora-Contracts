@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec, BytesN};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -16,15 +16,30 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const USDC_KEY: &str = "usdc";
+const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+const VERSION_KEY: &str = "version";
+
+pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
 /// Maximum number of payments allowed in a single `batch_distribute` call.
 /// Caps CPU/memory usage well within Soroban resource limits and aligns with
 /// the vault's `MAX_BATCH_SIZE` for `batch_deduct`.
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// TTL bump constants for instance storage archival risk mitigation.
+/// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
+/// Bumping TTL ensures state remains accessible for critical operations.
+/// 
+/// # Constants
+/// - `BUMP_AMOUNT`: Number of ledgers to extend TTL by (10000 ledgers ≈ 16 days)
+/// - `LIFETIME_THRESHOLD`: Minimum TTL before triggering a bump (1000 ledgers ≈ 1.5 days)
+pub const BUMP_AMOUNT: u32 = 10000;
+pub const LIFETIME_THRESHOLD: u32 = 1000;
 
 #[contract]
 pub struct RevenuePool;
@@ -57,6 +72,9 @@ impl RevenuePool {
         }
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
+
+        // Extend TTL on initialization to prevent archival
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
             .publish((Symbol::new(&env, "init"), admin), usdc_token);
@@ -119,6 +137,7 @@ impl RevenuePool {
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Emit explicit before/after admin intent for indexers and audit trails.
         env.events().publish(
@@ -157,6 +176,7 @@ impl RevenuePool {
 
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
             .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
@@ -196,6 +216,37 @@ impl RevenuePool {
         );
     }
 
+    /// Get the current per-leg distribution cap.
+    /// Defaults to `i128::MAX` when unset.
+    pub fn get_max_distribute(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+    }
+
+    /// Set the maximum amount that may be distributed in a single `distribute`
+    /// call or as an individual payment leg in `batch_distribute`.
+    ///
+    /// Only the current admin may call this. `max_distribute` must be positive.
+    /// Emits `set_max_distribute` with `(old_max, new_max)`.
+    pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        assert!(max_distribute > 0, "max_distribute must be positive");
+        let old_max = Self::get_max_distribute(env.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
+        env.events().publish(
+            (Symbol::new(&env, "set_max_distribute"), admin),
+            (old_max, max_distribute),
+        );
+    }
+
     fn validate_recipient(recipient: &Address, contract_self: &Address) {
         // Rule 1 — no self-distributions (the contract sending to itself is almost
         // certainly a logic bug; if you want to "reclaim" funds use a dedicated fn).
@@ -231,6 +282,10 @@ impl RevenuePool {
         if amount <= 0 {
             panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
         }
+        let max_distribute = Self::get_max_distribute(env.clone());
+        if amount > max_distribute {
+            panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
+        }
 
         let usdc_address: Address = env
             .storage()
@@ -252,6 +307,8 @@ impl RevenuePool {
         if usdc.balance(&contract_address) < amount {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
+
+        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
@@ -320,6 +377,7 @@ impl RevenuePool {
             panic!("batch too large");
         }
 
+        let max_distribute = Self::get_max_distribute(env.clone());
         let mut total_amount: i128 = 0;
         for payment in payments.iter() {
             let (_, amount) = payment;
@@ -327,6 +385,9 @@ impl RevenuePool {
             // Validate each amount is strictly positive
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            }
+            if *amount > max_distribute {
+                panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
             }
             total_amount = total_amount
                 .checked_add(amount)
@@ -346,6 +407,9 @@ impl RevenuePool {
         if usdc.balance(&contract_address) < total_amount {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
+
+        // Extend TTL before executing transfers
+        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Phase 3: Execution
         // All validation passed - now perform the transfers
@@ -379,6 +443,41 @@ impl RevenuePool {
             .expect("revenue pool not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         usdc.balance(&env.current_contract_address())
+    }
+
+    /// Admin-gated contract upgrade.
+    ///
+    /// Only the current admin may call. This will instruct the host to update
+    /// the current contract WASM to `new_wasm_hash` and persist the version.
+    /// Emits an `upgraded` event with the admin as topic and the new version as data.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        // Perform the on-chain upgrade via the deployer interface.
+        // This is a host operation and may only succeed in the live environment.
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        // Persist the version marker for on-chain queries.
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
+
+        // Emit an event for indexers / audit logs.
+        env.events().publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+    }
+
+    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
+    ///
+    /// Panics if no version has been stored yet.
+    pub fn version(env: Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, VERSION_KEY))
+            .expect("version not set")
     }
 }
 

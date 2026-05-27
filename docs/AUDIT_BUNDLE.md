@@ -180,6 +180,56 @@ Reports are generated in the `coverage/` directory:
 - Balance invariant validation
 - Input validation stress testing
 
+### Auth Matrix
+
+The following auth matrix covers every mutating entrypoint in the audited contracts. Each privileged function now enforces `require_auth()` on the controlling principal before state mutation.
+
+#### contracts/vault/src/lib.rs
+- `init` → owner (`owner.require_auth()`) at line 91
+- `set_admin` → current admin (`caller.require_auth()` + admin check) at line 267
+- `accept_admin` → pending admin (`pending.require_auth()`) at line 280
+- `set_authorized_caller` → owner (`meta.owner.require_auth()`) at line 299
+- `set_max_deduct` → owner (`meta.owner.require_auth()`) at line 319
+- `set_allowed_depositor` → owner (`caller.require_auth()` + `require_owner`) at line 333
+- `clear_allowed_depositors` → owner (`caller.require_auth()` + `require_owner`) at line 359
+- `pause` → admin or owner (`caller.require_auth()` + `require_admin_or_owner`) at line 384
+- `unpause` → admin or owner (`caller.require_auth()` + `require_admin_or_owner`) at line 393
+- `deposit` → owner or authorized depositor (`caller.require_auth()` + `is_authorized_depositor`) at line 411
+- `deduct` → owner or authorized caller (`caller.require_auth()` + `require_authorized_deduct_caller`) at line 453
+- `batch_deduct` → owner or authorized caller (`caller.require_auth()` + `require_authorized_deduct_caller`) at line 494
+- `transfer_ownership` → owner (`meta.owner.require_auth()`) at line 544
+- `accept_ownership` → pending owner (`pending.require_auth()`) at line 564
+- `withdraw` → owner (`meta.owner.require_auth()`) at line 582
+- `withdraw_to` → owner (`meta.owner.require_auth()`) at line 609
+- `distribute` → admin (`caller.require_auth()` + admin check) at line 632
+- `set_revenue_pool` → admin (`caller.require_auth()` + admin check) at line 655
+- `set_settlement` → admin (`caller.require_auth()` + admin check) at line 681
+- `set_metadata` → owner (`caller.require_auth()` + `require_owner`) at line 713
+- `update_metadata` → owner (`caller.require_auth()` + `require_owner`) at line 739
+- `add_address` → owner (`caller.require_auth()` + `require_owner`) at line 816
+- `clear_all` → owner (`caller.require_auth()` + `require_owner`) at line 834
+
+#### contracts/settlement/src/lib.rs
+- `init` → admin (`admin.require_auth()`) at line 74
+- `receive_payment` → vault or admin (`caller.require_auth()` + `require_authorized_caller`) at line 116
+- `set_admin` → current admin (`caller.require_auth()` + admin check) at line 301
+- `accept_admin` → pending admin (`pending.require_auth()`) at line 337
+- `set_vault` → admin (`caller.require_auth()` + admin check) at line 373
+
+#### contracts/revenue_pool/src/lib.rs
+- `init` → admin (`admin.require_auth()`) at line 46
+- `set_admin` → current admin (`caller.require_auth()` + admin check) at line 114
+- `claim_admin` → pending admin (`caller.require_auth()` + pending check) at line 147
+- `receive_payment` → admin (`caller.require_auth()` + admin check) at line 187
+- `distribute` → admin (`caller.require_auth()` + admin check) at line 225
+- `batch_distribute` → admin (`caller.require_auth()` + admin check) at line 307
+
+### Findings
+- Fixed missing admin auth enforcement in `contracts/settlement/src/lib.rs::init`.
+- Removed duplicate/uncompilable method definitions in `contracts/vault/src/lib.rs` that would have bypassed or corrupted auth handling.
+- Added a negative auth regression test for `settlement::init`.
+- Verified no audited view-only functions mutate state.
+
 ### Key Test Scenarios
 
 #### Vault Contract Tests

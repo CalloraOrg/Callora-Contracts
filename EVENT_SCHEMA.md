@@ -583,6 +583,25 @@ Emitted when the admin distributes USDC to a single developer.
 
 ---
 
+### `set_max_distribute`
+
+Emitted when the admin updates the per-leg distribution cap.
+
+| Index   | Location | Type    | Description                    |
+|---------|----------|---------|--------------------------------|
+| topic 0 | topics   | Symbol  | `"set_max_distribute"`        |
+| topic 1 | topics   | Address | admin address                  |
+| data    | data     | (i128, i128) | `(old_max, new_max)`       |
+
+```json
+{
+  "topics": ["set_max_distribute", "GADMIN..."],
+  "data": [9223372036854775807, 500]
+}
+```
+
+---
+
 ### `batch_distribute`
 
 Emitted **once per payment** during a `batch_distribute()` call. If a batch has
@@ -749,6 +768,25 @@ after the matching `payment_received` event.
 
 ---
 
+### `vault_changed`
+
+Emitted by `set_vault()` when the admin updates the registered vault address.
+
+| Index   | Location | Type    | Description                        |
+|---------|----------|---------|------------------------------------|
+| topic 0 | topics   | Symbol  | `"vault_changed"`                |
+| topic 1 | topics   | Address | `caller` — admin who performed update |
+| data    | data     | (Address, Address) | (old_vault, new_vault)        |
+
+```json
+{
+  "topics": ["vault_changed", "GADMIN..."],
+  "data": ["GOLDVAULT...", "GNEWVAULT..."]
+}
+```
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -774,12 +812,14 @@ after the matching `payment_received` event.
 | `init`                   | revenue-pool    | `init()`                                 |
 | `admin_changed`          | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
+| `set_max_distribute`     | revenue-pool    | `set_max_distribute()`                   |
 | `admin_transfer_completed`| revenue-pool   | `claim_admin()`                          |
 | `receive_payment`        | revenue-pool    | `receive_payment()`                      |
 | `distribute`             | revenue-pool    | `distribute()`                           |
 | `batch_distribute`       | revenue-pool    | each payment in `batch_distribute()`     |
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
+| `vault_changed`          | settlement      | `set_vault()`                            |
 
 ---
 

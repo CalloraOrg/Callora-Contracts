@@ -424,6 +424,26 @@
     },
 
     {
+      "name": "get_pending_owner",
+      "description": "Return the pending owner address, or null if no ownership transfer is in progress.",
+      "access": "any",
+      "params": [],
+      "returns": "Address | null",
+      "panics": [],
+      "events": []
+    },
+
+    {
+      "name": "get_pending_admin",
+      "description": "Return the pending admin address, or null if no admin transfer is in progress.",
+      "access": "any",
+      "params": [],
+      "returns": "Address | null",
+      "panics": [],
+      "events": []
+    },
+
+    {
       "name": "update_metadata",
       "description": "Overwrite existing offering metadata. Owner-only. Emits old and new values. offering_id max 64 chars; metadata max 256 chars.",
       "access": "owner",

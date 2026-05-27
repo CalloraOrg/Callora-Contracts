@@ -2,6 +2,21 @@
 
 This document describes the storage layout of the Callora Vault contract, including storage keys, data types, and access control implications.
 
+## Instance Storage TTL
+
+All critical vault state lives in instance storage. To prevent archival on infrequently-used vaults, every mutating entrypoint calls `env.storage().instance().extend_ttl(threshold, extend_to)`.
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `INSTANCE_BUMP_THRESHOLD` | `17_280 * 30` (~30 days) | Bump is triggered when fewer than 30 days of TTL remain |
+| `INSTANCE_BUMP_AMOUNT` | `17_280 * 60` (~60 days) | Each bump extends the TTL to 60 days from the current ledger |
+
+Ledger rate assumption: **17 280 ledgers/day** (5-second close time on Stellar mainnet).
+
+Entrypoints that bump TTL: `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`.
+
+Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_settlement`, `get_revenue_pool`, `get_contract_addresses`, `is_paused`, `is_authorized_depositor`, `get_metadata`, `get_max_deduct`, `get_allowed_depositors`) do **not** bump the TTL — they are read-only and incur no write cost.
+
 ## Storage Overview
 
 The Callora Vault contract uses Soroban's instance storage to persist contract state. Data is organized using the `StorageKey` enum, providing type-safe access to contract state.

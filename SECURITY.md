@@ -156,6 +156,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - **Resource Exhaustion via Unbounded Batch:** `batch_distribute` accepts a `Vec<(Address, i128)>`. Without a cap, a compromised admin key could submit thousands of entries, exhausting Soroban's per-transaction CPU/memory budget and causing unpredictable mid-execution failures.
   - *Mitigation:* `batch_distribute` enforces `1 <= payments.len() <= MAX_BATCH_SIZE` (currently **50**), matching the vault's `batch_deduct` cap. Empty vectors and oversized vectors are rejected before any iteration or USDC transfer occurs. The cap keeps resource consumption well within Soroban network limits.
 
+- **Excessive Single-Leg Distribution:** A compromised admin could still try to distribute a huge amount in a single `distribute()` or individual `batch_distribute` leg, increasing the blast radius for a compromised admin key.
+  - *Mitigation:* `callora-revenue-pool` now exposes a configurable `max_distribute` cap. Every `distribute` and every individual `batch_distribute` payment leg is validated against this cap. The cap is admin-gated, must be positive, and defaults to `i128::MAX` until configured.
+
 ### Input Validation
 
 - [ ] All amounts validated to be > 0

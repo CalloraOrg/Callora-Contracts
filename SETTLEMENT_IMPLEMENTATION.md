@@ -552,3 +552,196 @@ When rotating admin or updating vault:
 The revenue settlement implementation provides a secure, efficient, and well-tested system for automatically transferring USDC from the vault contract to a settlement contract. The settlement contract then properly credits either a global pool or specific developer balances based on payment parameters.
 
 The implementation maintains backward compatibility while adding powerful new revenue management capabilities to the Callora ecosystem.
+## Storage Migration (Developer Balances)
+
+### Overview
+
+As of the persistent storage migration, developer balances have been migrated from a single instance storage Map to per-address persistent storage with automatic TTL extension. This change improves scalability and reduces instance storage pressure as the number of developers grows.
+
+### Previous Storage Layout
+
+**Before Migration:**
+- Single instance storage key: `developer_balances` (Symbol)
+- Value: `Map<Address, i128>` containing all developer balances
+- Issues:
+  - Every `receive_payment` to a developer required reading/writing the entire map
+  - Map iteration in `get_all_developer_balances` became expensive with many developers
+  - Instance storage size grew linearly with developer count
+  - Higher archival risk due to large instance storage
+
+### New Storage Layout
+
+**After Migration:**
+- Storage key enum with variants for different storage types
+- Per-developer persistent storage: `StorageKey::DeveloperBalance(Address)`
+- Developer index: `StorageKey::DeveloperIndex` containing `Vec<Address>` of all developers
+- Benefits:
+  - O(1) point read/write for individual developer balances
+  - Persistent storage with automatic TTL extension (1 year)
+  - Reduced instance storage pressure (only index stored in instance)
+  - `get_all_developer_balances` iterates index instead of map
+
+### StorageKey Enum
+
+```rust
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum StorageKey {
+    Admin,
+    Vault,
+    PendingAdmin,
+    DeveloperIndex,
+    DeveloperBalance(Address),
+    GlobalPool,
+}
+```
+
+### Migration Details
+
+#### Changes to `receive_payment` (Developer Credit Path)
+
+**Before:**
+```rust
+let mut balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+let current_balance = balances.get(dev_address.clone()).unwrap_or(0);
+let new_balance = current_balance.checked_add(amount).unwrap_or_else(...);
+balances.set(dev_address.clone(), new_balance);
+inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &balances);
+```
+
+**After:**
+```rust
+let current_balance = env
+    .storage()
+    .persistent()
+    .get(&StorageKey::DeveloperBalance(dev_address.clone()))
+    .unwrap_or(0);
+let new_balance = current_balance.checked_add(amount).unwrap_or_else(...);
+env.storage()
+    .persistent()
+    .set(&StorageKey::DeveloperBalance(dev_address.clone()), &new_balance);
+env.storage()
+    .persistent()
+    .extend_ttl(&StorageKey::DeveloperBalance(dev_address.clone()), 50000, 50000);
+
+// Add to index if not present
+let mut index: Vec<Address> = inst
+    .get(&StorageKey::DeveloperIndex)
+    .unwrap_or_else(|| Vec::new(&env));
+if !index.iter().any(|addr| addr == &dev_address) {
+    index.push_back(dev_address.clone());
+    inst.set(&StorageKey::DeveloperIndex, &index);
+}
+```
+
+#### Changes to `get_developer_balance`
+
+**Before:**
+```rust
+let balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+balances.get(developer).unwrap_or(0)
+```
+
+**After:**
+```rust
+env.storage()
+    .persistent()
+    .get(&StorageKey::DeveloperBalance(developer))
+    .unwrap_or(0)
+```
+
+#### Changes to `get_all_developer_balances`
+
+**Before:**
+```rust
+let balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+let mut result = Vec::new(&env);
+for (address, balance) in balances.iter() {
+    result.push_back(DeveloperBalance { address, balance });
+}
+result
+```
+
+**After:**
+```rust
+let index: Vec<Address> = inst
+    .get(&StorageKey::DeveloperIndex)
+    .unwrap_or_else(|| Vec::new(&env));
+let mut result = Vec::new(&env);
+for address in index.iter() {
+    let balance = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::DeveloperBalance(address))
+        .unwrap_or(0);
+    result.push_back(DeveloperBalance {
+        address: address.clone(),
+        balance,
+    });
+}
+result
+```
+
+#### Changes to `init`
+
+**Before:**
+```rust
+let empty_balances: Map<Address, i128> = Map::new(&env);
+inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &empty_balances);
+```
+
+**After:**
+```rust
+let empty_index: Vec<Address> = Vec::new(&env);
+inst.set(&StorageKey::DeveloperIndex, &empty_index);
+```
+
+### Migration Impact
+
+#### Breaking Changes
+- **Contract Upgrade Required**: This is a storage-level migration that requires a contract upgrade
+- **Data Migration**: Existing developer balances in the old `Map<Address, i128>` format need to be migrated to the new persistent storage format
+- **API Compatibility**: Public API remains unchanged (`receive_payment`, `get_developer_balance`, `get_all_developer_balances`)
+
+#### Performance Improvements
+- **Developer Credit**: O(1) point read/write instead of O(n) map operations
+- **Balance Query**: O(1) persistent storage lookup instead of map lookup
+- **Instance Storage**: Reduced pressure as individual balances are in persistent storage
+- **Scalability**: Can handle 100+ developers without significant gas cost increases
+
+#### TTL Management
+- Developer balances now have persistent storage with 1-year TTL
+- TTL is automatically extended on every credit via `extend_ttl`
+- Index remains in instance storage (no TTL)
+
+### Testing
+
+#### Test Coverage
+- ✅ Per-address persistent storage read/write
+- ✅ TTL extension on credit
+- ✅ Developer index management
+- ✅ `get_developer_balance` O(1) lookup
+- ✅ `get_all_developer_balances` index iteration
+- ✅ 100+ developer scalability test
+
+#### Running Tests
+```bash
+cd contracts/settlement
+cargo test
+
+# Test with 100+ developers
+cargo test test_scale_many_developers
+```
+
+### Rollback Plan
+
+If issues arise with the new storage layout:
+1. Contract can be upgraded back to the previous version
+2. Data migration script can convert persistent storage back to instance storage map
+3. Monitor gas costs and storage pressure during rollout

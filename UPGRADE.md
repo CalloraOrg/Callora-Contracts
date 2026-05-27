@@ -105,6 +105,24 @@ pub fn init(
 | `admin` | `Address` | Admin address; may call `distribute` and `set_admin` |
 | `usdc` | `Address` | USDC token contract address |
 
+#### Upgradeability
+
+The revenue pool now supports in-place upgrades via an admin-gated `upgrade` function. 
+This method calls the host deployer to update the contract WASM code while 
+preserving existing instance storage.
+
+```bash
+# Build new WASM
+cargo build --target wasm32-unknown-unknown --release -p callora-revenue-pool
+
+# Compute WASM hash (example helper) and call upgrade via RPC or tooling
+soroban contract invoke --contract-id <REVENUE_POOL_ID> -- upgrade \
+   --caller <ADMIN> --new_wasm_hash <32-byte-hex>
+```
+
+The `version()` view returns the stored WASM hash; the contract emits an `upgraded`
+event with the admin as a topic and the new version as data.
+
 **Init signature** (`lib.rs:28-39`):
 
 ```rust

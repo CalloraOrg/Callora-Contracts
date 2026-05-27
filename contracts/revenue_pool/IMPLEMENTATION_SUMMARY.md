@@ -544,6 +544,49 @@ The implementation is ready for code review and testnet deployment.
 
 ---
 
+## TTL Window and Archival Risk Mitigation
+
+### Overview
+
+Soroban archives ledger entries after a period of inactivity (approximately 7 days / 631 ledgers). The revenue pool contract includes TTL bump functionality to prevent instance storage from becoming archived and inaccessible.
+
+### Constants
+
+| Constant | Value | Approximate Duration | Purpose |
+|----------|-------|---------------------|---------|
+| `BUMP_AMOUNT` | 10000 | ~16 days | Ledger extension amount when TTL is extended |
+| `LIFETIME_THRESHOLD` | 1000 | ~1.5 days | Minimum TTL before extension is triggered |
+
+### Functions with TTL Extension
+
+The following functions extend instance storage TTL to ensure contract state remains accessible:
+
+| Function | When TTL is Extended |
+|----------|---------------------|
+| `init` | After setting admin and USDC token addresses |
+| `set_admin` | After setting pending admin |
+| `claim_admin` | After completing admin transfer |
+| `distribute` | Before executing USDC transfer |
+| `batch_distribute` | Before executing batch transfers |
+
+### View Functions (No TTL Extension)
+
+View functions intentionally do **not** extend TTL to avoid unnecessary gas costs:
+
+- `get_admin()` - Read-only admin retrieval
+- `get_usdc_token()` - Read-only USDC token address retrieval
+- `balance()` - Read-only balance query
+
+### Archival Risk
+
+**Risk:** If a contract's instance storage is archived due to prolonged inactivity, any read or write operation will fail until restored.
+
+**Mitigation:** Regular calls to state-modifying functions (especially `distribute` or `batch_distribute`) automatically extend the TTL, ensuring continued accessibility.
+
+**Recommendation:** For production deployments, ensure regular activity (at least once per week) or implement external TTL monitoring and bumping if needed.
+
+---
+
 ## Contact
 
 For questions or issues, contact the development team or refer to the documentation files:
