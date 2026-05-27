@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec, BytesN};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -20,6 +20,7 @@ const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+const VERSION_KEY: &str = "version";
 
 /// Maximum number of payments allowed in a single `batch_distribute` call.
 /// Caps CPU/memory usage well within Soroban resource limits and aligns with
@@ -379,6 +380,41 @@ impl RevenuePool {
             .expect("revenue pool not initialized");
         let usdc = token::Client::new(&env, &usdc_address);
         usdc.balance(&env.current_contract_address())
+    }
+
+    /// Admin-gated contract upgrade.
+    ///
+    /// Only the current admin may call. This will instruct the host to update
+    /// the current contract WASM to `new_wasm_hash` and persist the version.
+    /// Emits an `upgraded` event with the admin as topic and the new version as data.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        // Perform the on-chain upgrade via the deployer interface.
+        // This is a host operation and may only succeed in the live environment.
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        // Persist the version marker for on-chain queries.
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
+
+        // Emit an event for indexers / audit logs.
+        env.events().publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+    }
+
+    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
+    ///
+    /// Panics if no version has been stored yet.
+    pub fn version(env: Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, VERSION_KEY))
+            .expect("version not set")
     }
 }
 

@@ -3,6 +3,7 @@ extern crate std;
 use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::token;
+use soroban_sdk::BytesN;
 use soroban_sdk::TryFromVal;
 use soroban_sdk::{Address, Env, IntoVal, Symbol, Vec};
 
@@ -1747,6 +1748,49 @@ fn batch_distribute_at_max_size_succeeds() {
 
     // Pool should be drained
     assert_eq!(usdc_client.balance(&pool_addr), 0);
+}
+
+#[test]
+fn upgrade_requires_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+
+    let new_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+    // Non-admin attempt should fail
+    let res = client.try_upgrade(&attacker, &new_hash);
+    assert!(res.is_err());
+}
+
+#[test]
+fn upgrade_sets_version_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+
+    let new_hash = BytesN::from_array(&env, &[2u8; 32]);
+
+    client.upgrade(&admin, &new_hash);
+
+    // version() should return stored value
+    let readback: BytesN<32> = client.version();
+    assert_eq!(readback, new_hash);
+
+    // An `upgraded` event should have been emitted
+    let events = env.events().all();
+    let ev = events.last().unwrap();
+    let name = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+    assert_eq!(name, Symbol::new(&env, "upgraded"));
 }
 
 #[test]
