@@ -2021,3 +2021,173 @@ fn views_do_not_trigger_ttl_bump() {
     assert_eq!(client.get_admin(), admin);
     assert_eq!(client.get_usdc_token(), usdc);
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate recipient tests — feature/revenue-pool-dedup-recipients
+// Policy: reject batches containing the same Address more than once.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "duplicate recipient in batch")]
+fn batch_distribute_duplicate_recipient_panics() {
+    // A batch where the same developer appears twice must be rejected entirely.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 1000);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev.clone(), 100_i128));
+    payments.push_back((dev.clone(), 200_i128)); // duplicate
+
+    client.batch_distribute(&admin, &payments);
+}
+
+#[test]
+fn batch_distribute_duplicate_does_not_transfer_any_funds() {
+    // Atomicity: a duplicate-recipient batch must leave balances completely unchanged.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 1000);
+
+    let pool_balance_before = usdc_client.balance(&pool_addr);
+    let dev_balance_before = usdc_client.balance(&dev);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev.clone(), 100_i128));
+    payments.push_back((dev.clone(), 200_i128)); // duplicate
+
+    let result = client.try_batch_distribute(&admin, &payments);
+    assert!(result.is_err());
+
+    // No tokens moved.
+    assert_eq!(usdc_client.balance(&pool_addr), pool_balance_before);
+    assert_eq!(usdc_client.balance(&dev), dev_balance_before);
+}
+
+#[test]
+fn batch_distribute_duplicate_does_not_emit_events() {
+    // No batch_distribute events should be emitted when the call is rejected.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 1000);
+
+    // Capture event count before the failing call.
+    let events_before = env.events().all().len();
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev.clone(), 100_i128));
+    payments.push_back((dev.clone(), 200_i128));
+
+    let _ = client.try_batch_distribute(&admin, &payments);
+
+    // Event log must not have grown with batch_distribute events.
+    let batch_events_after = env
+        .events()
+        .all()
+        .iter()
+        .skip(events_before as usize)
+        .filter(|e| {
+            e.1.get(0)
+                .and_then(|v| soroban_sdk::Symbol::try_from_val(&env, &v).ok())
+                .map(|s| s == soroban_sdk::Symbol::new(&env, "batch_distribute"))
+                .unwrap_or(false)
+        })
+        .count();
+
+    assert_eq!(batch_events_after, 0);
+}
+
+#[test]
+#[should_panic(expected = "duplicate recipient in batch")]
+fn batch_distribute_duplicate_at_end_panics() {
+    // Duplicate at position n-1 (last entry) must still be caught.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let dev3 = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 1000);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev1.clone(), 100_i128));
+    payments.push_back((dev2.clone(), 200_i128));
+    payments.push_back((dev3.clone(), 150_i128));
+    payments.push_back((dev1.clone(), 50_i128)); // dev1 again at the end
+
+    client.batch_distribute(&admin, &payments);
+}
+
+#[test]
+fn batch_distribute_unique_recipients_succeeds() {
+    // Sanity: a well-formed batch with all distinct addresses must still work.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let dev3 = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 600);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev1.clone(), 100_i128));
+    payments.push_back((dev2.clone(), 200_i128));
+    payments.push_back((dev3.clone(), 300_i128));
+
+    client.batch_distribute(&admin, &payments);
+
+    assert_eq!(usdc_client.balance(&dev1), 100);
+    assert_eq!(usdc_client.balance(&dev2), 200);
+    assert_eq!(usdc_client.balance(&dev3), 300);
+    assert_eq!(client.balance(), 0);
+}
+
+#[test]
+#[should_panic(expected = "duplicate recipient in batch")]
+fn batch_distribute_duplicate_detected_before_balance_check() {
+    // Duplicate detection must fire even when the pool has insufficient balance,
+    // proving it runs in Phase 1 (before the Phase 2 balance check).
+    // The panic message must be "duplicate recipient in batch", not "insufficient USDC balance".
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    // Fund only 10, but the batch would need 300 — yet the duplicate error fires first.
+    fund_pool(&usdc_admin, &pool_addr, 10);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    payments.push_back((dev.clone(), 100_i128));
+    payments.push_back((dev.clone(), 200_i128));
+
+    client.batch_distribute(&admin, &payments);
+}

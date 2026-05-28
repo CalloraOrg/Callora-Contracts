@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -22,6 +22,7 @@ const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
 const VERSION_KEY: &str = "version";
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
@@ -384,49 +385,72 @@ impl RevenuePool {
 
     /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.
     ///
-    /// This function implements a three-phase atomic batch transfer:
-    /// 1. **Precomputation & Validation**: Validates all amounts are positive and calculates total.
-    /// 2. **Balance Check**: Ensures contract has sufficient USDC before any transfers.
-    /// 3. **Execution**: Performs all transfers and emits events for each leg.
+    /// This function implements a four-phase atomic batch transfer:
+    /// 1. **Authorization**: Verifies the caller is the current admin.
+    /// 2. **Precomputation & Validation**: Validates all amounts are positive, detects duplicate
+    ///    recipients, and calculates the total required balance.
+    /// 3. **Balance Check**: Ensures the contract holds sufficient USDC before any transfers.
+    /// 4. **Execution**: Performs all transfers and emits one event per leg.
     ///
     /// The implementation guarantees atomicity: either all transfers succeed or none do.
-    /// No partial transfers occur if a later leg would fail.
+    /// No partial transfers occur if any validation step fails.
+    ///
+    /// # Duplicate Recipient Policy
+    ///
+    /// **Duplicates are rejected.** If the same `Address` appears more than once in `payments`,
+    /// the call panics with `"duplicate recipient in batch"` before any transfer is attempted.
+    ///
+    /// **Rationale:** A duplicate entry in the payload is almost always an off-chain bug (e.g.,
+    /// a developer listed twice in a settlement CSV). Silently double-paying would drain the pool
+    /// and be irreversible on-chain. Rejecting the batch forces the caller to fix the payload and
+    /// resubmit, which is the safe default for a financial contract.
+    ///
+    /// If you genuinely need to pay the same address for two distinct milestones in one call,
+    /// aggregate the amounts off-chain before submitting.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
     /// * `caller` - Must be the current admin.
     /// * `payments` - A vector of `(Address, i128)` tuples representing destinations and amounts.
     ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
+    ///   Each `Address` must be unique within the vector.
     ///
     /// # Panics
     /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
     /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
+    /// * If any individual amount exceeds `max_distribute` (`"amount exceeds max_distribute"`).
+    /// * If the same recipient address appears more than once (`"duplicate recipient in batch"`).
+    /// * If the total amount overflows `i128` (`"total overflow"`).
     /// * If the revenue pool has not been initialized (`"revenue pool not initialized"`).
     /// * If the total amount exceeds the contract's available balance (`"insufficient USDC balance"`).
-    /// * If the payments vector is empty (`"payments vector cannot be empty"`).
+    /// * If any recipient is the contract itself (`"invalid recipient: cannot distribute to the contract itself"`).
     ///
     /// # Events
-    /// Emits a `batch_distribute` event for each payment with `to` as a topic and `amount` as data.
+    /// Emits one `batch_distribute` event per payment leg with `to` as a topic and `amount` as data.
+    /// Events are only emitted after all validation passes — never for a partially-executed batch.
     ///
     /// # Atomicity Guarantee
-    /// All validation is performed before any external calls to the USDC token contract.
-    /// This ensures that if any validation fails, no state changes or transfers occur.
-    ///
-    /// # Vector Size Policy
-    /// The maximum number of payments in a single batch is limited by Soroban's
-    /// transaction budget and footprint limits. Recommended maximum: 100 payments per batch.
-    /// For larger distributions, split into multiple transactions.
+    /// All validation (including duplicate detection) is performed before any external calls to
+    /// the USDC token contract. If any check fails, no state changes or transfers occur.
     ///
     /// # Examples
     /// ```ignore
+    /// // Valid: three distinct recipients
     /// let payments = vec![
     ///     (developer1, 1000),
     ///     (developer2, 2000),
     ///     (developer3, 1500),
     /// ];
     /// pool.batch_distribute(&admin, &payments);
+    ///
+    /// // Invalid: developer1 appears twice — will panic with "duplicate recipient in batch"
+    /// let bad_payments = vec![
+    ///     (developer1, 1000),
+    ///     (developer1, 500),
+    /// ];
+    /// pool.batch_distribute(&admin, &bad_payments); // panics
     /// ```
     pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         // Phase 0: Authorization
@@ -445,25 +469,41 @@ impl RevenuePool {
             panic!("batch too large");
         }
 
+        // Phase 1: Precomputation, validation, and duplicate detection.
+        //
+        // We use a Map<Address, bool> as a seen-set. Map is the only ordered,
+        // address-keyed collection available in no_std Soroban. Insertion is
+        // O(log n) per entry, giving O(n log n) total — well within budget for
+        // MAX_BATCH_SIZE = 50 entries.
+        //
+        // All checks run here, before any external call, to preserve atomicity.
         let max_distribute = Self::get_max_distribute(env.clone());
+        let mut seen: Map<Address, bool> = Map::new(&env);
         let mut total_amount: i128 = 0;
-        for payment in payments.iter() {
-            let (_, amount) = payment;
 
-            // Validate each amount is strictly positive
+        for payment in payments.iter() {
+            let (to, amount) = payment;
+
+            // Reject duplicate recipients before any transfer is attempted.
+            if seen.contains_key(to.clone()) {
+                panic!("{}", ERR_DUPLICATE_RECIPIENT);
+            }
+            seen.set(to.clone(), true);
+
+            // Validate each amount is strictly positive.
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
             }
-            if *amount > max_distribute {
+            if amount > max_distribute {
                 panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
             }
+
             total_amount = total_amount
                 .checked_add(amount)
                 .unwrap_or_else(|| panic!("total overflow"));
         }
 
-        // Phase 2: Balance Check
-        // Query the USDC token contract for current balance
+        // Phase 2: Balance Check — single external read before any writes.
         let usdc_address: Address = env
             .storage()
             .instance()
@@ -476,20 +516,18 @@ impl RevenuePool {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
-        // Extend TTL before executing transfers
-        env.storage()
-            .instance()
-            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        // Extend TTL before executing transfers.
+        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        // Phase 3: Execution
-        // All validation passed - now perform the transfers
-        // Each transfer is atomic; if any fails, the entire transaction reverts
+        // Phase 3: Execution — all validation passed, perform transfers.
+        // Soroban's transaction model guarantees that if any transfer fails,
+        // the entire transaction reverts (no partial state).
         for payment in payments.iter() {
             let (to, amount) = payment;
             Self::validate_recipient(&to, &contract_address);
             usdc.transfer(&contract_address, &to, &amount);
 
-            // Emit event for this leg of the batch
+            // Emit one event per leg reflecting the final transferred amount.
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);
         }
