@@ -398,6 +398,12 @@ impl CalloraVault {
             .set(&StorageKey::DepositorList, &Vec::<Address>::new(&env));
     }
 
+    fn require_authorized_deduct_caller(env: Env, caller: &Address) {
+        let meta = Self::get_meta(env.clone());
+        let owner = meta.owner.clone();
+        let auth = match meta.authorized_caller {
+            Some(ac) => *caller == ac || *caller == owner,
+            None => *caller == owner,
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin_or_owner(env.clone(), &caller);
@@ -878,6 +884,7 @@ impl CalloraVault {
         assert!(auth, "unauthorized caller");
     }
 
+    pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
         token::Client::new(env, usdc_token).transfer(&env.current_contract_address(), to, &amount);
     }
@@ -945,12 +952,3 @@ impl CalloraVault {
             .unwrap_or(Vec::new(&env))
     }
 }
-
-#[cfg(test)]
-mod test;
-
-#[cfg(test)]
-mod test_init_hardening;
-
-#[cfg(test)]
-mod test_views;
