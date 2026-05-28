@@ -1977,7 +1977,7 @@ fn state_persists_after_ledger_advance() {
     // set_admin extends TTL
     let new_admin = Address::generate(&env);
     client.set_admin(&admin, &new_admin);
-    
+
     // claim_admin extends TTL
     client.claim_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);

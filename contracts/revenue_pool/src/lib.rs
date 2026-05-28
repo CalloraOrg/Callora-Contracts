@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec, BytesN};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -34,7 +34,7 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 /// Bumping TTL ensures state remains accessible for critical operations.
-/// 
+///
 /// # Constants
 /// - `BUMP_AMOUNT`: Number of ledgers to extend TTL by (10000 ledgers ≈ 16 days)
 /// - `LIFETIME_THRESHOLD`: Minimum TTL before triggering a bump (1000 ledgers ≈ 1.5 days)
@@ -303,7 +303,9 @@ impl RevenuePool {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
@@ -404,7 +406,9 @@ impl RevenuePool {
         }
 
         // Extend TTL before executing transfers
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Phase 3: Execution
         // All validation passed - now perform the transfers
@@ -454,7 +458,8 @@ impl RevenuePool {
 
         // Perform the on-chain upgrade via the deployer interface.
         // This is a host operation and may only succeed in the live environment.
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
 
         // Persist the version marker for on-chain queries.
         env.storage()
@@ -462,7 +467,8 @@ impl RevenuePool {
             .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
 
         // Emit an event for indexers / audit logs.
-        env.events().publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+        env.events()
+            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.

@@ -436,8 +436,11 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .expect("vault not initialized");
-        token::Client::new(&env, &usdc_addr)
-            .transfer(&caller, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &usdc_addr).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &amount,
+        );
         meta.balance = meta
             .balance
             .checked_add(amount)

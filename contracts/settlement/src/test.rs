@@ -49,8 +49,7 @@ mod settlement_tests {
             assert!(inst.has(&StorageKey::Vault));
             assert!(inst.has(&StorageKey::DeveloperIndex));
             assert!(inst.has(&StorageKey::GlobalPool));
-            let developer_index: Vec<Address> =
-                inst.get(&StorageKey::DeveloperIndex).unwrap();
+            let developer_index: Vec<Address> = inst.get(&StorageKey::DeveloperIndex).unwrap();
 
             assert_eq!(developer_index.len(), 0);
         });
@@ -115,7 +114,10 @@ mod settlement_tests {
 
         env.set_auths(&[]);
         let result = client.try_init(&admin, &vault);
-        assert!(result.is_err(), "expected init to require the admin signature");
+        assert!(
+            result.is_err(),
+            "expected init to require the admin signature"
+        );
     }
 
     #[test]

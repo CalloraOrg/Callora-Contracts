@@ -188,8 +188,6 @@ impl CalloraSettlement {
             let dev_address = developer
                 .unwrap_or_else(|| panic!("developer address required when to_pool=false"));
 
-
-
             // Read current balance from persistent storage
             let current_balance: i128 = env
                 .storage()
@@ -199,17 +197,20 @@ impl CalloraSettlement {
             let new_balance = current_balance
                 .checked_add(amount)
                 .unwrap_or_else(|| panic!("developer balance overflow"));
-            
+
             // Write to persistent storage with TTL extension
-            env.storage()
-                .persistent()
-                .set(&StorageKey::DeveloperBalance(dev_address.clone()), &new_balance);
-            
+            env.storage().persistent().set(
+                &StorageKey::DeveloperBalance(dev_address.clone()),
+                &new_balance,
+            );
+
             // Extend TTL for the developer's balance entry (persistent storage live for 1 year)
-            env.storage()
-                .persistent()
-                .extend_ttl(&StorageKey::DeveloperBalance(dev_address.clone()), 50000, 50000);
-            
+            env.storage().persistent().extend_ttl(
+                &StorageKey::DeveloperBalance(dev_address.clone()),
+                50000,
+                50000,
+            );
+
             // Add developer to index if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
@@ -218,7 +219,6 @@ impl CalloraSettlement {
                 index.push_back(dev_address.clone());
                 inst.set(&StorageKey::DeveloperIndex, &index);
             }
-
 
             env.events().publish(
                 (Symbol::new(&env, "payment_received"), caller.clone()),
@@ -408,7 +408,7 @@ impl CalloraSettlement {
         let index: Vec<Address> = inst
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
-        
+
         let mut result = Vec::new(&env);
         for address in index.iter() {
             let address_key = address.clone();
