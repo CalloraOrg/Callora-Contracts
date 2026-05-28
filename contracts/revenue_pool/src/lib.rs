@@ -101,34 +101,15 @@ impl RevenuePool {
     /// The new admin must call `claim_admin` to complete the transfer.
     ///
     /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
+    /// * `caller` - Must be the current admin; must authorize.
     /// * `new_admin` - Address of the proposed new admin.
     ///
     /// # Panics
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
-    /// Emits an `admin_changed` event with the `current_admin` as a topic and
-    /// `(current_admin, new_admin)` as data, followed by `admin_transfer_started`
-    /// with the `current_admin` as a topic and `new_admin` as data.
-    /// Return the USDC token address configured for this pool.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    ///
-    /// # Returns
-    /// The `Address` of the USDC token contract.
-    ///
-    /// # Panics
-    /// * If the revenue pool has not been initialized.
-    pub fn get_usdc_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
-            .expect("revenue pool not initialized")
-    }
-
+    /// Emits `admin_changed` with `current_admin` as topic and `(current_admin, new_admin)` as data.
+    /// Emits `admin_transfer_started` with `current_admin` as topic and `new_admin` as data.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -149,6 +130,20 @@ impl RevenuePool {
             (Symbol::new(&env, "admin_transfer_started"), current),
             new_admin,
         );
+    }
+
+    /// Return the USDC token address configured for this pool.
+    ///
+    /// # Returns
+    /// The `Address` of the USDC token contract.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect("revenue pool not initialized")
     }
 
     /// Complete the admin transfer. Only the pending admin may call this.
