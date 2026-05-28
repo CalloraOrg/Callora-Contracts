@@ -9,8 +9,30 @@
 /// - Owner withdrawals are ALLOWED (emergency recovery)
 /// - Admin distribute is ALLOWED (emergency recovery of untracked surplus)
 /// - Admin/owner configuration functions remain available
+///
+/// ## Request-ID Idempotency
+///
+/// `deduct` and `batch_deduct` accept an optional `request_id: Option<Symbol>`.
+/// When `Some(id)` is supplied the contract persists a processed-request marker
+/// in **temporary storage** and rejects any subsequent call that carries the same
+/// `request_id`, returning `VaultError::DuplicateRequestId`.
+///
+/// This gives safe **at-least-once retry** semantics: a backend can replay a
+/// failed transaction with the same `request_id` and the contract will either
+/// succeed (first time) or return a deterministic error (duplicate).
+///
+/// When `request_id` is `None` no deduplication is performed; the call is
+/// treated as a fire-and-forget deduction with no idempotency guarantee.
+///
+/// ### Retention / TTL
+/// Processed-request markers live in temporary storage and are bumped to
+/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct.  The threshold
+/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`.  After the TTL expires
+/// the marker is archived and a previously-seen `request_id` can be reused —
+/// callers must not rely on deduplication beyond the retention window.
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -75,6 +97,13 @@ pub enum VaultError {
     OfferingIdTooLong = 26,
     /// Metadata exceeds maximum length (code 27).
     MetadataTooLong = 27,
+    /// A deduct with this request_id has already been processed (code 28).
+    ///
+    /// Returned when `request_id` is `Some(id)` and a successful deduct with
+    /// the same `id` was recorded within the retention window.  The caller
+    /// should treat this as a successful no-op: the original deduction already
+    /// went through.
+    DuplicateRequestId = 28,
 }
 
 #[contracttype]
@@ -118,6 +147,12 @@ pub enum StorageKey {
     DepositorList,
     /// Contract version marker (WASM hash) set by `upgrade`.
     ContractVersion,
+    /// Idempotency marker for a processed deduct request.
+    ///
+    /// Stored in **temporary storage** so it expires automatically after
+    /// `REQUEST_ID_BUMP_AMOUNT` ledgers.  The value is `true` (a `bool`);
+    /// presence of the key is the authoritative signal.
+    ProcessedRequest(Symbol),
 }
 
 pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
@@ -130,6 +165,12 @@ pub const MAX_OFFERING_ID_LEN: u32 = 64;
 // Bump when fewer than 30 days remain; extend to 60 days.
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30; // ~30 days
 pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60; // ~60 days
+
+// Processed-request idempotency markers live in temporary storage.
+// Bump when fewer than 7 days remain; extend to 30 days.
+// After the TTL expires the marker is archived and the request_id can be reused.
+pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
+pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
 
 #[contract]
 pub struct CalloraVault;
@@ -533,6 +574,14 @@ impl CalloraVault {
     /// - `amount` must be positive and <= `max_deduct`.
     /// - `caller` must be the owner or `authorized_caller`.
     /// - Vault balance must cover `amount`.
+    ///
+    /// # Idempotency
+    /// When `request_id` is `Some(id)`, the contract checks whether `id` has
+    /// already been processed.  If so, `VaultError::DuplicateRequestId` is
+    /// returned immediately — no funds are moved.  On first success the marker
+    /// is persisted in temporary storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
+    ///
+    /// When `request_id` is `None`, no deduplication is performed.
     pub fn deduct(
         env: Env,
         caller: Address,
@@ -549,6 +598,10 @@ impl CalloraVault {
         if amount > max_d {
             return Err(VaultError::ExceedsMaxDeduct);
         }
+        // Idempotency check — must happen before any state mutation.
+        if let Some(ref rid) = request_id {
+            Self::require_not_duplicate(&env, rid)?;
+        }
         let mut meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
@@ -562,6 +615,10 @@ impl CalloraVault {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        // Mark request_id as processed after successful state update.
+        if let Some(ref rid) = request_id {
+            Self::mark_request_processed(&env, rid);
+        }
         let ut: Address = env
             .storage()
             .instance()
@@ -580,6 +637,15 @@ impl CalloraVault {
     ///
     /// Full-batch validation completes before any state write or transfer.
     /// If any item fails validation, the entire batch reverts with no partial effects.
+    ///
+    /// # Idempotency
+    /// For each item where `request_id` is `Some(id)`, the contract checks for
+    /// duplicates before processing the batch.  If any `id` in the batch has
+    /// already been processed, `VaultError::DuplicateRequestId` is returned and
+    /// the entire batch is rejected atomically.  On success, all `Some` ids in
+    /// the batch are marked as processed.
+    ///
+    /// Items with `request_id = None` are not deduplicated.
     pub fn batch_deduct(
         env: Env,
         caller: Address,
@@ -599,6 +665,9 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let mut running = meta.balance;
         let mut total: i128 = 0;
+        // Collect ids seen within this batch to catch intra-batch duplicates.
+        let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
+        // Full validation pass — no state writes yet.
         for item in items.iter() {
             if item.amount <= 0 {
                 return Err(VaultError::AmountNotPositive);
@@ -609,6 +678,15 @@ impl CalloraVault {
             if running < item.amount {
                 return Err(VaultError::InsufficientBalance);
             }
+            // Idempotency check per item — before any state mutation.
+            // Also catches intra-batch duplicates (two items with the same new id).
+            if let Some(ref rid) = item.request_id {
+                Self::require_not_duplicate(&env, rid)?;
+                if seen_in_batch.contains(rid) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_in_batch.push_back(rid.clone());
+            }
             running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
             total = total.checked_add(item.amount).ok_or(VaultError::Overflow)?;
         }
@@ -618,6 +696,12 @@ impl CalloraVault {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        // Mark all request_ids as processed after successful state update.
+        for item in items.iter() {
+            if let Some(ref rid) = item.request_id {
+                Self::mark_request_processed(&env, rid);
+            }
+        }
         let ut: Address = env
             .storage()
             .instance()
@@ -945,7 +1029,36 @@ impl CalloraVault {
         Ok(())
     }
 
-    pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
+    /// Return `true` if `request_id` has already been processed (marker present
+    /// in temporary storage and not yet expired).
+    pub fn is_request_processed(env: Env, request_id: Symbol) -> bool {
+        env.storage()
+            .temporary()
+            .has(&StorageKey::ProcessedRequest(request_id))
+    }
+
+    /// Check that `request_id` has NOT been processed yet.
+    /// Returns `VaultError::DuplicateRequestId` if the marker exists.
+    fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
+        if env
+            .storage()
+            .temporary()
+            .has(&StorageKey::ProcessedRequest(request_id.clone()))
+        {
+            return Err(VaultError::DuplicateRequestId);
+        }
+        Ok(())
+    }
+
+    /// Persist a processed-request marker in temporary storage and set its TTL.
+    fn mark_request_processed(env: &Env, request_id: &Symbol) {
+        let key = StorageKey::ProcessedRequest(request_id.clone());
+        env.storage().temporary().set(&key, &true);
+        env.storage()
+            .temporary()
+            .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+    }
+
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
         token::Client::new(env, usdc_token).transfer(&env.current_contract_address(), to, &amount);
     }
@@ -1018,3 +1131,25 @@ impl CalloraVault {
             .unwrap_or(Vec::new(&env))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Test modules
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod test;
+
+#[cfg(test)]
+mod test_init_hardening;
+
+#[cfg(test)]
+mod test_setter_validation;
+
+#[cfg(test)]
+mod test_settler_validation;
+
+#[cfg(test)]
+mod test_views;
+
+#[cfg(test)]
+mod test_idempotency;

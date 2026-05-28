@@ -15,7 +15,38 @@ Ledger rate assumption: **17 280 ledgers/day** (5-second close time on Stellar m
 
 Entrypoints that bump TTL: `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`.
 
-Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_settlement`, `get_revenue_pool`, `get_contract_addresses`, `is_paused`, `is_authorized_depositor`, `get_metadata`, `get_max_deduct`, `get_allowed_depositors`) do **not** bump the TTL — they are read-only and incur no write cost.
+Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_settlement`, `get_revenue_pool`, `get_contract_addresses`, `is_paused`, `is_authorized_depositor`, `get_metadata`, `get_max_deduct`, `get_allowed_depositors`, `is_request_processed`) do **not** bump the TTL — they are read-only and incur no write cost.
+
+## Processed-Request Idempotency Storage (Temporary)
+
+Idempotency markers for `deduct` and `batch_deduct` live in **temporary storage** — a separate Soroban storage tier that is automatically archived when its TTL expires, without requiring explicit deletion.
+
+| Constant | Value | Rationale |
+|---|---|---|
+| `REQUEST_ID_BUMP_THRESHOLD` | `17_280 * 7` (~7 days) | Bump is triggered when fewer than 7 days of TTL remain |
+| `REQUEST_ID_BUMP_AMOUNT` | `17_280 * 30` (~30 days) | Each bump extends the TTL to 30 days from the current ledger |
+
+### Key: `StorageKey::ProcessedRequest(Symbol)`
+
+- **Storage tier:** Temporary (auto-archived after TTL expires)
+- **Value type:** `bool` (`true`); presence of the key is the authoritative signal
+- **Written by:** `deduct` and `batch_deduct` on every **successful** deduction where `request_id` is `Some(id)`
+- **Read by:** `deduct`, `batch_deduct` (duplicate check), `is_request_processed` (view)
+- **TTL:** Set to `REQUEST_ID_BUMP_AMOUNT` (~30 days) on write; bumped on every successful re-use within the threshold window
+
+### Retention Policy
+
+| Scenario | Behaviour |
+|----------|-----------|
+| First deduct with `Some(id)` | Marker written; TTL set to ~30 days |
+| Retry within retention window | `DuplicateRequestId` error returned; no state change |
+| Retry after TTL expires | Marker archived; deduct treated as new (succeeds) |
+| Deduct with `None` | No marker written; no deduplication |
+| Failed deduct (any error) | No marker written; id remains reusable |
+
+> **Caller guidance:** Backends should treat `VaultError::DuplicateRequestId` as a successful no-op — the original deduction already went through. Do not retry with a new `request_id` for the same logical operation.
+
+> **Retention window:** The 30-day window is a best-effort guarantee. After expiry the marker is archived and the `request_id` can be reused. Callers requiring longer deduplication windows must implement their own off-chain tracking.
 
 ## Storage Overview
 
@@ -28,29 +59,39 @@ The contract defines the following storage keys:
 ```rust
 #[contracttype]
 pub enum StorageKey {
-    Meta,                          // VaultMeta
-    AllowedDepositors,             // Vec<Address>
+    MetaKey,                       // VaultMeta
     Admin,                         // Address
     UsdcToken,                     // Address
-    Settlement,                    // Option<Address>
+    Settlement,                    // Address
     RevenuePool,                   // Option<Address>
     MaxDeduct,                     // i128
+    Paused,                        // bool
     Metadata(String),              // String (offering metadata by offering_id)
+    PendingOwner,                  // Address
+    PendingAdmin,                  // Address
+    DepositorList,                 // Vec<Address>
+    ContractVersion,               // BytesN<32>
+    ProcessedRequest(Symbol),      // bool — temporary storage, idempotency marker
 }
 ```
 
 ### Storage Keys Table
 
-| Key Variant | Value Type | Description | Usage | Access |
-|-------------|-----------|-------------|-------|--------|
-| `Meta` | `VaultMeta` | Primary vault metadata including owner, balance, authorized_caller, and min_deposit | Core vault state | `get_meta()`, updated by deposit/deduct/withdraw operations |
-| `AllowedDepositors` | `Vec<Address>` | List of addresses allowed to deposit into the vault | Access control for deposits | `set_allowed_depositor()`, readable via `is_authorized_depositor()` |
-| `Admin` | `Address` | Administrator address authorized to call `distribute()` and `set_admin()` | Access control for distributions | `get_admin()`, `set_admin()` (admin-only) |
-| `UsdcToken` | `Address` | USDC token contract address | Token transfers for deposits, deducts, distributions | Set during `init()`, used by token operations |
-| `Settlement` | `Option<Address>` | Settlement contract address; receives USDC on deduct operations | Deduct routing (priority over RevenuePool) | `set_settlement()`, `get_settlement()` (admin-only write, public read) |
-| `RevenuePool` | `Option<Address>` | Revenue pool contract address; receives USDC on deduct if Settlement is not set | Deduct routing (fallback) | `set_revenue_pool()`, `get_revenue_pool()` (admin-only write, public read) |
-| `MaxDeduct` | `i128` | Maximum USDC amount per single deduct operation | Deduct limit enforcement | Set during `init()`, read by `deduct()` and `batch_deduct()` |
-| `Metadata(offering_id)` | `String` | Off-chain metadata reference (IPFS CID or URI) for a specific offering | Offering metadata | `set_metadata()`, `get_metadata()`, `update_metadata()` (owner-only) |
+| Key Variant | Storage Tier | Value Type | Description | Access |
+|-------------|-------------|-----------|-------------|--------|
+| `MetaKey` | Instance | `VaultMeta` | Owner, balance, authorized_caller, min_deposit | `get_meta()`, updated by deposit/deduct/withdraw |
+| `Admin` | Instance | `Address` | Administrator address | `get_admin()`, `set_admin()` |
+| `UsdcToken` | Instance | `Address` | USDC token contract address | Set during `init()` |
+| `Settlement` | Instance | `Address` | Settlement contract; receives USDC on deduct | `set_settlement()`, `get_settlement()` |
+| `RevenuePool` | Instance | `Option<Address>` | Revenue pool address (informational) | `set_revenue_pool()`, `get_revenue_pool()` |
+| `MaxDeduct` | Instance | `i128` | Maximum USDC per single deduct | Set during `init()`, read by `deduct()` / `batch_deduct()` |
+| `Paused` | Instance | `bool` | Circuit-breaker flag | `pause()`, `unpause()`, `is_paused()` |
+| `Metadata(String)` | Instance | `String` | Per-offering metadata (IPFS CID / URI) | `set_metadata()`, `get_metadata()`, `update_metadata()` |
+| `PendingOwner` | Instance | `Address` | Two-step ownership transfer nominee | `transfer_ownership()`, `accept_ownership()` |
+| `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
+| `DepositorList` | Instance | `Vec<Address>` | Allowed depositor addresses | `set_allowed_depositor()`, `get_allowed_depositors()` |
+| `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
+| `ProcessedRequest(Symbol)` | **Temporary** | `bool` | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
 
 ## Data Structures
 
@@ -103,13 +144,13 @@ Sets up the vault with initial state:
 
 | Operation | Reads | Writes | Authorization |
 |-----------|-------|--------|-----------------|
-| `deposit(amount)` | Meta, AllowedDepositors | Meta (balance += amount) | Owner or AllowedDepositor |
-| `deduct(amount, request_id)` | Meta, MaxDeduct, Settlement/RevenuePool | Meta (balance -= amount); transfers USDC | Owner or authorized_caller |
-| `batch_deduct(items)` | Meta, MaxDeduct, Settlement/RevenuePool | Meta (balance -= total); transfers USDC | Owner or authorized_caller |
-| `withdraw(amount)` | Meta, UsdcToken | Meta (balance -= amount); transfers USDC to owner | Owner only |
-| `withdraw_to(to, amount)` | Meta, UsdcToken | Meta (balance -= amount); transfers USDC to `to` | Owner only |
-| `balance()` | Meta | — | Public read |
-| `transfer_ownership(new_owner)` | Meta | Meta (owner = new_owner) | Owner only |
+| `deposit(amount)` | MetaKey, DepositorList | MetaKey (balance += amount) | Owner or AllowedDepositor |
+| `deduct(amount, request_id)` | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)? | MetaKey (balance -= amount); ProcessedRequest(id) if Some; transfers USDC | Owner or authorized_caller |
+| `batch_deduct(items)` | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)? per item | MetaKey (balance -= total); ProcessedRequest(id) per Some item; transfers USDC | Owner or authorized_caller |
+| `withdraw(amount)` | MetaKey, UsdcToken | MetaKey (balance -= amount); transfers USDC to owner | Owner only |
+| `withdraw_to(to, amount)` | MetaKey, UsdcToken | MetaKey (balance -= amount); transfers USDC to `to` | Owner only |
+| `balance()` | MetaKey | — | Public read |
+| `transfer_ownership(new_owner)` | MetaKey | PendingOwner | Owner only |
 
 ### Admin Operations
 
@@ -301,6 +342,7 @@ Monitor storage-related events:
 |---------|--------|
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
+| 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 
 ## Canonical Storage Keys
 
@@ -308,21 +350,24 @@ All storage is accessed via `StorageKey` enum.
 
 ### Keys
 
-| Key | Description |
-|-----|------------|
-| Meta | Vault metadata |
-| DepositorList | Authorized depositors |
-| Admin | Admin address |
-| UsdcToken | Token contract |
-| Settlement | Settlement contract |
-| RevenuePool | Revenue pool |
-| MaxDeduct | Deduct cap |
-| Paused | Circuit breaker |
-| Metadata(String) | Offering metadata |
-| PendingOwner | Ownership transfer |
-| PendingAdmin | Admin transfer |
+| Key | Storage Tier | Description |
+|-----|-------------|------------|
+| `MetaKey` | Instance | Vault metadata (owner, balance, authorized_caller, min_deposit) |
+| `DepositorList` | Instance | Authorized depositors |
+| `Admin` | Instance | Admin address |
+| `UsdcToken` | Instance | Token contract |
+| `Settlement` | Instance | Settlement contract |
+| `RevenuePool` | Instance | Revenue pool |
+| `MaxDeduct` | Instance | Deduct cap |
+| `Paused` | Instance | Circuit breaker |
+| `Metadata(String)` | Instance | Offering metadata |
+| `PendingOwner` | Instance | Ownership transfer nominee |
+| `PendingAdmin` | Instance | Admin transfer nominee |
+| `ContractVersion` | Instance | WASM hash (set by `upgrade()`) |
+| `ProcessedRequest(Symbol)` | **Temporary** | Idempotency marker; auto-expires after ~30 days |
 
 ### Migration
 
 - Removes deprecated `AllowedDepositors`
 - Ensures Admin fallback from Meta.owner
+- `ProcessedRequest` uses temporary storage — no manual cleanup required; markers expire automatically
