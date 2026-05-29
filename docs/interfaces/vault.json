@@ -1,4 +1,4 @@
-﻿{
+{
   "contract": "callora-vault",
   "version": "0.0.1",
   "description": "Primary USDC prepaid vault for the Callora API marketplace. Handles deposits, per-call deductions, withdrawals, and optional routing of deducted funds to a settlement or revenue-pool contract.",
@@ -34,7 +34,8 @@
       { "code": 24, "name": "NoOwnershipTransferPending", "description": "No ownership transfer is pending." },
       { "code": 25, "name": "NoAdminTransferPending", "description": "No admin transfer is pending." },
       { "code": 26, "name": "OfferingIdTooLong", "description": "Offering ID exceeds maximum length." },
-      { "code": 27, "name": "MetadataTooLong", "description": "Metadata exceeds maximum length." }
+      { "code": 27, "name": "MetadataTooLong", "description": "Metadata exceeds maximum length." },
+      { "code": 28, "name": "PriceParseError", "description": "Price parsing error or non‑positive price." }
     ]
   },
 
@@ -60,7 +61,7 @@
   "functions": [
     {
       "name": "init",
-      "description": "Initialize the vault. Can only be called once. The owner must authorize the transaction.",
+      "description": "Initialize the vault. Can only be called once. Owner must sign the transaction.",
       "access": "owner (must sign)",
       "params": [
         { "name": "owner",             "type": "Address",      "optional": false, "description": "Vault owner address; must authorize." },
@@ -73,38 +74,110 @@
       ],
       "returns": "VaultMeta",
       "panics": [
-        "\"vault already initialized\" â€” called more than once.",
-        "\"initial balance must be non-negative\" â€” initial_balance < 0.",
-        "\"min_deposit must be non-negative\" â€” min_deposit < 0.",
-        "\"max_deduct must be positive\" â€” max_deduct <= 0.",
-        "\"min_deposit cannot exceed max_deduct\" â€” constraint violation.",
-        "\"usdc_token cannot be vault address\" â€” self-reference guard.",
-        "\"revenue_pool cannot be vault address\" â€” self-reference guard."
+        "\"vault already initialized\" — called more than once.",
+        "\"initial balance must be non-negative\" — initial_balance < 0.",
+        "\"min_deposit must be non-negative\" — min_deposit < 0.",
+        "\"max_deduct must be positive\" — max_deduct <= 0.",
+        "\"min_deposit cannot exceed max_deduct\" — constraint violation.",
+        "\"usdc_token cannot be vault address\" — self-reference guard.",
+        "\"revenue_pool cannot be vault address\" — self-reference guard."
       ],
       "events": [
         { "topics": ["\"init\"", "owner"], "data": "balance (i128)" }
       ]
     },
-
     {
       "name": "deposit",
       "description": "Transfer USDC from depositor into vault and increase tracked balance. Blocked when paused.",
       "access": "owner OR allowed depositor",
       "params": [
         { "name": "depositor", "type": "Address", "optional": false, "description": "Must be owner or an allowed depositor; must authorize." },
-        { "name": "amount", "type": "i128",    "optional": false, "description": "Amount to deposit; must be > 0 and >= min_deposit." }
+        { "name": "amount",    "type": "i128",    "optional": false, "description": "Amount to deposit; must be > 0 and >= min_deposit." }
       ],
       "returns": "i128 (new balance)",
       "panics": [
-        "\"vault is paused\" â€” circuit breaker is active.",
-        "\"amount must be positive\" â€” amount <= 0.",
-        "\"unauthorized: only owner or allowed depositor can deposit\" â€” auth failure.",
-        "\"deposit below minimum: X < Y\" â€” below min_deposit.",
-        "\"balance overflow\" â€” extremely unlikely arithmetic overflow."
+        "\"vault is paused\" — circuit breaker is active.",
+        "\"amount must be positive\" — amount <= 0.",
+        "\"unauthorized: only owner or allowed depositor can deposit\" — auth failure.",
+        "\"deposit below minimum: X < Y\" — below min_deposit.",
+        "\"balance overflow\" — extremely unlikely arithmetic overflow."
       ],
       "events": [
         { "topics": ["\"deposit\"", "depositor"], "data": "(amount, new_balance) tuple" }
       ]
+    },
+    {
+      "name": "set_price",
+      "description": "Store off‑chain price for an offering. Owner‑only. Offering ID limited to 64 characters. Price must be a positive integer string.",
+      "access": "owner",
+      "params": [
+        { "name": "caller",      "type": "Address", "optional": false, "description": "Vault owner; must authorize." },
+        { "name": "offering_id", "type": "String",  "optional": false, "description": "Offering identifier; max 64 characters." },
+        { "name": "price",       "type": "String",  "optional": false, "description": "Price value as string; must parse to a positive i128." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: owner only\" — caller is not the owner.",
+        "\"offering_id exceeds max length\" — offering_id.len() > 64.",
+        "\"price parse error\" — price cannot be parsed to a positive integer."
+      ],
+      "events": [
+        { "topics": ["\"price_set\"", "caller", "offering_id"], "data": "price (String)" }
+      ]
+    },
+    {
+      "name": "get_price",
+      "description": "Retrieve stored price for an offering. Returns null if not set.",
+      "access": "any",
+      "params": [
+        { "name": "offering_id", "type": "String", "optional": false, "description": "Offering identifier to look up." }
+      ],
+      "returns": "String | null",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "set_metadata",
+      "description": "Store off-chain metadata (e.g. IPFS CID) for an offering. Owner-only. offering_id max 64 chars; metadata max 256 chars.",
+      "access": "owner",
+      "params": [
+        { "name": "caller",      "type": "Address", "optional": false, "description": "Must be the vault owner; must authorize." },
+        { "name": "offering_id", "type": "String",  "optional": false, "description": "Offering identifier; max 64 characters." },
+        { "name": "metadata",    "type": "String",  "optional": false, "description": "Metadata value (e.g. IPFS CID or URI); max 256 characters." }
+      ],
+      "returns": "String (stored metadata)",
+      "panics": [
+        "\"unauthorized: owner only\" — caller is not the owner.",
+        "\"offering_id exceeds max length\" — offering_id.len() > 64.",
+        "\"metadata exceeds max length\" — metadata.len() > 256."
+      ],
+      "events": [
+        { "topics": ["\"metadata_set\"", "offering_id", "caller"], "data": "metadata (String)" }
+      ]
+    },
+    {
+      "name": "get_metadata",
+      "description": "Retrieve stored offering metadata. Returns null if not set.",
+      "access": "any",
+      "params": [
+        { "name": "offering_id", "type": "String", "optional": false, "description": "Offering identifier to look up." }
+      ],
+      "returns": "String | null",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "require_owner",
+      "description": "Utility: panic with 'unauthorized: owner only' if caller is not the vault owner. Exposed publicly so external contracts can use it as a guard.",
+      "access": "any (panics if caller != owner)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Address to validate as owner." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: owner only\" — caller is not the owner."
+      ],
+      "events": []
     },
 
     {

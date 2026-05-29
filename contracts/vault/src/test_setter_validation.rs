@@ -1,16 +1,19 @@
 extern crate std;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{token, Address, Env, Symbol, String};
 use super::*;
+
 fn create_usdc(env: &Env, admin: &Address) -> (Address, token::StellarAssetClient) {
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
     let addr = ca.address();
     (addr.clone(), token::StellarAssetClient::new(env, &addr))
 }
+
 fn create_vault(env: &Env) -> (Address, CalloraVaultClient) {
     let addr = env.register(CalloraVault, ());
     (addr, CalloraVaultClient::new(env, &addr))
 }
+
 fn setup(env: &Env) -> (Address, CalloraVaultClient, Address, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
@@ -19,6 +22,39 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient, Address, Address) {
     client.init(&admin, &usdc, &None, &None, &None, &None, &None);
     (vault_addr, client, usdc, admin)
 }
+
+#[test]
+#[should_panic(expected = "OfferingIdTooLong")]
+fn set_price_offering_id_too_long() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let long_id = "a".repeat((MAX_OFFERING_ID_LEN + 1) as usize);
+    client.set_price(&admin, &long_id, "100");
+}
+
+#[test]
+#[should_panic(expected = "PriceParseError")]
+fn set_price_zero_price() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    client.set_price(&admin, "off1", "0");
+}
+
+#[test]
+fn set_price_successful() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    client.set_price(&admin, "off1", "1000").unwrap();
+    // Verify readback
+    let stored = client.get_price(&"off1".to_string());
+    assert_eq!(stored, Some("1000".to_string()));
+    // Verify event emitted (using try call to capture events)
+    let events = env.events().all();
+    // Find price_set event
+    let price_set = events.iter().find(|e| e.topics[0].to_string() == "price_set");
+    assert!(price_set.is_some(), "price_set event not emitted");
+}
+
 #[test]
 #[should_panic(expected = "settlement cannot be vault address")]
 fn set_settlement_vault_address_panics() {

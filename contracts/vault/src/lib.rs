@@ -97,13 +97,8 @@ pub enum VaultError {
     OfferingIdTooLong = 26,
     /// Metadata exceeds maximum length (code 27).
     MetadataTooLong = 27,
-    /// A deduct with this request_id has already been processed (code 28).
-    ///
-    /// Returned when `request_id` is `Some(id)` and a successful deduct with
-    /// the same `id` was recorded within the retention window.  The caller
-    /// should treat this as a successful no-op: the original deduction already
-    /// went through.
-    DuplicateRequestId = 28,
+    /// Price parsing error or non‑positive price (code 28).
+    PriceParseError = 28,
 }
 
 #[contracttype]
@@ -142,6 +137,7 @@ pub enum StorageKey {
     MaxDeduct,
     Paused,
     Metadata(String),
+    Price(String),
     PendingOwner,
     PendingAdmin,
     DepositorList,
@@ -932,6 +928,38 @@ impl CalloraVault {
             metadata.clone(),
         );
         Ok(metadata)
+    }
+
+    /// Set price for an offering (owner only).
+    ///
+    /// # Errors
+    /// - `VaultError::OfferingIdTooLong` when `offering_id` exceeds maximum length.
+    /// - `VaultError::PriceParseError` when `price` cannot be parsed to a positive i128.
+    pub fn set_price(env: Env, caller: Address, offering_id: String, price: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if offering_id.len() > MAX_OFFERING_ID_LEN {
+            return Err(VaultError::OfferingIdTooLong);
+        }
+        let price_i128: i128 = price.parse().map_err(|_| VaultError::PriceParseError)?;
+        if price_i128 <= 0 {
+            return Err(VaultError::PriceParseError);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::Price(offering_id.clone()), &price);
+        env.events().publish(
+            (Symbol::new(&env, "price_set"), caller, offering_id),
+            price.clone(),
+        );
+        Ok(())
+    }
+
+    /// Get stored price for an offering.
+    pub fn get_price(env: Env, offering_id: String) -> Option<String> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Price(offering_id))
     }
 
     pub fn update_metadata(
