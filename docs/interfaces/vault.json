@@ -5,6 +5,39 @@
   "crate": "callora-vault",
   "source": "contracts/vault/src/lib.rs",
 
+  "errors": {
+    "description": "Typed error codes returned by vault operations. These replace string panics to enable machine-readable error handling.",
+    "codes": [
+      { "code": 1, "name": "NotInitialized", "description": "Vault has not been initialized yet." },
+      { "code": 2, "name": "AlreadyInitialized", "description": "Vault has already been initialized." },
+      { "code": 3, "name": "Unauthorized", "description": "Caller is not authorized for this operation." },
+      { "code": 4, "name": "Paused", "description": "Vault is currently paused." },
+      { "code": 5, "name": "InsufficientBalance", "description": "Insufficient balance for the requested operation." },
+      { "code": 6, "name": "AmountNotPositive", "description": "Amount must be positive." },
+      { "code": 7, "name": "ExceedsMaxDeduct", "description": "Deduct amount exceeds the configured maximum." },
+      { "code": 8, "name": "BelowMinDeposit", "description": "Deposit amount is below the configured minimum." },
+      { "code": 9, "name": "Overflow", "description": "Arithmetic overflow detected." },
+      { "code": 10, "name": "InitialBalanceNegative", "description": "Initial balance must be non-negative." },
+      { "code": 11, "name": "MinDepositNotPositive", "description": "Min deposit must be positive." },
+      { "code": 12, "name": "MaxDeductNotPositive", "description": "Max deduct must be positive." },
+      { "code": 13, "name": "MinDepositExceedsMaxDeduct", "description": "Min deposit cannot exceed max deduct." },
+      { "code": 14, "name": "UsdcTokenCannotBeVault", "description": "USDC token address cannot be the vault address." },
+      { "code": 15, "name": "RevenuePoolCannotBeVault", "description": "Revenue pool address cannot be the vault address." },
+      { "code": 16, "name": "AuthorizedCallerCannotBeVault", "description": "Authorized caller address cannot be the vault address." },
+      { "code": 17, "name": "InitialBalanceExceedsOnLedger", "description": "Initial balance exceeds on-ledger USDC balance." },
+      { "code": 18, "name": "AlreadyPaused", "description": "Vault is already paused." },
+      { "code": 19, "name": "NotPaused", "description": "Vault is not paused." },
+      { "code": 20, "name": "SettlementNotSet", "description": "Settlement address has not been configured." },
+      { "code": 21, "name": "BatchEmpty", "description": "Batch deduct requires at least one item." },
+      { "code": 22, "name": "BatchTooLarge", "description": "Batch size exceeds maximum allowed." },
+      { "code": 23, "name": "NewOwnerSameAsCurrent", "description": "New owner must be different from current owner." },
+      { "code": 24, "name": "NoOwnershipTransferPending", "description": "No ownership transfer is pending." },
+      { "code": 25, "name": "NoAdminTransferPending", "description": "No admin transfer is pending." },
+      { "code": 26, "name": "OfferingIdTooLong", "description": "Offering ID exceeds maximum length." },
+      { "code": 27, "name": "MetadataTooLong", "description": "Metadata exceeds maximum length." }
+    ]
+  },
+
   "types": {
     "VaultMeta": {
       "description": "On-chain vault state returned by init and get_meta.",

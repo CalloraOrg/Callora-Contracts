@@ -70,6 +70,7 @@ The Callora Settlement contract tracks individual developer balances and global 
 - **Admin**: Primary authority over contract configuration and sensitive data.
 - **Vault**: The registered vault contract authorized to send payments.
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
+- **Pending Vault**: Proposed vault awaiting acceptance.
 
 ### Authorization Matrix
 
@@ -78,18 +79,22 @@ The Callora Settlement contract tracks individual developer balances and global 
 | `receive_payment` | ✅ | ✅ | ❌ | ❌ |
 | `set_admin` | ✅ | ❌ | ❌ | ❌ |
 | `accept_admin` | ❌ | ❌ | ✅ | ❌ |
-| `set_vault` | ✅ | ❌ | ❌ | ❌ |
+| `propose_vault` | ✅ | ❌ | ❌ | ❌ |
+| `accept_vault` | ✅ | ✅ | ❌ | ❌ |
+| `set_vault` (alias of `propose_vault`) | ✅ | ❌ | ❌ | ❌ |
 | `get_all_developer_balances` | ✅ | ❌ | ❌ | ❌ |
 
 ### Security Model
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
+- **Two-Step Vault Rotation**: Prevents accidentally misrouting settlement credits by requiring the proposed vault to accept (or the admin to finalize).
 - **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
 
 ## Test Coverage
 The implementation includes comprehensive tests covering:
 - ✅ Admin and Vault can call `receive_payment`
 - ✅ Unauthorized callers are rejected from `receive_payment`
-- ✅ Only Admin can call `set_admin` and `set_vault`
+- ✅ Only Admin can call `set_admin` and `propose_vault` (and the `set_vault` alias)
+- ✅ Only Admin or Pending Vault can call `accept_vault`
 - ✅ Only Pending Admin can call `accept_admin`
 - ✅ Only Admin can call `get_all_developer_balances`
 - ✅ All rotation and update logic preserves state integrity

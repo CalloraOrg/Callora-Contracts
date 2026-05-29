@@ -1,57 +1,62 @@
-use crate::{CalloraSettlement, CalloraSettlementClient};
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError};
+use soroban_sdk::{testutils::Address as _, Address, Env, InvokeError};
+
+fn is_not_initialized(result: Result<impl core::fmt::Debug, InvokeError>) -> bool {
+    match result {
+        Err(InvokeError::Contract(code)) => code == SettlementError::NotInitialized as u32,
+        _ => false,
+    }
+}
 
 #[test]
-#[should_panic(expected = "settlement contract not initialized")]
-fn test_get_admin_uninitialized_panics() {
+fn test_get_admin_uninitialized() {
     let env = Env::default();
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
-    client.get_admin();
+    assert!(is_not_initialized(client.try_get_admin()));
 }
 
 #[test]
-#[should_panic(expected = "settlement contract not initialized")]
-fn test_get_vault_uninitialized_panics() {
+fn test_get_vault_uninitialized() {
     let env = Env::default();
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
-    client.get_vault();
+    assert!(is_not_initialized(client.try_get_vault()));
 }
 
 #[test]
-#[should_panic(expected = "settlement contract not initialized")]
-fn test_get_global_pool_uninitialized_panics() {
+fn test_get_global_pool_uninitialized() {
     let env = Env::default();
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
-    client.get_global_pool();
+    assert!(is_not_initialized(client.try_get_global_pool()));
 }
 
 #[test]
-#[should_panic(expected = "settlement contract not initialized")]
-fn test_get_developer_balance_uninitialized_panics() {
+fn test_get_developer_balance_uninitialized() {
     let env = Env::default();
     let dev = Address::generate(&env);
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
-    client.get_developer_balance(&dev);
+    assert!(is_not_initialized(client.try_get_developer_balance(&dev)));
 }
 
 #[test]
-#[should_panic(expected = "settlement contract not initialized")]
-fn test_get_all_developer_balances_uninitialized_panics() {
+fn test_get_all_developer_balances_uninitialized() {
     let env = Env::default();
     env.mock_all_auths();
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     let dummy = Address::generate(&env);
 
-    client.get_all_developer_balances(&dummy);
+    // get_all_developer_balances calls get_admin internally, which returns NotInitialized
+    assert!(is_not_initialized(
+        client.try_get_all_developer_balances(&dummy)
+    ));
 }
 
 #[test]
