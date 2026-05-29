@@ -388,6 +388,30 @@ Emitted when existing offering metadata is replaced.
 
 ---
 
+### `metadata_removed`
+
+Emitted when the owner deletes a stale offering's metadata from instance storage.
+
+| Index   | Location | Type    | Description         |
+|---------|----------|---------|---------------------|
+| topic 0 | topics   | Symbol  | `"metadata_removed"` |
+| topic 1 | topics   | String  | offering_id         |
+| topic 2 | topics   | Address | caller (owner)      |
+| data    | data     | ()      | empty               |
+
+```json
+{
+  "topics": ["metadata_removed", "offering-001", "GOWNER..."],
+  "data": null
+}
+```
+
+**Indexer note:** After this event, `get_metadata(offering_id)` returns `None`.
+The call is idempotent — removing a key that was never set (or was already removed)
+emits the event and returns `Ok(())` without error.
+
+---
+
 ### `set_authorized_caller`
 
 Emitted when the owner updates the authorized caller address.
@@ -808,6 +832,7 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 | `set_authorized_caller` | vault           | `set_authorized_caller()`                |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |
+| `metadata_removed`       | vault           | `remove_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
 | `init`                   | revenue-pool    | `init()`                                 |
 | `admin_changed`          | revenue-pool    | `set_admin()`                            |
@@ -829,6 +854,7 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 |---------|---------------|--------------------------------------------------------------|
 | 0.0.1   | vault         | Initial vault events                                         |
 | 0.0.1   | vault         | Added `set_authorized_caller` event with old/new value payload (Issue #256) |
+| 0.0.1   | vault         | Added `metadata_removed` event on `remove_metadata()` for stale-entry cleanup |
 | 0.0.1   | revenue-pool  | Full revenue pool event suite with JSON examples             |
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |

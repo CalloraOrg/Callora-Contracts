@@ -2009,6 +2009,93 @@ fn metadata_remains_after_ownership_transfer() {
 }
 
 // ---------------------------------------------------------------------------
+// remove_metadata tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn remove_metadata_clears_entry() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "offering-rm-001");
+    let metadata = String::from_str(&env, "ipfs://bafybeig");
+
+    client.set_metadata(&owner, &offering_id, &metadata);
+    assert_eq!(client.get_metadata(&offering_id), Some(metadata));
+
+    client.remove_metadata(&owner, &offering_id);
+    assert_eq!(client.get_metadata(&offering_id), None);
+}
+
+#[test]
+fn remove_metadata_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "offering-rm-002");
+    client.set_metadata(&owner, &offering_id, &String::from_str(&env, "ipfs://cid"));
+    client.remove_metadata(&owner, &offering_id);
+
+    let events = env.events().all();
+    let ev = events.last().expect("expected metadata_removed event");
+
+    assert_eq!(ev.0, vault_address);
+    let topics = &ev.1;
+    assert_eq!(topics.len(), 3);
+
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: String = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
+
+    assert_eq!(topic0, Symbol::new(&env, "metadata_removed"));
+    assert_eq!(topic1, offering_id);
+    assert_eq!(topic2, owner);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: owner only")]
+fn unauthorized_cannot_remove_metadata() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "offering-rm-003");
+    client.set_metadata(&owner, &offering_id, &String::from_str(&env, "ipfs://cid"));
+    client.remove_metadata(&unauthorized, &offering_id);
+}
+
+#[test]
+fn remove_metadata_nonexistent_is_noop() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let offering_id = String::from_str(&env, "offering-rm-never-set");
+    // Should not panic even when the key was never written
+    client.remove_metadata(&owner, &offering_id);
+    assert_eq!(client.get_metadata(&offering_id), None);
+}
+
+// ---------------------------------------------------------------------------
 // Full lifecycle test
 // ---------------------------------------------------------------------------
 

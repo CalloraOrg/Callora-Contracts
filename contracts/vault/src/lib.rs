@@ -991,6 +991,34 @@ impl CalloraVault {
         Ok(metadata)
     }
 
+    /// Remove stored offering metadata (owner only).
+    ///
+    /// Deletes the `Metadata(offering_id)` storage key from instance storage.
+    /// Silently succeeds if the key does not exist (idempotent).
+    ///
+    /// # Errors
+    /// - `VaultError::Unauthorized` — caller is not the vault owner.
+    /// - `VaultError::OfferingIdTooLong` — `offering_id` exceeds `MAX_OFFERING_ID_LEN`.
+    pub fn remove_metadata(
+        env: Env,
+        caller: Address,
+        offering_id: String,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if offering_id.len() > MAX_OFFERING_ID_LEN {
+            return Err(VaultError::OfferingIdTooLong);
+        }
+        env.storage()
+            .instance()
+            .remove(&StorageKey::Metadata(offering_id.clone()));
+        env.events().publish(
+            (Symbol::new(&env, "metadata_removed"), offering_id, caller),
+            (),
+        );
+        Ok(())
+    }
+
     /// Admin-gated contract upgrade.
     ///
     /// Only the current admin may call. This will instruct the host to update
