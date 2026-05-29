@@ -139,7 +139,13 @@ pub struct BalanceCreditedEvent {
    - Creates empty developer balances and global pool
    - Panic: "settlement contract already initialized"
 
-2. **`receive_payment(env, caller, amount, to_pool, developer)`**
+4. **`set_usdc_token(env, caller, usdc_address)`**
+   - Configures the USDC token contract address for withdrawals
+   - Authorization: Current admin only
+   - Validation: Token address cannot be the contract itself
+   - Panic: "unauthorized: caller is not admin" or "invalid config: usdc_token cannot be the contract itself"
+
+5. **`receive_payment(env, caller, amount, to_pool, developer)`**
    - **Access Control**: Only vault or admin can call
    - **Validation**: Amount must be positive
    - **Pool Credit**: If `to_pool=true`, credits global pool
@@ -147,6 +153,14 @@ pub struct BalanceCreditedEvent {
    - **Events**: 
      - `PaymentReceivedEvent` for all payments
      - `BalanceCreditedEvent` for developer credits
+
+6. **`withdraw_developer_balance(env, developer, amount)`**
+   - **Access Control**: Only the developer may call
+   - **Validation**: Amount must be positive and cannot exceed tracked balance
+   - **Token Flow**: Transfers USDC from the settlement contract to the developer
+   - **State Update**: Deducts the withdrawn amount from the tracked balance using checked arithmetic
+   - **Events**:
+     - `DeveloperWithdrawEvent` after transfer succeeds
 
 3. **Query Functions**
    - `get_admin()`, `get_vault()`, `get_global_pool()`
@@ -255,6 +269,20 @@ CalloraSettlement::receive_payment(
     amount,
     false, // credit to developer, not pool
     Some(developer_address), // specify developer
+);
+```
+
+### Developer Withdrawal
+
+```rust
+// Configure USDC if not already configured by admin
+CalloraSettlement::set_usdc_token(env, admin_address, usdc_contract_address);
+
+// Developer withdraws their available tracked balance
+CalloraSettlement::withdraw_developer_balance(
+    env,
+    developer_address,
+    withdrawal_amount,
 );
 ```
 

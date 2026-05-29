@@ -49,6 +49,7 @@ pub enum StorageKey {
     DeveloperIndex,
     DeveloperBalance(Address),
     GlobalPool,
+    Usdc,
 }
 
 /// Developer balance record in settlement contract
@@ -337,8 +338,8 @@ impl CalloraSettlement {
             env.events().publish(
                 (Symbol::new(&env, "balance_credited"), dev.clone()),
                 BalanceCreditedEvent {
-                    developer: dev,
-                    amount,
+                    developer: dev.clone(),
+                    amount: amount,
                     new_balance,
                 },
             );
@@ -390,6 +391,87 @@ impl CalloraSettlement {
             .persistent()
             .get(&StorageKey::DeveloperBalance(developer))
             .unwrap_or(0)
+    }
+
+    /// Configure the USDC token contract address.
+    ///
+    /// Only the current admin may set the on-chain USDC token address that this
+    /// contract will use to execute withdrawals.
+    pub fn set_usdc_token(env: Env, caller: Address, usdc_address: Address) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        if usdc_address == env.current_contract_address() {
+            panic!("invalid config: usdc_token cannot be the contract itself");
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::Usdc, &usdc_address);
+    }
+
+    fn get_usdc_token(env: Env) -> Result<Address, SettlementError> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Usdc)
+            .ok_or(SettlementError::UsdcTokenNotConfigured)
+    }
+
+    /// Withdraw developer balance as USDC to the requesting developer.
+    ///
+    /// Requires the developer to authorize the request and the requested amount
+    /// to be positive and covered by the tracked developer balance.
+    pub fn withdraw_developer_balance(
+        env: Env,
+        developer: Address,
+        amount: i128,
+    ) -> Result<(), SettlementError> {
+        developer.require_auth();
+        if amount <= 0 {
+            return Err(SettlementError::AmountNotPositive);
+        }
+
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .unwrap_or(0);
+        if amount > current_balance {
+            return Err(SettlementError::InsufficientDeveloperBalance);
+        }
+
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+
+        if usdc.balance(&contract_address) < amount {
+            return Err(SettlementError::InsufficientContractBalance);
+        }
+
+        usdc.transfer(&contract_address, &developer, &amount);
+
+        env.storage()
+            .persistent()
+            .set(&StorageKey::DeveloperBalance(developer.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(&StorageKey::DeveloperBalance(developer.clone()), 50000, 50000);
+
+        env.events().publish(
+            (Symbol::new(&env, "developer_withdraw"), developer.clone()),
+            DeveloperWithdrawEvent {
+                developer,
+                amount,
+                remaining_balance: new_balance,
+            },
+        );
+
+        Ok(())
     }
 
     /// Get all developer balances (admin only)

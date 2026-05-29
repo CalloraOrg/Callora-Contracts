@@ -252,6 +252,111 @@ mod settlement_tests {
     }
 
     #[test]
+    fn test_withdraw_developer_balance_succeeds_exact_balance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+        usdc_admin_client.mint(&addr, &100i128);
+
+        let result = client.try_withdraw_developer_balance(&developer, &100i128);
+        assert!(result.is_ok());
+        assert_eq!(client.get_developer_balance(&developer), 0i128);
+        assert_eq!(token::Client::new(&env, &usdc_address).balance(&addr), 0i128);
+        assert_eq!(token::Client::new(&env, &usdc_address).balance(&developer), 100i128);
+    }
+
+    #[test]
+    fn test_withdraw_developer_balance_rejects_overdraw() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+        usdc_admin_client.mint(&addr, &100i128);
+
+        let result = client.try_withdraw_developer_balance(&developer, &101i128);
+        assert!(result.is_err());
+        assert_eq!(client.get_developer_balance(&developer), 100i128);
+    }
+
+    #[test]
+    fn test_withdraw_developer_balance_rejects_non_positive_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        client.init(&admin, &vault);
+
+        let zero_result = client.try_withdraw_developer_balance(&developer, &0i128);
+        let negative_result = client.try_withdraw_developer_balance(&developer, &-1i128);
+
+        assert!(zero_result.is_err());
+        assert!(negative_result.is_err());
+    }
+
+    #[test]
+    fn test_withdraw_developer_balance_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::{IntoVal, Symbol};
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()));
+        usdc_admin_client.mint(&addr, &200i128);
+
+        let result = client.try_withdraw_developer_balance(&developer, &200i128);
+        assert!(result.is_ok());
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "developer_withdraw")
+                }
+            })
+            .expect("expected developer_withdraw event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let data: crate::DeveloperWithdrawEvent = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.amount, 200i128);
+        assert_eq!(data.remaining_balance, 0i128);
+    }
+
+    #[test]
     fn test_get_all_developer_balances() {
         let env = Env::default();
         env.mock_all_auths();
