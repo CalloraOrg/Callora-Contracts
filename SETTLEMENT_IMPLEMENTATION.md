@@ -4,6 +4,18 @@
 
 This document describes the implementation of revenue settlement functionality that allows the vault contract to automatically transfer USDC to a settlement contract when deductions occur. The settlement contract then credits either a global pool or specific developer balances.
 
+## Reconciliation Contract (Vault ↔ Settlement)
+
+The integration between the vault and settlement contracts ensures that tracked balances stay in sync across both systems. Here's how it works:
+
+1. **Atomic Operations**: All operations (validation → token transfer → settlement contract call → state update) happen atomically. If any step fails, the entire transaction reverts with no partial state changes.
+2. **Reconciliation Flow**:
+   - The vault contract first validates the deduct/batch-deduct request
+   - It transfers USDC tokens to the settlement contract
+   - It calls `settlement_client.receive_payment(..., to_pool=true, developer=None)` to notify the settlement contract to credit the global pool
+   - Only after the cross‑contract call succeeds does the vault update its own internal balance
+3. **`to_pool` Semantics**: For all vault‑originated deducts and batch deducts, the deducted amount is always credited to the **global pool** in the settlement contract.
+
 ## Architecture
 
 ### Components
@@ -12,6 +24,7 @@ This document describes the implementation of revenue settlement functionality t
    - Enhanced with settlement contract integration
    - Automatically transfers USDC to settlement on `deduct()` and `batch_deduct()`
    - Maintains settlement contract address configuration
+   - Uses cross‑contract calls to `settlement_client.receive_payment()` to ensure reconciliation
 
 2. **Settlement Contract (`callora-settlement`)**
    - Receives USDC payments from vault
@@ -29,13 +42,13 @@ sequenceDiagram
     
     API->>Vault: deduct(env, caller, amount, request_id)
     Vault->>Vault: Validate Auth & Balance
-    Vault->>Vault: Update internal balance
     Vault->>USDC: transfer(vault, settlement, amount)
     USDC-->>Vault: Transfer complete
-    Vault->>Settlement: receive_payment(env, vault, amount, ...)
+    Vault->>Settlement: receive_payment(vault, amount, to_pool=true, developer=None)
     Settlement->>Settlement: Validate caller (vault)
-    Settlement->>Settlement: Update Global Pool or Dev Balance
+    Settlement->>Settlement: Update Global Pool
     Settlement-->>Vault: Payment successful
+    Vault->>Vault: Update internal balance & mark request processed
     Vault-->>API: Return new balance
 ```
 

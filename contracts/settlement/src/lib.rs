@@ -11,28 +11,36 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// Callers and indexers can match on the code rather than parsing raw panic strings,
 /// and the WASM binary shrinks because no error string literals are embedded.
 ///
-/// | Code | Variant              | When                                              |
-/// |------|----------------------|---------------------------------------------------|
-/// | 1    | NotInitialized       | A function is called before `init`                |
-/// | 2    | AlreadyInitialized   | `init` is called more than once                   |
-/// | 3    | Unauthorized         | Caller is not the vault or admin                  |
-/// | 4    | AmountNotPositive    | `amount` is zero or negative                      |
-/// | 5    | DeveloperRequired    | `to_pool=false` but no developer address supplied |
-/// | 6    | DeveloperMustBeNone  | `to_pool=true` but a developer address was given  |
-/// | 7    | PoolOverflow         | Global pool `i128` addition would overflow        |
-/// | 8    | DeveloperOverflow    | Developer balance `i128` addition would overflow  |
+/// | Code | Variant                      | When                                              |
+/// |------|------------------------------|---------------------------------------------------|
+/// | 1    | NotInitialized               | A function is called before `init`                |
+/// | 2    | AlreadyInitialized           | `init` is called more than once                   |
+/// | 3    | Unauthorized                 | Caller is not the vault or admin                  |
+/// | 4    | AmountNotPositive            | `amount` is zero or negative                      |
+/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied |
+/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given  |
+/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow        |
+/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow  |
+/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals |
+/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
+/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
+/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
 pub enum SettlementError {
-    NotInitialized      = 1,
-    AlreadyInitialized  = 2,
-    Unauthorized        = 3,
-    AmountNotPositive   = 4,
-    DeveloperRequired   = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow        = 7,
-    DeveloperOverflow   = 8,
+    NotInitialized               = 1,
+    AlreadyInitialized           = 2,
+    Unauthorized                 = 3,
+    AmountNotPositive            = 4,
+    DeveloperRequired            = 5,
+    DeveloperMustBeNone          = 6,
+    PoolOverflow                 = 7,
+    DeveloperOverflow            = 8,
+    UsdcTokenNotConfigured       = 9,
+    InsufficientDeveloperBalance = 10,
+    DeveloperBalanceUnderflow    = 11,
+    InsufficientContractBalance  = 12,
 }
 
 /// Maximum number of items accepted by `batch_receive_payment`.
@@ -109,6 +117,15 @@ pub struct VaultAcceptedEvent {
     pub old_vault: Address,
     pub new_vault: Address,
     pub accepted_by: Address,
+}
+
+/// Emitted when a developer withdraws their balance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperWithdrawEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
 }
 
 
@@ -662,12 +679,12 @@ impl CalloraSettlement {
 
         let inst = env.storage().instance();
         let old_vault = Self::get_vault(env.clone());
-        inst.set(&StorageKey::Vault, &new_vault);
+        inst.set(&StorageKey::PendingVault, &new_vault);
 
         env.events().publish(
             (Symbol::new(&env, "vault_proposed"), caller),
             VaultProposedEvent {
-                current_vault,
+                current_vault: old_vault,
                 proposed_vault: new_vault,
             },
         );

@@ -563,7 +563,8 @@ impl CalloraVault {
         Ok(meta.balance)
     }
 
-    /// Deduct USDC from the vault and transfer it to the configured settlement address.
+    /// Deduct USDC from the vault and transfer it to the configured settlement address,
+    /// then notify the settlement contract to credit the global pool.
     ///
     /// # Preconditions
     /// - `set_settlement` must have been called; returns error otherwise.
@@ -578,6 +579,11 @@ impl CalloraVault {
     /// is persisted in temporary storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
     ///
     /// When `request_id` is `None`, no deduplication is performed.
+    ///
+    /// # `to_pool` Semantics (Vault-Originated Deducts)
+    /// For deducts initiated via this vault contract, the deducted amount is always
+    /// credited to the **global pool** in the settlement contract. This is done
+    /// by calling `settlement_client.receive_payment(..., to_pool=true, developer=None)`.
     pub fn deduct(
         env: Env,
         caller: Address,
@@ -598,11 +604,36 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
-        let mut meta = Self::get_meta(env.clone())?;
+        let meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
         let settlement = Self::require_settlement(&env)?;
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+        
+        // Perform all external operations FIRST, so that if any fail,
+        // the entire transaction reverts with no partial state changes.
+        Self::transfer_funds(&env, &ut, &settlement, amount);
+        
+        // Create a settlement client and call receive_payment to credit the global pool
+        #[contractclient(name = "SettlementClient")]
+        trait Settlement {
+            fn receive_payment(env: Env, caller: Address, amount: i128, to_pool: bool, developer: Option<Address>);
+        }
+        let settlement_client = SettlementClient::new(&env, &settlement);
+        settlement_client.receive_payment(
+            env.current_contract_address(),
+            amount,
+            true, // to_pool = true: credit global pool
+            None, // no specific developer
+        );
+        
+        // Now that external operations succeeded, update internal state
+        let mut meta = Self::get_meta(env.clone())?;
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -615,12 +646,7 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::mark_request_processed(&env, rid);
         }
-        let ut: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::UsdcToken)
-            .ok_or(VaultError::NotInitialized)?;
-        Self::transfer_funds(&env, &ut, &settlement, amount);
+        
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
             (Symbol::new(&env, "deduct"), caller, rid),
@@ -642,6 +668,11 @@ impl CalloraVault {
     /// the batch are marked as processed.
     ///
     /// Items with `request_id = None` are not deduplicated.
+    ///
+    /// # `to_pool` Semantics (Vault-Originated Batch Deducts)
+    /// For batch deducts initiated via this vault contract, the total deducted amount
+    /// is always credited to the **global pool** in the settlement contract.
+    /// This is done by calling `settlement_client.receive_payment(..., to_pool=true, developer=None)`.
     pub fn batch_deduct(
         env: Env,
         caller: Address,
@@ -687,6 +718,31 @@ impl CalloraVault {
             total = total.checked_add(item.amount).ok_or(VaultError::Overflow)?;
         }
         let settlement = Self::require_settlement(&env)?;
+        let ut: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+        
+        // Perform all external operations FIRST, so that if any fail,
+        // the entire transaction reverts with no partial state changes.
+        Self::transfer_funds(&env, &ut, &settlement, total);
+        
+        // Create a settlement client and call receive_payment to credit the global pool
+        #[contractclient(name = "SettlementClient")]
+        trait Settlement {
+            fn receive_payment(env: Env, caller: Address, amount: i128, to_pool: bool, developer: Option<Address>);
+        }
+        let settlement_client = SettlementClient::new(&env, &settlement);
+        settlement_client.receive_payment(
+            env.current_contract_address(),
+            total,
+            true, // to_pool = true: credit global pool
+            None, // no specific developer
+        );
+        
+        // Now that external operations succeeded, update internal state
+        let mut meta = Self::get_meta(env.clone())?;
         meta.balance = running;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage()
@@ -698,12 +754,7 @@ impl CalloraVault {
                 Self::mark_request_processed(&env, rid);
             }
         }
-        let ut: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::UsdcToken)
-            .ok_or(VaultError::NotInitialized)?;
-        Self::transfer_funds(&env, &ut, &settlement, total);
+        
         for item in items.iter() {
             let rid = item.request_id.unwrap_or(Symbol::new(&env, ""));
             env.events().publish(
