@@ -26,8 +26,52 @@
     },
 
     {
+      "name": "pause",
+      "description": "Activate the circuit-breaker. Blocks distribute and batch_distribute until unpause is called. Admin rotation (set_admin / claim_admin) remains available while paused.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"revenue pool already paused\" — pool is already paused."
+      ],
+      "events": [
+        { "topics": ["\"pause_set\"", "caller"], "data": "true (bool)" }
+      ]
+    },
+
+    {
+      "name": "unpause",
+      "description": "Deactivate the circuit-breaker, restoring distribute and batch_distribute.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"revenue pool not paused\" — pool is not currently paused."
+      ],
+      "events": [
+        { "topics": ["\"pause_set\"", "caller"], "data": "false (bool)" }
+      ]
+    },
+
+    {
+      "name": "is_paused",
+      "description": "Return true if the revenue pool is currently paused, false otherwise. Defaults to false before any pause call.",
+      "access": "any",
+      "params": [],
+      "returns": "bool",
+      "panics": [],
+      "events": []
+    },
+
+    {
       "name": "distribute",
-      "description": "Transfer USDC from this contract to a developer wallet. Admin only.",
+      "description": "Transfer USDC from this contract to a developer wallet. Admin only. Blocked while paused.",
       "access": "admin",
       "params": [
         { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
@@ -36,6 +80,7 @@
       ],
       "returns": "void",
       "panics": [
+        "\"revenue pool is paused\" — pool is paused.",
         "\"unauthorized: caller is not admin\" — caller != current admin.",
         "\"amount must be positive\" — amount <= 0.",
         "\"revenue pool not initialized\" — called before init.",
@@ -48,7 +93,7 @@
 
     {
       "name": "batch_distribute",
-      "description": "Atomically distribute USDC to multiple developer wallets. Validates the total against the available balance before any transfer. One event is emitted per payment. Admin only.",
+      "description": "Atomically distribute USDC to multiple developer wallets. Validates the total against the available balance before any transfer. One event is emitted per payment. Admin only. Blocked while paused.",
       "access": "admin",
       "params": [
         { "name": "caller",   "type": "Address",              "optional": false, "description": "Must be the current admin; must authorize." },
@@ -56,6 +101,7 @@
       ],
       "returns": "void",
       "panics": [
+        "\"revenue pool is paused\" — pool is paused.",
         "\"unauthorized: caller is not admin\" — caller != current admin.",
         "\"amount must be positive\" — any individual amount <= 0.",
         "\"total overflow\" — extremely unlikely sum overflow.",

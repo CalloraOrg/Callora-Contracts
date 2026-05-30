@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec, BytesN};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -22,6 +22,7 @@ const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
 const VERSION_KEY: &str = "version";
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
@@ -34,7 +35,7 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 /// Bumping TTL ensures state remains accessible for critical operations.
-/// 
+///
 /// # Constants
 /// - `BUMP_AMOUNT`: Number of ledgers to extend TTL by (10000 ledgers ≈ 16 days)
 /// - `LIFETIME_THRESHOLD`: Minimum TTL before triggering a bump (1000 ledgers ≈ 1.5 days)
@@ -101,34 +102,15 @@ impl RevenuePool {
     /// The new admin must call `claim_admin` to complete the transfer.
     ///
     /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
+    /// * `caller` - Must be the current admin; must authorize.
     /// * `new_admin` - Address of the proposed new admin.
     ///
     /// # Panics
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     ///
     /// # Events
-    /// Emits an `admin_changed` event with the `current_admin` as a topic and
-    /// `(current_admin, new_admin)` as data, followed by `admin_transfer_started`
-    /// with the `current_admin` as a topic and `new_admin` as data.
-    /// Return the USDC token address configured for this pool.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    ///
-    /// # Returns
-    /// The `Address` of the USDC token contract.
-    ///
-    /// # Panics
-    /// * If the revenue pool has not been initialized.
-    pub fn get_usdc_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
-            .expect("revenue pool not initialized")
-    }
-
+    /// Emits `admin_changed` with `current_admin` as topic and `(current_admin, new_admin)` as data.
+    /// Emits `admin_transfer_started` with `current_admin` as topic and `new_admin` as data.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -149,6 +131,20 @@ impl RevenuePool {
             (Symbol::new(&env, "admin_transfer_started"), current),
             new_admin,
         );
+    }
+
+    /// Return the USDC token address configured for this pool.
+    ///
+    /// # Returns
+    /// The `Address` of the USDC token contract.
+    ///
+    /// # Panics
+    /// * If the revenue pool has not been initialized.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect("revenue pool not initialized")
     }
 
     /// Complete the admin transfer. Only the pending admin may call this.
@@ -180,6 +176,75 @@ impl RevenuePool {
 
         env.events()
             .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
+    }
+
+    fn require_not_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
+            .unwrap_or(false)
+        {
+            panic!("{}", ERR_PAUSED);
+        }
+    }
+
+    /// Pause the revenue pool, blocking `distribute` and `batch_distribute`.
+    ///
+    /// Only the admin may call. Admin rotation remains available while paused.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If the pool is already paused.
+    ///
+    /// # Events
+    /// Emits a `pause_set` event with `caller` as a topic and `true` as data.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        assert!(!Self::is_paused(env.clone()), "revenue pool already paused");
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        env.events()
+            .publish((Symbol::new(&env, "pause_set"), caller), true);
+    }
+
+    /// Unpause the revenue pool, restoring `distribute` and `batch_distribute`.
+    ///
+    /// Only the admin may call.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If the pool is not currently paused.
+    ///
+    /// # Events
+    /// Emits a `pause_set` event with `caller` as a topic and `false` as data.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        assert!(Self::is_paused(env.clone()), "revenue pool not paused");
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        env.events()
+            .publish((Symbol::new(&env, "pause_set"), caller), false);
+    }
+
+    /// Return `true` if the revenue pool is currently paused, `false` otherwise.
+    ///
+    /// Defaults to `false` when the pause key is absent (i.e. never paused).
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(&env, PAUSED_KEY))
+            .unwrap_or(false)
     }
 
     /// **Note**: This function is an **event-only helper**. It is **not** a substitute
@@ -275,6 +340,7 @@ impl RevenuePool {
     /// Emits a `distribute` event with `to` as a topic and `amount` as data.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
+        Self::require_not_paused(&env);
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             panic!("{}", ERR_UNAUTHORIZED);
@@ -308,7 +374,9 @@ impl RevenuePool {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
@@ -317,53 +385,77 @@ impl RevenuePool {
 
     /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.
     ///
-    /// This function implements a three-phase atomic batch transfer:
-    /// 1. **Precomputation & Validation**: Validates all amounts are positive and calculates total.
-    /// 2. **Balance Check**: Ensures contract has sufficient USDC before any transfers.
-    /// 3. **Execution**: Performs all transfers and emits events for each leg.
+    /// This function implements a four-phase atomic batch transfer:
+    /// 1. **Authorization**: Verifies the caller is the current admin.
+    /// 2. **Precomputation & Validation**: Validates all amounts are positive, detects duplicate
+    ///    recipients, and calculates the total required balance.
+    /// 3. **Balance Check**: Ensures the contract holds sufficient USDC before any transfers.
+    /// 4. **Execution**: Performs all transfers and emits one event per leg.
     ///
     /// The implementation guarantees atomicity: either all transfers succeed or none do.
-    /// No partial transfers occur if a later leg would fail.
+    /// No partial transfers occur if any validation step fails.
+    ///
+    /// # Duplicate Recipient Policy
+    ///
+    /// **Duplicates are rejected.** If the same `Address` appears more than once in `payments`,
+    /// the call panics with `"duplicate recipient in batch"` before any transfer is attempted.
+    ///
+    /// **Rationale:** A duplicate entry in the payload is almost always an off-chain bug (e.g.,
+    /// a developer listed twice in a settlement CSV). Silently double-paying would drain the pool
+    /// and be irreversible on-chain. Rejecting the batch forces the caller to fix the payload and
+    /// resubmit, which is the safe default for a financial contract.
+    ///
+    /// If you genuinely need to pay the same address for two distinct milestones in one call,
+    /// aggregate the amounts off-chain before submitting.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
     /// * `caller` - Must be the current admin.
     /// * `payments` - A vector of `(Address, i128)` tuples representing destinations and amounts.
     ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
+    ///   Each `Address` must be unique within the vector.
     ///
     /// # Panics
     /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
     /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
+    /// * If any individual amount exceeds `max_distribute` (`"amount exceeds max_distribute"`).
+    /// * If the same recipient address appears more than once (`"duplicate recipient in batch"`).
+    /// * If the total amount overflows `i128` (`"total overflow"`).
     /// * If the revenue pool has not been initialized (`"revenue pool not initialized"`).
     /// * If the total amount exceeds the contract's available balance (`"insufficient USDC balance"`).
-    /// * If the payments vector is empty (`"payments vector cannot be empty"`).
+    /// * If any recipient is the contract itself (`"invalid recipient: cannot distribute to the contract itself"`).
     ///
     /// # Events
-    /// Emits a `batch_distribute` event for each payment with `to` as a topic and `amount` as data.
+    /// Emits one `batch_distribute` event per payment leg with `to` as a topic and `amount` as data.
+    /// Events are only emitted after all validation passes — never for a partially-executed batch.
     ///
     /// # Atomicity Guarantee
-    /// All validation is performed before any external calls to the USDC token contract.
-    /// This ensures that if any validation fails, no state changes or transfers occur.
-    ///
-    /// # Vector Size Policy
-    /// The maximum number of payments in a single batch is limited by Soroban's
-    /// transaction budget and footprint limits. Recommended maximum: 100 payments per batch.
-    /// For larger distributions, split into multiple transactions.
+    /// All validation (including duplicate detection) is performed before any external calls to
+    /// the USDC token contract. If any check fails, no state changes or transfers occur.
     ///
     /// # Examples
     /// ```ignore
+    /// // Valid: three distinct recipients
     /// let payments = vec![
     ///     (developer1, 1000),
     ///     (developer2, 2000),
     ///     (developer3, 1500),
     /// ];
     /// pool.batch_distribute(&admin, &payments);
+    ///
+    /// // Invalid: developer1 appears twice — will panic with "duplicate recipient in batch"
+    /// let bad_payments = vec![
+    ///     (developer1, 1000),
+    ///     (developer1, 500),
+    /// ];
+    /// pool.batch_distribute(&admin, &bad_payments); // panics
     /// ```
     pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         // Phase 0: Authorization
         caller.require_auth();
+        Self::require_not_paused(&env);
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             panic!("{}", ERR_UNAUTHORIZED);
@@ -377,25 +469,41 @@ impl RevenuePool {
             panic!("batch too large");
         }
 
+        // Phase 1: Precomputation, validation, and duplicate detection.
+        //
+        // We use a Map<Address, bool> as a seen-set. Map is the only ordered,
+        // address-keyed collection available in no_std Soroban. Insertion is
+        // O(log n) per entry, giving O(n log n) total — well within budget for
+        // MAX_BATCH_SIZE = 50 entries.
+        //
+        // All checks run here, before any external call, to preserve atomicity.
         let max_distribute = Self::get_max_distribute(env.clone());
+        let mut seen: Map<Address, bool> = Map::new(&env);
         let mut total_amount: i128 = 0;
-        for payment in payments.iter() {
-            let (_, amount) = payment;
 
-            // Validate each amount is strictly positive
+        for payment in payments.iter() {
+            let (to, amount) = payment;
+
+            // Reject duplicate recipients before any transfer is attempted.
+            if seen.contains_key(to.clone()) {
+                panic!("{}", ERR_DUPLICATE_RECIPIENT);
+            }
+            seen.set(to.clone(), true);
+
+            // Validate each amount is strictly positive.
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
             }
-            if *amount > max_distribute {
+            if amount > max_distribute {
                 panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
             }
+
             total_amount = total_amount
                 .checked_add(amount)
                 .unwrap_or_else(|| panic!("total overflow"));
         }
 
-        // Phase 2: Balance Check
-        // Query the USDC token contract for current balance
+        // Phase 2: Balance Check — single external read before any writes.
         let usdc_address: Address = env
             .storage()
             .instance()
@@ -408,18 +516,18 @@ impl RevenuePool {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
-        // Extend TTL before executing transfers
+        // Extend TTL before executing transfers.
         env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        // Phase 3: Execution
-        // All validation passed - now perform the transfers
-        // Each transfer is atomic; if any fails, the entire transaction reverts
+        // Phase 3: Execution — all validation passed, perform transfers.
+        // Soroban's transaction model guarantees that if any transfer fails,
+        // the entire transaction reverts (no partial state).
         for payment in payments.iter() {
             let (to, amount) = payment;
             Self::validate_recipient(&to, &contract_address);
             usdc.transfer(&contract_address, &to, &amount);
 
-            // Emit event for this leg of the batch
+            // Emit one event per leg reflecting the final transferred amount.
             env.events()
                 .publish((Symbol::new(&env, "batch_distribute"), to), amount);
         }
@@ -459,7 +567,8 @@ impl RevenuePool {
 
         // Perform the on-chain upgrade via the deployer interface.
         // This is a host operation and may only succeed in the live environment.
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
 
         // Persist the version marker for on-chain queries.
         env.storage()
@@ -467,7 +576,8 @@ impl RevenuePool {
             .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
 
         // Emit an event for indexers / audit logs.
-        env.events().publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+        env.events()
+            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.

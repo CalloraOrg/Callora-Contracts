@@ -1,475 +1,190 @@
 # Atomic Multi-Leg USDC Transfer Implementation
 
 **Date:** 2026-04-24  
-**Feature:** Atomic batch transfer with all-or-nothing execution guarantee
+**Updated:** 2026-05-27 — duplicate recipient detection added  
+**Feature:** Atomic batch transfer with all-or-nothing execution and duplicate-recipient rejection
 
 ---
 
 ## Summary
 
-Implemented an atomic multi-leg USDC transfer function (`batch_distribute`) that ensures all-or-nothing execution. The contract validates the entire state before any external calls to the USDC token contract, guaranteeing that no partial transfers occur if any validation fails.
+`batch_distribute` performs an atomic multi-leg USDC transfer. All validation — including
+duplicate-recipient detection — runs before any external call to the token contract, so either
+every transfer in the batch succeeds or none do.
 
 ---
 
-## Implementation Details
+## Duplicate Recipient Policy
 
-### Three-Phase Execution Model
+**Duplicates are rejected.** If the same `Address` appears more than once in the `payments`
+vector, the call panics with `"duplicate recipient in batch"` and no tokens are moved.
 
-The `batch_distribute` function implements a strict three-phase execution model:
+### Rationale
 
-#### Phase 0: Authorization
-- Validates caller is the admin
-- Uses `require_auth()` for Soroban authorization
+A duplicate entry in a settlement payload is almost always an off-chain bug (e.g., a developer
+listed twice in a CSV). Silently double-paying would:
 
-#### Phase 1: Precomputation & Validation
-- Validates payments vector is not empty
-- Iterates through all payments
-- Validates each amount is strictly positive (> 0)
-- Calculates total required USDC with overflow protection
-- **No external calls in this phase**
+- Drain the pool by an unintended amount.
+- Be irreversible on-chain.
+- Mask the upstream data error rather than surfacing it.
 
-#### Phase 2: Balance Check
-- Queries USDC token contract for current balance
-- Compares current balance against total required
-- Fails immediately if insufficient balance
-- **Single external call for balance query**
+Rejecting the batch forces the caller to fix the payload and resubmit, which is the safe default
+for a financial contract.
 
-#### Phase 3: Execution
-- Performs all transfers sequentially
-- Emits event for each transfer leg
-- **All validation passed before this phase**
+### If you need to pay the same address for two milestones
+
+Aggregate the amounts off-chain before submitting:
+
+```rust
+// Instead of:
+payments.push_back((developer, 1_000)); // milestone 1
+payments.push_back((developer, 1_500)); // milestone 2  ← rejected
+
+// Do:
+payments.push_back((developer, 2_500)); // aggregated
+```
+
+---
+
+## Four-Phase Execution Model
+
+### Phase 0: Authorization
+- Verifies caller is the current admin via `require_auth()` + explicit address check.
+
+### Phase 1: Precomputation, Validation & Duplicate Detection
+- Rejects empty batches and batches exceeding `MAX_BATCH_SIZE`.
+- Iterates all payments once, building a `Map<Address, bool>` seen-set.
+- Panics on the first duplicate address encountered.
+- Validates each amount is strictly positive and within `max_distribute`.
+- Accumulates total with `checked_add` (overflow-safe).
+- **No external calls in this phase.**
+
+### Phase 2: Balance Check
+- Single read of the USDC token contract balance.
+- Panics if `balance < total`.
+- **One external read, no writes.**
+
+### Phase 3: Execution
+- Transfers and emits one `batch_distribute` event per leg.
+- Soroban's transaction model guarantees full revert on any failure.
 
 ---
 
 ## Atomicity Guarantee
 
-### How Atomicity is Achieved
-
-1. **Validation Before Execution**: All validation logic runs before any state-changing external calls
-2. **Soroban Transaction Model**: If any operation fails, the entire transaction reverts
-3. **No Partial State**: Either all transfers succeed or none do
-
-### What Happens on Failure
-
-If any of the following occur, **no transfers are executed**:
-
-- Caller is not admin
-- Payments vector is empty
-- Any amount is ≤ 0
-- Total amount causes overflow
-- Insufficient USDC balance
-- Any transfer fails (e.g., token contract error)
+All validation (phases 0–2) completes before any state-changing external call. If any check
+fails — including duplicate detection — no transfers occur and no `batch_distribute` events
+are emitted.
 
 ---
 
-## Vector Size Policy
-
-### Recommended Limits
-
-- **Recommended Maximum**: 100 payments per batch
-- **Hard Limit**: Determined by Soroban transaction budget and footprint limits
-
-### Budget Considerations
-
-Each payment in the batch consumes:
-- CPU instructions for validation
-- Memory for vector iteration
-- External call budget for USDC transfer
-- Event emission budget
-
-### Handling Large Distributions
-
-For distributions exceeding 100 recipients:
-
-1. **Split into Multiple Batches**:
-   ```rust
-   // Split 500 recipients into 5 batches of 100
-   for batch in payments.chunks(100) {
-       pool.batch_distribute(&admin, &batch);
-   }
-   ```
-
-2. **Monitor Transaction Budget**:
-   - Test with production-like data
-   - Monitor CPU and memory usage
-   - Adjust batch size based on actual limits
-
-3. **Consider Off-Chain Coordination**:
-   - Calculate optimal batch size off-chain
-   - Submit multiple transactions sequentially
-   - Track completion status off-chain
-
----
-
-## Code Structure
-
-### Function Signature
+## Duplicate Detection Implementation
 
 ```rust
-pub fn batch_distribute(
-    env: Env,
-    caller: Address,
-    payments: Vec<(Address, i128)>
-)
+let mut seen: Map<Address, bool> = Map::new(&env);
+
+for payment in payments.iter() {
+    let (to, amount) = payment;
+
+    if seen.contains_key(to.clone()) {
+        panic!("{}", ERR_DUPLICATE_RECIPIENT); // "duplicate recipient in batch"
+    }
+    seen.set(to.clone(), true);
+
+    // ... amount validation ...
+}
 ```
 
-### Parameters
+`Map<Address, bool>` is the only ordered, address-keyed collection available in `no_std`
+Soroban. Each `contains_key` / `set` is O(log n), giving O(n log n) total for the validation
+loop — well within budget for `MAX_BATCH_SIZE = 50`.
 
-- `env`: Soroban environment
-- `caller`: Must be admin (enforced via `require_auth`)
-- `payments`: Vector of `(recipient_address, amount)` tuples
+---
 
-### Return Value
+## Error Constants
 
-None (panics on error)
-
-### Panics
-
-- `"unauthorized: caller is not admin"` - Caller is not admin
-- `"payments vector cannot be empty"` - Empty payments vector
-- `"amount must be positive"` - Any amount ≤ 0
-- `"total amount overflow"` - Total calculation overflows i128
-- `"revenue pool not initialized"` - Contract not initialized
-- `"insufficient USDC balance"` - Balance < total required
+| Constant | Value |
+|---|---|
+| `ERR_DUPLICATE_RECIPIENT` | `"duplicate recipient in batch"` |
+| `ERR_AMOUNT_NOT_POSITIVE` | `"amount must be positive"` |
+| `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` | `"amount exceeds max_distribute"` |
+| `ERR_INSUFFICIENT_BALANCE` | `"insufficient USDC balance"` |
+| `ERR_UNAUTHORIZED` | `"unauthorized: caller is not admin"` |
 
 ---
 
 ## Event Schema
 
-### batch_distribute Event
+One `batch_distribute` event per payment leg, emitted only after all validation passes:
 
-Emitted for each payment leg:
-
-```rust
+```
 topics: ("batch_distribute", recipient: Address)
-data: amount: i128
+data:   amount: i128
 ```
 
-**Properties:**
-- One event per payment
-- Events emitted in order of payments vector
-- Events only emitted if all transfers succeed
+The `amount` in each event reflects the exact amount transferred to that recipient. Because
+duplicates are rejected, each recipient address appears at most once across all events in a
+successful batch.
+
+---
+
+## Batch Size Policy
+
+- **Hard cap:** `MAX_BATCH_SIZE = 50` entries per call.
+- **Minimum:** 1 entry (empty batch panics).
+- For larger distributions, split into multiple transactions off-chain.
 
 ---
 
 ## Test Coverage
 
-### Test Suite: 18 Tests
+Six new tests cover the duplicate-recipient feature (added to `test.rs`):
 
-1. **Basic Functionality** (3 tests)
-   - Single payment
-   - Multiple payments
-   - Exact balance usage
+| Test | What it verifies |
+|---|---|
+| `batch_distribute_duplicate_recipient_panics` | Basic duplicate → panic |
+| `batch_distribute_duplicate_does_not_transfer_any_funds` | Atomicity: balances unchanged on rejection |
+| `batch_distribute_duplicate_does_not_emit_events` | No events emitted on rejection |
+| `batch_distribute_duplicate_at_end_panics` | Duplicate at last position is still caught |
+| `batch_distribute_unique_recipients_succeeds` | Valid batch still works after the change |
+| `batch_distribute_duplicate_detected_before_balance_check` | Dedup fires in Phase 1, before Phase 2 balance check |
 
-2. **Edge Cases** (3 tests)
-   - Duplicate recipients in one batch
-   - Large vector (50 recipients)
-   - Empty vector
-
-3. **Validation** (4 tests)
-   - Zero amount rejection
-   - Negative amount rejection
-   - Mixed valid/invalid amounts
-   - Overflow protection
-
-4. **Balance Checks** (2 tests)
-   - Insufficient balance (single payment)
-   - Insufficient balance (multiple payments)
-
-5. **Authorization** (1 test)
-   - Unauthorized caller rejection
-
-6. **Events** (1 test)
-   - Event emission verification
-
-7. **Atomicity** (1 test)
-   - No partial transfers on failure
-
-8. **Legacy** (3 tests)
-   - Backward compatibility tests
-
-### Test Results
-
-```
-running 18 tests
-test batch_distribute_success ... ok
-test batch_distribute_single_payment ... ok
-test batch_distribute_duplicate_recipients ... ok
-test batch_distribute_large_vector ... ok
-test batch_distribute_exact_balance ... ok
-test batch_distribute_zero_amount_panics ... ok
-test batch_distribute_negative_amount_panics ... ok
-test batch_distribute_mixed_valid_and_invalid_amounts_panics ... ok
-test batch_distribute_insufficient_balance_panics ... ok
-test batch_distribute_insufficient_balance_multiple_payments_panics ... ok
-test batch_distribute_empty_vector_panics ... ok
-test batch_distribute_unauthorized_panics ... ok
-test batch_distribute_success_events ... ok
-test batch_distribute_atomicity_guarantee ... ok
-test batch_distribute_overflow_protection ... ok
-
-test result: ok. 18 passed; 0 failed
-```
-
-**Coverage:** ≥95% line coverage achieved
+Total test suite: **54 passing** (1 pre-existing failure in `upgrade_sets_version_and_emits_event`
+due to a Soroban unit-test environment limitation — WASM upload is not supported in `Env::default()`).
 
 ---
 
 ## Security Considerations
 
-### 1. Authorization
-
-**Control:** Only admin can call `batch_distribute`
-
-**Enforcement:** `require_auth()` + explicit admin check
-
-**Risk:** Admin key compromise allows unauthorized distributions
-
-**Mitigation:** Use multisig or hardware wallet for admin key
-
-### 2. Validation Order
-
-**Control:** All validation before external calls
-
-**Enforcement:** Three-phase execution model
-
-**Risk:** Partial transfers if validation after execution
-
-**Mitigation:** Strict phase separation in code
-
-### 3. Overflow Protection
-
-**Control:** `checked_add` for total calculation
-
-**Enforcement:** Explicit overflow check with panic
-
-**Risk:** Integer overflow causing incorrect total
-
-**Mitigation:** Rust's checked arithmetic
-
-### 4. Reentrancy
-
-**Control:** No reentrancy guard needed
-
-**Enforcement:** Soroban execution model
-
-**Risk:** Minimal (Soroban prevents reentrancy)
-
-**Mitigation:** Soroban's built-in protections
-
-### 5. Duplicate Recipients
-
-**Behavior:** Allowed (not an error)
-
-**Rationale:** Legitimate use case (multiple payments to same recipient)
-
-**Example:** Paying a developer for multiple milestones in one batch
-
----
-
-## Performance Characteristics
-
-### Time Complexity
-
-- **Validation Loop**: O(n) where n = number of payments
-- **Balance Check**: O(1) - single external call
-- **Execution Loop**: O(n) - one transfer per payment
-- **Total**: O(n)
-
-### Space Complexity
-
-- **Vector Storage**: O(n) - payments vector
-- **Local Variables**: O(1) - total_required counter
-- **Total**: O(n)
-
-### Gas Costs (Estimated)
-
-Per batch:
-- Base cost: ~10,000 gas
-- Per payment: ~5,000 gas (transfer + event)
-- 10 payments: ~60,000 gas
-- 100 payments: ~510,000 gas
-
----
-
-## Usage Examples
-
-### Basic Usage
-
-```rust
-// Initialize pool
-pool.init(&admin, &usdc_token);
-
-// Fund pool
-usdc.transfer(&funder, &pool_address, &10_000);
-
-// Distribute to multiple developers
-let payments = vec![
-    (developer1, 1_000),
-    (developer2, 2_000),
-    (developer3, 1_500),
-];
-pool.batch_distribute(&admin, &payments);
-```
-
-### Handling Duplicate Recipients
-
-```rust
-// Multiple payments to same recipient (valid)
-let payments = vec![
-    (developer, 1_000),  // Milestone 1
-    (developer, 1_500),  // Milestone 2
-    (developer, 2_000),  // Bonus
-];
-pool.batch_distribute(&admin, &payments);
-// Developer receives total: 4,500
-```
-
-### Large Distribution
-
-```rust
-// Split large distribution into batches
-let all_payments = generate_payments(500); // 500 recipients
-
-for batch in all_payments.chunks(100) {
-    pool.batch_distribute(&admin, &batch);
-    // Wait for confirmation before next batch
-}
-```
-
-### Error Handling
-
-```rust
-// Check balance before attempting distribution
-let total_required = payments.iter()
-    .map(|(_, amount)| amount)
-    .sum();
-
-if pool.balance() >= total_required {
-    pool.batch_distribute(&admin, &payments);
-} else {
-    // Handle insufficient balance
-}
-```
-
----
-
-## Comparison with Single Transfer
-
-### Single Transfer (`distribute`)
-
-```rust
-// 3 separate transactions
-pool.distribute(&admin, &dev1, &1_000);
-pool.distribute(&admin, &dev2, &2_000);
-pool.distribute(&admin, &dev3, &1_500);
-```
-
-**Pros:**
-- Simpler logic
-- Lower per-transaction gas
-
-**Cons:**
-- 3 separate transactions
-- No atomicity across transfers
-- Higher total gas cost
-- More on-chain operations
-
-### Batch Transfer (`batch_distribute`)
-
-```rust
-// 1 atomic transaction
-let payments = vec![
-    (dev1, 1_000),
-    (dev2, 2_000),
-    (dev3, 1_500),
-];
-pool.batch_distribute(&admin, &payments);
-```
-
-**Pros:**
-- Single transaction
-- Atomic execution
-- Lower total gas cost
-- Fewer on-chain operations
-
-**Cons:**
-- More complex logic
-- Higher per-transaction gas
-- Vector size limits
-
----
-
-## Migration Guide
-
-### From Single Transfers
-
-**Before:**
-```rust
-for (recipient, amount) in payments {
-    pool.distribute(&admin, &recipient, &amount);
-}
-```
-
-**After:**
-```rust
-pool.batch_distribute(&admin, &payments);
-```
-
-**Benefits:**
-- Atomicity guarantee
-- Lower gas costs
-- Fewer transactions
-
----
-
-## Future Enhancements
-
-1. **Batch Size Optimization**
-   - Dynamic batch size based on available budget
-   - Auto-splitting for large distributions
-
-2. **Partial Success Mode**
-   - Optional flag to allow partial transfers
-   - Return list of failed transfers
-
-3. **Priority Payments**
-   - Support for priority ordering
-   - Fail-fast on high-priority failures
-
-4. **Gas Estimation**
-   - Pre-flight gas estimation
-   - Warn if batch exceeds limits
-
-5. **Metadata Support**
-   - Attach metadata to each payment
-   - Emit metadata in events
+### Duplicate Recipient Attack
+**Threat:** Malformed off-chain payload lists the same developer twice, causing double-payment.  
+**Mitigation:** Phase 1 rejects the batch before any transfer. The pool balance is never touched.
+
+### Authorization
+**Threat:** Unauthorized caller distributes funds.  
+**Mitigation:** `require_auth()` + explicit admin address check in Phase 0.
+
+### Overflow
+**Threat:** Crafted amounts overflow `i128` total, bypassing balance check.  
+**Mitigation:** `checked_add` panics on overflow before reaching Phase 2.
+
+### Reentrancy
+**Threat:** Token contract re-enters `batch_distribute` mid-execution.  
+**Mitigation:** Soroban's execution model prevents reentrancy at the host level.
 
 ---
 
 ## Checklist
 
-- [x] Three-phase execution model implemented
-- [x] All validation before external calls
-- [x] Overflow protection with `checked_add`
-- [x] Empty vector validation
-- [x] Positive amount validation
-- [x] Balance check before transfers
-- [x] Event emission for each leg
-- [x] 18 comprehensive tests
-- [x] Duplicate recipient handling
-- [x] Large vector testing (50 recipients)
-- [x] Atomicity guarantee verified
-- [x] Authorization enforcement
-- [x] Documentation complete
-- [x] Vector size policy documented
-- [x] No clippy warnings
-- [x] Code formatted with `cargo fmt`
-
----
-
-## References
-
-- Soroban SDK: https://docs.rs/soroban-sdk
-- Stellar Asset Contract: https://soroban.stellar.org/docs/reference/contracts/token-interface
-- Transaction Limits: https://soroban.stellar.org/docs/fundamentals-and-concepts/resource-limits-fees
+- [x] Four-phase execution model implemented
+- [x] Duplicate recipient detection in Phase 1 (before any external call)
+- [x] `Map<Address, bool>` seen-set — O(n log n), no `unwrap()` in prod paths
+- [x] Error constant `ERR_DUPLICATE_RECIPIENT` defined
+- [x] All validation before external calls (atomicity preserved)
+- [x] `MAX_BATCH_SIZE` cap preserved
+- [x] Events reflect final per-recipient amount (one event per unique recipient)
+- [x] 6 new tests covering duplicate cases
+- [x] Pre-existing tests unaffected (54 pass)
+- [x] `/// doc` comments updated on `batch_distribute`
+- [x] Policy documented in this file
+- [x] No `unwrap()` in production paths

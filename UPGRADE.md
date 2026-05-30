@@ -65,6 +65,7 @@ The vault uses **instance storage** with the following keys:
 | `RevenuePool` | `Option<Address>` | Optional revenue pool address for deduct flow |
 | `MaxDeduct` | `i128` | Maximum amount per single deduct (default `i128::MAX`) |
 | `Metadata(String)` | `String` | Per-offering metadata (IPFS CID or URI) |
+| `ContractVersion` | `BytesN<32>` | WASM hash set by `upgrade` function |
 
 **VaultMeta structure** (defined in `lib.rs:46-51`):
 
@@ -90,6 +91,36 @@ pub fn init(
     revenue_pool: Option<Address>,
     max_deduct: Option<i128>,
 ) -> VaultMeta
+```
+
+#### Upgradeability
+
+The vault supports in-place upgrades via an admin-gated `upgrade` function. 
+This method calls the host deployer to update the contract WASM code while 
+preserving existing instance storage.
+
+```bash
+# Build new WASM
+cargo build --target wasm32-unknown-unknown --release -p callora-vault
+
+# Compute WASM hash and call upgrade via RPC or tooling
+soroban contract invoke --contract-id <VAULT_ID> -- upgrade \
+   --caller <ADMIN> --new_wasm_hash <32-byte-hex>
+```
+
+The `version()` view returns the stored WASM hash; the contract emits an `upgraded`
+event with the admin as a topic and the new version as data.
+
+**Upgrade Function Signature:**
+
+```rust
+pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>)
+```
+
+**Version Function Signature:**
+
+```rust
+pub fn version(env: Env) -> Option<BytesN<32>>
 ```
 
 **Behavior note (pause semantics):**
@@ -176,6 +207,70 @@ Because contracts reference each other by address, upgrades must be sequenced ca
 ### Per-Contract Upgrade Steps
 
 #### A. Upgrading Vault
+
+**Note:** As of version 1.1.0, the Vault contract supports in-place WASM upgrades via the `upgrade` function, eliminating the need for full redeployment and state migration in most cases.
+
+##### Option 1: In-Place Upgrade (Recommended)
+
+The vault now supports admin-gated in-place upgrades that preserve all existing state:
+
+1. **Build new vault WASM**
+   ```bash
+   cargo build --target wasm32-unknown-unknown --release -p callora-vault
+   ```
+
+2. **Compute WASM hash**
+   ```bash
+   # Using soroban CLI or custom tooling
+   soroban contract install --wasm target/wasm32-unknown-unknown/release/callora_vault.wasm
+   # Returns: <NEW_WASM_HASH>
+   ```
+
+3. **Call upgrade function** (admin only)
+   ```bash
+   soroban contract invoke --contract-id <VAULT_ID> -- upgrade \
+     --caller <ADMIN> \
+     --new_wasm_hash <NEW_WASM_HASH>
+   ```
+
+4. **Verify upgrade**
+   ```bash
+   # Check version marker
+   soroban contract invoke --contract-id <VAULT_ID> -- version
+   # Should return <NEW_WASM_HASH>
+   
+   # Verify state preserved
+   soroban contract invoke --contract-id <VAULT_ID> -- get_meta
+   soroban contract invoke --contract-id <VAULT_ID> -- balance
+   ```
+
+5. **Run post-upgrade migration** (if needed)
+   ```bash
+   # If the new WASM includes a migrate function for schema changes
+   soroban contract invoke --contract-id <VAULT_ID> -- migrate \
+     --caller <ADMIN>
+   ```
+
+6. **Monitor and verify**
+   - Test a small transaction
+   - Verify all view functions return expected values
+   - Check event emissions
+   - Monitor error rates
+
+**Upgrade Event:**
+The `upgrade` function emits an `upgraded` event with:
+- Topic 0: `Symbol("upgraded")`
+- Topic 1: Admin address
+- Data: New WASM hash (BytesN<32>)
+
+**Version Tracking:**
+- Call `version()` to retrieve the current WASM hash
+- Returns `None` for contracts deployed before upgrade functionality
+- Returns `Some(BytesN<32>)` after first upgrade
+
+##### Option 2: Full Redeployment (Legacy/Fallback)
+
+Use this approach only when in-place upgrade is not possible (e.g., breaking storage changes):
 
 1. **Export state**
    ```bash
