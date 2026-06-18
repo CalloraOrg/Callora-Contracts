@@ -87,8 +87,6 @@ pub enum VaultError {
     BatchEmpty = 21,
     /// Batch size exceeds maximum allowed (code 22).
     BatchTooLarge = 22,
-    /// Duplicate request ID detected (code 23).
-    DuplicateRequestId = 29,
     /// New owner must be different from current owner (code 23).
     NewOwnerSameAsCurrent = 23,
     /// No ownership transfer is pending (code 24).
@@ -101,7 +99,7 @@ pub enum VaultError {
     MetadataTooLong = 27,
     /// Price parsing error or non‑positive price (code 28).
     PriceParseError = 28,
-    /// Duplicate request ID (code 29).
+    /// Duplicate request ID detected (code 29).
     DuplicateRequestId = 29,
 }
 
@@ -184,17 +182,6 @@ pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60; // ~60 days
 // After the TTL expires the marker is archived and the request_id can be reused.
 pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
 pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
-
-#[soroban_sdk::contractclient(name = "SettlementClient")]
-trait SettlementTrait {
-    fn receive_payment(
-        env: Env,
-        caller: Address,
-        amount: i128,
-        to_pool: bool,
-        developer: Option<Address>,
-    );
-}
 
 #[contract]
 pub struct CalloraVault;

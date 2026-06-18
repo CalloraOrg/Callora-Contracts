@@ -66,6 +66,12 @@ fn setup_vault(env: &Env, balance: i128) -> (Address, CalloraVaultClient<'_>, Ad
 // deduct — single call idempotency
 // ---------------------------------------------------------------------------
 
+/// Pin the numeric error code so a future renumber regression is caught immediately.
+#[test]
+fn duplicate_request_id_error_code_is_29() {
+    assert_eq!(VaultError::DuplicateRequestId as u32, 29);
+}
+
 /// A `Some(request_id)` deduct succeeds on first call and is rejected on retry.
 #[test]
 fn deduct_duplicate_request_id_rejected() {

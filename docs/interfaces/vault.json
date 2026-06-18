@@ -35,7 +35,8 @@
       { "code": 25, "name": "NoAdminTransferPending", "description": "No admin transfer is pending." },
       { "code": 26, "name": "OfferingIdTooLong", "description": "Offering ID exceeds maximum length." },
       { "code": 27, "name": "MetadataTooLong", "description": "Metadata exceeds maximum length." },
-      { "code": 28, "name": "PriceParseError", "description": "Price parsing error or non‑positive price." }
+      { "code": 28, "name": "PriceParseError", "description": "Price parsing error or non‑positive price." },
+      { "code": 29, "name": "DuplicateRequestId", "description": "Duplicate request ID detected; this request_id has already been processed." }
     ]
   },
 
