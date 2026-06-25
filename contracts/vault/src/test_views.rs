@@ -315,3 +315,65 @@ fn get_metadata_returns_value_after_set() {
     client.set_metadata(&owner, &id, &val);
     assert_eq!(client.get_metadata(&id), Some(val));
 }
+
+// ---------------------------------------------------------------------------
+// list_prices
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_prices_empty_registry_returns_empty() {
+    let env = Env::default();
+    let (_, client, _) = setup(&env);
+    let prices = client.list_prices(&0, &10);
+    assert_eq!(prices.len(), 0);
+}
+
+#[test]
+fn list_prices_returns_paginated_price_entries() {
+    let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    let offer1 = String::from_str(&env, "offer-1");
+    let offer2 = String::from_str(&env, "offer-2");
+    let offer3 = String::from_str(&env, "offer-3");
+    client.set_price(&owner, &offer1, &String::from_str(&env, "100"));
+    client.set_price(&owner, &offer2, &String::from_str(&env, "200"));
+    client.set_price(&owner, &offer3, &String::from_str(&env, "300"));
+
+    let page1 = client.list_prices(&0, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().0, offer1);
+    assert_eq!(page1.get(0).unwrap().1, 100);
+    assert_eq!(page1.get(1).unwrap().0, offer2);
+    assert_eq!(page1.get(1).unwrap().1, 200);
+
+    let page2 = client.list_prices(&2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().0, offer3);
+    assert_eq!(page2.get(0).unwrap().1, 300);
+
+    let page3 = client.list_prices(&4, &2);
+    assert_eq!(page3.len(), 0);
+}
+
+#[test]
+fn list_prices_limit_is_capped_at_100() {
+    let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    for i in 0..105 {
+        let offering_id = String::from_str(&env, &format!("offer-{}", i));
+        client.set_price(&owner, &offering_id, &String::from_str(&env, "1"));
+    }
+    let prices = client.list_prices(&0, &200);
+    assert_eq!(prices.len(), 100);
+}
+
+#[test]
+fn remove_price_removes_index_entry() {
+    let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    let offer = String::from_str(&env, "offer-x");
+    client.set_price(&owner, &offer, &String::from_str(&env, "500"));
+    client.remove_price(&owner, &offer).unwrap();
+    assert_eq!(client.get_price(&offer), None);
+    assert_eq!(client.list_prices(&0, &10).len(), 0);
+}

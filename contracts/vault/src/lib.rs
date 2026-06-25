@@ -140,6 +140,7 @@ pub enum StorageKey {
     Paused,
     Metadata(String),
     Price(String),
+    OfferingIndex,
     PendingOwner,
     PendingAdmin,
     DepositorList,
@@ -171,6 +172,7 @@ pub const DEFAULT_MIN_DEPOSIT: i128 = 1;
 pub const MAX_BATCH_SIZE: u32 = 50;
 pub const MAX_METADATA_LEN: u32 = 256;
 pub const MAX_OFFERING_ID_LEN: u32 = 64;
+pub const MAX_LIST_PRICES_LIMIT: u32 = 100;
 
 // ~17 280 ledgers per day at 5-second close time.
 // Bump when fewer than 30 days remain; extend to 60 days.
@@ -388,6 +390,39 @@ impl CalloraVault {
         env.storage()
             .instance()
             .get(&StorageKey::Metadata(offering_id))
+    }
+
+    fn get_offering_index(env: &Env) -> Vec<String> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::OfferingIndex)
+            .unwrap_or(Vec::new(env))
+    }
+
+    fn add_offering_index(env: &Env, offering_id: &String) {
+        let mut list: Vec<String> = Self::get_offering_index(env);
+        if !list.contains(offering_id) {
+            list.push_back(offering_id.clone());
+            env.storage().instance().set(&StorageKey::OfferingIndex, &list);
+        }
+    }
+
+    fn remove_offering_index(env: &Env, offering_id: &String) {
+        let list: Vec<String> = Self::get_offering_index(env);
+        if list.len() == 0 {
+            return;
+        }
+        let mut updated = Vec::new(env);
+        for id in list.iter() {
+            if id != offering_id {
+                updated.push_back(id.clone());
+            }
+        }
+        if updated.len() == 0 {
+            env.storage().instance().remove(&StorageKey::OfferingIndex);
+        } else {
+            env.storage().instance().set(&StorageKey::OfferingIndex, &updated);
+        }
     }
 
     /// Return the full allowed-depositor list.
@@ -1036,6 +1071,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&StorageKey::Price(offering_id.clone()), &price);
+        Self::add_offering_index(&env, &offering_id);
         env.events().publish(
             (Symbol::new(&env, "price_set"), caller, offering_id),
             price.clone(),
@@ -1048,6 +1084,60 @@ impl CalloraVault {
         env.storage()
             .instance()
             .get(&StorageKey::Price(offering_id))
+    }
+
+    pub fn list_prices(env: Env, start: u32, limit: u32) -> Vec<(String, i128)> {
+        let index: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::OfferingIndex)
+            .unwrap_or(Vec::new(&env));
+        let len = index.len();
+        if start >= len {
+            return Vec::new(&env);
+        }
+
+        let cap = if limit > MAX_LIST_PRICES_LIMIT {
+            MAX_LIST_PRICES_LIMIT
+        } else {
+            limit
+        };
+        let end = core::cmp::min(start.saturating_add(cap), len);
+        let mut result: Vec<(String, i128)> = Vec::new(&env);
+
+        for i in start..end {
+            if let Some(offering_id) = index.get(i) {
+                if let Some(price_str) = Self::get_price(env.clone(), offering_id.clone()) {
+                    let mut buffer = [0u8; 64];
+                    price_str.copy_into_slice(&mut buffer);
+                    if let Some(price_i128) = core::str::from_utf8(&buffer[..price_str.len() as usize])
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                    {
+                        result.push_back((offering_id.clone(), price_i128));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    pub fn remove_price(env: Env, caller: Address, offering_id: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if offering_id.len() > MAX_OFFERING_ID_LEN {
+            return Err(VaultError::OfferingIdTooLong);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::Price(offering_id.clone()));
+        Self::remove_offering_index(&env, &offering_id);
+        env.events().publish(
+            (Symbol::new(&env, "price_removed"), caller, offering_id),
+            (),
+        );
+        Ok(())
     }
 
     pub fn update_metadata(
