@@ -144,6 +144,46 @@ fn create_usdc<'a>(
     }
 
     #[test]
+    fn pause_blocks_distribute() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let (pool_addr, client) = create_pool(&env);
+        let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        fund_pool(&usdc_admin, &pool_addr, 1_000);
+        assert!(!client.is_paused());
+        client.pause(&admin);
+        assert!(client.is_paused());
+
+        let result = std::panic::catch_unwind(|| client.distribute(&admin, &developer, &100));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unpause_restores_distribute() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let (pool_addr, client) = create_pool(&env);
+        let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        fund_pool(&usdc_admin, &pool_addr, 1_000);
+        client.pause(&admin);
+        assert!(client.is_paused());
+        client.unpause(&admin);
+        assert!(!client.is_paused());
+
+        client.distribute(&admin, &developer, &250);
+        assert_eq!(usdc_client.balance(&pool_addr), 750);
+        assert_eq!(usdc_client.balance(&developer), 250);
+    }
+
+    #[test]
     #[should_panic(expected = "amount must be positive")]
     fn distribute_zero_panics() {
         let env = Env::default();
