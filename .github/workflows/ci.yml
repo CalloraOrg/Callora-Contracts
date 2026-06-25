@@ -65,7 +65,8 @@ jobs:
         run: |
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh
-event-schema-coverage:
+
+  event-schema-coverage:
     name: Event schema coverage gate
     runs-on: ubuntu-latest
     steps:

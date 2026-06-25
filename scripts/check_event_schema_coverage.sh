@@ -35,47 +35,79 @@ fi
 
 echo "Checking EVENT_SCHEMA.md coverage"
 echo "  Schema : ${SCHEMA_FILE}"
-echo "  Crates : ${CONTRACTS_DIR}/*/src/lib.rs"
+echo "  Scope  : ${CONTRACTS_DIR}/*/src/*.rs (excluding #[cfg(test)] blocks)"
 echo ""
 
-# Strip #[cfg(test)] blocks from a lib.rs file, then extract all Symbol::new
-# topic strings that appear in publish calls. Test blocks are excluded because
-# they may reference topic names that are not real contract events.
-collect_topics() {
-  local lib="$1"
-
+# Remove #[cfg(test)] inline blocks and one-line test module imports.
+strip_test_blocks() {
   awk '
-    /^[[:space:]]*#\[cfg\(test\)\]/ { inside_test = 1; depth = 0; next }
-    inside_test {
-      n = split($0, chars, "")
+    BEGIN { inside_test = 0; depth = 0 }
+
+    function handle_test_content(content) {
+      n = split(content, chars, "")
       for (i = 1; i <= n; i++) {
         if (chars[i] == "{") depth++
         if (chars[i] == "}") {
           depth--
-          if (depth <= 0) { inside_test = 0; next }
+          if (depth <= 0) { inside_test = 0; return }
         }
       }
+    }
+
+    /^[[:space:]]*#\[cfg\(test\)\]/ {
+      if ((getline nextline) <= 0) next
+      if (nextline ~ /^[[:space:]]*mod[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*;/) next
+      inside_test = 1
+      depth = 0
+      handle_test_content(nextline)
       next
     }
+
+    inside_test {
+      handle_test_content($0)
+      next
+    }
+
     { print }
-  ' "${lib}" \
-  | grep -oP 'Symbol::new\(&env,\s*"\K[^"]+' \
-  | sort -u
+  ' "$1"
 }
 
-declare -A ALL_TOPICS
+# Extract the event topic (first Symbol::new string) from each publish site.
+# Handles both env.events().publish( and env.events()\n    .publish( forms.
+collect_topics() {
+  local lib="$1"
 
-for lib in "${CONTRACTS_DIR}"/*/src/lib.rs; do
-  [[ -f "${lib}" ]] || continue
-  crate=$(basename "$(dirname "$(dirname "${lib}")")")
+  strip_test_blocks "${lib}" \
+    | perl -0777 -pe 's/env\.events\(\)\s*\n\s*\.publish\(/env.events().publish(/g' \
+    | perl -0777 -ne '
+        while (/\.publish\s*\(/g) {
+          my $chunk = substr($_, pos(), 500);
+          if ($chunk =~ /Symbol::new\(&env,\s*"([^"]+)"/) {
+            print "$1\n";
+          }
+        }
+      ' \
+    | sort -u
+}
+
+declare -A ALL_TOPICS=()
+topic_count=0
+
+while IFS= read -r -d '' rs_file; do
+  case "$(basename "${rs_file}")" in
+    test.rs | test_*.rs) continue ;;
+  esac
+
+  crate=$(basename "$(dirname "$(dirname "${rs_file}")")")
 
   while IFS= read -r topic; do
     [[ -z "${topic}" ]] && continue
     ALL_TOPICS["${topic}"]="${crate}"
-  done < <(collect_topics "${lib}")
-done
+    topic_count=$((topic_count + 1))
+  done < <(collect_topics "${rs_file}")
+done < <(find "${CONTRACTS_DIR}" -path '*/src/*.rs' -print0 | sort -z)
 
-if [[ ${#ALL_TOPICS[@]} -eq 0 ]]; then
+if [[ ${topic_count} -eq 0 ]]; then
   echo -e "${YELLOW}WARN:${NC} no publish topics found under ${CONTRACTS_DIR}" >&2
   exit 0
 fi
