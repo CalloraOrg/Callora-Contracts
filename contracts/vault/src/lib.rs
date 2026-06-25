@@ -25,11 +25,11 @@
 /// treated as a fire-and-forget deduction with no idempotency guarantee.
 ///
 /// ### Retention / TTL
-/// Processed-request markers live in temporary storage and are bumped to
-/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct.  The threshold
-/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`.  After the TTL expires
-/// the marker is archived and a previously-seen `request_id` can be reused —
-/// callers must not rely on deduplication beyond the retention window.
+/// Processed-request markers live in persistent storage and are bumped to
+/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct. The threshold
+/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
+/// persistent, they do not silently archive. To prevent state bloat, an owner
+/// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
     Env, String, Symbol, Vec,
@@ -147,9 +147,8 @@ pub enum StorageKey {
     ContractVersion,
     /// Idempotency marker for a processed deduct request.
     ///
-    /// Stored in **temporary storage** so it expires automatically after
-    /// `REQUEST_ID_BUMP_AMOUNT` ledgers.  The value is `true` (a `bool`);
-    /// presence of the key is the authoritative signal.
+    /// Stored in **persistent storage**. The value is `true` (a `bool`);
+    /// presence of the key is the authoritative signal. Must be pruned explicitly.
     ProcessedRequest(Symbol),
 }
 
@@ -177,9 +176,9 @@ pub const MAX_OFFERING_ID_LEN: u32 = 64;
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30; // ~30 days
 pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60; // ~60 days
 
-// Processed-request idempotency markers live in temporary storage.
+// Processed-request idempotency markers live in persistent storage.
 // Bump when fewer than 7 days remain; extend to 30 days.
-// After the TTL expires the marker is archived and the request_id can be reused.
+// Must be pruned via prune_processed_requests when they are no longer needed.
 pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
 pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
 
@@ -613,7 +612,7 @@ impl CalloraVault {
     /// When `request_id` is `Some(id)`, the contract checks whether `id` has
     /// already been processed.  If so, `VaultError::DuplicateRequestId` is
     /// returned immediately — no funds are moved.  On first success the marker
-    /// is persisted in temporary storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
+    /// is persisted in persistent storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
     ///
     /// When `request_id` is `None`, no deduplication is performed.
     ///
@@ -1154,6 +1153,25 @@ impl CalloraVault {
             .get(&StorageKey::ContractVersion)
     }
 
+    /// Garbage-collect processed request markers from persistent storage.
+    /// Only the owner can call this.
+    /// Emits a `request_id_pruned` event for each removed ID.
+    pub fn prune_processed_requests(env: Env, caller: Address, ids: Vec<Symbol>) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+
+        for id in ids.iter() {
+            let key = StorageKey::ProcessedRequest(id.clone());
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                env.events()
+                    .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
+            }
+        }
+        
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -1171,32 +1189,28 @@ impl CalloraVault {
     }
 
     /// Return `true` if `request_id` has already been processed (marker present
-    /// in temporary storage and not yet expired).
+    /// in persistent storage, or temporary storage for legacy markers).
     pub fn is_request_processed(env: Env, request_id: Symbol) -> bool {
-        env.storage()
-            .temporary()
-            .has(&StorageKey::ProcessedRequest(request_id))
+        let key = StorageKey::ProcessedRequest(request_id);
+        env.storage().persistent().has(&key) || env.storage().temporary().has(&key)
     }
 
     /// Check that `request_id` has NOT been processed yet.
     /// Returns `VaultError::DuplicateRequestId` if the marker exists.
     fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
-        if env
-            .storage()
-            .temporary()
-            .has(&StorageKey::ProcessedRequest(request_id.clone()))
-        {
+        let key = StorageKey::ProcessedRequest(request_id.clone());
+        if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
             return Err(VaultError::DuplicateRequestId);
         }
         Ok(())
     }
 
-    /// Persist a processed-request marker in temporary storage and set its TTL.
+    /// Persist a processed-request marker in persistent storage and set its TTL.
     fn mark_request_processed(env: &Env, request_id: &Symbol) {
         let key = StorageKey::ProcessedRequest(request_id.clone());
-        env.storage().temporary().set(&key, &true);
+        env.storage().persistent().set(&key, &true);
         env.storage()
-            .temporary()
+            .persistent()
             .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
     }
 

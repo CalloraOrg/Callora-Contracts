@@ -266,10 +266,14 @@ The vault now supports admin-gated in-place upgrades that preserve all existing 
 
 5. **Run post-upgrade migration** (if needed)
    ```bash
-   # If the new WASM includes a migrate function for schema changes
+   // If the new WASM includes a migrate function for schema changes
    soroban contract invoke --contract-id <VAULT_ID> -- migrate \
      --caller <ADMIN>
    ```
+
+**Migration of `request_id` Deduplication (v1.2+):**
+The vault now uses `persistent` storage for `ProcessedRequest` idempotency markers rather than `temporary` storage.
+During the upgrade, no explicit state migration script is needed. The `require_not_duplicate` checks have been updated to query *both* temporary (legacy) and persistent (new) storage. Temporary markers will naturally expire over the next ~30 days. Going forward, the owner should periodically invoke `prune_processed_requests` to garbage-collect old persistent markers and recover storage deposits.
 
 6. **Monitor and verify**
    - Test a small transaction

@@ -71,7 +71,7 @@ pub enum StorageKey {
     PendingAdmin,                  // Address
     DepositorList,                 // Vec<Address>
     ContractVersion,               // BytesN<32>
-    ProcessedRequest(Symbol),      // bool — temporary storage, idempotency marker
+    ProcessedRequest(Symbol),      // bool — persistent storage, idempotency marker
 }
 ```
 
@@ -91,7 +91,7 @@ pub enum StorageKey {
 | `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
 | `DepositorList` | Instance | `Vec<Address>` | Allowed depositor addresses | `set_allowed_depositor()`, `get_allowed_depositors()` |
 | `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
-| `ProcessedRequest(Symbol)` | **Temporary** | `bool` | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
+| `ProcessedRequest(Symbol)` | **Persistent** | `bool` | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
 
 ## Data Structures
 
@@ -342,7 +342,7 @@ Monitor storage-related events:
 |---------|--------|
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
-| 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 
 ## Canonical Storage Keys
 
@@ -364,10 +364,10 @@ All storage is accessed via `StorageKey` enum.
 | `PendingOwner` | Instance | Ownership transfer nominee |
 | `PendingAdmin` | Instance | Admin transfer nominee |
 | `ContractVersion` | Instance | WASM hash (set by `upgrade()`) |
-| `ProcessedRequest(Symbol)` | **Temporary** | Idempotency marker; auto-expires after ~30 days |
+| `ProcessedRequest(Symbol)` | **Persistent** | Idempotency marker; manually pruned |
 
 ### Migration
 
 - Removes deprecated `AllowedDepositors`
 - Ensures Admin fallback from Meta.owner
-- `ProcessedRequest` uses temporary storage — no manual cleanup required; markers expire automatically
+- `ProcessedRequest` uses persistent storage — markers must be explicitly pruned using `prune_processed_requests` to avoid state bloat

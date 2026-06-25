@@ -423,3 +423,99 @@ fn batch_deduct_mixed_ids_marks_only_some_ids() {
     // None deducts still go through.
     assert_eq!(client.deduct(&owner, &10, &None), 765);
 }
+
+#[test]
+fn replay_across_long_window_rejected() {
+    let env = Env::default();
+    let (_, client, _, owner) = setup_vault(&env, 1_000);
+
+    let rid = Symbol::new(&env, "req_long_win");
+    
+    // First call succeeds
+    client.deduct(&owner, &100, &Some(rid.clone()));
+    
+    // Fast-forward ledger 6 months (approx 6 * 30 days)
+    let new_timestamp = env.ledger().timestamp() + 180 * 24 * 60 * 60;
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        timestamp: new_timestamp,
+        protocol_version: 20,
+        sequence_number: env.ledger().sequence() + 180 * 17_280,
+        network_id: env.ledger().network_id(),
+        base_reserve: env.ledger().base_reserve(),
+        max_entry_expiration: env.ledger().max_entry_expiration(),
+        min_temp_entry_expiration: env.ledger().min_temp_entry_expiration(),
+        min_persistent_entry_expiration: env.ledger().min_persistent_entry_expiration(),
+    });
+    
+    // Retry should still be rejected because it's persistent and hasn't been explicitly pruned.
+    let res = client.try_deduct(&owner, &100, &Some(rid.clone()));
+    assert!(res.is_err(), "should still reject after multi-month window");
+}
+
+#[test]
+fn gc_entrypoint_prunes_and_emits_event() {
+    let env = Env::default();
+    let (_, client, _, owner) = setup_vault(&env, 1_000);
+
+    let rid1 = Symbol::new(&env, "req_gc_1");
+    let rid2 = Symbol::new(&env, "req_gc_2");
+    
+    client.deduct(&owner, &100, &Some(rid1.clone()));
+    client.deduct(&owner, &100, &Some(rid2.clone()));
+    
+    let mut ids_to_prune = soroban_sdk::Vec::new(&env);
+    ids_to_prune.push_back(rid1.clone());
+    
+    client.prune_processed_requests(&owner, &ids_to_prune).unwrap();
+    
+    assert_eq!(client.is_request_processed(&rid1), false);
+    assert_eq!(client.is_request_processed(&rid2), true);
+    
+    let events = env.events().all();
+    let mut has_event = false;
+    for ev in events.iter() {
+        if let Ok(topic) = soroban_sdk::Symbol::try_from_val(&env, &ev.1.get(0).unwrap()) {
+            if topic == Symbol::new(&env, "request_id_pruned") {
+                has_event = true;
+                break;
+            }
+        }
+    }
+    assert!(has_event, "Should emit request_id_pruned event");
+    
+    // Should now be able to replay rid1
+    client.deduct(&owner, &100, &Some(rid1));
+}
+
+#[test]
+fn gc_ignores_unknown_ids() {
+    let env = Env::default();
+    let (_, client, _, owner) = setup_vault(&env, 1_000);
+
+    let rid_unknown = Symbol::new(&env, "req_unknown");
+    
+    let mut ids_to_prune = soroban_sdk::Vec::new(&env);
+    ids_to_prune.push_back(rid_unknown.clone());
+    
+    // Shouldn't fail, just skips
+    client.prune_processed_requests(&owner, &ids_to_prune).unwrap();
+}
+
+#[test]
+fn gc_allowed_during_pause() {
+    let env = Env::default();
+    let (_, client, _, owner) = setup_vault(&env, 1_000);
+
+    let rid1 = Symbol::new(&env, "req_gc_pause");
+    client.deduct(&owner, &100, &Some(rid1.clone()));
+    
+    client.pause(&owner);
+    assert!(client.is_paused());
+    
+    let mut ids_to_prune = soroban_sdk::Vec::new(&env);
+    ids_to_prune.push_back(rid1.clone());
+    
+    // Prune should succeed even when paused
+    client.prune_processed_requests(&owner, &ids_to_prune).unwrap();
+    assert_eq!(client.is_request_processed(&rid1), false);
+}
