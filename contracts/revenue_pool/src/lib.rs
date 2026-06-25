@@ -23,6 +23,8 @@ const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
+const ERR_PAUSED: &str = "revenue pool is paused";
+const PAUSED_KEY: &str = "paused";
 const VERSION_KEY: &str = "version";
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
