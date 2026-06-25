@@ -30,3 +30,26 @@ The invariant would be violated if:
 2. The global pool balance is modified without a corresponding payment.
 3. Arithmetic overflow occurs and is not caught (prevented by `checked_add`).
 4. Storage corruption or unauthorized direct storage modification occurs.
+
+# Daily Withdraw Cap Invariant
+
+A developer's cumulative withdrawals within a single UTC day (defined as `ledger_timestamp / 86400`) must never exceed their configured `DailyWithdrawCap`, unless the cap is `0` (unlimited).
+
+## When It Holds
+
+The invariant is enforced during `withdraw_developer_balance`:
+- Before any state mutation, the function reads the developer's `DailyWithdrawCap` and `WithdrawalToday` accumulator.
+- If `cap > 0` and `amount + accumulator > cap`, the call fails with `DailyWithdrawCapExceeded`.
+- The accumulator auto-resets when `current_day != stored_day`.
+- After a successful withdrawal, `WithdrawalToday.amount` is incremented by `amount` and `WithdrawalToday.day` is set to the current epoch day.
+
+## Default Behavior
+
+- A cap of `0` (the default) means unlimited — no daily limit is enforced.
+- Caps are set per-developer by the admin via `set_daily_withdraw_cap` and emit a `daily_withdraw_cap_changed` event.
+
+## Guarantees
+
+- **No stale window data**: the day field is always compared against the current ledger timestamp on every write.
+- **Per-developer isolation**: cap and accumulator are scoped to individual developer addresses.
+- **Admin-only configuration**: only the current admin can modify caps, enforced by `require_auth`.

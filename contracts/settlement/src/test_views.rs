@@ -1,9 +1,13 @@
 use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError};
-use soroban_sdk::{testutils::Address as _, Address, Env, InvokeError};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, Env, Error, InvokeError};
 
-fn is_not_initialized(result: Result<impl core::fmt::Debug, InvokeError>) -> bool {
+fn is_not_initialized<V, CE: Into<Error>, E: Into<Error>>(
+    result: Result<Result<V, CE>, Result<E, InvokeError>>,
+) -> bool {
+    let expected = SettlementError::NotInitialized as u32;
     match result {
-        Err(InvokeError::Contract(code)) => code == SettlementError::NotInitialized as u32,
+        Err(Ok(e)) => e.into().get_code() == expected,
         _ => false,
     }
 }
@@ -42,7 +46,9 @@ fn test_get_developer_balance_uninitialized() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
-    assert!(is_not_initialized(client.try_get_developer_balance(&dev)));
+    assert!(is_not_initialized(
+        client.try_get_developer_balance(&dev)
+    ));
 }
 
 #[test]
@@ -53,7 +59,6 @@ fn test_get_all_developer_balances_uninitialized() {
     let client = CalloraSettlementClient::new(&env, &addr);
     let dummy = Address::generate(&env);
 
-    // get_all_developer_balances calls get_admin internally, which returns NotInitialized
     assert!(is_not_initialized(
         client.try_get_all_developer_balances(&dummy)
     ));

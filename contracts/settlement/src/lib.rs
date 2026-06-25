@@ -28,6 +28,7 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 /// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
 /// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
 /// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
+/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded|
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -44,6 +45,7 @@ pub enum SettlementError {
     InsufficientDeveloperBalance = 10,
     DeveloperBalanceUnderflow    = 11,
     InsufficientContractBalance  = 12,
+    DailyWithdrawCapExceeded     = 13,
 }
 
 /// Persistent storage keys for settlement contract
@@ -58,6 +60,8 @@ pub enum StorageKey {
     DeveloperBalance(Address),
     GlobalPool,
     Usdc,
+    DailyWithdrawCap(Address),
+    WithdrawalToday(Address),
 }
 
 /// Developer balance record in settlement contract
@@ -81,6 +85,17 @@ pub struct GlobalPool {
     /// Ledger timestamp of the last pool credit. Useful for analytics
     /// and staleness checks.
     pub last_updated: u64,
+}
+
+/// Tracks a developer's cumulative withdrawal amount for a given epoch day.
+///
+/// `day` is `timestamp / 86400` (UTC epoch day). When the current call's day
+/// differs from the stored day the accumulator is silently reset.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawState {
+    pub day: u64,
+    pub amount: i128,
 }
 
 /// Payment received event
@@ -126,6 +141,14 @@ pub struct DeveloperWithdrawEvent {
     pub developer: Address,
     pub amount: i128,
     pub remaining_balance: i128,
+}
+
+/// Emitted when the admin sets or changes a developer's daily withdrawal cap.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawCapChanged {
+    pub developer: Address,
+    pub new_cap: i128,
 }
 
 
@@ -458,6 +481,27 @@ impl CalloraSettlement {
             return Err(SettlementError::InsufficientDeveloperBalance);
         }
 
+        let cap: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
+            .unwrap_or(0);
+        if cap > 0 {
+            let today = env.ledger().timestamp() / 86400;
+            let mut daily = env
+                .storage()
+                .persistent()
+                .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+                .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
+            if daily.day != today {
+                daily.day = today;
+                daily.amount = 0;
+            }
+            if daily.amount.checked_add(amount).is_none_or(|sum| sum > cap) {
+                return Err(SettlementError::DailyWithdrawCapExceeded);
+            }
+        }
+
         let new_balance = current_balance
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
@@ -479,6 +523,25 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&StorageKey::DeveloperBalance(developer.clone()), 50000, 50000);
 
+        // Update daily withdrawal accumulator
+        let today = env.ledger().timestamp() / 86400;
+        let mut daily = env
+            .storage()
+            .persistent()
+            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+            .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
+        if daily.day != today {
+            daily.day = today;
+            daily.amount = 0;
+        }
+        daily.amount = daily.amount.saturating_add(amount);
+        env.storage()
+            .persistent()
+            .set(&StorageKey::WithdrawalToday(developer.clone()), &daily);
+        env.storage()
+            .persistent()
+            .extend_ttl(&StorageKey::WithdrawalToday(developer.clone()), 50000, 50000);
+
         env.events().publish(
             (Symbol::new(&env, "developer_withdraw"), developer.clone()),
             DeveloperWithdrawEvent {
@@ -489,6 +552,58 @@ impl CalloraSettlement {
         );
 
         Ok(())
+    }
+
+    /// Set the daily withdrawal cap for a developer (admin only).
+    ///
+    /// A cap of `0` means unlimited (no daily limit enforced).
+    ///
+    /// # Access Control
+    /// Only the current admin can call this function.
+    ///
+    /// # Events
+    /// Emits `daily_withdraw_cap_changed` with the developer and new cap.
+    pub fn set_daily_withdraw_cap(env: Env, caller: Address, developer: Address, cap: i128) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        env.storage()
+            .persistent()
+            .set(&StorageKey::DailyWithdrawCap(developer.clone()), &cap);
+        env.storage()
+            .persistent()
+            .extend_ttl(&StorageKey::DailyWithdrawCap(developer.clone()), 50000, 50000);
+
+        env.events().publish(
+            (Symbol::new(&env, "daily_withdraw_cap_changed"), caller),
+            DailyWithdrawCapChanged { developer, new_cap: cap },
+        );
+    }
+
+    /// Get the daily withdrawal cap for a developer.
+    ///
+    /// Returns `0` if no cap has been set (meaning unlimited).
+    pub fn get_daily_withdraw_cap(env: Env, developer: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&StorageKey::DailyWithdrawCap(developer))
+            .unwrap_or(0)
+    }
+
+    /// Get the amount a developer has already withdrawn today.
+    ///
+    /// Returns `0` if no withdrawal has been made today.
+    pub fn get_withdrawal_today(env: Env, developer: Address) -> i128 {
+        let state: Option<DailyWithdrawState> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::WithdrawalToday(developer));
+        match state {
+            Some(s) if s.day == env.ledger().timestamp() / 86400 => s.amount,
+            _ => 0,
+        }
     }
 
     /// Get all developer balances (admin only)
