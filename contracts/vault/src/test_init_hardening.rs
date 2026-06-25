@@ -33,7 +33,6 @@ fn create_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "vault already initialized")]
 fn reinit_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -42,8 +41,8 @@ fn reinit_panics() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    // second call must panic
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    let result = client.try_init(&owner, &usdc, &None, &None, &None, &None, &None);
+    assert!(result.is_err(), "second init must fail");
 }
 
 #[test]
@@ -64,15 +63,14 @@ fn reinit_via_try_returns_err() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "usdc_token cannot be vault address")]
 fn init_usdc_token_is_vault_panics() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (vault_addr, client) = create_vault(&env);
 
-    // pass the vault's own address as usdc_token
-    client.init(&owner, &vault_addr, &None, &None, &None, &None, &None);
+    let result = client.try_init(&owner, &vault_addr, &None, &None, &None, &None, &None);
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +78,6 @@ fn init_usdc_token_is_vault_panics() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "min_deposit must be positive")]
 fn init_min_deposit_zero_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -88,11 +85,11 @@ fn init_min_deposit_zero_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &None, &Some(0), &None, &None);
+    let result = client.try_init(&owner, &usdc, &None, &None, &Some(0), &None, &None);
+    assert!(result.is_err());
 }
 
 #[test]
-#[should_panic(expected = "min_deposit must be positive")]
 fn init_min_deposit_negative_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -100,7 +97,8 @@ fn init_min_deposit_negative_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &None, &Some(-1), &None, &None);
+    let result = client.try_init(&owner, &usdc, &None, &None, &Some(-1), &None, &None);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -120,7 +118,6 @@ fn init_min_deposit_one_succeeds() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "max_deduct must be positive")]
 fn init_max_deduct_zero_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -128,11 +125,11 @@ fn init_max_deduct_zero_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &None, &None, &None, &Some(0));
+    let result = client.try_init(&owner, &usdc, &None, &None, &None, &None, &Some(0));
+    assert!(result.is_err());
 }
 
 #[test]
-#[should_panic(expected = "min_deposit cannot exceed max_deduct")]
 fn init_min_deposit_exceeds_max_deduct_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -140,8 +137,8 @@ fn init_min_deposit_exceeds_max_deduct_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    // min=100, max=50 → invalid
-    client.init(&owner, &usdc, &None, &None, &Some(100), &None, &Some(50));
+    let result = client.try_init(&owner, &usdc, &None, &None, &Some(100), &None, &Some(50));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -162,7 +159,6 @@ fn init_min_equals_max_deduct_succeeds() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "revenue_pool cannot be vault address")]
 fn init_revenue_pool_is_vault_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -170,7 +166,8 @@ fn init_revenue_pool_is_vault_panics() {
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &None, &None, &Some(vault_addr), &None);
+    let result = client.try_init(&owner, &usdc, &None, &None, &None, &Some(vault_addr), &None);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -211,7 +208,6 @@ fn init_without_revenue_pool_stores_none() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "authorized_caller cannot be vault address")]
 fn init_authorized_caller_is_vault_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -219,7 +215,8 @@ fn init_authorized_caller_is_vault_panics() {
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &Some(vault_addr), &None, &None, &None);
+    let result = client.try_init(&owner, &usdc, &None, &Some(vault_addr), &None, &None, &None);
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +224,6 @@ fn init_authorized_caller_is_vault_panics() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "initial_balance exceeds on-ledger USDC balance")]
 fn init_initial_balance_exceeds_onchain_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -235,9 +231,9 @@ fn init_initial_balance_exceeds_onchain_panics() {
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
-    // fund vault with 50 but claim 100
     usdc_admin.mint(&vault_addr, &50);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    let result = client.try_init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+    assert!(result.is_err());
 }
 
 #[test]

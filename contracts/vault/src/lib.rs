@@ -105,6 +105,12 @@ pub enum VaultError {
     WithdrawToVaultAddress = 30,
     /// Withdraw recipient cannot be the configured USDC token address (code 31).
     WithdrawToUsdcTokenAddress = 31,
+    /// Settlement address cannot be the vault contract address (code 32).
+    SettlementCannotBeVault = 32,
+    /// Settlement address cannot be the configured USDC token address (code 33).
+    SettlementCannotBeUsdcToken = 33,
+    /// Settlement address cannot equal the configured revenue pool (code 34).
+    SettlementCannotEqualRevenuePool = 34,
 }
 
 #[contracttype]
@@ -447,6 +453,11 @@ impl CalloraVault {
     pub fn set_authorized_caller(env: Env, new_caller: Option<Address>) -> Result<(), VaultError> {
         let mut meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
+        if let Some(ref caller) = new_caller {
+            if caller == &env.current_contract_address() {
+                return Err(VaultError::AuthorizedCallerCannotBeVault);
+            }
+        }
         let old = meta.authorized_caller.clone();
         meta.authorized_caller = new_caller.clone();
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
@@ -987,6 +998,9 @@ impl CalloraVault {
         }
         match revenue_pool {
             Some(addr) => {
+                if addr == env.current_contract_address() {
+                    return Err(VaultError::RevenuePoolCannotBeVault);
+                }
                 env.storage()
                     .instance()
                     .set(&StorageKey::RevenuePool, &addr);
@@ -1014,6 +1028,26 @@ impl CalloraVault {
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
             return Err(VaultError::Unauthorized);
+        }
+        if settlement_address == env.current_contract_address() {
+            return Err(VaultError::SettlementCannotBeVault);
+        }
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+        if settlement_address == usdc_addr {
+            return Err(VaultError::SettlementCannotBeUsdcToken);
+        }
+        if let Some(revenue_pool) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::RevenuePool)
+        {
+            if settlement_address == revenue_pool {
+                return Err(VaultError::SettlementCannotEqualRevenuePool);
+            }
         }
         env.storage()
             .instance()
@@ -1065,9 +1099,13 @@ impl CalloraVault {
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
+        let price_len = price.len() as usize;
+        if price_len == 0 || price_len > 64 {
+            return Err(VaultError::PriceParseError);
+        }
         let mut price_buf = [0u8; 64];
-        price.copy_into_slice(&mut price_buf);
-        let price_str = core::str::from_utf8(&price_buf[..price.len() as usize])
+        price.copy_into_slice(&mut price_buf[..price_len]);
+        let price_str = core::str::from_utf8(&price_buf[..price_len])
             .map_err(|_| VaultError::PriceParseError)?;
         let price_i128: i128 = price_str.parse().map_err(|_| VaultError::PriceParseError)?;
         if price_i128 <= 0 {

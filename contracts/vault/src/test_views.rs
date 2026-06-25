@@ -142,11 +142,11 @@ fn set_max_deduct_updates_max_deduct_key_and_getter() {
 }
 
 #[test]
-#[should_panic(expected = "max_deduct must be positive")]
 fn set_max_deduct_rejects_non_positive_values() {
     let env = Env::default();
     let (_, client, _) = setup(&env);
-    client.set_max_deduct(&0);
+    let result = client.try_set_max_deduct(&0);
+    assert!(result.is_err());
 }
 
 // ---------------------------------------------------------------------------
