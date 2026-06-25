@@ -4,7 +4,7 @@ mod settlement_tests {
 
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
-    use soroban_sdk::{Address, Env, InvokeError};
+    use soroban_sdk::{token, Address, Env, InvokeError};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -270,8 +270,14 @@ mod settlement_tests {
         let result = client.try_withdraw_developer_balance(&developer, &100i128);
         assert!(result.is_ok());
         assert_eq!(client.get_developer_balance(&developer), 0i128);
-        assert_eq!(token::Client::new(&env, &usdc_address).balance(&addr), 0i128);
-        assert_eq!(token::Client::new(&env, &usdc_address).balance(&developer), 100i128);
+        assert_eq!(
+            token::Client::new(&env, &usdc_address).balance(&addr),
+            0i128
+        );
+        assert_eq!(
+            token::Client::new(&env, &usdc_address).balance(&developer),
+            100i128
+        );
     }
 
     #[test]
@@ -955,9 +961,10 @@ mod settlement_tests {
         client.init(&admin, &vault);
 
         env.as_contract(&addr, || {
-            env.storage()
-                .persistent()
-                .set(&crate::StorageKey::DeveloperBalance(developer.clone()), &i128::MAX);
+            env.storage().persistent().set(
+                &crate::StorageKey::DeveloperBalance(developer.clone()),
+                &i128::MAX,
+            );
         });
 
         let result = client.try_receive_payment(&vault, &1i128, &false, &Some(developer));
@@ -1008,17 +1015,29 @@ mod settlement_tests {
         }
 
         let cases = [
-            Case { name: "vault address succeeds",  role: CallerRole::Vault,      should_succeed: true  },
-            Case { name: "admin address succeeds",  role: CallerRole::Admin,      should_succeed: true  },
-            Case { name: "third party fails",       role: CallerRole::ThirdParty, should_succeed: false },
+            Case {
+                name: "vault address succeeds",
+                role: CallerRole::Vault,
+                should_succeed: true,
+            },
+            Case {
+                name: "admin address succeeds",
+                role: CallerRole::Admin,
+                should_succeed: true,
+            },
+            Case {
+                name: "third party fails",
+                role: CallerRole::ThirdParty,
+                should_succeed: false,
+            },
         ];
 
         for case in cases {
             let (env, addr, admin, vault, third_party) = setup_contract();
             let client = CalloraSettlementClient::new(&env, &addr);
             let caller = match case.role {
-                CallerRole::Vault      => vault,
-                CallerRole::Admin      => admin,
+                CallerRole::Vault => vault,
+                CallerRole::Admin => admin,
                 CallerRole::ThirdParty => third_party,
             };
 

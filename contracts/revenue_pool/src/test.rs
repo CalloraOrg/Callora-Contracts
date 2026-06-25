@@ -1620,19 +1620,25 @@ fn receive_payment_event_shape_conformance() {
     assert_eq!(ev.1.len(), 2, "receive_payment must have exactly 2 topics");
 
     let t0: Symbol = ev.1.get(0).unwrap().into_val(&env);
-    assert_eq!(t0, Symbol::new(&env, "receive_payment"),
-        "topic[0] must be Symbol(\"receive_payment\")");
+    assert_eq!(
+        t0,
+        Symbol::new(&env, "receive_payment"),
+        "topic[0] must be Symbol(\"receive_payment\")"
+    );
 
     let t1: Address = ev.1.get(1).unwrap().into_val(&env);
-    assert_eq!(t1, admin,
-        "topic[1] must be the caller/admin address");
+    assert_eq!(t1, admin, "topic[1] must be the caller/admin address");
 
     // ── Data assertion: canonical shape (amount, from_vault) ──
     let (amount, from_vault): (i128, bool) = ev.2.clone().into_val(&env);
-    assert_eq!(amount, 7_777_000,
-        "data[0] must be amount (i128) — first field");
-    assert!(from_vault,
-        "data[1] must be from_vault (bool) — second field");
+    assert_eq!(
+        amount, 7_777_000,
+        "data[0] must be amount (i128) — first field"
+    );
+    assert!(
+        from_vault,
+        "data[1] must be from_vault (bool) — second field"
+    );
 
     // ── Also verify from_vault=false event ──
     client.receive_payment(&admin, &3_333_000, &false);
@@ -1640,10 +1646,14 @@ fn receive_payment_event_shape_conformance() {
     let ev = events.last().unwrap();
 
     let (amount, from_vault): (i128, bool) = ev.2.clone().into_val(&env);
-    assert_eq!(amount, 3_333_000,
-        "data[0] must be amount (i128) — first field");
-    assert!(!from_vault,
-        "data[1] must be from_vault (bool) — second field");
+    assert_eq!(
+        amount, 3_333_000,
+        "data[0] must be amount (i128) — first field"
+    );
+    assert!(
+        !from_vault,
+        "data[1] must be from_vault (bool) — second field"
+    );
 }
 
 #[test]

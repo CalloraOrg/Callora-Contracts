@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec,
+};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
@@ -32,18 +34,18 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
 pub enum SettlementError {
-    NotInitialized               = 1,
-    AlreadyInitialized           = 2,
-    Unauthorized                 = 3,
-    AmountNotPositive            = 4,
-    DeveloperRequired            = 5,
-    DeveloperMustBeNone          = 6,
-    PoolOverflow                 = 7,
-    DeveloperOverflow            = 8,
-    UsdcTokenNotConfigured       = 9,
+    NotInitialized = 1,
+    AlreadyInitialized = 2,
+    Unauthorized = 3,
+    AmountNotPositive = 4,
+    DeveloperRequired = 5,
+    DeveloperMustBeNone = 6,
+    PoolOverflow = 7,
+    DeveloperOverflow = 8,
+    UsdcTokenNotConfigured = 9,
     InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow    = 11,
-    InsufficientContractBalance  = 12,
+    DeveloperBalanceUnderflow = 11,
+    InsufficientContractBalance = 12,
 }
 
 /// Persistent storage keys for settlement contract
@@ -127,7 +129,6 @@ pub struct DeveloperWithdrawEvent {
     pub amount: i128,
     pub remaining_balance: i128,
 }
-
 
 #[contract]
 pub struct CalloraSettlement;
@@ -245,7 +246,7 @@ impl CalloraSettlement {
             let new_balance = current_balance
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
-            
+
             // Write to persistent storage with TTL extension
             env.storage().persistent().set(
                 &StorageKey::DeveloperBalance(dev_address.clone()),
@@ -341,9 +342,11 @@ impl CalloraSettlement {
             env.storage()
                 .persistent()
                 .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
-            env.storage()
-                .persistent()
-                .extend_ttl(&StorageKey::DeveloperBalance(dev.clone()), 50000, 50000);
+            env.storage().persistent().extend_ttl(
+                &StorageKey::DeveloperBalance(dev.clone()),
+                50000,
+                50000,
+            );
             // Add to index if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
@@ -472,12 +475,15 @@ impl CalloraSettlement {
 
         usdc.transfer(&contract_address, &developer, &amount);
 
-        env.storage()
-            .persistent()
-            .set(&StorageKey::DeveloperBalance(developer.clone()), &new_balance);
-        env.storage()
-            .persistent()
-            .extend_ttl(&StorageKey::DeveloperBalance(developer.clone()), 50000, 50000);
+        env.storage().persistent().set(
+            &StorageKey::DeveloperBalance(developer.clone()),
+            &new_balance,
+        );
+        env.storage().persistent().extend_ttl(
+            &StorageKey::DeveloperBalance(developer.clone()),
+            50000,
+            50000,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "developer_withdraw"), developer.clone()),
@@ -615,9 +621,7 @@ impl CalloraSettlement {
     /// # Returns
     /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::PendingAdmin)
+        env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
     /// Nominate a new admin (admin only).
