@@ -12,7 +12,7 @@ The fundamental conservation invariant of the Callora Settlement contract guaran
 ## Guarantees
 
 - **No Value Leakage**: Every unit of USDC (in micro-units) received from the Vault or Admin is credited either to the global pool or a specific developer.
-- **No Value Creation**: Credits cannot be generated out of thin air; they must originate from a `receive_payment` or `batch_receive_payment` call.
+- **No Value Creation**: Credits cannot be generated out of thin air; they must originate from a `receive_payment` or `batch_receive_payment` call, or from the admin-only `force_credit_developer` escape hatch.
 - **Arithmetic Integrity**: Use of checked arithmetic ensures that balance overflows result in transaction failure rather than silent wrapping or loss of funds.
 
 ## When It Holds
@@ -22,6 +22,7 @@ The invariant holds after every successful transaction that modifies the settlem
 - After `receive_payment(to_pool=true)`: `Global Pool Balance` increases by `amount`.
 - After `receive_payment(to_pool=false)`: `Developer Balance` for a specific address increases by `amount`.
 - After `batch_receive_payment`: Multiple `Developer Balance` entries increase by their respective `amount` values.
+- After `force_credit_developer`: A single `Developer Balance` increases by `amount`. This is an **admin-authorized inflow** — no on-ledger USDC moves. It is an audited escape hatch documented in the event (`developer_force_credited` with an on-chain `reason`).
 
 ## Violations
 

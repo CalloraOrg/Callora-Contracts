@@ -4,7 +4,7 @@ mod settlement_tests {
 
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
-    use soroban_sdk::{Address, Env, InvokeError};
+    use soroban_sdk::{Address, Env, InvokeError, Symbol};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -1605,6 +1605,160 @@ mod settlement_tests {
         for dev in &devs {
             assert_eq!(client.get_developer_balance(dev), 1i128);
         }
+    }
+
+    // ── force_credit_developer tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_force_credit_developer_happy_path() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "offline_settlement");
+
+        client.force_credit_developer(&admin, &developer, &1000i128, &reason);
+
+        assert_eq!(client.get_developer_balance(&developer), 1000i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_accumulates() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &500i128,
+            &Symbol::new(&env, "first"),
+        );
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &300i128,
+            &Symbol::new(&env, "second"),
+        );
+
+        assert_eq!(client.get_developer_balance(&developer), 800i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_unauthorized() {
+        let (env, addr, _admin, vault, third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "unauthorized_test");
+
+        let vault_result =
+            client.try_force_credit_developer(&vault, &developer, &100i128, &reason);
+        assert!(is_error(vault_result, SettlementError::Unauthorized));
+
+        let third_party_result =
+            client.try_force_credit_developer(&third_party, &developer, &100i128, &reason);
+        assert!(is_error(third_party_result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn test_force_credit_developer_zero_amount() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &0i128,
+            &Symbol::new(&env, "zero"),
+        );
+        assert!(is_error(result, SettlementError::AmountNotPositive));
+    }
+
+    #[test]
+    fn test_force_credit_developer_negative_amount() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &-1i128,
+            &Symbol::new(&env, "negative"),
+        );
+        assert!(is_error(result, SettlementError::AmountNotPositive));
+    }
+
+    #[test]
+    fn test_force_credit_developer_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "dispute_resolution");
+
+        client.force_credit_developer(&admin, &developer, &2500i128, &reason);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "developer_force_credited")
+                }
+            })
+            .expect("expected developer_force_credited event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let data: crate::DeveloperForceCreditedEvent = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.amount, 2500i128);
+        assert_eq!(data.reason, reason);
+        assert_eq!(data.new_balance, 2500i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_repeated_reason() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer1 = Address::generate(&env);
+        let developer2 = Address::generate(&env);
+        let reason = Symbol::new(&env, "bulk_reconciliation");
+
+        client.force_credit_developer(&admin, &developer1, &100i128, &reason);
+        client.force_credit_developer(&admin, &developer2, &200i128, &reason);
+
+        assert_eq!(client.get_developer_balance(&developer1), 100i128);
+        assert_eq!(client.get_developer_balance(&developer2), 200i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_overflow() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        env.as_contract(&addr, || {
+            env.storage()
+                .persistent()
+                .set(
+                    &crate::StorageKey::DeveloperBalance(developer.clone()),
+                    &i128::MAX,
+                );
+        });
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &1i128,
+            &Symbol::new(&env, "overflow"),
+        );
+        assert!(is_error(result, SettlementError::DeveloperOverflow));
     }
 
     /// Property-based test that drives many randomized receive_payment calls

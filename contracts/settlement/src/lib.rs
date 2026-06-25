@@ -28,6 +28,7 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 /// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
 /// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
 /// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
+/// | 13   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -44,6 +45,7 @@ pub enum SettlementError {
     InsufficientDeveloperBalance = 10,
     DeveloperBalanceUnderflow    = 11,
     InsufficientContractBalance  = 12,
+    ReasonTooLong                = 13,
 }
 
 /// Persistent storage keys for settlement contract
@@ -127,6 +129,21 @@ pub struct DeveloperWithdrawEvent {
     pub amount: i128,
     pub remaining_balance: i128,
 }
+
+/// Emitted when an admin force-credits a developer balance (escape hatch).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperForceCreditedEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub reason: Symbol,
+    pub new_balance: i128,
+}
+
+/// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
+/// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
+/// this constant is used for explicit defense-in-depth validation.
+pub const MAX_REASON_LENGTH: u32 = 32;
 
 
 #[contract]
@@ -489,6 +506,88 @@ impl CalloraSettlement {
         );
 
         Ok(())
+    }
+
+    /// Admin-only escape hatch to manually credit a developer balance.
+    ///
+    /// This function is designed for operational edge cases where a developer
+    /// must be credited outside the normal `receive_payment` flow (e.g.,
+    /// off-chain payment reconciliation, dispute resolution). It does **not**
+    /// move on-ledger USDC and is treated as an audited administrative inflow.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin address.
+    /// * `developer` - Address of the developer to credit.
+    /// * `amount` - Amount in USDC micro-units; must be `> 0`.
+    /// * `reason` - On-chain reason code (Symbol); used for auditability.
+    ///   The Soroban SDK enforces a 32-byte maximum on Symbol values at
+    ///   construction, so a reason Symbol received here is always ≤ 32 bytes.
+    ///
+    /// # Panics
+    /// * `SettlementError::Unauthorized` — caller is not admin.
+    /// * `SettlementError::AmountNotPositive` — amount is zero or negative.
+    /// * `SettlementError::DeveloperOverflow` — i128 overflow on developer balance.
+    ///
+    /// # Events
+    /// Emits `developer_force_credited` with
+    /// `(developer, amount, reason, new_balance)`.
+    pub fn force_credit_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        amount: i128,
+        reason: Symbol,
+    ) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        if amount <= 0 {
+            env.panic_with_error(SettlementError::AmountNotPositive);
+        }
+
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .unwrap_or(0i128);
+        let new_balance = current_balance
+            .checked_add(amount)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
+
+        env.storage()
+            .persistent()
+            .set(&StorageKey::DeveloperBalance(developer.clone()), &new_balance);
+        env.storage()
+            .persistent()
+            .extend_ttl(
+                &StorageKey::DeveloperBalance(developer.clone()),
+                50000,
+                50000,
+            );
+
+        let mut index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DeveloperIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !index.iter().any(|addr| addr == developer) {
+            index.push_back(developer.clone());
+            env.storage()
+                .instance()
+                .set(&StorageKey::DeveloperIndex, &index);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "developer_force_credited"), developer.clone()),
+            DeveloperForceCreditedEvent {
+                developer,
+                amount,
+                reason,
+                new_balance,
+            },
+        );
     }
 
     /// Get all developer balances (admin only)

@@ -215,6 +215,7 @@ The following auth matrix covers every mutating entrypoint in the audited contra
 - `set_admin` → current admin (`caller.require_auth()` + admin check) at line 301
 - `accept_admin` → pending admin (`pending.require_auth()`) at line 337
 - `set_vault` → admin (`caller.require_auth()` + admin check) at line 373
+- `force_credit_developer` → admin (`caller.require_auth()` + admin check) at line ~453
 
 #### contracts/revenue_pool/src/lib.rs
 - `init` → admin (`admin.require_auth()`) at line 46
