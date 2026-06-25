@@ -4,7 +4,7 @@ mod settlement_tests {
 
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
-    use soroban_sdk::{token, Address, Env, Error, InvokeError};
+    use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -38,6 +38,36 @@ mod settlement_tests {
         let client = token::Client::new(env, &address);
         let admin_client = token::StellarAssetClient::new(env, &address);
         (address, client, admin_client)
+    }
+
+    /// Helper function to compute total developer balances from settlement contract.
+    ///
+    /// This is a test-only utility for cross-contract invariant verification.
+    /// It reads the developer index and sums all individual developer balances stored
+    /// in persistent storage.
+    ///
+    /// # Returns
+    /// The sum of all developer balances in the settlement contract.
+    pub fn get_total_developer_balances(env: &Env, settlement_addr: &Address, admin: &Address) -> i128 {
+        let client = CalloraSettlementClient::new(env, settlement_addr);
+        let all_balances = client.get_all_developer_balances(admin);
+        let mut total = 0i128;
+        for balance_record in all_balances.iter() {
+            total = total.checked_add(balance_record.balance).expect("developer balance sum overflow");
+        }
+        total
+    }
+
+    /// Helper function to get the global settlement pool balance.
+    ///
+    /// This is a test-only utility for cross-contract invariant verification.
+    ///
+    /// # Returns
+    /// The current `total_balance` of the global settlement pool.
+    pub fn get_settlement_pool_balance(env: &Env, settlement_addr: &Address) -> i128 {
+        let client = CalloraSettlementClient::new(env, settlement_addr);
+        let global_pool = client.get_global_pool();
+        global_pool.total_balance
     }
 
     #[test]

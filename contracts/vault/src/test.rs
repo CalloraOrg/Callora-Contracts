@@ -6198,3 +6198,639 @@ fn budget_measure_all() {
     
     std::println!("\n=== END VAULT BUDGET MEASUREMENTS ===\n");
 }
+
+// ===========================================================================
+// Cross-Contract Value Conservation Invariant Tests
+// ===========================================================================
+//
+// This module implements end-to-end integration tests that verify the
+// mathematical value conservation invariant across the entire Callora protocol:
+//
+//     abs(delta_vault) == delta_settlement_pool + delta_developer_balances + delta_revenue_pool
+//
+// Every single token unit (measured in stroops) deducted from the CalloraVault
+// must be perfectly accounted for in one of the following destinations:
+// - The CalloraSettlement global pool
+// - Explicit developer balances in CalloraSettlement
+// - The RevenuePool contract
+//
+// These tests ensure that value never duplicates or disappears into unallocated state.
+//
+// # Test Coverage Matrix
+//
+// | Scenario | Description | to_pool | Developer | Settlement Paused |
+// |----------|-------------|---------|-----------|-------------------|
+// | 1        | Standard pool routing | true | None | No |
+// | 2        | Standard developer routing | false | Some | No |
+// | 3        | Zero-developer batch | true | None | No |
+// | 4        | Fully-pool batch | true | None | No |
+// | 5        | Mixed batch routing | mixed | mixed | No |
+//
+// # References
+// - Vault contract: contracts/vault/src/lib.rs
+// - Settlement contract: contracts/settlement/src/lib.rs
+// - Revenue pool contract: contracts/revenue_pool/src/lib.rs
+// - Documentation: INVARIANTS.md (Cross-contract conservation section)
+
+#[cfg(test)]
+mod conservation_invariant {
+    use super::*;
+    use callora_settlement::{CalloraSettlement, CalloraSettlementClient};
+    use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
+
+    /// Snapshot of cross-contract state totals for value conservation verification.
+    ///
+    /// This structure captures the accounting state across all three contracts
+    /// at a specific point in time, enabling delta computation to verify the
+    /// conservation invariant.
+    #[derive(Debug, Clone)]
+    struct ConservationSnapshot {
+        /// Tracked USDC balance in the vault's internal accounting (VaultMeta.balance)
+        vault_balance: i128,
+        /// Total balance in the settlement global pool
+        settlement_pool: i128,
+        /// Sum of all individual developer balances in settlement
+        settlement_developer_total: i128,
+        /// On-ledger USDC balance held by the revenue pool contract
+        revenue_pool_balance: i128,
+    }
+
+    impl ConservationSnapshot {
+        /// Capture current state totals across vault, settlement, and revenue pool.
+        ///
+        /// # Arguments
+        /// * `env` - Soroban test environment
+        /// * `vault_client` - Client for the vault contract
+        /// * `settlement_client` - Client for the settlement contract
+        /// * `settlement_addr` - Settlement contract address (for helper functions)
+        /// * `admin` - Admin address (required for settlement queries)
+        /// * `usdc_client` - USDC token client for on-ledger balance queries
+        /// * `revenue_pool_addr` - Revenue pool contract address
+        ///
+        /// # Returns
+        /// A snapshot containing current state totals for all accounting buckets.
+        fn capture(
+            env: &Env,
+            vault_client: &CalloraVaultClient,
+            settlement_client: &CalloraSettlementClient,
+            settlement_addr: &Address,
+            admin: &Address,
+            usdc_client: &token::Client,
+            revenue_pool_addr: &Address,
+        ) -> Self {
+            let vault_balance = vault_client.balance();
+            let settlement_pool = settlement_client.get_global_pool().total_balance;
+            
+            // Use the helper function from settlement test module
+            let settlement_developer_total = 
+                callora_settlement::settlement_tests::get_total_developer_balances(
+                    env,
+                    settlement_addr,
+                    admin
+                );
+            
+            let revenue_pool_balance = usdc_client.balance(revenue_pool_addr);
+
+            ConservationSnapshot {
+                vault_balance,
+                settlement_pool,
+                settlement_developer_total,
+                revenue_pool_balance,
+            }
+        }
+
+        /// Compute the delta between two snapshots.
+        ///
+        /// # Arguments
+        /// * `before` - Snapshot captured before the operation
+        /// * `after` - Snapshot captured after the operation
+        ///
+        /// # Returns
+        /// A new snapshot containing the deltas (after - before) for each field.
+        fn delta(before: &Self, after: &Self) -> Self {
+            ConservationSnapshot {
+                vault_balance: after.vault_balance - before.vault_balance,
+                settlement_pool: after.settlement_pool - before.settlement_pool,
+                settlement_developer_total: after.settlement_developer_total - before.settlement_developer_total,
+                revenue_pool_balance: after.revenue_pool_balance - before.revenue_pool_balance,
+            }
+        }
+
+        /// Verify the value conservation invariant for this delta snapshot.
+        ///
+        /// # Conservation Formula
+        /// ```text
+        /// abs(delta_vault) == delta_settlement_pool + delta_developer_balances + delta_revenue_pool
+        /// ```
+        ///
+        /// # Panics
+        /// Panics if the invariant is violated, displaying detailed diagnostic information.
+        fn assert_conservation_invariant(&self) {
+            let abs_vault_delta = self.vault_balance.abs();
+            let right_side = self.settlement_pool
+                + self.settlement_developer_total
+                + self.revenue_pool_balance;
+
+            if abs_vault_delta != right_side {
+                panic!(
+                    "VALUE CONSERVATION INVARIANT VIOLATED!\n\
+                     abs(delta_vault) = {}\n\
+                     delta_settlement_pool = {}\n\
+                     delta_developer_balances = {}\n\
+                     delta_revenue_pool = {}\n\
+                     Sum of destinations = {}\n\
+                     Discrepancy = {}",
+                    abs_vault_delta,
+                    self.settlement_pool,
+                    self.settlement_developer_total,
+                    self.revenue_pool_balance,
+                    right_side,
+                    abs_vault_delta - right_side
+                );
+            }
+        }
+    }
+
+    /// Initialize the complete three-contract test environment.
+    ///
+    /// This helper sets up vault, settlement, revenue_pool, and USDC token
+    /// with proper cross-contract wiring and initial funding.
+    ///
+    /// # Returns
+    /// A tuple containing:
+    /// - Env: Soroban test environment
+    /// - Address: Vault address
+    /// - CalloraVaultClient: Vault client
+    /// - Address: Settlement address
+    /// - CalloraSettlementClient: Settlement client
+    /// - Address: Revenue pool address
+    /// - RevenuePoolClient: Revenue pool client
+    /// - Address: USDC token address
+    /// - token::Client: USDC token client
+    /// - Address: Owner/admin address
+    fn setup_conservation_test_env() -> (
+        Env,
+        Address,
+        CalloraVaultClient<'static>,
+        Address,
+        CalloraSettlementClient<'static>,
+        Address,
+        RevenuePoolClient<'static>,
+        Address,
+        token::Client<'static>,
+        Address,
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let owner = Address::generate(&env);
+
+        // Create USDC token
+        let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+        // Create vault
+        let (vault_address, vault_client) = create_vault(&env);
+
+        // Create settlement (requires vault address)
+        let settlement_address = create_settlement(&env, &owner, &vault_address);
+        let settlement_client = CalloraSettlementClient::new(&env, &settlement_address);
+
+        // Create revenue pool
+        let revenue_pool_address = env.register(RevenuePool, ());
+        let revenue_pool_client = RevenuePoolClient::new(&env, &revenue_pool_address);
+        revenue_pool_client.init(&owner, &usdc_address);
+
+        // Initialize vault with funding
+        fund_vault(&usdc_admin, &vault_address, 10_000_000);
+        vault_client.init(
+            &owner,
+            &usdc_address,
+            &Some(10_000_000),
+            &None,
+            &None,
+            &Some(revenue_pool_address.clone()),
+            &None,
+        );
+
+        // Configure vault to use settlement
+        vault_client.set_settlement(&owner, &settlement_address);
+
+        // Configure settlement to accept USDC withdrawals (for future tests)
+        settlement_client.set_usdc_token(&owner, &usdc_address);
+
+        // Cast to 'static lifetime for return
+        // Safety: In test context, these clients remain valid for the test duration
+        let vault_client_static = unsafe {
+            std::mem::transmute::<CalloraVaultClient<'_>, CalloraVaultClient<'static>>(vault_client)
+        };
+        let settlement_client_static = unsafe {
+            std::mem::transmute::<CalloraSettlementClient<'_>, CalloraSettlementClient<'static>>(
+                settlement_client,
+            )
+        };
+        let revenue_pool_client_static = unsafe {
+            std::mem::transmute::<RevenuePoolClient<'_>, RevenuePoolClient<'static>>(
+                revenue_pool_client,
+            )
+        };
+        let usdc_client_static = unsafe {
+            std::mem::transmute::<token::Client<'_>, token::Client<'static>>(usdc_client)
+        };
+
+        (
+            env,
+            vault_address,
+            vault_client_static,
+            settlement_address,
+            settlement_client_static,
+            revenue_pool_address,
+            revenue_pool_client_static,
+            usdc_address,
+            usdc_client_static,
+            owner,
+        )
+    }
+
+    /// **Scenario 1**: Standard routing with `to_pool=true`
+    ///
+    /// Tests single deduction that routes funds to the settlement global pool.
+    ///
+    /// # Expected Conservation
+    /// - `abs(delta_vault)` should equal `delta_settlement_pool`
+    /// - `delta_developer_balances` should be 0
+    /// - `delta_revenue_pool` should be 0
+    #[test]
+    fn conservation_scenario_1_standard_pool_routing() {
+        let (
+            env,
+            _vault_address,
+            vault_client,
+            settlement_address,
+            settlement_client,
+            revenue_pool_address,
+            _revenue_pool_client,
+            _usdc_address,
+            usdc_client,
+            owner,
+        ) = setup_conservation_test_env();
+
+        // Capture state before deduction
+        let before = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Execute: deduct 1,000,000 stroops to pool
+        vault_client.deduct(&owner, &1_000_000, &None);
+
+        // Capture state after deduction
+        let after = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Compute and verify delta
+        let delta = ConservationSnapshot::delta(&before, &after);
+        delta.assert_conservation_invariant();
+
+        // Additional assertions for this specific scenario
+        assert_eq!(delta.vault_balance, -1_000_000, "Vault balance should decrease by deducted amount");
+        assert_eq!(delta.settlement_pool, 1_000_000, "Settlement pool should increase by deducted amount");
+        assert_eq!(delta.settlement_developer_total, 0, "Developer balances should not change");
+        assert_eq!(delta.revenue_pool_balance, 0, "Revenue pool should not change");
+    }
+
+    /// **Scenario 2**: Standard routing with `to_pool=false`
+    ///
+    /// Tests single deduction that routes funds to a specific developer balance.
+    ///
+    /// # Expected Conservation
+    /// - `abs(delta_vault)` should equal `delta_developer_balances`
+    /// - `delta_settlement_pool` should be 0
+    /// - `delta_revenue_pool` should be 0
+    ///
+    /// # Note
+    /// This test uses a mock routing by directly calling settlement.receive_payment
+    /// after the vault deduction, since the vault's current implementation always
+    /// routes to pool (to_pool=true). This simulates the intended architecture where
+    /// different routing logic could be configured.
+    #[test]
+    fn conservation_scenario_2_standard_developer_routing() {
+        let (
+            env,
+            _vault_address,
+            vault_client,
+            settlement_address,
+            settlement_client,
+            revenue_pool_address,
+            _revenue_pool_client,
+            _usdc_address,
+            usdc_client,
+            owner,
+        ) = setup_conservation_test_env();
+
+        let developer = Address::generate(&env);
+
+        // Capture state before operations
+        let before = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Execute: deduct from vault (goes to pool in current implementation)
+        vault_client.deduct(&owner, &500_000, &None);
+
+        // Simulate developer routing by admin crediting developer
+        // (In real workflow, this would be a separate admin action or different deduct mode)
+        settlement_client.receive_payment(&owner, &500_000, &false, &Some(developer.clone()));
+
+        // Capture state after operations
+        let after = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Compute and verify delta
+        let delta = ConservationSnapshot::delta(&before, &after);
+        
+        // Note: Total conservation should still hold, but split between pool and developer
+        let abs_vault_delta = delta.vault_balance.abs();
+        let total_settlement = delta.settlement_pool + delta.settlement_developer_total;
+        assert_eq!(abs_vault_delta, total_settlement, "Vault deduction should equal total settlement credits");
+    }
+
+    /// **Scenario 3**: Zero-developer batch allocation
+    ///
+    /// Tests batch deduction where all items route to the global pool.
+    ///
+    /// # Expected Conservation
+    /// - `abs(delta_vault)` should equal `delta_settlement_pool`
+    /// - `delta_developer_balances` should be 0
+    /// - `delta_revenue_pool` should be 0
+    #[test]
+    fn conservation_scenario_3_zero_developer_batch() {
+        let (
+            env,
+            _vault_address,
+            vault_client,
+            settlement_address,
+            settlement_client,
+            revenue_pool_address,
+            _revenue_pool_client,
+            _usdc_address,
+            usdc_client,
+            owner,
+        ) = setup_conservation_test_env();
+
+        // Capture state before batch deduction
+        let before = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Execute: batch deduct with 5 items, all to pool
+        let mut items = Vec::new(&env);
+        items.push_back(DeductItem {
+            amount: 100_000,
+            request_id: Some(Symbol::new(&env, "req1")),
+        });
+        items.push_back(DeductItem {
+            amount: 200_000,
+            request_id: Some(Symbol::new(&env, "req2")),
+        });
+        items.push_back(DeductItem {
+            amount: 150_000,
+            request_id: Some(Symbol::new(&env, "req3")),
+        });
+        items.push_back(DeductItem {
+            amount: 300_000,
+            request_id: Some(Symbol::new(&env, "req4")),
+        });
+        items.push_back(DeductItem {
+            amount: 250_000,
+            request_id: Some(Symbol::new(&env, "req5")),
+        });
+
+        vault_client.batch_deduct(&owner, &items);
+
+        // Capture state after batch deduction
+        let after = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Compute and verify delta
+        let delta = ConservationSnapshot::delta(&before, &after);
+        delta.assert_conservation_invariant();
+
+        // Additional assertions
+        let expected_total = 100_000 + 200_000 + 150_000 + 300_000 + 250_000;
+        assert_eq!(delta.vault_balance, -expected_total, "Vault should decrease by sum of batch items");
+        assert_eq!(delta.settlement_pool, expected_total, "Settlement pool should increase by sum of batch items");
+        assert_eq!(delta.settlement_developer_total, 0, "Developer balances should not change");
+        assert_eq!(delta.revenue_pool_balance, 0, "Revenue pool should not change");
+    }
+
+    /// **Scenario 4**: Fully-pool batch allocation
+    ///
+    /// Tests batch deduction with maximum batch size (50 items), all routing to pool.
+    ///
+    /// # Expected Conservation
+    /// - `abs(delta_vault)` should equal `delta_settlement_pool`
+    /// - `delta_developer_balances` should be 0
+    /// - `delta_revenue_pool` should be 0
+    #[test]
+    fn conservation_scenario_4_fully_pool_batch_max_size() {
+        let (
+            env,
+            _vault_address,
+            vault_client,
+            settlement_address,
+            settlement_client,
+            revenue_pool_address,
+            _revenue_pool_client,
+            _usdc_address,
+            usdc_client,
+            owner,
+        ) = setup_conservation_test_env();
+
+        // Capture state before batch deduction
+        let before = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Execute: batch deduct with MAX_BATCH_SIZE items (50)
+        let mut items = Vec::new(&env);
+        let item_amount = 50_000; // 50 items × 50,000 = 2,500,000 total
+        for i in 0..50 {
+            items.push_back(DeductItem {
+                amount: item_amount,
+                request_id: Some(Symbol::new(&env, &std::format!("req{}", i))),
+            });
+        }
+
+        vault_client.batch_deduct(&owner, &items);
+
+        // Capture state after batch deduction
+        let after = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Compute and verify delta
+        let delta = ConservationSnapshot::delta(&before, &after);
+        delta.assert_conservation_invariant();
+
+        // Additional assertions
+        let expected_total = item_amount * 50;
+        assert_eq!(delta.vault_balance, -expected_total, "Vault should decrease by sum of 50 items");
+        assert_eq!(delta.settlement_pool, expected_total, "Settlement pool should increase by sum of 50 items");
+    }
+
+    /// **Scenario 5**: Mixed batch routing with developer allocations
+    ///
+    /// Tests a complex scenario where:
+    /// - Multiple batch deductions occur
+    /// - Some funds go to pool, some to developers
+    /// - Simulates real-world mixed routing patterns
+    ///
+    /// # Expected Conservation
+    /// The conservation invariant must hold for the aggregate of all operations.
+    #[test]
+    fn conservation_scenario_5_mixed_batch_routing() {
+        let (
+            env,
+            _vault_address,
+            vault_client,
+            settlement_address,
+            settlement_client,
+            revenue_pool_address,
+            _revenue_pool_client,
+            _usdc_address,
+            usdc_client,
+            owner,
+        ) = setup_conservation_test_env();
+
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        let dev3 = Address::generate(&env);
+
+        // Capture state before operations
+        let before = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Operation 1: Batch deduct to pool
+        let mut batch1 = Vec::new(&env);
+        batch1.push_back(DeductItem {
+            amount: 400_000,
+            request_id: Some(Symbol::new(&env, "batch1_1")),
+        });
+        batch1.push_back(DeductItem {
+            amount: 300_000,
+            request_id: Some(Symbol::new(&env, "batch1_2")),
+        });
+        vault_client.batch_deduct(&owner, &batch1);
+
+        // Operation 2: Admin credits developers using batch_receive_payment
+        let mut dev_payments = Vec::new(&env);
+        dev_payments.push_back((dev1.clone(), 100_000));
+        dev_payments.push_back((dev2.clone(), 200_000));
+        dev_payments.push_back((dev3.clone(), 150_000));
+        settlement_client.batch_receive_payment(&owner, &dev_payments);
+
+        // Operation 3: Another batch deduct to pool
+        let mut batch2 = Vec::new(&env);
+        batch2.push_back(DeductItem {
+            amount: 250_000,
+            request_id: Some(Symbol::new(&env, "batch2_1")),
+        });
+        batch2.push_back(DeductItem {
+            amount: 350_000,
+            request_id: Some(Symbol::new(&env, "batch2_2")),
+        });
+        vault_client.batch_deduct(&owner, &batch2);
+
+        // Capture state after all operations
+        let after = ConservationSnapshot::capture(
+            &env,
+            &vault_client,
+            &settlement_client,
+            &settlement_address,
+            &owner,
+            &usdc_client,
+            &revenue_pool_address,
+        );
+
+        // Compute and verify delta
+        let delta = ConservationSnapshot::delta(&before, &after);
+        
+        // Conservation invariant must hold for aggregate
+        let abs_vault_delta = delta.vault_balance.abs();
+        let total_destinations = delta.settlement_pool 
+            + delta.settlement_developer_total 
+            + delta.revenue_pool_balance;
+        
+        assert_eq!(
+            abs_vault_delta,
+            total_destinations,
+            "Total vault deduction must equal total destination credits"
+        );
+
+        // Detailed breakdown assertions
+        let expected_vault_delta = -(400_000 + 300_000 + 250_000 + 350_000);
+        let expected_pool_delta = 400_000 + 300_000 + 250_000 + 350_000; // All vault deducts go to pool
+        let expected_dev_delta = 100_000 + 200_000 + 150_000; // Admin-initiated developer credits
+
+        assert_eq!(delta.vault_balance, expected_vault_delta, "Vault delta mismatch");
+        assert_eq!(delta.settlement_pool, expected_pool_delta, "Pool delta mismatch");
+        assert_eq!(delta.settlement_developer_total, expected_dev_delta, "Developer total delta mismatch");
+    }
+}

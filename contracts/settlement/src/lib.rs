@@ -909,7 +909,7 @@ impl CalloraSettlement {
 }
 
 #[cfg(test)]
-mod test;
+pub mod settlement_tests;
 
 #[cfg(test)]
 mod test_views;
