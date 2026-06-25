@@ -5880,14 +5880,14 @@ fn upgrade_sets_version_and_emits_event() {
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
     // Version should be None before any upgrade
-    assert_eq!(client.version(), None);
+    assert_eq!(client.get_version(), None);
 
     let new_hash = BytesN::from_array(&env, &[2u8; 32]);
 
     client.upgrade(&owner, &new_hash);
 
     // version() should return stored value
-    let readback = client.version();
+    let readback = client.get_version();
     assert_eq!(readback, Some(new_hash.clone()));
 
     // An `upgraded` event should have been emitted
@@ -5927,7 +5927,7 @@ fn upgrade_non_owner_admin_succeeds() {
     // new_admin should be able to upgrade
     client.upgrade(&new_admin, &new_hash);
 
-    let readback = client.version();
+    let readback = client.get_version();
     assert_eq!(readback, Some(new_hash));
 }
 
@@ -5966,7 +5966,7 @@ fn version_returns_none_before_first_upgrade() {
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    assert_eq!(client.version(), None);
+    assert_eq!(client.get_version(), None);
 }
 
 #[test]
@@ -5982,15 +5982,15 @@ fn upgrade_multiple_times_updates_version() {
 
     let hash1 = BytesN::from_array(&env, &[5u8; 32]);
     client.upgrade(&owner, &hash1);
-    assert_eq!(client.version(), Some(hash1.clone()));
+    assert_eq!(client.get_version(), Some(hash1.clone()));
 
     let hash2 = BytesN::from_array(&env, &[6u8; 32]);
     client.upgrade(&owner, &hash2);
-    assert_eq!(client.version(), Some(hash2.clone()));
+    assert_eq!(client.get_version(), Some(hash2.clone()));
 
     let hash3 = BytesN::from_array(&env, &[7u8; 32]);
     client.upgrade(&owner, &hash3);
-    assert_eq!(client.version(), Some(hash3));
+    assert_eq!(client.get_version(), Some(hash3));
 }
 
 // ---------------------------------------------------------------------------

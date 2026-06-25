@@ -582,12 +582,11 @@ impl RevenuePool {
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
     ///
-    /// Panics if no version has been stored yet.
-    pub fn version(env: Env) -> BytesN<32> {
+    /// Returns `None` if no version has been stored yet.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
         env.storage()
             .instance()
             .get(&Symbol::new(&env, VERSION_KEY))
-            .expect("version not set")
     }
 }
 

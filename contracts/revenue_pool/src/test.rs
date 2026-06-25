@@ -1883,8 +1883,8 @@ fn upgrade_sets_version_and_emits_event() {
     client.upgrade(&admin, &new_hash);
 
     // version() should return stored value
-    let readback: BytesN<32> = client.version();
-    assert_eq!(readback, new_hash);
+    let readback: Option<BytesN<32>> = client.get_version();
+    assert_eq!(readback, Some(new_hash));
 
     // An `upgraded` event should have been emitted
     let events = env.events().all();

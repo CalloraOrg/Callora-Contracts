@@ -1148,7 +1148,7 @@ impl CalloraVault {
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
     ///
     /// Returns `None` if no upgrade has been performed yet (initial deployment).
-    pub fn version(env: Env) -> Option<BytesN<32>> {
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
         env.storage()
             .instance()
             .get(&StorageKey::ContractVersion)

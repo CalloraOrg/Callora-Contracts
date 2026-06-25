@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
@@ -58,6 +58,7 @@ pub enum StorageKey {
     DeveloperBalance(Address),
     GlobalPool,
     Usdc,
+    ContractVersion,
 }
 
 /// Developer balance record in settlement contract
@@ -790,6 +791,40 @@ impl CalloraSettlement {
         if caller != vault && caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+    }
+
+    /// Admin-gated contract upgrade.
+    ///
+    /// Only the current admin may call. This will instruct the host to update
+    /// the current contract WASM to `new_wasm_hash` and persist the version marker.
+    /// Emits an `upgraded` event with the admin as topic and the new version as data.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+
+        // Perform the on-chain upgrade via the deployer interface.
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        // Persist the version marker for on-chain queries.
+        env.storage()
+            .instance()
+            .set(&StorageKey::ContractVersion, &new_wasm_hash);
+
+        // Emit an event for indexers / audit logs.
+        env.events()
+            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+    }
+
+    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
+    ///
+    /// Returns `None` if no upgrade has been performed yet (initial deployment).
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::ContractVersion)
     }
 }
 

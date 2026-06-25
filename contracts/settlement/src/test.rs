@@ -1679,5 +1679,22 @@ mod settlement_tests {
             pool.total_balance + sum_dev_balances,
             "Conservation invariant violated: total credits must equal pool + developer balances"
         );
+    #[test]
+    fn test_upgrade_and_get_version() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        assert_eq!(client.get_version(), None);
+
+        let new_hash = BytesN::from_array(&env, &[1u8; 32]);
+        client.upgrade(&admin, &new_hash);
+
+        assert_eq!(client.get_version(), Some(new_hash.clone()));
+
+        // An `upgraded` event should have been emitted
+        let events = env.events().all();
+        let ev = events.last().unwrap();
+        let name = soroban_sdk::Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+        assert_eq!(name, soroban_sdk::Symbol::new(&env, "upgraded"));
     }
 }

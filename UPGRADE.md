@@ -120,7 +120,7 @@ pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>)
 **Version Function Signature:**
 
 ```rust
-pub fn version(env: Env) -> Option<BytesN<32>>
+pub fn get_version(env: Env) -> Option<BytesN<32>>
 ```
 
 **Behavior note (pause semantics):**
@@ -135,6 +135,7 @@ pub fn version(env: Env) -> Option<BytesN<32>>
 |-----|------|-------------|
 | `admin` | `Address` | Admin address; may call `distribute` and `set_admin` |
 | `usdc` | `Address` | USDC token contract address |
+| `ContractVersion` | `BytesN<32>` | WASM hash set by `upgrade` function |
 
 #### Upgradeability
 
@@ -151,7 +152,7 @@ soroban contract invoke --contract-id <REVENUE_POOL_ID> -- upgrade \
    --caller <ADMIN> --new_wasm_hash <32-byte-hex>
 ```
 
-The `version()` view returns the stored WASM hash; the contract emits an `upgraded`
+The `get_version()` view returns the stored WASM hash; the contract emits an `upgraded`
 event with the admin as a topic and the new version as data.
 
 **Init signature** (`lib.rs:28-39`):
@@ -168,6 +169,25 @@ pub fn init(env: Env, admin: Address, usdc_token: Address)
 | `vault` | `Address` | Registered vault address |
 | `developer_balances` | `Map<Address, i128>` | Per-developer balance tracking |
 | `global_pool` | `GlobalPool` | Total balance and last updated timestamp |
+| `ContractVersion` | `BytesN<32>` | WASM hash set by `upgrade` function |
+
+#### Upgradeability
+
+The settlement contract supports in-place upgrades via an admin-gated `upgrade` function. 
+This method calls the host deployer to update the contract WASM code while 
+preserving existing instance storage.
+
+```bash
+# Build new WASM
+cargo build --target wasm32-unknown-unknown --release -p callora-settlement
+
+# Compute WASM hash and call upgrade via RPC or tooling
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- upgrade \
+   --caller <ADMIN> --new_wasm_hash <32-byte-hex>
+```
+
+The `get_version()` view returns the stored WASM hash (as an `Option<BytesN<32>>`); the contract emits an `upgraded`
+event with the admin as a topic and the new version as data.
 
 **GlobalPool structure** (`lib.rs:16-19`):
 
@@ -236,7 +256,7 @@ The vault now supports admin-gated in-place upgrades that preserve all existing 
 4. **Verify upgrade**
    ```bash
    # Check version marker
-   soroban contract invoke --contract-id <VAULT_ID> -- version
+   soroban contract invoke --contract-id <VAULT_ID> -- get_version
    # Should return <NEW_WASM_HASH>
    
    # Verify state preserved
@@ -264,7 +284,7 @@ The `upgrade` function emits an `upgraded` event with:
 - Data: New WASM hash (BytesN<32>)
 
 **Version Tracking:**
-- Call `version()` to retrieve the current WASM hash
+- Call `get_version()` to retrieve the current WASM hash
 - Returns `None` for contracts deployed before upgrade functionality
 - Returns `Some(BytesN<32>)` after first upgrade
 
