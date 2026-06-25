@@ -17,11 +17,13 @@ const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const USDC_KEY: &str = "usdc";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+const PAUSED_KEY: &str = "paused";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+const ERR_PAUSED: &str = "revenue pool is paused";
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
 const VERSION_KEY: &str = "version";
 
@@ -517,7 +519,9 @@ impl RevenuePool {
         }
 
         // Extend TTL before executing transfers.
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Phase 3: Execution — all validation passed, perform transfers.
         // Soroban's transaction model guarantees that if any transfer fails,
