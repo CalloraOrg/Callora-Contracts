@@ -517,7 +517,9 @@ impl RevenuePool {
         }
 
         // Extend TTL before executing transfers.
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Phase 3: Execution — all validation passed, perform transfers.
         // Soroban's transaction model guarantees that if any transfer fails,

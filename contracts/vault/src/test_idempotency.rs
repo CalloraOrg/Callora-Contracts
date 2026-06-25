@@ -43,7 +43,8 @@ fn create_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
 /// Register and initialize the settlement contract.
 fn create_settlement(env: &Env, admin: &Address, vault_address: &Address) -> Address {
     let settlement_address = env.register(CalloraSettlement, ());
-    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_address);
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(env, &settlement_address);
     settlement_client.init(admin, vault_address);
     settlement_address
 }
@@ -86,13 +87,14 @@ fn deduct_duplicate_request_id_rejected() {
 
     // Second call with same request_id — must be rejected.
     let result = client.try_deduct(&owner, &100, &Some(rid.clone()));
-    assert!(
-        result.is_err(),
-        "duplicate request_id must be rejected"
-    );
+    assert!(result.is_err(), "duplicate request_id must be rejected");
 
     // Balance must be unchanged after the rejected retry.
-    assert_eq!(client.balance(), 900, "balance must not change on duplicate");
+    assert_eq!(
+        client.balance(),
+        900,
+        "balance must not change on duplicate"
+    );
 }
 
 /// Two distinct `request_id` values each succeed independently.
@@ -241,7 +243,11 @@ fn batch_deduct_duplicate_request_id_rejected_atomically() {
     assert!(result.is_err(), "batch with duplicate id must be rejected");
 
     // Balance must be unchanged — full atomicity.
-    assert_eq!(client.balance(), 900, "balance must not change on duplicate batch");
+    assert_eq!(
+        client.balance(),
+        900,
+        "balance must not change on duplicate batch"
+    );
 }
 
 /// A batch where two items share the same new `request_id` is rejected.
@@ -381,7 +387,10 @@ fn deduct_retry_with_different_amount_still_rejected() {
 
     // Retry with a different amount — still rejected.
     let result = client.try_deduct(&owner, &50, &Some(rid.clone()));
-    assert!(result.is_err(), "retry with different amount must be rejected");
+    assert!(
+        result.is_err(),
+        "retry with different amount must be rejected"
+    );
     assert_eq!(client.balance(), 900);
 }
 
