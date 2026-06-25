@@ -1,7 +1,7 @@
 extern crate std;
+use super::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol};
-use super::*;
 
 fn create_usdc<'a>(env: &'a Env, admin: &'a Address) -> (Address, token::StellarAssetClient<'a>) {
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
@@ -28,21 +28,61 @@ fn set_price_offering_id_too_long() {
     let env = Env::default();
     let (_, client, _, admin) = setup(&env);
     let long_id = "a".repeat((MAX_OFFERING_ID_LEN + 1) as usize);
-    client.set_price(&admin, &String::from_str(&env, &long_id), &String::from_str(&env, "100"));
+    client.set_price(
+        &admin,
+        &String::from_str(&env, &long_id),
+        &String::from_str(&env, "100"),
+    );
 }
 
 #[test]
 fn set_price_zero_price() {
     let env = Env::default();
     let (_, client, _, admin) = setup(&env);
-    client.set_price(&admin, &String::from_str(&env, "off1"), &String::from_str(&env, "0"));
+    client.set_price(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "0"),
+    );
+}
+
+#[test]
+fn require_price_not_set_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    // Calling require_price for a non-existent offering should return PriceNotSet
+    let result = client.try_require_price(&String::from_str(&env, "nonexistent"));
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), Ok(VaultError::PriceNotSet));
+}
+
+#[test]
+fn set_price_below_existing_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    client.set_price(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "1000"),
+    );
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "500"),
+    );
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), Ok(VaultError::PriceUpdateBelowFloor));
 }
 
 #[test]
 fn set_price_successful() {
     let env = Env::default();
     let (_, client, _, admin) = setup(&env);
-    client.set_price(&admin, &String::from_str(&env, "off1"), &String::from_str(&env, "1000"));
+    client.set_price(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "1000"),
+    );
     // Verify readback
     let stored = client.get_price(&String::from_str(&env, "off1"));
     assert_eq!(stored, Some(String::from_str(&env, "1000")));

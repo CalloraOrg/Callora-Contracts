@@ -105,6 +105,44 @@ The implementation includes comprehensive tests covering:
 - ✅ Cancel functions fail for unauthorized callers
 - ✅ After cancellation, new nominations can be made
 
+## VaultError Codes
+
+| Code | Variant | Trigger Condition |
+|------|---------|-------------------|
+| 1 | `NotInitialized` | Contract not yet initialized |
+| 2 | `AlreadyInitialized` | `init` called a second time |
+| 3 | `Unauthorized` | Caller lacks required role |
+| 4 | `Paused` | Operation blocked by circuit breaker |
+| 5 | `InsufficientBalance` | Vault balance too low |
+| 6 | `AmountNotPositive` | Deposit/withdraw amount ≤ 0 |
+| 7 | `ExceedsMaxDeduct` | Deduct > configured max |
+| 8 | `BelowMinDeposit` | Deposit < configured min |
+| 9 | `Overflow` | Arithmetic overflow |
+| 10 | `InitialBalanceNegative` | Negative initial balance |
+| 11 | `MinDepositNotPositive` | Min deposit ≤ 0 |
+| 12 | `MaxDeductNotPositive` | Max deduct ≤ 0 |
+| 13 | `MinDepositExceedsMaxDeduct` | Min deposit > max deduct |
+| 14 | `UsdcTokenCannotBeVault` | USDC token set to vault address |
+| 15 | `RevenuePoolCannotBeVault` | Revenue pool set to vault address |
+| 16 | `AuthorizedCallerCannotBeVault` | Authorized caller set to vault address |
+| 17 | `InitialBalanceExceedsOnLedger` | On-ledger balance too low for init |
+| 18 | `AlreadyPaused` | `pause` when already paused |
+| 19 | `NotPaused` | `unpause` when not paused |
+| 20 | `SettlementNotSet` | Settlement address not configured |
+| 21 | `BatchEmpty` | Batch deduct has zero items |
+| 22 | `BatchTooLarge` | Batch exceeds size limit |
+| 23 | `NewOwnerSameAsCurrent` | Ownership transfer to same address |
+| 24 | `NoOwnershipTransferPending` | No pending ownership transfer |
+| 25 | `NoAdminTransferPending` | No pending admin transfer |
+| 26 | `OfferingIdTooLong` | Offering ID exceeds max length |
+| 27 | `MetadataTooLong` | Metadata exceeds max length |
+| 28 | `PriceParseError` | Price string cannot be parsed |
+| 29 | `DuplicateRequestId` | Deduplicated request ID |
+| 30 | `WithdrawRecipientInvalid` | Recipient is the vault or USDC token |
+| 31 | `DepositorListFull` | Allowed-depositor list at capacity |
+| 32 | `PriceNotSet` | Price queried but not yet set |
+| 33 | `PriceUpdateBelowFloor` | Price update would lower the existing price |
+
 Run tests with:
 ```bash
 cargo test -p callora-settlement

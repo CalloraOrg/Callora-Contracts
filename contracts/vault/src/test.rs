@@ -31,7 +31,8 @@ fn create_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
 /// Register and initialize the settlement contract.
 fn create_settlement(env: &Env, admin: &Address, vault_address: &Address) -> Address {
     let settlement_address = env.register(CalloraSettlement, ());
-    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_address);
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(env, &settlement_address);
     env.mock_all_auths();
     settlement_client.init(admin, vault_address);
     settlement_address
@@ -641,6 +642,30 @@ fn set_allowed_depositor_duplicate_is_ignored() {
     usdc_admin.mint(&depositor, &50);
     usdc_client.approve(&depositor, &vault_address, &50, &1000);
     assert_eq!(client.deposit(&depositor, &50), 150);
+}
+
+#[test]
+fn set_allowed_depositor_list_full_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    // Fill the depositor list to the cap
+    for _ in 0..MAX_ALLOWED_DEPOSITORS {
+        let d = Address::generate(&env);
+        client.set_allowed_depositor(&owner, &Some(d));
+    }
+
+    // Next addition should fail
+    let extra = Address::generate(&env);
+    let result = client.try_set_allowed_depositor(&owner, &Some(extra));
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), Ok(VaultError::DepositorListFull));
 }
 
 #[test]
@@ -1457,7 +1482,6 @@ fn withdraw_to_insufficient_balance_fails() {
 }
 
 #[test]
-#[should_panic(expected = "cannot withdraw to vault address")]
 fn withdraw_to_vault_address_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1469,11 +1493,15 @@ fn withdraw_to_vault_address_fails() {
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
     // Attempt to withdraw to the vault itself
-    client.withdraw_to(&vault_address, &100);
+    let result = client.try_withdraw_to(&vault_address, &100);
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        Ok(crate::VaultError::WithdrawRecipientInvalid)
+    );
 }
 
 #[test]
-#[should_panic(expected = "cannot withdraw to token address")]
 fn withdraw_to_token_address_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1485,7 +1513,12 @@ fn withdraw_to_token_address_fails() {
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
     // Attempt to withdraw to the USDC token contract
-    client.withdraw_to(&usdc, &100);
+    let result = client.try_withdraw_to(&usdc, &100);
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        Ok(crate::VaultError::WithdrawRecipientInvalid)
+    );
 }
 
 #[test]
@@ -1688,6 +1721,25 @@ fn distribute_zero_amount_fails() {
 
     let result = client.try_distribute(&admin, &developer, &0);
     assert!(result.is_err(), "expected error for zero amount");
+}
+
+#[test]
+fn distribute_to_vault_address_fails() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &admin);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&admin, &usdc, &Some(0), &None, &None, &None, &None);
+
+    let result = client.try_distribute(&admin, &vault_address, &100);
+    assert!(result.is_err());
+    assert_eq!(
+        result.unwrap_err(),
+        Ok(VaultError::WithdrawRecipientInvalid)
+    );
 }
 
 #[test]
@@ -5844,7 +5896,6 @@ fn test_reentry_repeated_attempts() {
     assert_eq!(vault_client.balance(), 400);
 }
 
-
 // ---------------------------------------------------------------------------
 // Upgrade tests (Issue #331)
 // ---------------------------------------------------------------------------
@@ -5894,13 +5945,13 @@ fn upgrade_sets_version_and_emits_event() {
     let events = env.events().all();
     let ev = events.last().unwrap();
     assert_eq!(ev.0, vault_address);
-    
+
     let name: Symbol = ev.1.get(0).unwrap().into_val(&env);
     assert_eq!(name, Symbol::new(&env, "upgraded"));
-    
+
     let admin_topic: Address = ev.1.get(1).unwrap().into_val(&env);
     assert_eq!(admin_topic, owner);
-    
+
     let data: BytesN<32> = ev.2.into_val(&env);
     assert_eq!(data, new_hash);
 }
@@ -5952,7 +6003,10 @@ fn upgrade_owner_not_admin_fails() {
 
     // owner (no longer admin) should fail
     let res = client.try_upgrade(&owner, &new_hash);
-    assert!(res.is_err(), "owner without admin role should not be able to upgrade");
+    assert!(
+        res.is_err(),
+        "owner without admin role should not be able to upgrade"
+    );
 }
 
 #[test]
@@ -6022,10 +6076,16 @@ impl BudgetSnapshot {
     /// Calculate delta between two snapshots (after - before).
     fn delta(&self, before: &BudgetSnapshot) -> BudgetSnapshot {
         BudgetSnapshot {
-            cpu_instructions: self.cpu_instructions.saturating_sub(before.cpu_instructions),
+            cpu_instructions: self
+                .cpu_instructions
+                .saturating_sub(before.cpu_instructions),
             memory_bytes: self.memory_bytes.saturating_sub(before.memory_bytes),
-            ledger_read_bytes: self.ledger_read_bytes.saturating_sub(before.ledger_read_bytes),
-            ledger_write_bytes: self.ledger_write_bytes.saturating_sub(before.ledger_write_bytes),
+            ledger_read_bytes: self
+                .ledger_read_bytes
+                .saturating_sub(before.ledger_read_bytes),
+            ledger_write_bytes: self
+                .ledger_write_bytes
+                .saturating_sub(before.ledger_write_bytes),
         }
     }
 }
@@ -6038,7 +6098,15 @@ fn setup_vault_for_deduct(env: &Env, initial_balance: i128) -> (Address, Callora
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, initial_balance);
-    client.init(&owner, &usdc, &Some(initial_balance), &None, &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(initial_balance),
+        &None,
+        &None,
+        &None,
+        &None,
+    );
     let settlement = create_settlement(env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
@@ -6186,15 +6254,15 @@ fn budget_measure_batch_deduct_size_50() {
 #[ignore]
 fn budget_measure_all() {
     std::println!("\n=== VAULT BUDGET MEASUREMENT SUITE ===\n");
-    
+
     // Single deduct baseline
     budget_measure_single_deduct();
-    
+
     // Batch deduct at various sizes
     budget_measure_batch_deduct_size_1();
     budget_measure_batch_deduct_size_10();
     budget_measure_batch_deduct_size_25();
     budget_measure_batch_deduct_size_50();
-    
+
     std::println!("\n=== END VAULT BUDGET MEASUREMENTS ===\n");
 }
