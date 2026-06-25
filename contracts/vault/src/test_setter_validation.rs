@@ -98,3 +98,241 @@ fn set_revenue_pool_vault_address_fails() {
     let result = client.try_set_revenue_pool(&admin, &Some(vault_addr));
     assert!(result.is_err());
 }
+
+// ---------------------------------------------------------------------------
+// set_metadata input validation (length / charset hardening)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_metadata_empty_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, ""),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_null_byte_in_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off\x00ering"),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_control_char_in_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off\x01ering"),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_leading_space_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, " off1"),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_trailing_space_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1 "),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_whitespace_only_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "   "),
+        &String::from_str(&env, "valid"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_metadata_empty_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, ""),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_null_byte_in_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "meta\x00data"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_control_char_in_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "meta\x1Fdata"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_leading_space_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, " metadata"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_trailing_space_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "metadata "),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_whitespace_only_metadata_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_metadata(
+        &admin,
+        &String::from_str(&env, "off1"),
+        &String::from_str(&env, "   "),
+    );
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
+}
+
+#[test]
+fn set_metadata_exact_max_length_succeeds() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let offering_id = "a".repeat(MAX_OFFERING_ID_LEN as usize);
+    let metadata = "b".repeat(MAX_METADATA_LEN as usize);
+    let result = client.set_metadata(
+        &admin,
+        &String::from_str(&env, &offering_id),
+        &String::from_str(&env, &metadata),
+    );
+    assert_eq!(result, String::from_str(&env, &metadata));
+}
+
+// ---------------------------------------------------------------------------
+// set_price offering_id input validation (length / charset hardening)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn set_price_empty_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, ""),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_price_null_byte_in_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, "off\x00ering"),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_price_control_char_in_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, "off\x01ering"),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_price_leading_space_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, " off1"),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_price_trailing_space_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, "off1 "),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}
+
+#[test]
+fn set_price_whitespace_only_offering_id_fails() {
+    let env = Env::default();
+    let (_, client, _, admin) = setup(&env);
+    let result = client.try_set_price(
+        &admin,
+        &String::from_str(&env, "   "),
+        &String::from_str(&env, "100"),
+    );
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
+}

@@ -101,6 +101,10 @@ pub enum VaultError {
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
     DuplicateRequestId = 29,
+    /// Offering ID is empty or contains invalid characters (code 30).
+    OfferingIdInvalid = 30,
+    /// Metadata string is empty or contains invalid characters (code 31).
+    MetadataInvalid = 31,
 }
 
 #[contracttype]
@@ -990,6 +994,27 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Validate that a vault input string is non-empty, contains no control
+    /// characters (0x00–0x1F, 0x7F), and has no leading/trailing whitespace.
+    fn validate_vault_input(s: &String) -> Result<(), ()> {
+        let len = s.len();
+        if len == 0 {
+            return Err(());
+        }
+        let mut buf = [0u8; 256];
+        s.copy_into_slice(&mut buf[..len as usize]);
+        let bytes = &buf[..len as usize];
+        for &b in bytes {
+            if b <= 0x1F || b == 0x7F {
+                return Err(());
+            }
+        }
+        if bytes[0] == 0x20 || bytes[len as usize - 1] == 0x20 {
+            return Err(());
+        }
+        Ok(())
+    }
+
     pub fn set_metadata(
         env: Env,
         caller: Address,
@@ -998,6 +1023,12 @@ impl CalloraVault {
     ) -> Result<String, VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
+        }
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
@@ -1022,12 +1053,16 @@ impl CalloraVault {
     pub fn set_price(env: Env, caller: Address, offering_id: String, price: String) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
         let mut price_buf = [0u8; 64];
-        price.copy_into_slice(&mut price_buf);
-        let price_str = core::str::from_utf8(&price_buf[..price.len() as usize])
+        let price_len = price.len() as usize;
+        price.copy_into_slice(&mut price_buf[..price_len]);
+        let price_str = core::str::from_utf8(&price_buf[..price_len])
             .map_err(|_| VaultError::PriceParseError)?;
         let price_i128: i128 = price_str.parse().map_err(|_| VaultError::PriceParseError)?;
         if price_i128 <= 0 {
