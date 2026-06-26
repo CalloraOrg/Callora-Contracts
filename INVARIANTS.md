@@ -483,3 +483,67 @@ The settlement, vault, and revenue-pool test suites provide practical evidence f
   - Verifies unauthorized callers cannot change the vault's settlement destination.
 
 Together with the explicit pre-/post-conditions above, these tests help auditors and maintainers validate that **cross-contract routing, accounting, and payout actions remain reachable only by the intended principals**.
+
+---
+
+## Revenue Pool On-Ledger Coverage Invariant
+
+**Invariant**: For every reachable state of [`RevenuePool`](contracts/revenue_pool/src/lib.rs#L45), the on-ledger USDC balance of the contract is always **greater than or equal to** the sum of all approved-but-not-yet-distributed payments (the "scheduled" or "pending" total).
+
+- **On-ledger balance**: `usdc.balance(&current_contract_address)` queried via [`balance(env)`](contracts/revenue_pool/src/lib.rs#L546)
+- **Pending total**: A virtual sum tracked off-chain by the backend. In the invariant test, this is simulated as a local `scheduled` variable.
+- **Guarantee**: The admin can always distribute the full set of pending payments without encountering an `ERR_INSUFFICIENT_BALANCE` panic, assuming no concurrent external USDC transfers out of the pool.
+
+### Functions That Modify the Balance
+
+| Function | Effect on balance | Effect on pending |
+|---|---|---|
+| [`receive_payment`](contracts/revenue_pool/src/lib.rs#L272) | None (event-only) | None |
+| [`distribute`](contracts/revenue_pool/src/lib.rs#L341) | Decreases by `amount` | Decreases by `amount` (on success) |
+| [`batch_distribute`](contracts/revenue_pool/src/lib.rs#L455) | Decreases by `sum(amounts)` | Decreases by `sum(amounts)` (on success) |
+| External USDC transfer in | Increases | None |
+| External USDC transfer out | Decreases | None (only admin-distribute paths are intended) |
+
+### Pre-conditions
+
+- `distribute` / `batch_distribute`:
+  - `caller == admin` (authorized)
+  - `amount > 0`
+  - `amount <= max_distribute`
+  - Pool is not paused
+  - `usdc.balance(&self) >= amount` (or `>= sum(amounts)` for batch)
+- `schedule` (off-chain backend action, simulated in test):
+  - Must be accompanied by a corresponding USDC deposit (or must not exceed available balance)
+
+### Post-conditions
+
+- After a successful `distribute` or `batch_distribute`:
+  - `balance' = balance - amount`
+  - `pending' = pending - amount`
+  - The invariant `balance' >= pending'` holds if it held before.
+- After an external USDC deposit (fund):
+  - `balance' = balance + amount`
+  - `pending' = pending`
+  - The invariant holds — more slack.
+- After a successful `schedule` (accompanied by funding):
+  - `balance' = balance + amount`
+  - `pending' = pending + amount`
+  - The invariant holds — both sides increase equally.
+- If any pre-condition fails, the call reverts and state is unchanged.
+
+### How Tests Support the Invariant
+
+The invariant test in [`test_invariant.rs`](contracts/revenue_pool/src/test_invariant.rs) provides Foundry-style stateful invariant coverage:
+
+- **128 deterministic seeded traces**: Each seed (0..127) generates a unique sequence of 75 stateful actions.
+- **Action types**:
+  - **Fund** (33%): Mint USDC to the pool, increasing the balance gap.
+  - **Schedule and fund** (25%): Mint USDC *and* increase the virtual `scheduled` total, simulating a backend approval with concurrent vault settlement.
+  - **Distribute single** (17%): Call `distribute` — on success, decrement `scheduled`.
+  - **Batch distribute** (8%): Call `batch_distribute` with 1-5 random legs — on success, decrement `scheduled` by the batch total. Duplicate recipient detection is implicitly exercised by random address selection.
+  - **Pause/unpause toggle** (8%): Guards are tested by toggling the pause flag.
+  - **Pause-then-distribute edge case** (8%): Pauses the pool, attempts a `distribute` (which must revert with `ERR_PAUSED`), then unpauses. Verifies that `scheduled` is unchanged after the failed attempt.
+- **Invariant check after every action**: `usdc.balance(pool) >= scheduled` is asserted after each of the 75 steps across all 128 traces — 9,600 invariant checks total.
+- **`catch_unwind` for expected reverts**: Actions that are expected to fail (e.g., distribute while paused, duplicate recipients, insufficient balance) are wrapped in `std::panic::catch_unwind` so that the test runner continues the trace and verifies the invariant after the revert.
+
+Together with the explicit design above, these tests help auditors and maintainers validate that **the revenue pool's on-ledger USDC never falls below the sum of pending scheduled distributions**.

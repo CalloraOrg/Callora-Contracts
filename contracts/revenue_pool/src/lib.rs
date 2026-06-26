@@ -680,3 +680,6 @@ mod test;
 
 #[cfg(test)]
 mod test_balance;
+
+#[cfg(test)]
+mod test_invariant;
