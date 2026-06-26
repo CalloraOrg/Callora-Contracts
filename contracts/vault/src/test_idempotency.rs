@@ -11,11 +11,79 @@
 extern crate std;
 
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::{token, Address, Env, Symbol, Vec};
 
 use super::*;
 
 use callora_settlement::CalloraSettlement;
+
+/// Deterministic PRNG for seeded property tests.
+///
+/// This simple 64-bit LCG is adequate for generating deterministic trace
+/// variants without pulling in an external RNG dependency.
+struct Prng {
+    state: u64,
+}
+
+impl Prng {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed.wrapping_add(0x9E37_79B9_7F4A_7C15),
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        self.state
+    }
+
+    fn gen_range_i128(&mut self, min: i128, max_inclusive: i128) -> i128 {
+        if min >= max_inclusive {
+            return min;
+        }
+        let span = (max_inclusive - min) as u64 + 1;
+        min + (self.next_u64() % span) as i128
+    }
+
+    fn gen_range_usize(&mut self, min: usize, max_inclusive: usize) -> usize {
+        if min >= max_inclusive {
+            return min;
+        }
+        let span = max_inclusive - min + 1;
+        min + (self.next_u64() as usize % span)
+    }
+}
+
+fn build_duplicate_batch(
+    env: &Env,
+    seed: u64,
+    batch_size: usize,
+) -> (Vec<DeductItem>, Symbol) {
+    let mut rng = Prng::new(seed);
+    let first_dup = rng.gen_range_usize(0, batch_size - 1);
+    let mut second_dup = rng.gen_range_usize(0, batch_size - 1);
+    while second_dup == first_dup {
+        second_dup = rng.gen_range_usize(0, batch_size - 1);
+    }
+
+    let duplicate_id = Symbol::new(env, &format!("dup_{}_{}", seed, first_dup));
+    let mut items: Vec<DeductItem> = Vec::new(env);
+
+    for i in 0..batch_size {
+        let amount = rng.gen_range_i128(1, 50);
+        let request_id = if i == first_dup || i == second_dup {
+            Some(duplicate_id.clone())
+        } else {
+            Some(Symbol::new(env, &format!("req_{}_{}", seed, i)))
+        };
+        items.push_back(DeductItem { amount, request_id });
+    }
+
+    (items, duplicate_id)
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -277,6 +345,33 @@ fn batch_deduct_two_items_same_new_id_rejected() {
         !client.is_request_processed(&rid),
         "rejected batch must not mark request_id"
     );
+}
+
+/// A varying set of batch sizes with seeded duplicate positions must be rejected
+/// atomically when the same `request_id` appears twice within a single batch.
+#[test]
+fn batch_deduct_duplicate_request_id_within_batch_rejected_atomically() {
+    for seed in 0..32 {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (_, client, _, owner) = setup_vault(&env, 10_000);
+
+        let batch_size = 2 + (seed as usize % (MAX_BATCH_SIZE as usize - 1));
+        let (items, duplicate_id) = build_duplicate_batch(&env, seed, batch_size);
+        let starting_balance = client.balance();
+
+        let result = client.try_batch_deduct(&owner, &items);
+        assert!(
+            result.is_err(),
+            "seed {seed} batch with duplicate request_id must be rejected"
+        );
+        assert_eq!(result.unwrap_err(), VaultError::DuplicateRequestId);
+        assert_eq!(client.balance(), starting_balance);
+        assert!(
+            !client.is_request_processed(&duplicate_id),
+            "rejected batch must not mark duplicate request_id"
+        );
+    }
 }
 
 /// A batch with all distinct `Some` ids succeeds and marks all of them.

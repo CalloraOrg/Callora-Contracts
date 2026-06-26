@@ -182,6 +182,7 @@ The test suite in `contracts/vault/src/test.rs` provides practical evidence for 
   - `batch_deduct_success`, `batch_deduct_all_succeed`, `batch_deduct_all_revert`, and `batch_deduct_revert_preserves_balance` all verify that:
     - Successful batches leave balance consistent with expectations.
     - Failing batches revert without corrupting balance.
+    - Duplicate `request_id` values inside a single batch are rejected atomically and do not change `meta.balance`.
 - **Withdraw tests**:
   - `withdraw_owner_success`, `withdraw_exact_balance`, and `withdraw_exceeds_balance_fails` ensure that:
     - Withdrawals are only allowed up to the current balance.
