@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec,
+};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -26,6 +28,22 @@ const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
 const PAUSED_KEY: &str = "paused";
 const ERR_PAUSED: &str = "revenue pool paused";
 const VERSION_KEY: &str = "version";
+
+/// Typed contract errors for the revenue pool.
+///
+/// Returned (instead of string panics) for batch-size violations so backend
+/// integrators can branch on a stable numeric code rather than parsing panic
+/// strings. See [`chunk_iter`] for pre-chunking large payout lists to avoid
+/// [`RevenuePoolError::BatchTooLarge`] entirely.
+#[contracterror]
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum RevenuePoolError {
+    /// `batch_distribute` was called with an empty `payments` vector (code 1).
+    BatchEmpty = 1,
+    /// `batch_distribute` received more than [`MAX_BATCH_SIZE`] payment legs (code 2).
+    BatchTooLarge = 2,
+}
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
@@ -417,9 +435,14 @@ impl RevenuePool {
     ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
     ///   Each `Address` must be unique within the vector.
     ///
+    /// # Errors
+    /// Returns a typed [`RevenuePoolError`] for batch-size violations so callers can
+    /// branch on a stable numeric code without parsing panic strings:
+    /// * [`RevenuePoolError::BatchEmpty`] if `payments` is empty.
+    /// * [`RevenuePoolError::BatchTooLarge`] if `payments` exceeds [`MAX_BATCH_SIZE`] entries.
+    ///   Use [`chunk_iter`] to pre-split large payout lists and avoid this error.
+    ///
     /// # Panics
-    /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
-    /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
     /// * If any individual amount exceeds `max_distribute` (`"amount exceeds max_distribute"`).
@@ -454,7 +477,11 @@ impl RevenuePool {
     /// ];
     /// pool.batch_distribute(&admin, &bad_payments); // panics
     /// ```
-    pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
+    pub fn batch_distribute(
+        env: Env,
+        caller: Address,
+        payments: Vec<(Address, i128)>,
+    ) -> Result<(), RevenuePoolError> {
         // Phase 0: Authorization
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -463,12 +490,14 @@ impl RevenuePool {
             panic!("{}", ERR_UNAUTHORIZED);
         }
 
+        // Size guards return typed errors so backend integrators can branch on a
+        // stable code instead of parsing panic strings. See `chunk_iter`.
         let n = payments.len();
         if n == 0 {
-            panic!("batch_distribute requires at least one payment");
+            return Err(RevenuePoolError::BatchEmpty);
         }
         if n > MAX_BATCH_SIZE {
-            panic!("batch too large");
+            return Err(RevenuePoolError::BatchTooLarge);
         }
 
         // Phase 1: Precomputation, validation, and duplicate detection.
@@ -533,6 +562,8 @@ impl RevenuePool {
             env.events()
                 .publish((events::event_batch_distribute(&env), to), amount);
         }
+
+        Ok(())
     }
 
     /// Return this contract's USDC balance (for testing and dashboards).
@@ -593,6 +624,56 @@ impl RevenuePool {
 }
 
 mod events;
+/// Split `payments` into consecutive chunks of at most `chunk_size` legs each,
+/// preserving order.
+///
+/// Intended for backend integrators who need to distribute to more than
+/// [`MAX_BATCH_SIZE`] developers: pre-chunk the full payout list and submit one
+/// [`RevenuePool::batch_distribute`] call per chunk. Every chunk is guaranteed to
+/// satisfy the size cap, so no call ever returns [`RevenuePoolError::BatchTooLarge`],
+/// and there is no panic string to parse.
+///
+/// The last chunk may contain fewer than `chunk_size` entries. An empty `payments`
+/// vector — or a `chunk_size` of `0` — yields an empty result (no chunks). A single
+/// remaining leg produces a one-element chunk.
+///
+/// This is a pure, read-only helper: it performs no storage access, no
+/// authorization, and moves no tokens.
+///
+/// # Examples
+/// ```ignore
+/// // Distribute to an arbitrarily large list, MAX_BATCH_SIZE legs at a time.
+/// for chunk in chunk_iter(&env, payments, MAX_BATCH_SIZE).iter() {
+///     pool.batch_distribute(&admin, &chunk);
+/// }
+/// ```
+pub fn chunk_iter(
+    env: &Env,
+    payments: Vec<(Address, i128)>,
+    chunk_size: u32,
+) -> Vec<Vec<(Address, i128)>> {
+    let mut chunks: Vec<Vec<(Address, i128)>> = Vec::new(env);
+    // A zero chunk size has no well-defined chunking; return no chunks rather
+    // than looping forever.
+    if chunk_size == 0 {
+        return chunks;
+    }
+
+    let mut current: Vec<(Address, i128)> = Vec::new(env);
+    for payment in payments.iter() {
+        current.push_back(payment);
+        if current.len() == chunk_size {
+            chunks.push_back(current);
+            current = Vec::new(env);
+        }
+    }
+    // Flush the trailing partial chunk, if any.
+    if !current.is_empty() {
+        chunks.push_back(current);
+    }
+
+    chunks
+}
 
 #[cfg(test)]
 mod test;

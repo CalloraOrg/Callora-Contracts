@@ -2,6 +2,7 @@
 
 **Date:** 2026-04-24  
 **Updated:** 2026-05-27 — duplicate recipient detection added  
+**Updated:** 2026-06-25 — typed size-violation errors (`RevenuePoolError`) and `chunk_iter` helper added (#418)  
 **Feature:** Atomic batch transfer with all-or-nothing execution and duplicate-recipient rejection
 
 ---
@@ -52,7 +53,8 @@ payments.push_back((developer, 2_500)); // aggregated
 - Verifies caller is the current admin via `require_auth()` + explicit address check.
 
 ### Phase 1: Precomputation, Validation & Duplicate Detection
-- Rejects empty batches and batches exceeding `MAX_BATCH_SIZE`.
+- Rejects empty batches and batches exceeding `MAX_BATCH_SIZE` with **typed errors**
+  ([`RevenuePoolError::BatchEmpty`] / [`RevenuePoolError::BatchTooLarge`]), not string panics.
 - Iterates all payments once, building a `Map<Address, bool>` seen-set.
 - Panics on the first duplicate address encountered.
 - Validates each amount is strictly positive and within `max_distribute`.
@@ -101,7 +103,18 @@ loop — well within budget for `MAX_BATCH_SIZE = 50`.
 
 ---
 
-## Error Constants
+## Errors
+
+Batch **size** violations are typed (`#[contracterror] RevenuePoolError`) so integrators
+branch on a numeric code, never a panic string:
+
+| Error | Code | Trigger |
+|---|---|---|
+| `RevenuePoolError::BatchEmpty` | `1` | `payments` is empty |
+| `RevenuePoolError::BatchTooLarge` | `2` | `payments.len() > MAX_BATCH_SIZE` |
+
+Remaining per-leg validations still panic with string constants (typed-error migration for
+these is tracked separately):
 
 | Constant | Value |
 |---|---|
@@ -131,8 +144,73 @@ successful batch.
 ## Batch Size Policy
 
 - **Hard cap:** `MAX_BATCH_SIZE = 50` entries per call.
-- **Minimum:** 1 entry (empty batch panics).
-- For larger distributions, split into multiple transactions off-chain.
+- **Minimum:** 1 entry.
+- Size violations return **typed errors** instead of string panics, so integrators
+  branch on a stable numeric code rather than matching panic text:
+
+| Condition | Error | Code |
+|---|---|---|
+| `payments.len() == 0` | `RevenuePoolError::BatchEmpty` | `1` |
+| `payments.len() > MAX_BATCH_SIZE` | `RevenuePoolError::BatchTooLarge` | `2` |
+
+`batch_distribute` returns `Result<(), RevenuePoolError>`. From the generated client,
+call `try_batch_distribute(...)` to receive `Err(Ok(RevenuePoolError::BatchTooLarge))`
+(or `BatchEmpty`) without triggering a host panic.
+
+---
+
+## Chunking Large Distributions
+
+To pay more than `MAX_BATCH_SIZE` developers, **pre-chunk** the payout list and submit one
+`batch_distribute` call per chunk. Every chunk is guaranteed to satisfy the cap, so no call
+ever returns `BatchTooLarge` and there is no panic string to parse.
+
+### On-chain helper: `chunk_iter`
+
+`chunk_iter(env, payments, chunk_size)` splits an ordered `Vec<(Address, i128)>` into
+consecutive chunks of at most `chunk_size` legs, preserving order. The last chunk may be
+shorter (a single remaining leg becomes a one-element chunk). An empty input — or a
+`chunk_size` of `0` — yields no chunks. It is a pure, read-only helper: no storage access,
+no auth, no token movement.
+
+```rust
+use callora_revenue_pool::{chunk_iter, MAX_BATCH_SIZE};
+
+// Distribute to an arbitrarily large list, MAX_BATCH_SIZE legs at a time.
+for chunk in chunk_iter(&env, payments, MAX_BATCH_SIZE).iter() {
+    pool.batch_distribute(&admin, &chunk); // each chunk is within the cap
+}
+```
+
+### Off-chain (TypeScript) integrators
+
+Backends typically build the payout list off-chain and chunk it before invoking the
+contract. Mirror `MAX_BATCH_SIZE = 50` and submit one transaction per chunk:
+
+```ts
+const MAX_BATCH_SIZE = 50; // must match the contract constant
+
+/** Split an ordered payout list into chunks of at most `size` legs. */
+function chunkPayments<T>(payments: T[], size: number = MAX_BATCH_SIZE): T[][] {
+  if (size <= 0) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < payments.length; i += size) {
+    chunks.push(payments.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// payments: Array<{ to: string; amount: bigint }>
+for (const chunk of chunkPayments(payments)) {
+  // Each chunk.length <= MAX_BATCH_SIZE, so batch_distribute never returns BatchTooLarge.
+  await pool.batch_distribute({ caller: admin, payments: chunk });
+}
+```
+
+> **Atomicity note:** each chunk is its own transaction. A failure in one chunk reverts only
+> that chunk, not previously-submitted chunks. Design retries to be idempotent (the
+> duplicate-recipient guard makes accidental re-submission of an already-paid leg safe to
+> reject).
 
 ---
 
@@ -149,7 +227,23 @@ Six new tests cover the duplicate-recipient feature (added to `test.rs`):
 | `batch_distribute_unique_recipients_succeeds` | Valid batch still works after the change |
 | `batch_distribute_duplicate_detected_before_balance_check` | Dedup fires in Phase 1, before Phase 2 balance check |
 
-Total test suite: **54 passing** (1 pre-existing failure in `upgrade_sets_version_and_emits_event`
+### Size-cap & chunking tests (#418)
+
+| Test | Boundary / behavior |
+|---|---|
+| `batch_distribute_empty_returns_typed_error` | length `0` → `RevenuePoolError::BatchEmpty` |
+| `batch_distribute_too_large_returns_typed_error` | length `MAX_BATCH_SIZE + 1` → `BatchTooLarge`, funds untouched |
+| `batch_distribute_at_max_size_succeeds` | length `MAX_BATCH_SIZE` → succeeds |
+| `chunk_iter_empty_input_yields_no_chunks` | empty input → `[]` |
+| `chunk_iter_zero_chunk_size_yields_no_chunks` | `chunk_size == 0` → `[]` |
+| `chunk_iter_single_leg_yields_one_chunk` | single-leg chunk |
+| `chunk_iter_exact_multiple` | even split (`[5, 5]`) |
+| `chunk_iter_with_remainder_has_single_leg_tail` | remainder tail (`[5, 5, 1]`) |
+| `chunk_iter_chunk_size_larger_than_input` | one chunk when `chunk_size > len` |
+| `chunk_iter_preserves_order_and_amounts` | order preserved across chunks |
+| `chunk_iter_chunks_each_distribute_within_cap` | `MAX_BATCH_SIZE + 1` legs pre-chunked → all distribute, pool drained |
+
+Total test suite: **62 passing** (1 pre-existing failure in `upgrade_sets_version_and_emits_event`
 due to a Soroban unit-test environment limitation — WASM upload is not supported in `Env::default()`).
 
 ---
@@ -188,3 +282,6 @@ due to a Soroban unit-test environment limitation — WASM upload is not support
 - [x] `/// doc` comments updated on `batch_distribute`
 - [x] Policy documented in this file
 - [x] No `unwrap()` in production paths
+- [x] Typed `RevenuePoolError::{BatchEmpty, BatchTooLarge}` replace size-violation string panics (#418)
+- [x] `chunk_iter` helper for backend pre-chunking, with Rust + TypeScript usage documented
+- [x] Boundary tests for length `0`, `MAX_BATCH_SIZE`, and `MAX_BATCH_SIZE + 1`

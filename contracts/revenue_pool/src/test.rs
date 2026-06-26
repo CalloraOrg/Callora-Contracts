@@ -1832,8 +1832,8 @@ fn get_usdc_token_before_init_panics() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "batch_distribute requires at least one payment")]
-fn batch_distribute_empty_panics() {
+fn batch_distribute_empty_returns_typed_error() {
+    // Boundary: length == 0 must surface RevenuePoolError::BatchEmpty (no string panic).
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -1843,17 +1843,18 @@ fn batch_distribute_empty_panics() {
     client.init(&admin, &usdc_address);
 
     let payments: Vec<(Address, i128)> = Vec::new(&env);
-    client.batch_distribute(&admin, &payments);
+    let res = client.try_batch_distribute(&admin, &payments);
+    assert_eq!(res, Err(Ok(RevenuePoolError::BatchEmpty)));
 }
 
 #[test]
-#[should_panic(expected = "batch too large")]
-fn batch_distribute_too_large_panics() {
+fn batch_distribute_too_large_returns_typed_error() {
+    // Boundary: length == MAX_BATCH_SIZE + 1 must surface RevenuePoolError::BatchTooLarge.
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let (pool_addr, client) = create_pool(&env);
-    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
 
     client.init(&admin, &usdc_address);
     fund_pool(&usdc_admin, &pool_addr, 100_000);
@@ -1863,7 +1864,11 @@ fn batch_distribute_too_large_panics() {
     for _ in 0..=crate::MAX_BATCH_SIZE {
         payments.push_back((Address::generate(&env), 1_i128));
     }
-    client.batch_distribute(&admin, &payments);
+    let res = client.try_batch_distribute(&admin, &payments);
+    assert_eq!(res, Err(Ok(RevenuePoolError::BatchTooLarge)));
+
+    // Atomicity: a rejected oversized batch must not move any funds.
+    assert_eq!(usdc_client.balance(&pool_addr), 100_000);
 }
 
 #[test]
@@ -1887,6 +1892,134 @@ fn batch_distribute_at_max_size_succeeds() {
     client.batch_distribute(&admin, &payments);
 
     // Pool should be drained
+    assert_eq!(usdc_client.balance(&pool_addr), 0);
+}
+
+// ---------------------------------------------------------------------------
+// chunk_iter helper tests — backend pre-chunking of large payout lists (#418)
+// ---------------------------------------------------------------------------
+
+fn make_payments(env: &Env, count: u32) -> Vec<(Address, i128)> {
+    let mut payments: Vec<(Address, i128)> = Vec::new(env);
+    for i in 0..count {
+        // Amounts are 1..=count so order can be asserted after chunking.
+        payments.push_back((Address::generate(env), (i as i128) + 1));
+    }
+    payments
+}
+
+fn total_legs(chunks: &Vec<Vec<(Address, i128)>>) -> u32 {
+    let mut total = 0u32;
+    for chunk in chunks.iter() {
+        total += chunk.len();
+    }
+    total
+}
+
+#[test]
+fn chunk_iter_empty_input_yields_no_chunks() {
+    let env = Env::default();
+    let payments: Vec<(Address, i128)> = Vec::new(&env);
+    let chunks = crate::chunk_iter(&env, payments, crate::MAX_BATCH_SIZE);
+    assert_eq!(chunks.len(), 0);
+}
+
+#[test]
+fn chunk_iter_zero_chunk_size_yields_no_chunks() {
+    let env = Env::default();
+    let payments = make_payments(&env, 5);
+    let chunks = crate::chunk_iter(&env, payments, 0);
+    assert_eq!(chunks.len(), 0);
+}
+
+#[test]
+fn chunk_iter_single_leg_yields_one_chunk() {
+    let env = Env::default();
+    let payments = make_payments(&env, 1);
+    let chunks = crate::chunk_iter(&env, payments, crate::MAX_BATCH_SIZE);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks.get(0).unwrap().len(), 1);
+}
+
+#[test]
+fn chunk_iter_exact_multiple() {
+    let env = Env::default();
+    let payments = make_payments(&env, 10);
+    let chunks = crate::chunk_iter(&env, payments, 5);
+    assert_eq!(chunks.len(), 2);
+    assert_eq!(chunks.get(0).unwrap().len(), 5);
+    assert_eq!(chunks.get(1).unwrap().len(), 5);
+    assert_eq!(total_legs(&chunks), 10);
+}
+
+#[test]
+fn chunk_iter_with_remainder_has_single_leg_tail() {
+    let env = Env::default();
+    // 11 legs in chunks of 5 → [5, 5, 1]; the tail is a single-leg chunk.
+    let payments = make_payments(&env, 11);
+    let chunks = crate::chunk_iter(&env, payments, 5);
+    assert_eq!(chunks.len(), 3);
+    assert_eq!(chunks.get(0).unwrap().len(), 5);
+    assert_eq!(chunks.get(1).unwrap().len(), 5);
+    assert_eq!(chunks.get(2).unwrap().len(), 1);
+    assert_eq!(total_legs(&chunks), 11);
+}
+
+#[test]
+fn chunk_iter_chunk_size_larger_than_input() {
+    let env = Env::default();
+    let payments = make_payments(&env, 3);
+    let chunks = crate::chunk_iter(&env, payments, crate::MAX_BATCH_SIZE);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks.get(0).unwrap().len(), 3);
+}
+
+#[test]
+fn chunk_iter_preserves_order_and_amounts() {
+    let env = Env::default();
+    let payments = make_payments(&env, 7); // amounts 1..=7
+    let chunks = crate::chunk_iter(&env, payments, 3); // [3, 3, 1]
+    // Flatten and assert amounts return in order 1,2,3,4,5,6,7.
+    let mut expected: i128 = 1;
+    for chunk in chunks.iter() {
+        for (_, amount) in chunk.iter() {
+            assert_eq!(amount, expected);
+            expected += 1;
+        }
+    }
+    assert_eq!(expected, 8);
+}
+
+#[test]
+fn chunk_iter_chunks_each_distribute_within_cap() {
+    // Integration: a payout list larger than MAX_BATCH_SIZE, pre-chunked, must
+    // distribute leg-by-leg with no BatchTooLarge error.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    client.init(&admin, &usdc_address);
+
+    let leg_count = crate::MAX_BATCH_SIZE + 1; // forces 2 chunks
+    let amount_per = 10_i128;
+    let total = amount_per * (leg_count as i128);
+    fund_pool(&usdc_admin, &pool_addr, total);
+
+    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+    for _ in 0..leg_count {
+        payments.push_back((Address::generate(&env), amount_per));
+    }
+
+    let chunks = crate::chunk_iter(&env, payments, crate::MAX_BATCH_SIZE);
+    assert_eq!(chunks.len(), 2);
+    for chunk in chunks.iter() {
+        assert!(chunk.len() <= crate::MAX_BATCH_SIZE);
+        let res = client.try_batch_distribute(&admin, &chunk);
+        assert_eq!(res, Ok(Ok(())));
+    }
+
+    // Whole payout delivered; pool drained.
     assert_eq!(usdc_client.balance(&pool_addr), 0);
 }
 
