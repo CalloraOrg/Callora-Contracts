@@ -826,6 +826,36 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 
 ---
 
+### `developer_withdraw`
+
+Emitted by `withdraw_developer_balance()` when a developer withdraws their balance as USDC.
+
+| Index             | Location | Type    | Description                                                     |
+|-------------------|----------|---------|-----------------------------------------------------------------|
+| topic 0           | topics   | Symbol  | `"developer_withdraw"`                                          |
+| topic 1           | topics   | Address | `developer` — address withdrawing the balance                   |
+| `developer`       | data     | Address | same as topic 1; duplicated for data-only indexers              |
+| `amount`          | data     | i128    | amount withdrawn in USDC micro-units                            |
+| `remaining_balance`| data    | i128    | developer's cumulative balance after this withdrawal (post-state)|
+| `to`              | data     | Address | recipient address the funds were sent to (defaults to developer)|
+
+```json
+{
+    "topics": ["developer_withdraw", "GDEV..."],
+    "data": {
+        "developer": "GDEV...",
+        "amount": 2000000,
+        "remaining_balance": 0,
+        "to": "GRECIPIENT..."
+    }
+}
+```
+
+**Invariants.**
+- `remaining_balance = prior_balance - amount`, checked for underflow.
+- `to` cannot be the contract's own address.
+- If `to` is not provided (None), it defaults to `developer`.
+
 ### `developer_force_credited`
 
 Emitted by `force_credit_developer()` when an admin manually credits a developer balance (escape hatch).
@@ -844,13 +874,13 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 
 ```json
 {
-  "topics": ["developer_force_credited", "GDEV..."],
-  "data": {
-    "developer": "GDEV...",
-    "amount": 5000000,
-    "reason": "offline_settlement",
-    "new_balance": 7500000
-  }
+    "topics": ["developer_force_credited", "GDEV..."],
+    "data": {
+        "developer": "GDEV...",
+        "amount": 5000000,
+        "reason": "offline_settlement",
+        "new_balance": 7500000
+    }
 }
 ```
 

@@ -146,6 +146,7 @@ pub struct DeveloperWithdrawEvent {
     pub developer: Address,
     pub amount: i128,
     pub remaining_balance: i128,
+    pub to: Address,
 }
 
 /// Emitted when the admin sets or changes a developer's daily withdrawal cap.
@@ -474,75 +475,56 @@ impl CalloraSettlement {
             .ok_or(SettlementError::UsdcTokenNotConfigured)
     }
 
-    /// Withdraw developer balance as USDC to the requesting developer.
-    ///
-    /// Requires the developer to authorize the request and the requested amount
-    /// to be positive and covered by the tracked developer balance.
-    pub fn withdraw_developer_balance(
-        env: Env,
-        developer: Address,
-        amount: i128,
-    ) -> Result<(), SettlementError> {
-        developer.require_auth();
-        if amount <= 0 {
-            return Err(SettlementError::AmountNotPositive);
-        }
+    /// Withdraw developer balance as USDC to a designated recipient (defaults to the developer).
+///
+/// Requires the developer to authorize the request and the requested amount
+/// to be positive and covered by the tracked developer balance.
+///
+/// # Arguments
+/// * `developer` - Address of the developer withdrawing their balance
+/// * `amount` - Amount to withdraw in USDC micro-units
+/// * `to` - Optional recipient address; if `None`, defaults to `developer`
+///
+/// # Errors
+/// - `AmountNotPositive` if amount is ≤ 0
+/// - `InsufficientDeveloperBalance` if developer balance < amount
+/// - `DailyWithdrawCapExceeded` if daily cap is exceeded
+/// - `DeveloperBalanceUnderflow` if subtraction underflows
+/// - `UsdcTokenNotConfigured` if USDC token not set
+/// - `InsufficientContractBalance` if contract has insufficient USDC
+/// - Panics if `to` is the contract's own address
+pub fn withdraw_developer_balance(
+    env: Env,
+    developer: Address,
+    amount: i128,
+    to: Option<Address>,
+) -> Result<(), SettlementError> {
+    developer.require_auth();
+    if amount <= 0 {
+        return Err(SettlementError::AmountNotPositive);
+    }
 
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
-            .unwrap_or(0);
-        if amount > current_balance {
-            return Err(SettlementError::InsufficientDeveloperBalance);
-        }
+    let recipient = to.unwrap_or_else(|| developer.clone());
+    let contract_address = env.current_contract_address();
+    if recipient == contract_address {
+        panic!("invalid recipient: cannot withdraw to contract itself");
+    }
 
-        let cap: i128 = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
-            .unwrap_or(0);
-        if cap > 0 {
-            let today = env.ledger().timestamp() / 86400;
-            let mut daily = env
-                .storage()
-                .persistent()
-                .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-                .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
-            if daily.day != today {
-                daily.day = today;
-                daily.amount = 0;
-            }
-            if daily.amount.checked_add(amount).is_none_or(|sum| sum > cap) {
-                return Err(SettlementError::DailyWithdrawCapExceeded);
-            }
-        }
+    let current_balance: i128 = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::DeveloperBalance(developer.clone()))
+        .unwrap_or(0);
+    if amount > current_balance {
+        return Err(SettlementError::InsufficientDeveloperBalance);
+    }
 
-        let new_balance = current_balance
-            .checked_sub(amount)
-            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-
-        let usdc_address = Self::get_usdc_token(env.clone())?;
-        let usdc = token::Client::new(&env, &usdc_address);
-        let contract_address = env.current_contract_address();
-
-        if usdc.balance(&contract_address) < amount {
-            return Err(SettlementError::InsufficientContractBalance);
-        }
-
-        usdc.transfer(&contract_address, &developer, &amount);
-
-        env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            &new_balance,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            50000,
-            50000,
-        );
-
-        // Update daily withdrawal accumulator
+    let cap: i128 = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::DailyWithdrawCap(developer.clone()))
+        .unwrap_or(0);
+    if cap > 0 {
         let today = env.ledger().timestamp() / 86400;
         let mut daily = env
             .storage()
@@ -553,25 +535,65 @@ impl CalloraSettlement {
             daily.day = today;
             daily.amount = 0;
         }
-        daily.amount = daily.amount.saturating_add(amount);
-        env.storage()
-            .persistent()
-            .set(&StorageKey::WithdrawalToday(developer.clone()), &daily);
-        env.storage()
-            .persistent()
-            .extend_ttl(&StorageKey::WithdrawalToday(developer.clone()), 50000, 50000);
-
-        env.events().publish(
-            (events::event_developer_withdraw(&env), developer.clone()),
-            DeveloperWithdrawEvent {
-                developer,
-                amount,
-                remaining_balance: new_balance,
-            },
-        );
-
-        Ok(())
+        if daily.amount.checked_add(amount).is_none_or(|sum| sum > cap) {
+            return Err(SettlementError::DailyWithdrawCapExceeded);
+        }
     }
+
+    let new_balance = current_balance
+        .checked_sub(amount)
+        .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+
+    let usdc_address = Self::get_usdc_token(env.clone())?;
+    let usdc = token::Client::new(&env, &usdc_address);
+
+    if usdc.balance(&contract_address) < amount {
+        return Err(SettlementError::InsufficientContractBalance);
+    }
+
+    usdc.transfer(&contract_address, &recipient, &amount);
+
+    env.storage().persistent().set(
+        &StorageKey::DeveloperBalance(developer.clone()),
+        &new_balance,
+    );
+    env.storage().persistent().extend_ttl(
+        &StorageKey::DeveloperBalance(developer.clone()),
+        50000,
+        50000,
+    );
+
+    // Update daily withdrawal accumulator
+    let today = env.ledger().timestamp() / 86400;
+    let mut daily = env
+        .storage()
+        .persistent()
+        .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+        .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
+    if daily.day != today {
+        daily.day = today;
+        daily.amount = 0;
+    }
+    daily.amount = daily.amount.saturating_add(amount);
+    env.storage()
+        .persistent()
+        .set(&StorageKey::WithdrawalToday(developer.clone()), &daily);
+    env.storage()
+        .persistent()
+        .extend_ttl(&StorageKey::WithdrawalToday(developer.clone()), 50000, 50000);
+
+    env.events().publish(
+        (events::event_developer_withdraw(&env), developer.clone()),
+        DeveloperWithdrawEvent {
+            developer,
+            amount,
+            remaining_balance: new_balance,
+            to: recipient,
+        },
+    );
+
+    Ok(())
+}
 
     /// Set the daily withdrawal cap for a developer (admin only).
     ///
