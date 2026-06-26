@@ -3,9 +3,8 @@ mod settlement_tests {
     extern crate std;
 
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
-    use soroban_sdk::testutils::{Address as _, Ledger as _};
-    use soroban_sdk::{token, Address, Env, Error, InvokeError};
-    use soroban_sdk::{Address, Env, InvokeError, Symbol};
+    use soroban_sdk::testutils::{Address as _, Ledger as _, Events as _};
+    use soroban_sdk::{token, Address, Env, Error, InvokeError, Symbol, BytesN, TryFromVal};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -276,7 +275,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -305,7 +304,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -348,7 +347,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -566,6 +565,60 @@ mod settlement_tests {
 
         let result = client.try_set_admin(&vault, &new_admin);
         assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn test_cancel_admin_transfer_success() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &new_admin);
+        assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+        client.cancel_admin_transfer(&admin);
+        assert_eq!(client.get_pending_admin(), None);
+
+        let events = env.events().all();
+        let last_event = events.last().unwrap();
+        let event_name = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
+        assert_eq!(event_name, Symbol::new(&env, "admin_cancelled"));
+    }
+
+    #[test]
+    fn test_cancel_admin_transfer_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.set_admin(&admin, &new_admin);
+
+        let result = client.try_cancel_admin_transfer(&vault);
+        assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    #[should_panic(expected = "no admin transfer pending")]
+    fn test_cancel_admin_transfer_no_pending_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        client.cancel_admin_transfer(&admin);
     }
 
     #[test]
@@ -1857,6 +1910,7 @@ mod settlement_tests {
             pool.total_balance + sum_dev_balances,
             "Conservation invariant violated: total credits must equal pool + developer balances"
         );
+    }
     #[test]
     fn test_upgrade_and_get_version() {
         let (env, addr, admin, _vault, _third_party) = setup_contract();

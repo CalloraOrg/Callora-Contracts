@@ -103,6 +103,7 @@ The Callora Settlement contract tracks individual developer balances and global 
 | `receive_payment` | ✅ | ✅ | ❌ | ❌ |
 | `set_admin` | ✅ | ❌ | ❌ | ❌ |
 | `accept_admin` | ❌ | ❌ | ✅ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
 | `propose_vault` | ✅ | ❌ | ❌ | ❌ |
 | `accept_vault` | ✅ | ✅ | ❌ | ❌ |
 | `set_vault` (alias of `propose_vault`) | ✅ | ❌ | ❌ | ❌ |
@@ -112,6 +113,34 @@ The Callora Settlement contract tracks individual developer balances and global 
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Two-Step Vault Rotation**: Prevents accidentally misrouting settlement credits by requiring the proposed vault to accept (or the admin to finalize).
 - **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
+- **Cancellation Safety**: The admin can invoke `cancel_admin_transfer` to clear a mistaken nomination.
+
+---
+
+## 3. Revenue Pool Access Control
+
+### Overview
+The Callora Revenue Pool contract processes USDC distribution to developer wallets. Like Settlement and Vault, it implements standard administrative roles and rotation procedures.
+
+### Roles
+- **Admin**: Handles revenue distributions and nominates administrative successions.
+- **Pending Admin**: A nominated account that has to explicitly accept the role to become the Admin.
+
+### Authorization Matrix
+
+| Function | Admin | Pending Admin | Others |
+|----------|-------|---------------|--------|
+| `distribute` | ✅ | ❌ | ❌ |
+| `batch_distribute` | ✅ | ❌ | ❌ |
+| `set_admin` | ✅ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ |
+| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ |
+
+### Cancellation Safety
+The current admin can call `cancel_admin_transfer` to abort a pending admin nomination.
+
+---
 
 ## Test Coverage
 The implementation includes comprehensive tests covering:
@@ -132,7 +161,7 @@ The implementation includes comprehensive tests covering:
 - ✅ Only Admin can call `get_all_developer_balances`
 - ✅ All rotation and update logic preserves state integrity
 - ✅ Only current owner can call `cancel_ownership_transfer`
-- ✅ Only current admin can call `cancel_admin_transfer`
+- ✅ Only current admin can call `cancel_admin_transfer` in Vault, Settlement, and Revenue Pool
 - ✅ Cancel functions clear pending state and emit events
 - ✅ Cancel functions fail when no transfer is pending
 - ✅ Cancel functions fail for unauthorized callers
@@ -140,6 +169,5 @@ The implementation includes comprehensive tests covering:
 
 Run tests with:
 ```bash
-cargo test -p callora-settlement
-cargo test -p callora-vault
+cargo build --workspace --release --target=wasm32-unknown-unknown
 ```

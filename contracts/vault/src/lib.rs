@@ -485,6 +485,24 @@ impl CalloraVault {
         Ok(())
     }
 
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        let cur = Self::get_admin(env.clone())?;
+        if caller != cur {
+            return Err(VaultError::Unauthorized);
+        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(VaultError::NoAdminTransferPending)?;
+
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), cur, pending), ());
+        Ok(())
+    }
+
     pub fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         if caller != meta.owner {

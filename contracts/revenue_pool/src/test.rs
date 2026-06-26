@@ -336,6 +336,78 @@ fn create_usdc<'a>(
     }
 
     #[test]
+    fn set_admin_two_step_transfers_control_accept_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let (_, client) = create_pool(&env);
+        let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        assert_eq!(client.get_pending_admin(), None);
+
+        client.set_admin(&admin, &new_admin);
+        assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+        assert_eq!(client.get_admin(), admin);
+
+        client.accept_admin(&new_admin);
+        assert_eq!(client.get_admin(), new_admin);
+        assert_eq!(client.get_pending_admin(), None);
+    }
+
+    #[test]
+    fn cancel_admin_transfer_clears_pending_and_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let (_, client) = create_pool(&env);
+        let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        client.set_admin(&admin, &new_admin);
+        assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+        client.cancel_admin_transfer(&admin);
+        assert_eq!(client.get_pending_admin(), None);
+
+        let events = env.events().all();
+        let cancel_event = events.last().unwrap();
+        let event_name = Symbol::try_from_val(&env, &cancel_event.1.get(0).unwrap()).unwrap();
+        assert_eq!(event_name, Symbol::new(&env, "admin_cancelled"));
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized: caller is not admin")]
+    fn cancel_admin_transfer_non_admin_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let (_, client) = create_pool(&env);
+        let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        client.set_admin(&admin, &new_admin);
+        client.cancel_admin_transfer(&attacker);
+    }
+
+    #[test]
+    #[should_panic(expected = "no admin transfer pending")]
+    fn cancel_admin_transfer_no_pending_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (_, client) = create_pool(&env);
+        let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+        client.cancel_admin_transfer(&admin);
+    }
+
+    #[test]
     #[should_panic(expected = "unauthorized: caller is not admin")]
     fn set_admin_unauthorized_panics() {
         let env = Env::default();

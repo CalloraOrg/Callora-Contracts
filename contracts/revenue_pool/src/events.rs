@@ -37,6 +37,13 @@ pub fn event_admin_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_completed")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin transfer.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 /// Returns the Symbol for the `"pause_set"` event topic.
 ///
 /// Emitted by both `pause` (with data `true`) and `unpause` (with data `false`)
@@ -118,6 +125,16 @@ mod tests {
         assert_eq!(
             event_admin_transfer_completed(&env),
             Symbol::new(&env, "admin_transfer_completed")
+        );
+    }
+
+    /// Snapshot: proves event_admin_cancelled still maps to exactly the bytes for "admin_cancelled".
+    #[test]
+    fn test_event_admin_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_admin_cancelled(&env),
+            Symbol::new(&env, "admin_cancelled")
         );
     }
 

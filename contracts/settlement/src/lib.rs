@@ -1020,6 +1020,33 @@ impl CalloraSettlement {
             .publish((events::event_admin_accepted(&env), current, pending), ());
     }
 
+    /// Cancel a pending admin transfer. Only the current admin may call this.
+    ///
+    /// # Arguments
+    /// * `caller` - Current admin address; must match stored admin
+    ///
+    /// # Panics
+    /// * Panics if caller is not the current admin.
+    /// * Panics if no admin transfer is pending.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let current = Self::get_admin(env.clone());
+        if caller != current {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&StorageKey::PendingAdmin)
+            .expect("no admin transfer pending");
+
+        inst.remove(&StorageKey::PendingAdmin);
+
+        env.events().publish(
+            (events::event_admin_cancelled(&env), current, pending),
+            (),
+        );
+    }
+
     /// Propose a new vault address (admin only).
     ///
     /// # Arguments

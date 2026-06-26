@@ -179,7 +179,7 @@ impl RevenuePool {
     ///
     /// # Events
     /// Emits an `admin_transfer_completed` event with the `new_admin` as a topic.
-    pub fn claim_admin(env: Env, caller: Address) {
+    pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
         let inst = env.storage().instance();
         let pending: Address = inst
@@ -196,6 +196,50 @@ impl RevenuePool {
 
         env.events()
             .publish((events::event_admin_transfer_completed(&env), pending), ());
+    }
+
+    /// Complete the admin transfer. Legacy name for `accept_admin`.
+    pub fn claim_admin(env: Env, caller: Address) {
+        Self::accept_admin(env, caller);
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call this.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If no admin transfer is pending.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` event with `(current_admin, pending_admin)`.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let current = Self::get_admin(env.clone());
+        if caller != current {
+            panic!("unauthorized: caller is not admin");
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .expect("no admin transfer pending");
+
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        env.events().publish(
+            (events::event_admin_cancelled(&env), current, pending),
+            (),
+        );
+    }
+
+    /// Return the pending admin address, or `None` if no transfer is in progress.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
     }
 
     fn require_not_paused(env: &Env) {
