@@ -3540,6 +3540,57 @@ fn accept_admin_without_pending_fails() {
 }
 
 #[test]
+fn cancel_admin_transfer_success() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    client.set_admin(&owner, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    client.cancel_admin_transfer(&owner);
+    assert_eq!(client.get_pending_admin(), None);
+
+    let events = env.events().all();
+    let last_event = events.last().unwrap();
+    let event_name = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
+    assert_eq!(event_name, Symbol::new(&env, "admin_cancelled"));
+}
+
+#[test]
+#[should_panic(expected = "unauthorized")]
+fn cancel_admin_transfer_unauthorized() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_admin(&owner, &new_admin);
+    client.cancel_admin_transfer(&attacker);
+}
+
+#[test]
+#[should_panic(expected = "no admin transfer pending")]
+fn cancel_admin_transfer_no_pending_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.cancel_admin_transfer(&owner);
+}
+
+
+#[test]
 #[should_panic(expected = "no ownership transfer pending")]
 fn accept_ownership_without_pending_fails() {
     let env = Env::default();

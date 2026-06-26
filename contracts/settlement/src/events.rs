@@ -53,6 +53,13 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin transfer.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 /// Returns the Symbol for the `"vault_proposed"` event topic.
 ///
 /// Emitted when the admin proposes a new vault address via `propose_vault`.
@@ -117,6 +124,13 @@ mod tests {
     fn test_event_admin_accepted_bytes() {
         let env = Env::default();
         assert_eq!(event_admin_accepted(&env), Symbol::new(&env, "admin_accepted"));
+    }
+
+    /// Snapshot: proves event_admin_cancelled still maps to exactly the bytes for "admin_cancelled".
+    #[test]
+    fn test_event_admin_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(event_admin_cancelled(&env), Symbol::new(&env, "admin_cancelled"));
     }
 
     /// Snapshot: proves event_vault_proposed still maps to exactly the bytes for "vault_proposed".

@@ -28,6 +28,13 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin transfer.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 /// Returns the Symbol for the `"set_authorized_caller"` event topic.
 ///
 /// Emitted when an owner adds a new authorized caller for `deduct` operations.
@@ -231,6 +238,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_accepted"));
+    }
+
+    #[test]
+    fn test_event_admin_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_admin_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "admin_cancelled"));
     }
 
     #[test]
