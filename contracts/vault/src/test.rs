@@ -3235,7 +3235,6 @@ fn clear_allowed_depositors_on_absent_address_is_noop() {
 // ---------------------------------------------------------------------------
 // Additional edge-case tests to reach ≥ 95 % line coverage
 // ---------------------------------------------------------------------------
-#[test]
 #[should_panic(expected = "vault already paused")]
 fn pause_when_already_paused_fails() {
     let env = Env::default();

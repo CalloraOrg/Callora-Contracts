@@ -418,7 +418,7 @@ impl CalloraVault {
         }
         let mut updated = Vec::new(env);
         for id in list.iter() {
-            if id != offering_id {
+            if id != *offering_id {
                 updated.push_back(id.clone());
             }
         }
@@ -1425,3 +1425,6 @@ mod test_reentrancy;
 
 #[cfg(test)]
 mod test_balance_property;
+
+#[cfg(test)]
+mod test_ttl_archival;

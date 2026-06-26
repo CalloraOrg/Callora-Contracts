@@ -360,7 +360,7 @@ fn list_prices_limit_is_capped_at_100() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
     for i in 0..105 {
-        let offering_id = String::from_str(&env, &format!("offer-{}", i));
+        let offering_id = String::from_str(&env, &std::format!("offer-{}", i));
         client.set_price(&owner, &offering_id, &String::from_str(&env, "1"));
     }
     let prices = client.list_prices(&0, &200);
@@ -373,7 +373,7 @@ fn remove_price_removes_index_entry() {
     let (owner, client, _) = setup(&env);
     let offer = String::from_str(&env, "offer-x");
     client.set_price(&owner, &offer, &String::from_str(&env, "500"));
-    client.remove_price(&owner, &offer).unwrap();
+    client.remove_price(&owner, &offer);
     assert_eq!(client.get_price(&offer), None);
     assert_eq!(client.list_prices(&0, &10).len(), 0);
 }

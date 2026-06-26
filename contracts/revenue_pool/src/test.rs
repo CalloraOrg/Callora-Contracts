@@ -158,7 +158,7 @@ fn create_usdc<'a>(
         client.pause(&admin);
         assert!(client.is_paused());
 
-        let result = std::panic::catch_unwind(|| client.distribute(&admin, &developer, &100));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| client.distribute(&admin, &developer, &100)));
         assert!(result.is_err());
     }
 
