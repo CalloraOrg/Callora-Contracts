@@ -285,7 +285,7 @@ impl CalloraVault {
         inst.set(&StorageKey::MaxDeduct, &max_d);
         inst.extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events()
-            .publish((Symbol::new(&env, "init"), owner.clone()), balance);
+            .publish((events::event_init(&env), owner.clone()), balance);
         Ok(meta)
     }
 
@@ -418,7 +418,7 @@ impl CalloraVault {
         }
         let mut updated = Vec::new(env);
         for id in list.iter() {
-            if id != offering_id {
+            if id != *offering_id {
                 updated.push_back(id.clone());
             }
         }
@@ -451,7 +451,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
         env.events()
-            .publish((Symbol::new(&env, "admin_nominated"), cur, new_admin), ());
+            .publish((events::event_admin_nominated(&env), cur, new_admin), ());
         Ok(())
     }
 
@@ -466,7 +466,7 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Admin, &pending);
         env.storage().instance().remove(&StorageKey::PendingAdmin);
         env.events()
-            .publish((Symbol::new(&env, "admin_accepted"), cur, pending), ());
+            .publish((events::event_admin_accepted(&env), cur, pending), ());
         Ok(())
     }
 
@@ -490,7 +490,7 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.events().publish(
             (
-                Symbol::new(&env, "set_authorized_caller"),
+                events::event_set_authorized_caller(&env),
                 meta.owner.clone(),
             ),
             (old, new_caller),
@@ -513,7 +513,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::MaxDeduct, &max_deduct);
         env.events().publish(
-            (Symbol::new(&env, "set_max_deduct"), meta.owner),
+            (events::event_set_max_deduct(&env), meta.owner),
             (old, max_deduct),
         );
         Ok(())
@@ -566,7 +566,7 @@ impl CalloraVault {
         }
         env.storage().instance().set(&StorageKey::Paused, &true);
         env.events()
-            .publish((Symbol::new(&env, "vault_paused"), caller), ());
+            .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
     }
 
@@ -578,7 +578,7 @@ impl CalloraVault {
         }
         env.storage().instance().set(&StorageKey::Paused, &false);
         env.events()
-            .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
+            .publish((events::event_vault_unpaused(&env), caller), ());
         Ok(())
     }
 
@@ -625,7 +625,7 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "deposit"), caller.clone()),
+            (events::event_deposit(&env), caller.clone()),
             (amount, meta.balance),
         );
 
@@ -724,7 +724,7 @@ impl CalloraVault {
         
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
-            (Symbol::new(&env, "deduct"), caller, rid),
+            (events::event_deduct(&env), caller, rid),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -829,7 +829,7 @@ impl CalloraVault {
         for item in items.iter() {
             let rid = item.request_id.unwrap_or(Symbol::new(&env, ""));
             env.events().publish(
-                (Symbol::new(&env, "deduct"), caller.clone(), rid),
+                (events::event_deduct(&env), caller.clone(), rid),
                 (item.amount, meta.balance),
             );
         }
@@ -847,7 +847,7 @@ impl CalloraVault {
             .set(&StorageKey::PendingOwner, &new_owner);
         env.events().publish(
             (
-                Symbol::new(&env, "ownership_nominated"),
+                events::event_ownership_nominated(&env),
                 meta.owner,
                 new_owner,
             ),
@@ -869,7 +869,7 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
-            (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
+            (events::event_ownership_accepted(&env), old, meta.owner),
             (),
         );
         Ok(())
@@ -901,7 +901,7 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "withdraw"), meta.owner.clone()),
+            (events::event_withdraw(&env), meta.owner.clone()),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -928,7 +928,7 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to.clone()),
+            (events::event_withdraw_to(&env), meta.owner.clone(), to.clone()),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -974,7 +974,7 @@ impl CalloraVault {
         }
         // CEI: emit event before external transfer
         env.events()
-            .publish((Symbol::new(&env, "distribute"), to.clone()), amount);
+            .publish((events::event_distribute(&env), to.clone()), amount);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
         Ok(())
     }
@@ -995,12 +995,12 @@ impl CalloraVault {
                     .instance()
                     .set(&StorageKey::RevenuePool, &addr);
                 env.events()
-                    .publish((Symbol::new(&env, "set_revenue_pool"), caller), addr);
+                    .publish((events::event_set_revenue_pool(&env), caller), addr);
             }
             None => {
                 env.storage().instance().remove(&StorageKey::RevenuePool);
                 env.events()
-                    .publish((Symbol::new(&env, "clear_revenue_pool"), caller), ());
+                    .publish((events::event_clear_revenue_pool(&env), caller), ());
             }
         }
         Ok(())
@@ -1023,7 +1023,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::Settlement, &settlement_address);
         env.events().publish(
-            (Symbol::new(&env, "set_settlement"), caller),
+            (events::event_set_settlement(&env), caller),
             settlement_address,
         );
         Ok(())
@@ -1074,7 +1074,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
-            (Symbol::new(&env, "metadata_set"), offering_id, caller),
+            (events::event_metadata_set(&env), offering_id, caller),
             metadata.clone(),
         );
         Ok(metadata)
@@ -1108,7 +1108,7 @@ impl CalloraVault {
             .set(&StorageKey::Price(offering_id.clone()), &price);
         Self::add_offering_index(&env, &offering_id);
         env.events().publish(
-            (Symbol::new(&env, "price_set"), caller, offering_id),
+            (events::event_price_set(&env), caller, offering_id),
             price.clone(),
         );
         Ok(())
@@ -1169,7 +1169,7 @@ impl CalloraVault {
             .remove(&StorageKey::Price(offering_id.clone()));
         Self::remove_offering_index(&env, &offering_id);
         env.events().publish(
-            (Symbol::new(&env, "price_removed"), caller, offering_id),
+            (events::event_price_removed(&env), caller, offering_id),
             (),
         );
         Ok(())
@@ -1198,7 +1198,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
-            (Symbol::new(&env, "metadata_updated"), offering_id, caller),
+            (events::event_metadata_updated(&env), offering_id, caller),
             (old, metadata.clone()),
         );
         Ok(metadata)
@@ -1226,7 +1226,7 @@ impl CalloraVault {
             .instance()
             .remove(&StorageKey::Metadata(offering_id.clone()));
         env.events().publish(
-            (Symbol::new(&env, "metadata_removed"), offering_id, caller),
+            (events::event_metadata_removed(&env), offering_id, caller),
             (),
         );
         Ok(())
@@ -1267,7 +1267,7 @@ impl CalloraVault {
 
         // Emit an event for indexers / audit logs.
         env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+            .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
@@ -1375,7 +1375,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::DepositorList, &list);
         env.events()
-            .publish((Symbol::new(&env, "allowlist_add"), caller, depositor), ());
+            .publish((events::event_allowlist_add(&env), caller, depositor), ());
         Ok(())
     }
 
@@ -1386,7 +1386,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::DepositorList, &Vec::<Address>::new(&env));
         env.events()
-            .publish((Symbol::new(&env, "allowlist_clear"), caller), ());
+            .publish((events::event_allowlist_clear(&env), caller), ());
         Ok(())
     }
 
@@ -1397,6 +1397,8 @@ impl CalloraVault {
             .unwrap_or(Vec::new(&env))
     }
 }
+
+mod events;
 
 // ---------------------------------------------------------------------------
 // Test modules

@@ -247,7 +247,7 @@ impl CalloraSettlement {
             global_pool.last_updated = env.ledger().timestamp();
             inst.set(&StorageKey::GlobalPool, &global_pool);
             env.events().publish(
-                (Symbol::new(&env, "payment_received"), caller.clone()),
+                (events::event_payment_received(&env), caller.clone()),
                 PaymentReceivedEvent {
                     from_vault: caller.clone(),
                     amount,
@@ -292,7 +292,7 @@ impl CalloraSettlement {
             }
 
             env.events().publish(
-                (Symbol::new(&env, "payment_received"), caller.clone()),
+                (events::event_payment_received(&env), caller.clone()),
                 PaymentReceivedEvent {
                     from_vault: caller.clone(),
                     amount,
@@ -301,7 +301,7 @@ impl CalloraSettlement {
                 },
             );
             env.events().publish(
-                (Symbol::new(&env, "balance_credited"), dev_address.clone()),
+                (events::event_balance_credited(&env), dev_address.clone()),
                 BalanceCreditedEvent {
                     developer: dev_address,
                     amount,
@@ -376,7 +376,7 @@ impl CalloraSettlement {
                 inst.set(&StorageKey::DeveloperIndex, &index);
             }
             env.events().publish(
-                (Symbol::new(&env, "balance_credited"), dev.clone()),
+                (events::event_balance_credited(&env), dev.clone()),
                 BalanceCreditedEvent {
                     developer: dev.clone(),
                     amount: amount,
@@ -543,7 +543,7 @@ impl CalloraSettlement {
             .extend_ttl(&StorageKey::WithdrawalToday(developer.clone()), 50000, 50000);
 
         env.events().publish(
-            (Symbol::new(&env, "developer_withdraw"), developer.clone()),
+            (events::event_developer_withdraw(&env), developer.clone()),
             DeveloperWithdrawEvent {
                 developer,
                 amount,
@@ -577,7 +577,7 @@ impl CalloraSettlement {
             .extend_ttl(&StorageKey::DailyWithdrawCap(developer.clone()), 50000, 50000);
 
         env.events().publish(
-            (Symbol::new(&env, "daily_withdraw_cap_changed"), caller),
+            (events::event_daily_withdraw_cap_changed(&env), caller),
             DailyWithdrawCapChanged { developer, new_cap: cap },
         );
     }
@@ -769,7 +769,7 @@ impl CalloraSettlement {
 
         env.events().publish(
             (
-                Symbol::new(&env, "admin_nominated"),
+                events::event_admin_nominated(&env),
                 current_admin,
                 new_admin,
             ),
@@ -805,7 +805,7 @@ impl CalloraSettlement {
         inst.remove(&StorageKey::PendingAdmin);
 
         env.events()
-            .publish((Symbol::new(&env, "admin_accepted"), current, pending), ());
+            .publish((events::event_admin_accepted(&env), current, pending), ());
     }
 
     /// Propose a new vault address (admin only).
@@ -852,7 +852,7 @@ impl CalloraSettlement {
         inst.set(&StorageKey::PendingVault, &new_vault);
 
         env.events().publish(
-            (Symbol::new(&env, "vault_proposed"), caller),
+            (events::event_vault_proposed(&env), caller),
             VaultProposedEvent {
                 current_vault: old_vault,
                 proposed_vault: new_vault,
@@ -889,7 +889,7 @@ impl CalloraSettlement {
         inst.remove(&StorageKey::PendingVault);
 
         env.events().publish(
-            (Symbol::new(&env, "vault_accepted"), caller.clone()),
+            (events::event_vault_accepted(&env), caller.clone()),
             VaultAcceptedEvent {
                 old_vault,
                 new_vault: pending,
@@ -907,6 +907,8 @@ impl CalloraSettlement {
         }
     }
 }
+
+mod events;
 
 #[cfg(test)]
 mod test;

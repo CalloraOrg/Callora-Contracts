@@ -1,4 +1,4 @@
-﻿# Event Schema
+# Event Schema
 
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
@@ -6,6 +6,21 @@ All topic/data types refer to Soroban/Stellar XDR values.
 ## Change Note (2026-04)
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
+
+## Change Note (2026-06)
+
+**Event topic centralization (PR: task/event-symbol-catalog).**
+All inline `Symbol::new(&env, "...")` event topic literals have been extracted from
+`lib.rs` call sites into dedicated `src/events.rs` modules per crate:
+
+- [`contracts/vault/src/events.rs`](contracts/vault/src/events.rs) — 23 topics
+- [`contracts/settlement/src/events.rs`](contracts/settlement/src/events.rs) — 8 topics
+- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 10 topics
+
+Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
+a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
+No topic strings were renamed; this refactor is a zero-semantic-change migration.
+
 
 ## Contract: Callora Vault
 

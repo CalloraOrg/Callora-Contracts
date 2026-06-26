@@ -1,7 +1,7 @@
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol, TryFromVal};
+use soroban_sdk::{token, Address, Env, IntoVal, String, Symbol};
 
 use super::*;
 
@@ -2908,7 +2908,7 @@ fn test_set_authorized_caller() {
 fn set_authorized_caller_non_owner_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let non_owner = Address::generate(&env);
+    let _non_owner = Address::generate(&env);
     let new_caller = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);

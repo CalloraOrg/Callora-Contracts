@@ -80,7 +80,7 @@ impl RevenuePool {
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
-            .publish((Symbol::new(&env, "init"), admin), usdc_token);
+            .publish((events::event_init(&env), admin), usdc_token);
     }
 
     /// Return the current admin address.
@@ -125,12 +125,12 @@ impl RevenuePool {
 
         // Emit explicit before/after admin intent for indexers and audit trails.
         env.events().publish(
-            (Symbol::new(&env, "admin_changed"), current.clone()),
+            (events::event_admin_changed(&env), current.clone()),
             (current.clone(), new_admin.clone()),
         );
 
         env.events().publish(
-            (Symbol::new(&env, "admin_transfer_started"), current),
+            (events::event_admin_transfer_started(&env), current),
             new_admin,
         );
     }
@@ -177,7 +177,7 @@ impl RevenuePool {
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
-            .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
+            .publish((events::event_admin_transfer_completed(&env), pending), ());
     }
 
     fn require_not_paused(env: &Env) {
@@ -212,7 +212,7 @@ impl RevenuePool {
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &true);
         env.events()
-            .publish((Symbol::new(&env, "pause_set"), caller), true);
+            .publish((events::event_pause_set(&env), caller), true);
     }
 
     /// Unpause the revenue pool, restoring `distribute` and `batch_distribute`.
@@ -236,7 +236,7 @@ impl RevenuePool {
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &false);
         env.events()
-            .publish((Symbol::new(&env, "pause_set"), caller), false);
+            .publish((events::event_pause_set(&env), caller), false);
     }
 
     /// Return `true` if the revenue pool is currently paused, `false` otherwise.
@@ -278,7 +278,7 @@ impl RevenuePool {
             panic!("unauthorized: caller is not admin");
         }
         env.events().publish(
-            (Symbol::new(&env, "receive_payment"), caller),
+            (events::event_receive_payment(&env), caller),
             (amount, from_vault),
         );
     }
@@ -309,7 +309,7 @@ impl RevenuePool {
             .instance()
             .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
         env.events().publish(
-            (Symbol::new(&env, "set_max_distribute"), admin),
+            (events::event_set_max_distribute(&env), admin),
             (old_max, max_distribute),
         );
     }
@@ -382,7 +382,7 @@ impl RevenuePool {
 
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
-            .publish((Symbol::new(&env, "distribute"), to), amount);
+            .publish((events::event_distribute(&env), to), amount);
     }
 
     /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.
@@ -531,7 +531,7 @@ impl RevenuePool {
 
             // Emit one event per leg reflecting the final transferred amount.
             env.events()
-                .publish((Symbol::new(&env, "batch_distribute"), to), amount);
+                .publish((events::event_batch_distribute(&env), to), amount);
         }
     }
 
@@ -579,7 +579,7 @@ impl RevenuePool {
 
         // Emit an event for indexers / audit logs.
         env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+            .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
@@ -592,6 +592,8 @@ impl RevenuePool {
             .expect("version not set")
     }
 }
+
+mod events;
 
 #[cfg(test)]
 mod test;
