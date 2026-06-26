@@ -8,14 +8,19 @@
   "errors": {
     "description": "Typed error codes emitted via env.panic_with_error(). Callers and indexers match on the u32 code rather than parsing raw strings.",
     "variants": [
-      { "code": 1, "name": "NotInitialized",      "when": "A function is called before init." },
-      { "code": 2, "name": "AlreadyInitialized",  "when": "init is called more than once." },
-      { "code": 3, "name": "Unauthorized",         "when": "Caller is not the registered vault or admin." },
-      { "code": 4, "name": "AmountNotPositive",    "when": "amount is zero or negative." },
-      { "code": 5, "name": "DeveloperRequired",    "when": "to_pool=false but no developer address was supplied." },
-      { "code": 6, "name": "DeveloperMustBeNone",  "when": "to_pool=true but a developer address was given." },
-      { "code": 7, "name": "PoolOverflow",         "when": "Global pool i128 addition would overflow." },
-      { "code": 8, "name": "DeveloperOverflow",    "when": "Developer balance i128 addition would overflow." }
+      { "code": 1,  "name": "NotInitialized",               "when": "A function is called before init." },
+      { "code": 2,  "name": "AlreadyInitialized",           "when": "init is called more than once." },
+      { "code": 3,  "name": "Unauthorized",                 "when": "Caller is not the registered vault or admin." },
+      { "code": 4,  "name": "AmountNotPositive",            "when": "amount is zero or negative." },
+      { "code": 5,  "name": "DeveloperRequired",            "when": "to_pool=false but no developer address was supplied." },
+      { "code": 6,  "name": "DeveloperMustBeNone",          "when": "to_pool=true but a developer address was given." },
+      { "code": 7,  "name": "PoolOverflow",                 "when": "Global pool i128 addition would overflow." },
+      { "code": 8,  "name": "DeveloperOverflow",            "when": "Developer balance i128 addition would overflow." },
+      { "code": 9,  "name": "UsdcTokenNotConfigured",       "when": "USDC token address not configured for withdrawals." },
+      { "code": 10, "name": "InsufficientDeveloperBalance", "when": "Developer balance is less than withdrawal amount." },
+      { "code": 11, "name": "DeveloperBalanceUnderflow",    "when": "Developer balance subtraction would overflow." },
+      { "code": 12, "name": "InsufficientContractBalance",  "when": "Settlement contract lacks on-ledger USDC." },
+      { "code": 13, "name": "GasExhaustionRisk",            "when": "Index exceeds 100 entries; use get_developer_balances_cursor instead of get_all_developer_balances." }
     ]
   },
 
@@ -118,17 +123,44 @@
 
     {
       "name": "get_all_developer_balances",
-      "description": "Return a list of all developer balances. Admin only; may be expensive if the index is large.",
+      "description": "Return a list of all developer balances. Admin only. Rejects the call with GasExhaustionRisk when the developer index exceeds 100 entries — use get_developer_balances_cursor for larger sets. The index is maintained in deterministic ascending order by address bytes.",
       "access": "admin",
       "params": [
         { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin." }
       ],
       "returns": "Vec<DeveloperBalance>",
       "errors": [
+        { "code": 1,  "name": "NotInitialized",   "when": "Called before init." },
+        { "code": 3,  "name": "Unauthorized",      "when": "Caller is not the admin." },
+        { "code": 13, "name": "GasExhaustionRisk", "when": "Developer index has more than 100 entries." }
+      ],
+      "events": []
+    },
+
+    {
+      "name": "get_developer_balances_cursor",
+      "description": "Cursor-based paginated developer balances (admin only). Returns up to `limit` DeveloperBalance records starting after the supplied `cursor` address (exclusive), or from the beginning of the sorted index when `cursor` is null. The DeveloperIndex is maintained in deterministic ascending order by address bytes, so pages are stable across interleaved receive_payment calls for developers that sort after the cursor. The limit is capped at 100 (MAX_DEVELOPER_BALANCES_PAGE_SIZE).",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address",        "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "cursor", "type": "Address | null",  "optional": true,  "description": "Exclusive start position. Pass null for the first page; pass the next_cursor value returned by the previous call for subsequent pages." },
+        { "name": "limit",  "type": "u32",             "optional": false, "description": "Maximum records to return per page; silently capped at 100." }
+      ],
+      "returns": {
+        "type": "(Vec<DeveloperBalance>, Address | null)",
+        "description": "A tuple of (page, next_cursor). `page` contains up to `limit` DeveloperBalance records. `next_cursor` is the address of the last record on the page when more records may exist, or null when this is the final page."
+      },
+      "errors": [
         { "code": 1, "name": "NotInitialized", "when": "Called before init." },
         { "code": 3, "name": "Unauthorized",   "when": "Caller is not the admin." }
       ],
-      "events": []
+      "events": [],
+      "notes": [
+        "Iterating all pages: call with cursor=null, then pass the returned next_cursor on each subsequent call until next_cursor is null.",
+        "Cursor stability: credits to developers that sort after the current cursor do not affect previously returned pages.",
+        "limit=0 returns an empty page and null next_cursor immediately.",
+        "A cursor pointing past the last entry returns an empty page and null next_cursor."
+      ]
     },
 
     {

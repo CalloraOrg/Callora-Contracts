@@ -5,6 +5,7 @@ mod settlement_tests {
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{token, Address, Env, Error, InvokeError};
+    use soroban_sdk::{Address, Env, InvokeError, Symbol};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
@@ -275,7 +276,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -285,8 +286,14 @@ mod settlement_tests {
         let result = client.try_withdraw_developer_balance(&developer, &100i128);
         assert!(result.is_ok());
         assert_eq!(client.get_developer_balance(&developer), 0i128);
-        assert_eq!(token::Client::new(&env, &usdc_address).balance(&addr), 0i128);
-        assert_eq!(token::Client::new(&env, &usdc_address).balance(&developer), 100i128);
+        assert_eq!(
+            token::Client::new(&env, &usdc_address).balance(&addr),
+            0i128
+        );
+        assert_eq!(
+            token::Client::new(&env, &usdc_address).balance(&developer),
+            100i128
+        );
     }
 
     #[test]
@@ -298,7 +305,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -341,7 +348,7 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -967,9 +974,10 @@ mod settlement_tests {
         client.init(&admin, &vault);
 
         env.as_contract(&addr, || {
-            env.storage()
-                .persistent()
-                .set(&crate::StorageKey::DeveloperBalance(developer.clone()), &i128::MAX);
+            env.storage().persistent().set(
+                &crate::StorageKey::DeveloperBalance(developer.clone()),
+                &i128::MAX,
+            );
         });
 
         let result = client.try_receive_payment(&vault, &1i128, &false, &Some(developer));
@@ -1020,17 +1028,29 @@ mod settlement_tests {
         }
 
         let cases = [
-            Case { name: "vault address succeeds",  role: CallerRole::Vault,      should_succeed: true  },
-            Case { name: "admin address succeeds",  role: CallerRole::Admin,      should_succeed: true  },
-            Case { name: "third party fails",       role: CallerRole::ThirdParty, should_succeed: false },
+            Case {
+                name: "vault address succeeds",
+                role: CallerRole::Vault,
+                should_succeed: true,
+            },
+            Case {
+                name: "admin address succeeds",
+                role: CallerRole::Admin,
+                should_succeed: true,
+            },
+            Case {
+                name: "third party fails",
+                role: CallerRole::ThirdParty,
+                should_succeed: false,
+            },
         ];
 
         for case in cases {
             let (env, addr, admin, vault, third_party) = setup_contract();
             let client = CalloraSettlementClient::new(&env, &addr);
             let caller = match case.role {
-                CallerRole::Vault      => vault,
-                CallerRole::Admin      => admin,
+                CallerRole::Vault => vault,
+                CallerRole::Admin => admin,
                 CallerRole::ThirdParty => third_party,
             };
 
@@ -1611,6 +1631,160 @@ mod settlement_tests {
         }
     }
 
+    // ── force_credit_developer tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_force_credit_developer_happy_path() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "offline_settlement");
+
+        client.force_credit_developer(&admin, &developer, &1000i128, &reason);
+
+        assert_eq!(client.get_developer_balance(&developer), 1000i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_accumulates() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &500i128,
+            &Symbol::new(&env, "first"),
+        );
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &300i128,
+            &Symbol::new(&env, "second"),
+        );
+
+        assert_eq!(client.get_developer_balance(&developer), 800i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_unauthorized() {
+        let (env, addr, _admin, vault, third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "unauthorized_test");
+
+        let vault_result =
+            client.try_force_credit_developer(&vault, &developer, &100i128, &reason);
+        assert!(is_error(vault_result, SettlementError::Unauthorized));
+
+        let third_party_result =
+            client.try_force_credit_developer(&third_party, &developer, &100i128, &reason);
+        assert!(is_error(third_party_result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn test_force_credit_developer_zero_amount() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &0i128,
+            &Symbol::new(&env, "zero"),
+        );
+        assert!(is_error(result, SettlementError::AmountNotPositive));
+    }
+
+    #[test]
+    fn test_force_credit_developer_negative_amount() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &-1i128,
+            &Symbol::new(&env, "negative"),
+        );
+        assert!(is_error(result, SettlementError::AmountNotPositive));
+    }
+
+    #[test]
+    fn test_force_credit_developer_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+        use soroban_sdk::IntoVal;
+
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+        let reason = Symbol::new(&env, "dispute_resolution");
+
+        client.force_credit_developer(&admin, &developer, &2500i128, &reason);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "developer_force_credited")
+                }
+            })
+            .expect("expected developer_force_credited event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let data: crate::DeveloperForceCreditedEvent = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.amount, 2500i128);
+        assert_eq!(data.reason, reason);
+        assert_eq!(data.new_balance, 2500i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_repeated_reason() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer1 = Address::generate(&env);
+        let developer2 = Address::generate(&env);
+        let reason = Symbol::new(&env, "bulk_reconciliation");
+
+        client.force_credit_developer(&admin, &developer1, &100i128, &reason);
+        client.force_credit_developer(&admin, &developer2, &200i128, &reason);
+
+        assert_eq!(client.get_developer_balance(&developer1), 100i128);
+        assert_eq!(client.get_developer_balance(&developer2), 200i128);
+    }
+
+    #[test]
+    fn test_force_credit_developer_overflow() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        env.as_contract(&addr, || {
+            env.storage()
+                .persistent()
+                .set(
+                    &crate::StorageKey::DeveloperBalance(developer.clone()),
+                    &i128::MAX,
+                );
+        });
+
+        let result = client.try_force_credit_developer(
+            &admin,
+            &developer,
+            &1i128,
+            &Symbol::new(&env, "overflow"),
+        );
+        assert!(is_error(result, SettlementError::DeveloperOverflow));
+    }
+
     /// Property-based test that drives many randomized receive_payment calls
     /// (mix of to_pool=true / false) and asserts the conservation invariant:
     /// sum of all credits == pool total + sum of all developer balances.
@@ -1683,6 +1857,23 @@ mod settlement_tests {
             pool.total_balance + sum_dev_balances,
             "Conservation invariant violated: total credits must equal pool + developer balances"
         );
+    #[test]
+    fn test_upgrade_and_get_version() {
+        let (env, addr, admin, _vault, _third_party) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        assert_eq!(client.get_version(), None);
+
+        let new_hash = BytesN::from_array(&env, &[1u8; 32]);
+        client.upgrade(&admin, &new_hash);
+
+        assert_eq!(client.get_version(), Some(new_hash.clone()));
+
+        // An `upgraded` event should have been emitted
+        let events = env.events().all();
+        let ev = events.last().unwrap();
+        let name = soroban_sdk::Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+        assert_eq!(name, soroban_sdk::Symbol::new(&env, "upgraded"));
     }
 
     // ── daily withdrawal cap tests ──────────────────────────────────────────
@@ -1953,5 +2144,273 @@ mod settlement_tests {
 
         // dev2 can still withdraw (no cap)
         assert!(client.try_withdraw_developer_balance(&dev2, &500i128).is_ok());
+    }
+
+    // ── cursor-based pagination tests ────────────────────────────────────────
+
+    /// First page with cursor=None returns up to `limit` records from the
+    /// beginning of the sorted index and yields a non-None next_cursor when the
+    /// index has more entries.
+    #[test]
+    fn test_cursor_first_page_returns_records_and_next_cursor() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        let dev3 = Address::generate(&env);
+        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()));
+        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()));
+        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()));
+
+        let (page, next) = client.get_developer_balances_cursor(&admin, &None, &2u32);
+
+        assert_eq!(page.len(), 2, "first page must contain exactly limit records");
+        // next_cursor must point at the last record on this page so the caller
+        // can continue from there.
+        assert!(next.is_some(), "next_cursor must be Some when more records exist");
+        assert_eq!(
+            next.as_ref().unwrap(),
+            &page.get(1).unwrap().address,
+            "next_cursor must equal the last address on the page"
+        );
+    }
+
+    /// Subsequent page retrieved via next_cursor returns the remaining records.
+    #[test]
+    fn test_cursor_subsequent_page_returns_remaining_records() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        let dev3 = Address::generate(&env);
+        client.receive_payment(&vault, &10i128, &false, &Some(dev1.clone()));
+        client.receive_payment(&vault, &20i128, &false, &Some(dev2.clone()));
+        client.receive_payment(&vault, &30i128, &false, &Some(dev3.clone()));
+
+        // Page 1
+        let (page1, next1) = client.get_developer_balances_cursor(&admin, &None, &2u32);
+        assert_eq!(page1.len(), 2);
+        assert!(next1.is_some());
+
+        // Page 2 — use next_cursor from page 1
+        let (page2, next2) = client.get_developer_balances_cursor(&admin, &next1, &2u32);
+        assert_eq!(page2.len(), 1, "last page must contain the remaining record");
+        // Reached the end of the index.
+        assert!(next2.is_none(), "next_cursor must be None on the last page");
+
+        // Together the two pages must cover all three developers exactly once.
+        let mut all_addrs: std::vec::Vec<Address> = std::vec::Vec::new();
+        for r in page1.iter() { all_addrs.push(r.address.clone()); }
+        for r in page2.iter() { all_addrs.push(r.address.clone()); }
+        assert_eq!(all_addrs.len(), 3);
+        assert!(all_addrs.contains(&dev1));
+        assert!(all_addrs.contains(&dev2));
+        assert!(all_addrs.contains(&dev3));
+    }
+
+    /// Cursor pointing past the last entry returns an empty page and None.
+    #[test]
+    fn test_cursor_past_last_entry_returns_empty_page() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev1.clone()));
+        client.receive_payment(&vault, &2i128, &false, &Some(dev2.clone()));
+
+        // Exhaust the index with a large limit to find the last cursor.
+        let (full_page, last_cursor) = client.get_developer_balances_cursor(&admin, &None, &100u32);
+        assert_eq!(full_page.len(), 2);
+        assert!(last_cursor.is_none());
+
+        // Use the address of the last record as the cursor — nothing should follow.
+        let last_addr = full_page.get(full_page.len() - 1).unwrap().address;
+        let (empty_page, next) =
+            client.get_developer_balances_cursor(&admin, &Some(last_addr), &10u32);
+        assert_eq!(empty_page.len(), 0, "page after last cursor must be empty");
+        assert!(next.is_none());
+    }
+
+    /// Cursor stability: credits to developers that sort **after** the cursor do
+    /// not disturb already-returned pages.
+    #[test]
+    fn test_cursor_stable_across_interleaved_credits() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Pre-populate three developers so the sorted index is stable.
+        let dev_a = Address::generate(&env);
+        let dev_b = Address::generate(&env);
+        let dev_c = Address::generate(&env);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_a.clone()));
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_b.clone()));
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_c.clone()));
+
+        // Fetch first page (limit=1) to get the cursor.
+        let (page1, cursor_after_first) =
+            client.get_developer_balances_cursor(&admin, &None, &1u32);
+        assert_eq!(page1.len(), 1);
+        let first_addr = page1.get(0).unwrap().address.clone();
+
+        // Credit the first developer again — this must NOT shift remaining pages.
+        client.receive_payment(&vault, &999i128, &false, &Some(first_addr.clone()));
+
+        // Continue pagination from the saved cursor.
+        let (page2, _) =
+            client.get_developer_balances_cursor(&admin, &cursor_after_first, &10u32);
+        assert_eq!(page2.len(), 2, "two records must remain after the cursor");
+
+        // The first developer must not appear again in page2.
+        for rec in page2.iter() {
+            assert_ne!(
+                rec.address, first_addr,
+                "already-paged developer must not re-appear"
+            );
+        }
+    }
+
+    /// Limit is capped at MAX_DEVELOPER_BALANCES_PAGE_SIZE even if caller
+    /// passes a larger value.
+    #[test]
+    fn test_cursor_limit_is_capped_at_max_page_size() {
+        use crate::MAX_DEVELOPER_BALANCES_PAGE_SIZE;
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Insert more developers than MAX_DEVELOPER_BALANCES_PAGE_SIZE.
+        for _ in 0..(MAX_DEVELOPER_BALANCES_PAGE_SIZE + 10) {
+            let dev = Address::generate(&env);
+            client.receive_payment(&vault, &1i128, &false, &Some(dev));
+        }
+
+        // Request more than the cap.
+        let (page, _) =
+            client.get_developer_balances_cursor(&admin, &None, &(MAX_DEVELOPER_BALANCES_PAGE_SIZE + 50));
+        assert_eq!(
+            page.len(),
+            MAX_DEVELOPER_BALANCES_PAGE_SIZE,
+            "page must be capped at MAX_DEVELOPER_BALANCES_PAGE_SIZE"
+        );
+    }
+
+    /// limit=0 returns an empty page and None immediately.
+    #[test]
+    fn test_cursor_zero_limit_returns_empty() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let dev = Address::generate(&env);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev));
+
+        let (page, next) = client.get_developer_balances_cursor(&admin, &None, &0u32);
+        assert_eq!(page.len(), 0);
+        assert!(next.is_none());
+    }
+
+    /// Cursor on an empty index returns an empty page and None.
+    #[test]
+    fn test_cursor_empty_index_returns_empty_page() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let (page, next) = client.get_developer_balances_cursor(&admin, &None, &10u32);
+        assert_eq!(page.len(), 0);
+        assert!(next.is_none());
+    }
+
+    /// Non-admin caller is rejected with Unauthorized.
+    #[test]
+    fn test_cursor_unauthorized_caller_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let result = client.try_get_developer_balances_cursor(&vault, &None, &10u32);
+        assert!(
+            is_error(result, SettlementError::Unauthorized),
+            "non-admin caller must be rejected with Unauthorized"
+        );
+    }
+
+    /// Sorted order: DeveloperIndex stays sorted; cursor pages come out in the
+    /// same deterministic order regardless of credit sequence.
+    #[test]
+    fn test_cursor_sorted_order_is_deterministic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        // Generate addresses in arbitrary order and credit them.
+        let mut devs: std::vec::Vec<Address> = (0..5).map(|_| Address::generate(&env)).collect();
+        for dev in &devs {
+            client.receive_payment(&vault, &1i128, &false, &Some(dev.clone()));
+        }
+
+        // Collect all balances via cursor pagination.
+        let mut cursor_pages: std::vec::Vec<Address> = std::vec::Vec::new();
+        let mut next: Option<Address> = None;
+        loop {
+            let (page, nc) = client.get_developer_balances_cursor(&admin, &next, &2u32);
+            for r in page.iter() {
+                cursor_pages.push(r.address.clone());
+            }
+            next = nc;
+            if next.is_none() { break; }
+        }
+
+        assert_eq!(cursor_pages.len(), 5, "all developers must be returned across pages");
+
+        // The cursor pages must be in sorted order (ascending by address).
+        devs.sort();
+        assert_eq!(
+            cursor_pages, devs,
+            "cursor pages must iterate in deterministic sorted order"
+        );
     }
 }

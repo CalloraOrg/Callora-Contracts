@@ -71,7 +71,7 @@ pub enum StorageKey {
     PendingAdmin,                  // Address
     DepositorList,                 // Vec<Address>
     ContractVersion,               // BytesN<32>
-    ProcessedRequest(Symbol),      // bool — temporary storage, idempotency marker
+    ProcessedRequest(Symbol),      // bool — persistent storage, idempotency marker
 }
 ```
 
@@ -94,6 +94,21 @@ pub enum StorageKey {
 | `DepositorList`            | Instance      | `Vec<Address>`    | Allowed depositor addresses                            | `set_allowed_depositor()`, `get_allowed_depositors()`                      |
 | `ContractVersion`          | Instance      | `BytesN<32>`      | WASM hash set by `upgrade()`                           | `upgrade()`, `version()`                                                   |
 | `ProcessedRequest(Symbol)` | **Temporary** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
+| Key Variant | Storage Tier | Value Type | Description | Access |
+|-------------|-------------|-----------|-------------|--------|
+| `MetaKey` | Instance | `VaultMeta` | Owner, balance, authorized_caller, min_deposit | `get_meta()`, updated by deposit/deduct/withdraw |
+| `Admin` | Instance | `Address` | Administrator address | `get_admin()`, `set_admin()` |
+| `UsdcToken` | Instance | `Address` | USDC token contract address | Set during `init()` |
+| `Settlement` | Instance | `Address` | Settlement contract; receives USDC on deduct | `set_settlement()`, `get_settlement()` |
+| `RevenuePool` | Instance | `Option<Address>` | Revenue pool address (informational) | `set_revenue_pool()`, `get_revenue_pool()` |
+| `MaxDeduct` | Instance | `i128` | Maximum USDC per single deduct | Set during `init()`, read by `deduct()` / `batch_deduct()` |
+| `Paused` | Instance | `bool` | Circuit-breaker flag | `pause()`, `unpause()`, `is_paused()` |
+| `Metadata(String)` | Instance | `String` | Per-offering metadata (IPFS CID / URI) | `set_metadata()`, `get_metadata()`, `update_metadata()` |
+| `PendingOwner` | Instance | `Address` | Two-step ownership transfer nominee | `transfer_ownership()`, `accept_ownership()` |
+| `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
+| `DepositorList` | Instance | `Vec<Address>` | Allowed depositor addresses | `set_allowed_depositor()`, `get_allowed_depositors()` |
+| `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
+| `ProcessedRequest(Symbol)` | **Persistent** | `bool` | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
 
 ## Data Structures
 
@@ -355,6 +370,11 @@ Monitor storage-related events:
 | 1.0     | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)`                                                                                                                                |
 | 1.1     | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md                                                                                                                     |
 | 1.2     | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| Version | Change |
+|---------|--------|
+| 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
+| 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
+| 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 
 ## Canonical Storage Keys
 
@@ -377,9 +397,25 @@ All storage is accessed via `StorageKey` enum.
 | `PendingAdmin`             | Instance      | Admin transfer nominee                                          |
 | `ContractVersion`          | Instance      | WASM hash (set by `upgrade()`)                                  |
 | `ProcessedRequest(Symbol)` | **Temporary** | Idempotency marker; auto-expires after ~30 days                 |
+| Key | Storage Tier | Description |
+|-----|-------------|------------|
+| `MetaKey` | Instance | Vault metadata (owner, balance, authorized_caller, min_deposit) |
+| `DepositorList` | Instance | Authorized depositors |
+| `Admin` | Instance | Admin address |
+| `UsdcToken` | Instance | Token contract |
+| `Settlement` | Instance | Settlement contract |
+| `RevenuePool` | Instance | Revenue pool |
+| `MaxDeduct` | Instance | Deduct cap |
+| `Paused` | Instance | Circuit breaker |
+| `Metadata(String)` | Instance | Offering metadata |
+| `PendingOwner` | Instance | Ownership transfer nominee |
+| `PendingAdmin` | Instance | Admin transfer nominee |
+| `ContractVersion` | Instance | WASM hash (set by `upgrade()`) |
+| `ProcessedRequest(Symbol)` | **Persistent** | Idempotency marker; manually pruned |
 
 ### Migration
 
 - Removes deprecated `AllowedDepositors`
 - Ensures Admin fallback from Meta.owner
 - `ProcessedRequest` uses temporary storage — no manual cleanup required; markers expire automatically
+- `ProcessedRequest` uses persistent storage — markers must be explicitly pruned using `prune_processed_requests` to avoid state bloat

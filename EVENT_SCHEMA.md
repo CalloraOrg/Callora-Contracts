@@ -7,6 +7,21 @@ All topic/data types refer to Soroban/Stellar XDR values.
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
 
+## Change Note (2026-06)
+
+**Event topic centralization (PR: task/event-symbol-catalog).**
+All inline `Symbol::new(&env, "...")` event topic literals have been extracted from
+`lib.rs` call sites into dedicated `src/events.rs` modules per crate:
+
+- [`contracts/vault/src/events.rs`](contracts/vault/src/events.rs) — 23 topics
+- [`contracts/settlement/src/events.rs`](contracts/settlement/src/events.rs) — 8 topics
+- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 10 topics
+
+Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
+a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
+No topic strings were renamed; this refactor is a zero-semantic-change migration.
+
+
 ## Contract: Callora Vault
 
 ### `init`
@@ -835,6 +850,47 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 
 ---
 
+### `developer_force_credited`
+
+Emitted by `force_credit_developer()` when an admin manually credits a developer balance (escape hatch).
+
+This is an **admin-authorized inflow** — no on-ledger USDC is moved. It is designed for
+operational edge cases (off-chain payment reconciliation, dispute resolution).
+
+| Index         | Location | Type    | Description                                                     |
+|---------------|----------|---------|-----------------------------------------------------------------|
+| topic 0       | topics   | Symbol  | `"developer_force_credited"`                                    |
+| topic 1       | topics   | Address | `developer` — address whose balance was updated                  |
+| `developer`   | data     | Address | same as topic 1; duplicated for data-only indexers              |
+| `amount`      | data     | i128    | amount credited to the developer in USDC micro-units            |
+| `reason`      | data     | Symbol  | on-chain reason code for the manual credit                      |
+| `new_balance` | data     | i128    | developer's cumulative balance after this credit (post-state)   |
+
+```json
+{
+  "topics": ["developer_force_credited", "GDEV..."],
+  "data": {
+    "developer": "GDEV...",
+    "amount": 5000000,
+    "reason": "offline_settlement",
+    "new_balance": 7500000
+  }
+}
+```
+
+**Invariants.**
+- `new_balance = prior_balance + amount`, checked for `i128` overflow.
+- Only the contract admin may call `force_credit_developer`.
+- This is an audit-only path; every credit includes an on-chain `reason` Symbol.
+
+**Indexer guidance.**
+- Subscribe to `developer_force_credited` to track admin-initiated manual credits.
+- The `reason` field distinguishes different operational scenarios (e.g., `"dispute_resolution"`, `"offline_settlement"`, `"bulk_reconciliation"`).
+- This event is **never** paired with a `payment_received` event.
+- For full accounting, sum `balance_credited.amount` + `developer_force_credited.amount` to compute total developer inflows.
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -870,6 +926,7 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
+| `developer_force_credited`| settlement     | `force_credit_developer()`               |
 
 ---
 
@@ -884,3 +941,4 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.0.1   | revenue-pool  | Added `set_min_pool_balance` event; floor enforcement on `distribute` + `batch_distribute` (Issue #416) |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
+| 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |

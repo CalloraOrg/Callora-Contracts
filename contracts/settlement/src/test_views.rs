@@ -81,3 +81,20 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let balance = client.get_developer_balance(&dev);
     assert_eq!(balance, 0);
 }
+
+/// `get_developer_balances_cursor` called before `init` must return
+/// `NotInitialized` (it calls `get_admin` internally).
+#[test]
+fn test_get_developer_balances_cursor_uninitialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+    let dummy = Address::generate(&env);
+
+    let result = client.try_get_developer_balances_cursor(&dummy, &None, &10u32);
+    assert!(
+        is_not_initialized(result),
+        "expected NotInitialized before init"
+    );
+}
