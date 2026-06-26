@@ -201,7 +201,7 @@ fn test_reentrancy_by_authorized_attacker() {
     let (vault_addr, vault_client, token_addr, _settlement_addr, _owner) = setup_reentrancy_test(&env);
     
     let attacker = Address::generate(&env);
-    vault_client.set_authorized_caller(&Some(attacker.clone()));
+    vault_client.set_authorized_caller(&Some(attacker.clone()), &0u64);
     
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
     token_mock.set_token_attack_config(&vault_addr, &attacker, &true);

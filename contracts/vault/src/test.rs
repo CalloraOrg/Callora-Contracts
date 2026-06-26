@@ -759,7 +759,7 @@ fn set_authorized_caller_sets_and_emits_event() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    client.set_authorized_caller(&Some(new_caller.clone()));
+    client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
 
     let events = env.events().all();
     let ev = events.last().expect("expected set_authorized_caller event");
@@ -770,9 +770,10 @@ fn set_authorized_caller_sets_and_emits_event() {
     assert_eq!(topic0, Symbol::new(&env, "set_authorized_caller"));
     assert_eq!(topic1, owner);
 
-    let (old, now): (Option<Address>, Option<Address>) = ev.2.into_val(&env);
+    let (old, now, nonce): (Option<Address>, Option<Address>, u64) = ev.2.into_val(&env);
     assert_eq!(old, None);
     assert_eq!(now, Some(new_caller.clone()));
+    assert_eq!(nonce, 0u64);
 
     let remaining = client.deduct(&new_caller, &50, &None);
     assert_eq!(remaining, 150);
@@ -2898,7 +2899,7 @@ fn test_set_authorized_caller() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
-    client.set_authorized_caller(&Some(auth_caller.clone()));
+    client.set_authorized_caller(&Some(auth_caller.clone()), &0u64);
     let meta = client.get_meta();
     assert_eq!(meta.authorized_caller, Some(auth_caller));
 }
@@ -2917,11 +2918,11 @@ fn set_authorized_caller_non_owner_fails() {
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     // Attempt to set authorized caller as non-owner
-    client.set_authorized_caller(&Some(new_caller));
+    let _ = non_owner; // non_owner has no way to override owner auth without caller param
+    client.set_authorized_caller(&Some(new_caller), &0u64);
 }
 
 #[test]
-#[should_panic(expected = "authorized_caller cannot be vault address")]
 fn set_authorized_caller_vault_address_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2931,8 +2932,11 @@ fn set_authorized_caller_vault_address_fails() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
-    // Attempt to set vault itself as authorized caller
-    client.set_authorized_caller(&Some(vault_address));
+    let result = client.try_set_authorized_caller(&Some(vault_address), &0u64);
+    assert_eq!(
+        result,
+        Err(Ok(VaultError::AuthorizedCallerCannotBeVault))
+    );
 }
 
 #[test]
@@ -2946,15 +2950,187 @@ fn set_authorized_caller_clear_succeeds() {
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
-    // Set authorized caller
-    client.set_authorized_caller(&Some(auth_caller.clone()));
+    // Set authorized caller (nonce 0 → stored nonce becomes 1)
+    client.set_authorized_caller(&Some(auth_caller.clone()), &0u64);
     let meta = client.get_meta();
     assert_eq!(meta.authorized_caller, Some(auth_caller));
 
-    // Clear authorized caller
-    client.set_authorized_caller(&None);
+    // Clear authorized caller (nonce 1 → stored nonce becomes 2)
+    client.set_authorized_caller(&None, &1u64);
     let meta2 = client.get_meta();
     assert_eq!(meta2.authorized_caller, None);
+}
+
+// ---------------------------------------------------------------------------
+// Nonce-based replay-protection tests for set_authorized_caller
+// ---------------------------------------------------------------------------
+
+/// Nonce defaults to 0 before any rotation has occurred.
+#[test]
+fn set_authorized_caller_nonce_default_is_zero() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert_eq!(client.get_authorized_caller_nonce(), 0u64);
+}
+
+/// First rotation with nonce 0 succeeds and increments the stored nonce to 1.
+#[test]
+fn set_authorized_caller_first_rotation_with_nonce_zero() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
+
+    assert_eq!(client.get_authorized_caller_nonce(), 1u64);
+    assert_eq!(client.get_meta().authorized_caller, Some(new_caller));
+}
+
+/// Replaying the same nonce after a successful rotation is rejected.
+#[test]
+fn set_authorized_caller_stale_nonce_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let caller_a = Address::generate(&env);
+    let caller_b = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // First rotation succeeds with nonce 0.
+    client.set_authorized_caller(&Some(caller_a.clone()), &0u64);
+
+    // Replaying nonce 0 must be rejected.
+    let result = client.try_set_authorized_caller(&Some(caller_b.clone()), &0u64);
+    assert_eq!(result, Err(Ok(VaultError::StaleNonce)));
+
+    // Stored caller is still caller_a — no state was mutated by the replay.
+    assert_eq!(client.get_meta().authorized_caller, Some(caller_a));
+}
+
+/// Supplying a future nonce that hasn't been reached is rejected.
+#[test]
+fn set_authorized_caller_future_nonce_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let result = client.try_set_authorized_caller(&Some(new_caller), &5u64);
+    assert_eq!(result, Err(Ok(VaultError::StaleNonce)));
+
+    assert_eq!(client.get_authorized_caller_nonce(), 0u64);
+}
+
+/// Three sequential rotations with nonces 0, 1, 2 each succeed and leave
+/// the stored nonce at 3.
+#[test]
+fn set_authorized_caller_nonce_increments_sequentially() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    for nonce in 0u64..3 {
+        let caller = Address::generate(&env);
+        client.set_authorized_caller(&Some(caller), &nonce);
+        assert_eq!(client.get_authorized_caller_nonce(), nonce + 1);
+    }
+    assert_eq!(client.get_authorized_caller_nonce(), 3u64);
+}
+
+/// When the stored nonce is u64::MAX a successful rotation wraps to 0.
+#[test]
+fn set_authorized_caller_nonce_wraps_at_u64_max() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Manually prime the nonce to u64::MAX via storage so we don't need 2^64 calls.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&StorageKey::AuthorizedCallerNonce, &u64::MAX);
+    });
+    assert_eq!(client.get_authorized_caller_nonce(), u64::MAX);
+
+    // Rotation with nonce u64::MAX succeeds and wraps to 0.
+    client.set_authorized_caller(&Some(new_caller.clone()), &u64::MAX);
+    assert_eq!(client.get_authorized_caller_nonce(), 0u64);
+    assert_eq!(client.get_meta().authorized_caller, Some(new_caller));
+}
+
+/// A failed rotation (wrong nonce) does not advance the nonce.
+#[test]
+fn set_authorized_caller_failed_rotation_does_not_advance_nonce() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Wrong nonce — must fail.
+    let _ = client.try_set_authorized_caller(&Some(new_caller.clone()), &99u64);
+
+    // Stored nonce is unchanged at 0.
+    assert_eq!(client.get_authorized_caller_nonce(), 0u64);
+
+    // Correct nonce still works afterwards.
+    client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
+    assert_eq!(client.get_authorized_caller_nonce(), 1u64);
+}
+
+/// Successful rotation emits the consumed nonce in the event data.
+#[test]
+fn set_authorized_caller_event_emits_nonce() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let new_caller = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
+
+    let events = env.events().all();
+    let ev = events.last().expect("expected set_authorized_caller event");
+
+    let topic: Symbol = ev.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic, Symbol::new(&env, "set_authorized_caller"));
+
+    let (old, now, nonce): (Option<Address>, Option<Address>, u64) = ev.2.into_val(&env);
+    assert_eq!(old, None);
+    assert_eq!(now, Some(new_caller));
+    assert_eq!(nonce, 0u64);
 }
 
 #[test]

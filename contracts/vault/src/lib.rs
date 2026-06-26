@@ -105,6 +105,8 @@ pub enum VaultError {
     OfferingIdInvalid = 30,
     /// Metadata string is empty or contains invalid characters (code 31).
     MetadataInvalid = 31,
+    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
+    StaleNonce = 32,
 }
 
 #[contracttype]
@@ -155,6 +157,9 @@ pub enum StorageKey {
     /// Stored in **persistent storage**. The value is `true` (a `bool`);
     /// presence of the key is the authoritative signal. Must be pruned explicitly.
     ProcessedRequest(Symbol),
+    /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
+    /// rotation.  Defaults to `0` before the first rotation.
+    AuthorizedCallerNonce,
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -373,6 +378,17 @@ impl CalloraVault {
             .unwrap_or(false)
     }
 
+    /// Return the current authorized-caller rotation nonce.
+    ///
+    /// Returns `0` before the first `set_authorized_caller` call.
+    /// Pass this value as `expected_nonce` in the next `set_authorized_caller` call.
+    pub fn get_authorized_caller_nonce(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::AuthorizedCallerNonce)
+            .unwrap_or(0u64)
+    }
+
     /// Return `true` if `caller` is the owner or an allowed depositor.
     /// Returns error if vault is not initialized.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> Result<bool, VaultError> {
@@ -478,21 +494,51 @@ impl CalloraVault {
     }
 
     /// Set or clear the authorized caller for `deduct`/`batch_deduct` (owner only).
+    ///
+    /// # Replay Protection
+    /// A monotonic u64 nonce (stored under `StorageKey::AuthorizedCallerNonce`)
+    /// guards this function against replay attacks.  The caller must supply the
+    /// current nonce as `expected_nonce`; the stored value defaults to `0` before
+    /// the first rotation.  Each successful rotation increments the stored nonce
+    /// (wrapping at `u64::MAX`) and emits it in the event payload so off-chain
+    /// indexers can detect gaps or replays.
+    ///
+    /// # Errors
+    /// - `VaultError::StaleNonce` — `expected_nonce` differs from the stored nonce.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` — `new_caller` is the vault itself.
     pub fn set_authorized_caller(
         env: Env,
         new_caller: Option<Address>,
+        expected_nonce: u64,
     ) -> Result<(), VaultError> {
         let mut meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
+        if let Some(ref nc) = new_caller {
+            if nc == &env.current_contract_address() {
+                return Err(VaultError::AuthorizedCallerCannotBeVault);
+            }
+        }
+        let stored_nonce: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::AuthorizedCallerNonce)
+            .unwrap_or(0u64);
+        if expected_nonce != stored_nonce {
+            return Err(VaultError::StaleNonce);
+        }
+        let next_nonce = stored_nonce.wrapping_add(1);
         let old = meta.authorized_caller.clone();
         meta.authorized_caller = new_caller.clone();
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage()
+            .instance()
+            .set(&StorageKey::AuthorizedCallerNonce, &next_nonce);
         env.events().publish(
             (
                 events::event_set_authorized_caller(&env),
                 meta.owner.clone(),
             ),
-            (old, new_caller),
+            (old, new_caller, expected_nonce),
         );
         Ok(())
     }
