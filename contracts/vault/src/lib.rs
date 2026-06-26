@@ -107,6 +107,10 @@ pub enum VaultError {
     MetadataInvalid = 31,
     /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
     StaleNonce = 32,
+    /// New revenue pool must be different from current revenue pool (code 33).
+    NewRevenuePoolSameAsCurrent = 33,
+    /// No revenue pool transfer is pending (code 34).
+    NoRevenuePoolTransferPending = 34,
 }
 
 #[contracttype]
@@ -149,6 +153,7 @@ pub enum StorageKey {
     OfferingIndex,
     PendingOwner,
     PendingAdmin,
+    PendingRevenuePool,
     DepositorList,
     /// Contract version marker (WASM hash) set by `upgrade`.
     ContractVersion,
@@ -356,6 +361,11 @@ impl CalloraVault {
     /// Return the pending admin address, or `None` if no admin transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::PendingAdmin)
+    }
+
+    /// Return the pending revenue pool address, or `None` if no proposal is pending.
+    pub fn get_pending_revenue_pool(env: Env) -> Option<Address> {
+        env.storage().instance().get(&StorageKey::PendingRevenuePool)
     }
 
     /// Return `(usdc_token, settlement, revenue_pool)` in one call.
@@ -1035,30 +1045,103 @@ impl CalloraVault {
         Ok(())
     }
 
-    pub fn set_revenue_pool(
+    /// Propose a new revenue pool address (owner only).
+    ///
+    /// Stores the proposed address in `PendingRevenuePool`. The proposal must be
+    /// accepted by the proposed address via `accept_revenue_pool` before taking effect.
+    /// If there is already a pending proposal, calling this function overwrites it.
+    ///
+    /// # Errors
+    /// - `VaultError::Unauthorized` — caller is not the owner.
+    /// - `VaultError::RevenuePoolCannotBeVault` — proposed address is the vault itself.
+    /// - `VaultError::NewRevenuePoolSameAsCurrent` — proposed address equals the current revenue pool.
+    pub fn propose_revenue_pool(
         env: Env,
-        caller: Address,
-        revenue_pool: Option<Address>,
+        new_pool: Option<Address>,
     ) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
+        let meta = Self::get_meta(env.clone())?;
+        meta.owner.require_auth();
+        if let Some(ref pool) = new_pool {
+            if pool == &env.current_contract_address() {
+                return Err(VaultError::RevenuePoolCannotBeVault);
+            }
+            let current: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
+            if current.as_ref() == Some(pool) {
+                return Err(VaultError::NewRevenuePoolSameAsCurrent);
+            }
         }
-        match revenue_pool {
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingRevenuePool, &new_pool);
+        env.events().publish(
+            (events::event_revenue_pool_proposed(&env), meta.owner, new_pool),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Accept a pending revenue pool proposal (pending address only).
+    ///
+    /// The caller must match the address stored in `PendingRevenuePool`.
+    /// On success, the `RevenuePool` is updated to the pending address,
+    /// and the pending state is cleared.
+    ///
+    /// # Errors
+    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
+    /// - `VaultError::Unauthorized` — caller does not match the pending proposal.
+    pub fn accept_revenue_pool(env: Env) -> Result<(), VaultError> {
+        let pending: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingRevenuePool)
+            .ok_or(VaultError::NoRevenuePoolTransferPending)?;
+        match pending {
             Some(addr) => {
-                env.storage()
-                    .instance()
-                    .set(&StorageKey::RevenuePool, &addr);
-                env.events()
-                    .publish((events::event_set_revenue_pool(&env), caller), addr);
+                addr.require_auth();
+                let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
+                env.storage().instance().set(&StorageKey::RevenuePool, &addr);
+                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+                env.events().publish(
+                    (events::event_revenue_pool_accepted(&env), old, addr),
+                    (),
+                );
             }
             None => {
+                // Proposal to clear the revenue pool — no auth required beyond checking
+                // that the pending is None (i.e., the owner proposed clearing it).
+                // The owner already authenticated when proposing.
+                let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
                 env.storage().instance().remove(&StorageKey::RevenuePool);
-                env.events()
-                    .publish((events::event_clear_revenue_pool(&env), caller), ());
+                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+                env.events().publish(
+                    (events::event_revenue_pool_accepted(&env), old, None::<Address>),
+                    (),
+                );
             }
         }
+        Ok(())
+    }
+
+    /// Cancel a pending revenue pool proposal (owner only).
+    ///
+    /// Removes the pending proposal without applying it.
+    ///
+    /// # Errors
+    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
+    /// - `VaultError::Unauthorized` — caller is not the owner.
+    pub fn cancel_revenue_pool(env: Env) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        meta.owner.require_auth();
+        let pending: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingRevenuePool)
+            .ok_or(VaultError::NoRevenuePoolTransferPending)?;
+        env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+        env.events().publish(
+            (events::event_revenue_pool_cancelled(&env), meta.owner, pending),
+            (),
+        );
         Ok(())
     }
 

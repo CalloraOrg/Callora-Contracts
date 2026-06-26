@@ -185,6 +185,27 @@ pub fn event_allowlist_clear(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_clear")
 }
 
+/// Returns the Symbol for the `"revenue_pool_proposed"` event topic.
+///
+/// Emitted when the owner proposes a new revenue pool address.
+pub fn event_revenue_pool_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "revenue_pool_proposed")
+}
+
+/// Returns the Symbol for the `"revenue_pool_accepted"` event topic.
+///
+/// Emitted when a proposed revenue pool accepts the role.
+pub fn event_revenue_pool_accepted(env: &Env) -> Symbol {
+    Symbol::new(env, "revenue_pool_accepted")
+}
+
+/// Returns the Symbol for the `"revenue_pool_cancelled"` event topic.
+///
+/// Emitted when the owner cancels a pending revenue pool proposal.
+pub fn event_revenue_pool_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "revenue_pool_cancelled")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +385,26 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_allowlist_clear(&env);
         assert_eq!(sym, Symbol::new(&env, "allowlist_clear"));
+    }
+
+    #[test]
+    fn test_event_revenue_pool_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_revenue_pool_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "revenue_pool_proposed"));
+    }
+
+    #[test]
+    fn test_event_revenue_pool_accepted_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_revenue_pool_accepted(&env);
+        assert_eq!(sym, Symbol::new(&env, "revenue_pool_accepted"));
+    }
+
+    #[test]
+    fn test_event_revenue_pool_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_revenue_pool_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "revenue_pool_cancelled"));
     }
 }

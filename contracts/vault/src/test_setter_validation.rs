@@ -89,7 +89,9 @@ fn set_settlement_equals_revenue_pool_fails() {
     let env = Env::default();
     let (_, client, _, admin) = setup(&env);
     let pool = Address::generate(&env);
-    client.set_revenue_pool(&admin, &Some(pool.clone()));
+    // Use propose/accept two-step flow to set revenue pool
+    client.propose_revenue_pool(&Some(pool.clone()));
+    client.accept_revenue_pool();
     let result = client.try_set_settlement(&admin, &pool);
     assert!(result.is_err());
 }

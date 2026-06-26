@@ -6,11 +6,12 @@
 The Callora Vault implements role-based access control for deposit operations to ensure only authorized parties can increase the vault balance.
 
 ### Roles
-- **Owner**: Set during contract initialization. Exclusive authority to manage allowed depositors and withdraw funds.
+- **Owner**: Set during contract initialization. Exclusive authority to manage allowed depositors, withdraw funds, and propose revenue pool changes.
 - **Allowed Depositor**: Addresses approved by the owner to handle automated deposits.
 - **Authorized Caller**: Optional address permitted to trigger `deduct` operations.
 - **Pending Owner**: Nominee awaiting acceptance of the owner role.
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
+- **Pending Revenue Pool**: Proposed revenue pool address awaiting acceptance.
 
 ### Authorization Matrix
 
@@ -30,6 +31,9 @@ The Callora Vault implements role-based access control for deposit operations to
 | `set_admin` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `accept_admin` | ❌ | ❌ | ❌ | ❌ | ✅ |
 | `cancel_admin_transfer` | ❌ | ❌ | ❌ | ❌ | ✅ |
+| `propose_revenue_pool` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `accept_revenue_pool` | ❌ | ❌ | ❌ | ❌ | ✅ |
+| `cancel_revenue_pool` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `pause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `unpause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 

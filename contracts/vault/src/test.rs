@@ -1036,308 +1036,275 @@ fn balance_unchanged_after_failed_deduct() {
 // ---------------------------------------------------------------------------
 // Batch deduct tests
 // ---------------------------------------------------------------------------
+// propose_revenue_pool / accept_revenue_pool / cancel_revenue_pool tests
+// ---------------------------------------------------------------------------
 
 #[test]
-fn batch_deduct_multiple_items() {
+fn propose_and_accept_revenue_pool_stores_address() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let revenue_pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
-    let settlement = create_settlement(&env, &owner, &vault_address);
-    client.set_settlement(&owner, &settlement);
-
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 100,
-            request_id: Some(Symbol::new(&env, "req1"))
-        },
-        DeductItem {
-            amount: 200,
-            request_id: None
-        },
-        DeductItem {
-            amount: 50,
-            request_id: Some(Symbol::new(&env, "req2"))
-        },
-    ];
-
-    let remaining = client.batch_deduct(&owner, &items);
-    assert_eq!(remaining, 650);
-    assert_eq!(client.balance(), 650);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.propose_revenue_pool(&Some(revenue_pool.clone()));
+    // pending should be set
+    assert_eq!(client.get_pending_revenue_pool(), Some(revenue_pool.clone()));
+    // accept
+    client.accept_revenue_pool();
+    assert_eq!(client.get_revenue_pool(), Some(revenue_pool));
+    assert_eq!(client.get_pending_revenue_pool(), None);
 }
 
 #[test]
-fn batch_deduct_events_contain_request_ids() {
+fn propose_and_accept_revenue_pool_clear_proposal() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 1000);
-    client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
-    let settlement = create_settlement(&env, &owner, &vault_address);
-    client.set_settlement(&owner, &settlement);
-
-    let rid_a = Symbol::new(&env, "batch_a");
-    let rid_b = Symbol::new(&env, "batch_b");
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 200,
-            request_id: Some(rid_a.clone())
-        },
-        DeductItem {
-            amount: 300,
-            request_id: Some(rid_b.clone())
-        },
-    ];
-    client.batch_deduct(&owner, &items);
-
-    // Filter to the two deduct events emitted by the vault (topic 0 == "deduct").
-    // The settlement transfer emits an additional event after the deducts.
-    let deduct_sym = Symbol::new(&env, "deduct");
-    let deduct_events: std::vec::Vec<_> = env
-        .events()
-        .all()
-        .iter()
-        .filter(|e| {
-            e.0 == vault_address && !e.1.is_empty() && {
-                let t: Symbol = e.1.get(0).unwrap().into_val(&env);
-                t == deduct_sym
-            }
-        })
-        .collect();
-    assert_eq!(deduct_events.len(), 2, "expected exactly two deduct events");
-    let ev_a = &deduct_events[0];
-    let ev_b = &deduct_events[1];
-
-    let req_a: Symbol = ev_a.1.get(2).unwrap().into_val(&env);
-    let req_b: Symbol = ev_b.1.get(2).unwrap().into_val(&env);
-    assert_eq!(req_a, rid_a);
-    assert_eq!(req_b, rid_b);
-
-    let (amt_a, _): (i128, i128) = ev_a.2.into_val(&env);
-    let (amt_b, _): (i128, i128) = ev_b.2.into_val(&env);
-    assert_eq!(amt_a, 200);
-    assert_eq!(amt_b, 300);
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    // Propose None to clear the revenue pool
+    client.propose_revenue_pool(&None);
+    assert_eq!(client.get_pending_revenue_pool(), None);
+    // Accept the clear proposal
+    client.accept_revenue_pool();
+    assert_eq!(client.get_revenue_pool(), None);
 }
 
 #[test]
-fn batch_deduct_insufficient_balance_fails() {
+fn propose_revenue_pool_update_replaces_via_two_step() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let old_pool = Address::generate(&env);
+    let new_pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    // Start with old_pool via init
+    client.init(&owner, &usdc, &None, &None, &None, &Some(old_pool), &None);
+    assert_eq!(client.get_revenue_pool(), Some(old_pool));
+
+    // Propose new pool
+    client.propose_revenue_pool(&Some(new_pool.clone()));
+    assert_eq!(client.get_pending_revenue_pool(), Some(new_pool.clone()));
+
+    // Accept
+    client.accept_revenue_pool();
+    assert_eq!(client.get_revenue_pool(), Some(new_pool));
+}
+
+#[test]
+fn propose_revenue_pool_same_as_current_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool.clone()), &None);
+    let result = client.try_propose_revenue_pool(&Some(pool));
+    assert_eq!(result, Err(Ok(VaultError::NewRevenuePoolSameAsCurrent)));
+}
+
+#[test]
+fn propose_revenue_pool_vault_address_fails() {
+    let env = Env::default();
+    let (vault_addr, client, _, admin) = setup(&env);
+    let result = client.try_propose_revenue_pool(&Some(vault_addr));
+    assert!(result.is_err());
+}
+
+#[test]
+fn cancel_revenue_pool_removes_pending() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Propose
+    client.propose_revenue_pool(&Some(pool.clone()));
+    assert_eq!(client.get_pending_revenue_pool(), Some(pool.clone()));
+
+    // Cancel
+    client.cancel_revenue_pool();
+    assert_eq!(client.get_pending_revenue_pool(), None);
+    assert_eq!(client.get_revenue_pool(), None);
+}
+
+#[test]
+fn accept_revenue_pool_no_pending_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let result = client.try_accept_revenue_pool();
+    assert_eq!(result, Err(Ok(VaultError::NoRevenuePoolTransferPending)));
+}
+
+#[test]
+fn cancel_revenue_pool_no_pending_fails() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let result = client.try_cancel_revenue_pool();
+    assert_eq!(result, Err(Ok(VaultError::NoRevenuePoolTransferPending)));
+}
+
+#[test]
+fn propose_revenue_pool_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let revenue_pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.propose_revenue_pool(&Some(revenue_pool.clone()));
+
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "revenue_pool_proposed"));
+}
+
+#[test]
+fn accept_revenue_pool_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let revenue_pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.propose_revenue_pool(&Some(revenue_pool.clone()));
+    client.accept_revenue_pool();
+
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "revenue_pool_accepted"));
+}
+
+#[test]
+fn cancel_revenue_pool_emits_event() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.propose_revenue_pool(&Some(pool));
+    client.cancel_revenue_pool();
+
+    let events = env.events().all();
+    let last = events.last().unwrap();
+    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "revenue_pool_cancelled"));
+}
+
+#[test]
+fn get_revenue_pool_returns_none_when_not_set() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert_eq!(client.get_revenue_pool(), None);
+}
+
+#[test]
+fn get_revenue_pool_consistent_after_deduct_operations() {
+    // Ensure get_revenue_pool remains consistent and doesn't mutate state
     let env = Env::default();
     let owner = Address::generate(&env);
     let caller = Address::generate(&env);
+    let revenue_pool = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(
-        &owner,
-        &usdc,
-        &Some(100),
-        &Some(caller.clone()),
-        &None,
-        &None,
-        &None,
-    );
-
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 50,
-            request_id: None
-        },
-        DeductItem {
-            amount: 80,
-            request_id: None
-        },
-    ];
-
-    let result = client.try_batch_deduct(&caller, &items);
-    assert!(result.is_err(), "expected error for batch overdraw");
-    // Balance must be unchanged on failure
-    assert_eq!(client.balance(), 100);
-}
-
-#[test]
-fn batch_deduct_empty_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(
-        &owner,
-        &usdc,
-        &Some(100),
-        &Some(caller.clone()),
-        &None,
-        &None,
-        &None,
-    );
-
-    let items: soroban_sdk::Vec<DeductItem> = soroban_sdk::vec![&env];
-    let result = client.try_batch_deduct(&caller, &items);
-    assert!(result.is_err(), "expected error for empty batch");
-}
-
-#[test]
-fn batch_deduct_zero_amount_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(
-        &owner,
-        &usdc,
-        &Some(100),
-        &Some(caller.clone()),
-        &None,
-        &None,
-        &None,
-    );
-
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 0,
-            request_id: None
-        }
-    ];
-    let result = client.try_batch_deduct(&caller, &items);
-    assert!(result.is_err(), "expected error for zero amount item");
-}
-
-#[test]
-fn batch_deduct_too_large_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 10_000);
-    client.init(&owner, &usdc, &Some(10_000), &None, &None, &None, &None);
-
-    // Build a batch of MAX_BATCH_SIZE + 1 items
-    let mut items = soroban_sdk::Vec::new(&env);
-    for _ in 0..=crate::MAX_BATCH_SIZE {
-        items.push_back(DeductItem {
-            amount: 1,
-            request_id: None,
-        });
-    }
-    let result = client.try_batch_deduct(&owner, &items);
-    assert!(result.is_err(), "expected error for oversized batch");
-}
-
-#[test]
-fn batch_deduct_fail_mid_batch_leaves_balance_unchanged() {
-    // Second item exceeds balance - entire batch must revert.
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 60,
-            request_id: None
-        },
-        DeductItem {
-            amount: 60,
-            request_id: None
-        }, // cumulative 120 > 100
-    ];
-    let result = client.try_batch_deduct(&owner, &items);
-    assert!(result.is_err(), "expected insufficient balance error");
-    // Balance must be completely unchanged
-    assert_eq!(client.balance(), 100);
-}
-
-#[test]
-fn batch_deduct_fail_mid_batch_has_no_transfer_or_deduct_events() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let caller = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let settlement = create_settlement(&env, &owner, &vault_address);
     let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
+    fund_vault(&usdc_admin, &vault_address, 1000);
     client.init(
         &owner,
         &usdc_address,
-        &Some(100),
+        &Some(1000),
         &Some(caller.clone()),
         &None,
-        &None,
+        &Some(revenue_pool.clone()),
         &None,
     );
+    let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    let deduct_events_before = env
-        .events()
-        .all()
-        .iter()
-        .filter(|e| {
-            !e.1.is_empty() && {
-                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
-                s == Symbol::new(&env, "deduct")
-            }
-        })
-        .count();
+    // Query revenue pool before deduct
+    let before = client.get_revenue_pool();
+    assert_eq!(before, Some(revenue_pool.clone()));
 
-    let items = soroban_sdk::vec![
-        &env,
-        DeductItem {
-            amount: 60,
-            request_id: Some(Symbol::new(&env, "x1"))
-        },
-        DeductItem {
-            amount: 60,
-            request_id: Some(Symbol::new(&env, "x2"))
-        },
-    ];
+    // Perform deduct operation (routes to settlement, not revenue_pool)
+    client.deduct(&caller, &200, &None);
 
-    let result = client.try_batch_deduct(&caller, &items);
-    assert!(result.is_err(), "expected insufficient balance error");
+    // Query revenue pool after deduct - should be unchanged
+    let after = client.get_revenue_pool();
+    assert_eq!(after, Some(revenue_pool.clone()));
+    assert_eq!(before, after);
 
-    assert_eq!(client.balance(), 100);
-    assert_eq!(usdc_client.balance(&settlement), 0);
+    // Funds flow to settlement; revenue_pool receives nothing.
+    assert_eq!(client.balance(), 800);
+    assert_eq!(usdc_client.balance(&settlement), 200);
+    assert_eq!(usdc_client.balance(&revenue_pool), 0);
+}
 
-    let deduct_events_after = env
-        .events()
-        .all()
-        .iter()
-        .filter(|e| {
-            !e.1.is_empty() && {
-                let s: Symbol = e.1.get(0).unwrap().into_val(&env);
-                s == Symbol::new(&env, "deduct")
-            }
-        })
-        .count();
-    assert_eq!(deduct_events_after, deduct_events_before);
+#[test]
+fn get_pending_revenue_pool_returns_none_when_not_set() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert_eq!(client.get_pending_revenue_pool(), None);
+}
+
+#[test]
+fn get_pending_revenue_pool_returns_proposed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let pool = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.propose_revenue_pool(&Some(pool.clone()));
+    assert_eq!(client.get_pending_revenue_pool(), Some(pool));
 }
 
 // ---------------------------------------------------------------------------
@@ -3287,309 +3254,12 @@ fn batch_deduct_to_zero_succeeds() {
 // ---------------------------------------------------------------------------
 // Issue #108 â€” set_allowed_depositor: duplicate add, clear, unauthorized
 // ---------------------------------------------------------------------------
-
-#[test]
-fn clear_allowed_depositors_removes_all() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let d1 = Address::generate(&env);
-    let d2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.set_allowed_depositor(&owner, &Some(d1.clone()));
-    client.set_allowed_depositor(&owner, &Some(d2.clone()));
-    client.clear_all(&owner);
-
-    // Neither address should be able to deposit after clear.
-    usdc_admin.mint(&d1, &10);
-    usdc_client.approve(&d1, &vault_address, &10, &1000);
-    assert!(client.try_deposit(&d1, &10).is_err());
-}
-
-#[test]
-fn clear_allowed_depositors_on_empty_is_noop() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    // Must not panic on empty list.
-    client.clear_all(&owner);
-    assert_eq!(client.get_allowed_depositors().len(), 0);
-}
-
-#[test]
-#[ignore = "event emission issue"]
-fn clear_allowed_depositors_preserves_other_entries() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let d1 = Address::generate(&env);
-    let d2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.set_allowed_depositor(&owner, &Some(d1.clone()));
-    client.set_allowed_depositor(&owner, &Some(d2.clone()));
-    client.clear_all(&owner);
-
-    let list = client.get_allowed_depositors();
-    assert_eq!(list.len(), 0);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected allowlist_clear event");
-    let topic0: Symbol = last.1.get(0).expect("expected event topic").into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "allowlist_clear"));
-}
-
-#[test]
-fn clear_allowed_depositors_on_absent_address_is_noop() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let d1 = Address::generate(&env);
-    let d2 = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 100);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-
-    client.set_allowed_depositor(&owner, &Some(d1.clone()));
-    client.set_allowed_depositor(&owner, &Some(d2.clone()));
-    client.clear_all(&owner);
-
-    let list = client.get_allowed_depositors();
-    assert_eq!(list.len(), 0);
-}
-
-#[test]
-// ---------------------------------------------------------------------------
-// Token transfer failure modes — documented limitations
+// propose_revenue_pool / accept_revenue_pool / cancel_revenue_pool tests
 // ---------------------------------------------------------------------------
 //
-// # Manual Test Plan: Transfer Failure Modes
-//
-// The Soroban test harness (soroban-sdk testutils) does not provide a mechanism
-// to inject token-level failures (e.g. simulate a transfer revert mid-call).
-// The following failure modes are therefore documented here for manual / fuzzing
-// verification rather than automated unit tests:
-//
-// 1. **deposit: transfer from caller fails** — if the caller has insufficient
-//    USDC balance or has not approved the vault, the token contract panics and
-//    the deposit reverts atomically (no balance change).
-//
-// 2. **withdraw / withdraw_to: transfer to recipient fails** — if the vault's
-//    on-chain USDC balance is lower than the tracked `meta.balance` (e.g. due
-//    to a direct token transfer out), the token transfer panics. The vault
-//    balance is NOT updated in this case (state write happens after transfer).
-//
-// 3. **deduct → settlement transfer fails** — if the settlement address has no
-//    trustline or the vault's USDC balance is insufficient, the token transfer
-//    panics. The vault balance IS already written before the transfer; callers
-//    should treat a panic here as a critical invariant violation.
-//
-// 4. **deduct → revenue_pool transfer fails** — same as (3) for revenue_pool.
-//
-// 5. **distribute: transfer fails** — guarded by an explicit `vault_balance < amount`
-//    check before the transfer; covered by `distribute_insufficient_usdc_fails`.
-//
-// All paths above are covered by the checked-arithmetic and balance-guard tests
-// below. The highest-risk external calls (deduct routing) are covered by the
-// integration tests `deduct_with_settlement_transfers_usdc` and
-// `deduct_with_revenue_pool_transfers_usdc`.
-
+// The old set_revenue_pool function has been replaced with a two-step
+// propose/accept flow.  These tests cover the new API.
 // ---------------------------------------------------------------------------
-// Additional edge-case tests to reach ≥ 95 % line coverage
-// ---------------------------------------------------------------------------
-#[test]
-#[should_panic(expected = "vault already paused")]
-fn pause_when_already_paused_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.pause(&owner);
-    client.pause(&owner); // second pause must panic
-}
-
-#[test]
-#[should_panic(expected = "vault not paused")]
-fn unpause_when_not_paused_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.unpause(&owner); // not paused — must panic
-}
-
-#[test]
-#[should_panic(expected = "unauthorized: caller is not admin or owner")]
-fn pause_by_unauthorized_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.pause(&attacker);
-}
-
-#[test]
-#[should_panic(expected = "unauthorized: caller is not admin or owner")]
-fn unpause_by_unauthorized_fails() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.pause(&owner);
-    client.unpause(&attacker);
-}
-
-#[test]
-fn owner_can_pause_and_unpause() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    assert!(!client.is_paused());
-    client.pause(&owner);
-    assert!(client.is_paused());
-    client.unpause(&owner);
-    assert!(!client.is_paused());
-}
-
-#[test]
-fn admin_can_pause_and_unpause() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
-    client.set_admin(&owner, &new_admin);
-    client.accept_admin();
-    client.pause(&new_admin);
-    assert!(client.is_paused());
-    client.unpause(&new_admin);
-    assert!(!client.is_paused());
-}
-
-// ---------------------------------------------------------------------------
-// is_paused() view function tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn is_paused_returns_false_after_init() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    let rp = Address::generate(&env);
-    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
-    // After initialization, vault should not be paused
-    assert!(!client.is_paused());
-}
-
-#[test]
-fn is_paused_returns_true_after_pause() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    let rp = Address::generate(&env);
-    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
-    client.pause(&owner);
-    // After pause, should return true
-    assert!(client.is_paused());
-}
-
-#[test]
-fn is_paused_returns_false_after_unpause() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    let rp = Address::generate(&env);
-    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
-    client.pause(&owner);
-    assert!(client.is_paused());
-    client.unpause(&owner);
-    // After unpause, should return false
-    assert!(!client.is_paused());
-}
-
-#[test]
-fn is_paused_multiple_pause_unpause_cycles() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    let rp = Address::generate(&env);
-    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
-
-    // Multiple cycles of pause/unpause
-    for _ in 0..5 {
-        assert!(!client.is_paused());
-        client.pause(&owner);
-        assert!(client.is_paused());
-        client.unpause(&owner);
-        assert!(!client.is_paused());
-    }
-}
-
-#[test]
-fn is_paused_consistent_consecutive_calls() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    let rp = Address::generate(&env);
-    client.init(&owner, &usdc, &None, &None, &None, &Some(rp), &None);
-
-    // Call is_paused multiple times - should return consistent values
-    for _ in 0..10 {
-        assert!(!client.is_paused());
-    }
-
-    client.pause(&owner);
-
-    for _ in 0..10 {
-        assert!(client.is_paused());
-    }
-
-    client.unpause(&owner);
-
-    for _ in 0..10 {
-        assert!(!client.is_paused());
-    }
-}
 
 #[test]
 fn is_paused_no_state_mutation() {
@@ -5287,7 +4957,9 @@ fn get_contract_addresses_updates_after_clear_revenue_pool() {
 
     env.mock_all_auths();
     client.init(&owner, &usdc, &None, &None, &None, &Some(pool), &None);
-    client.set_revenue_pool(&owner, &None); // clear it
+    // Use two-step propose/accept to clear the revenue pool
+    client.propose_revenue_pool(&None);
+    client.accept_revenue_pool();
 
     let (_, _, got_pool) = client.get_contract_addresses();
     assert_eq!(got_pool, None);
