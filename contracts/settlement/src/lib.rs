@@ -1238,3 +1238,6 @@ mod test;
 
 #[cfg(test)]
 mod test_views;
+
+#[cfg(test)]
+mod test_invariant;
