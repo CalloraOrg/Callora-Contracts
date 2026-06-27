@@ -729,3 +729,6 @@ mod test_balance;
 
 #[cfg(test)]
 mod test_invariant;
+
+#[cfg(test)]
+mod test_proptest;
