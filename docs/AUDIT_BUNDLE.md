@@ -230,6 +230,9 @@ The following auth matrix covers every mutating entrypoint in the audited contra
 - Removed duplicate/uncompilable method definitions in `contracts/vault/src/lib.rs` that would have bypassed or corrupted auth handling.
 - Added a negative auth regression test for `settlement::init`.
 - Verified no audited view-only functions mutate state.
+- Added bounded metadata validation in `callora-vault` so offering metadata
+  rejects zero-width, bidi-override, and other confusable Unicode input while
+  remaining NFC-normalized by policy.
 
 ### Key Test Scenarios
 
