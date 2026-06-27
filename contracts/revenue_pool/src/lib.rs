@@ -790,3 +790,6 @@ mod test_invariant;
 
 #[cfg(test)]
 mod test_proptest;
+
+#[cfg(test)]
+mod test_error_codes;

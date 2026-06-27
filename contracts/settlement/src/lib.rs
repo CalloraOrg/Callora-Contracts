@@ -1,76 +1,15 @@
 #![no_std]
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
+
+mod errors;
+pub use errors::SettlementError;
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-
-/// Maximum length for admin broadcast messages.
-pub const MAX_MESSAGE_LEN: u32 = 256;
-
-/// Severity levels for admin broadcast messages.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Severity {
-    Info,
-    Warn,
-    Crit,
-}
-
-/// Event payload for admin broadcast messages.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AdminBroadcast {
-    pub severity: Severity,
-    pub message: String,
-}
-
-/// Typed errors for the settlement contract.
-///
-/// Using `#[contracterror]` encodes each variant as a stable `u32` code.
-/// Callers and indexers can match on the code rather than parsing raw panic strings,
-/// and the WASM binary shrinks because no error string literals are embedded.
-///
-/// | Code | Variant                      | When                                              |
-/// |------|------------------------------|---------------------------------------------------|
-/// | 1    | NotInitialized               | A function is called before `init`                |
-/// | 2    | AlreadyInitialized           | `init` is called more than once                   |
-/// | 3    | Unauthorized                 | Caller is not the vault or admin                  |
-/// | 4    | AmountNotPositive            | `amount` is zero or negative                      |
-/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied |
-/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given  |
-/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow        |
-/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow  |
-/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals |
-/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
-/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
-/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
-/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded|
-/// | 14   | GasExhaustionRisk            | Index too large for safe full scan; use pagination|
-/// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum SettlementError {
-    NotInitialized = 1,
-    AlreadyInitialized = 2,
-    Unauthorized = 3,
-    AmountNotPositive = 4,
-    DeveloperRequired = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow = 7,
-    DeveloperOverflow = 8,
-    UsdcTokenNotConfigured = 9,
-    InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow    = 11,
-    InsufficientContractBalance  = 12,
-    DailyWithdrawCapExceeded     = 13,
-    GasExhaustionRisk            = 14,
-    ReasonTooLong                = 15,
-}
 
 /// Persistent storage keys for settlement contract
 #[contracttype]
@@ -1280,3 +1219,6 @@ mod test_views;
 
 #[cfg(test)]
 mod test_invariant;
+
+#[cfg(test)]
+mod test_error_codes;
