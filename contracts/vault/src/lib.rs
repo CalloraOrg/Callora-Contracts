@@ -1449,45 +1449,6 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Admin-gated contract upgrade.
-    ///
-    /// Only the current admin may call. This will instruct the host to update
-    /// the current contract WASM to `new_wasm_hash` and persist the version marker.
-    ///
-    /// # Parameters
-    /// - `caller` — must be the vault admin; signature required.
-    /// - `new_wasm_hash` — 32-byte hash of the new WASM code to deploy.
-    ///
-    /// # Panics
-    /// - `"unauthorized: caller is not admin"` — `caller` is not the admin.
-    ///
-    /// # Events
-    /// Emits an `upgraded` event with the admin as topic and the new WASM hash as data.
-    ///
-    /// # Post-Upgrade Migration
-    /// After calling `upgrade`, you may need to invoke a separate `migrate` function
-    /// (if implemented in the new WASM) to update storage schema or perform data migrations.
-    /// See UPGRADE.md for the complete operational flow.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
-        }
-        let len = message.len();
-        if len == 0 {
-            panic!("message cannot be empty");
-        }
-        if len > MAX_MESSAGE_LEN {
-            panic!("message length exceeds maximum of 256 characters");
-        }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
-        Ok(())
-    }
-
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
