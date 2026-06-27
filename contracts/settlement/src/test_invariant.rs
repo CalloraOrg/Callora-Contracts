@@ -33,6 +33,8 @@
 
 extern crate std;
 
+use std::boxed::Box;
+
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{token, Address, Env, Vec};
@@ -207,7 +209,7 @@ fn setup_env() -> (
     let contract = env.register(CalloraSettlement, ());
 
     // Mint a large enough USDC reserve so withdrawals don't run out.
-    let (usdc_addr, _usdc_client, usdc_sac) = make_usdc(env, &contract, i128::MAX / 2);
+    let (usdc_addr, _usdc_client, _usdc_sac) = make_usdc(env, &contract, i128::MAX / 2);
 
     let client = CalloraSettlementClient::new(env, &contract);
     client.init(&admin, &vault);
@@ -216,7 +218,15 @@ fn setup_env() -> (
     let usdc_sac_static: token::StellarAssetClient<'static> =
         token::StellarAssetClient::new(env, &usdc_addr);
 
-    (env, contract, client, admin, vault, usdc_addr, usdc_sac_static)
+    (
+        (*env).clone(),
+        contract,
+        client,
+        admin,
+        vault,
+        usdc_addr,
+        usdc_sac_static,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +238,7 @@ fn setup_env() -> (
 /// The global pool is tracked separately; this checks only the developer side.
 /// A full conservation check is: `total_in == dev_sum + pool`.
 fn check_invariant(
-    env: &Env,
+    _env: &Env,
     client: &CalloraSettlementClient<'_>,
     admin: &Address,
     expected_dev_total: i128,

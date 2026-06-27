@@ -69,6 +69,13 @@ must not be reassigned once released.
 | 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |
 | 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
 | 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |
+| 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
+| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
+| 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |
+| 19 | `TimelockOverflow` | Settlement | Timelock timestamp addition overflowed |
+| 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
+| 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
+| 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
 
 ## Revenue Pool
 

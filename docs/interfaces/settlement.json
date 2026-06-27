@@ -70,9 +70,22 @@
       },
       {
         "code": 13,
+        "name": "DailyWithdrawCapExceeded",
+        "when": "A withdrawal would exceed the developer's daily cap."
+      },
+      {
+        "code": 14,
         "name": "GasExhaustionRisk",
         "when": "Index exceeds 100 entries; use get_developer_balances_cursor instead of get_all_developer_balances."
-      }
+      },
+      { "code": 15, "name": "ReasonTooLong", "when": "Reason Symbol exceeds the allowed length." },
+      { "code": 16, "name": "MigrationSameAddress", "when": "Migration source and target are identical." },
+      { "code": 17, "name": "InvalidMigrationTarget", "when": "Migration target is the settlement contract." },
+      { "code": 18, "name": "NoDeveloperBalance", "when": "Migration source has no positive balance." },
+      { "code": 19, "name": "TimelockOverflow", "when": "Timelock timestamp addition overflowed." },
+      { "code": 20, "name": "MigrationNotFound", "when": "No migration is pending for the source." },
+      { "code": 21, "name": "TimelockNotExpired", "when": "Migration delay has not elapsed." },
+      { "code": 22, "name": "MigrationBalanceChanged", "when": "The approved amount is no longer available at the source." }
     ]
   },
 
@@ -88,6 +101,25 @@
           "type": "i128",
           "description": "Credited balance in USDC base units (stroops)."
         }
+      }
+    },
+    "PendingDeveloperMigration": {
+      "description": "Timelocked snapshot of an approved developer balance migration.",
+      "fields": {
+        "from": { "type": "Address" },
+        "to": { "type": "Address" },
+        "amount": { "type": "i128" },
+        "proposed_at": { "type": "u64" },
+        "execute_after": { "type": "u64" }
+      }
+    },
+    "AdminMigrationEvent": {
+      "description": "Audit payload emitted when a migration executes.",
+      "fields": {
+        "from": { "type": "Address" },
+        "to": { "type": "Address" },
+        "amount": { "type": "i128" },
+        "executed_at": { "type": "u64" }
       }
     },
     "GlobalPool": {
@@ -433,6 +465,37 @@
       ]
     },
 
+    {
+      "name": "propose_balance_migration",
+      "description": "Snapshot a developer balance and begin the fixed 24-hour migration timelock. Re-proposal replaces the prior target and restarts the delay.",
+      "access": "admin (must sign; native account multisig thresholds apply)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false },
+        { "name": "from", "type": "Address", "optional": false },
+        { "name": "to", "type": "Address", "optional": false }
+      ],
+      "returns": "void",
+      "events": [{ "topics": ["admin_migration_proposed", "from"], "data": "PendingDeveloperMigration" }]
+    },
+    {
+      "name": "execute_balance_migration",
+      "description": "Move the approved balance snapshot after the timelock and consume the proposal.",
+      "access": "admin (must sign; native account multisig thresholds apply)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false },
+        { "name": "from", "type": "Address", "optional": false }
+      ],
+      "returns": "void",
+      "events": [{ "topics": ["admin_migration", "from", "to"], "data": "AdminMigrationEvent" }]
+    },
+    {
+      "name": "get_balance_migration",
+      "description": "Return the pending migration for a source address, or null.",
+      "access": "any",
+      "params": [{ "name": "from", "type": "Address", "optional": false }],
+      "returns": "PendingDeveloperMigration | null",
+      "events": []
+    },
     {
       "name": "set_vault",
       "description": "Update the registered vault address. Only admin may call this.",

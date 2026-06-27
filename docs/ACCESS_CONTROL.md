@@ -94,6 +94,11 @@ Allows the current admin to cancel a pending admin transfer before the nominee a
 ### Overview
 The Callora Settlement contract tracks individual developer balances and global protocol revenue. It enforces strict access control for incoming payments and administrative updates.
 
+Developer address compliance recoveries use `propose_balance_migration` and
+`execute_balance_migration`. Both calls require authorization by the current
+admin address, including its native Stellar multisig thresholds, and execution
+is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MIGRATION.md).
+
 ### Roles
 - **Admin**: Primary authority over contract configuration and sensitive data.
 - **Vault**: The registered vault contract authorized to send payments.

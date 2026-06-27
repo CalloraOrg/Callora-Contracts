@@ -1,15 +1,40 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
+};
 
+mod admin;
 mod errors;
+mod timelock;
 pub use errors::SettlementError;
+pub use timelock::{PendingDeveloperMigration, DEVELOPER_MIGRATION_TIMELOCK_SECONDS};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+
+/// Maximum length for admin broadcast messages.
+pub const MAX_MESSAGE_LEN: u32 = 256;
+
+/// Severity level for an administrative broadcast.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Event payload emitted by `broadcast`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
+}
 
 /// Persistent storage keys for settlement contract
 #[contracttype]
@@ -26,6 +51,7 @@ pub enum StorageKey {
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
     ContractVersion,
+    PendingDeveloperMigration(Address),
 }
 
 /// Developer balance record in settlement contract
@@ -124,6 +150,16 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+}
+
+/// Emitted after an approved developer balance migration is executed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminMigrationEvent {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub executed_at: u64,
 }
 
 /// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
@@ -407,6 +443,40 @@ impl CalloraSettlement {
             .persistent()
             .get(&StorageKey::DeveloperBalance(developer))
             .unwrap_or(0)
+    }
+
+    /// Propose moving a developer's current balance to a replacement address.
+    ///
+    /// The current admin must authorize this state change. If the admin is a
+    /// Stellar multisig account, `require_auth` enforces that account's signer
+    /// thresholds. The proposal snapshots the source balance and becomes
+    /// executable after [`DEVELOPER_MIGRATION_TIMELOCK_SECONDS`]. Re-proposing
+    /// for the same source replaces the prior proposal and restarts the delay.
+    ///
+    /// # Errors
+    /// Panics with a typed [`SettlementError`] when the caller is unauthorized,
+    /// the addresses are equal or unsafe, the source balance is empty, or the
+    /// execution timestamp cannot be represented.
+    pub fn propose_balance_migration(env: Env, caller: Address, from: Address, to: Address) {
+        admin::propose_balance_migration(&env, &caller, &from, &to);
+    }
+
+    /// Execute a matured developer balance migration proposal.
+    ///
+    /// The current admin must authorize execution independently of proposal.
+    /// Exactly the amount approved at proposal time is moved; credits received
+    /// afterward remain at `from`. The destination balance addition is checked
+    /// for overflow, and the consumed proposal is removed to prevent replay.
+    ///
+    /// # Events
+    /// Emits `admin_migration` with [`AdminMigrationEvent`] after success.
+    pub fn execute_balance_migration(env: Env, caller: Address, from: Address) {
+        admin::execute_balance_migration(&env, &caller, &from);
+    }
+
+    /// Return the pending migration for `from`, if one exists.
+    pub fn get_balance_migration(env: Env, from: Address) -> Option<PendingDeveloperMigration> {
+        timelock::get_pending_migration(&env, &from)
     }
 
     /// Configure the USDC token contract address.
@@ -1188,7 +1258,7 @@ pub fn withdraw_developer_balance(
     /// and the result is a deterministic, stable ordering that cursors can rely on.
     ///
     /// If `addr` is already present the index is left unchanged.
-    fn sorted_insert(env: &Env, index: &mut Vec<Address>, addr: Address) {
+    pub(crate) fn sorted_insert(env: &Env, index: &mut Vec<Address>, addr: Address) {
         // Check for duplicates and find insertion position in one pass.
         let mut insert_pos: Option<u32> = None;
         for (i, existing) in index.iter().enumerate() {
@@ -1222,3 +1292,6 @@ mod test_invariant;
 
 #[cfg(test)]
 mod test_error_codes;
+
+#[cfg(test)]
+mod test_admin_migration;
