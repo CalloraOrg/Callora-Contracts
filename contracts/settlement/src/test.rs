@@ -388,7 +388,7 @@ mod settlement_tests {
         let custodial = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
@@ -421,7 +421,7 @@ mod settlement_tests {
         let custodial = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let (usdc_address, usdc_admin_client) = create_usdc(&env, &admin);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
