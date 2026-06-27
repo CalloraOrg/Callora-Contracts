@@ -251,6 +251,138 @@ fn set_admin_unauthorized_fails() {
     );
 }
 
+// Cross-contract conservation invariant E2E fuzz test
+#[test]
+fn cross_contract_conservation_fuzz() {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    // Short doc: This test runs a seeded randomized sequence of actions
+    // across the vault, settlement and revenue-pool contracts and asserts
+    // that (1) settlement accounting equals cumulative settled amounts and
+    // (2) the vault internal balance matches the sequence-tracked expected
+    // internal balance. The seed is printed on failure for reproducibility.
+
+    let seed: u64 = 0x_dead_beef_1234_u64; // deterministic seed for CI; change for local runs
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let steps: usize = 200;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Participants / principals
+    let owner = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let developer = Address::generate(&env);
+
+    // Deploy contracts and token
+    let (vault_address, vault_client) = create_vault(&env);
+    let settlement_contract = env.register(CalloraSettlement, ());
+    let settlement_client = CalloraSettlementClient::new(&env, &settlement_contract);
+    let settlement_address = settlement_contract;
+
+    let revenue_contract = env.register(RevenuePool, ());
+    let revenue_client = RevenuePoolClient::new(&env, &revenue_contract);
+    let revenue_address = revenue_contract;
+
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    // Fund vault on-chain and init contracts
+    fund_vault(&usdc_admin, &vault_address, 1_000_000);
+    let _ = vault_client.init(&owner, &usdc, &Some(1_000_000), &None, &None, &Some(revenue_address), &None);
+
+    settlement_client.init(&admin, &vault_address);
+    revenue_client.init(&admin, &usdc);
+
+    // Register settlement in vault
+    vault_client.set_settlement(&owner, &settlement_address);
+
+    // Track expected values
+    let mut expected_vault_internal: i128 = vault_client.balance();
+    let mut expected_onchain_vault: i128 = usdc_client.balance(&vault_address);
+    let mut total_deposits: i128 = 0;
+    let mut total_deductions: i128 = 0;
+    let mut total_withdraws: i128 = 0;
+
+    for i in 0..steps {
+        let choice: u8 = rng.gen_range(0..100);
+        if choice < 40 {
+            // Deposit
+            let amt_u64: u64 = rng.gen_range(1..10_000);
+            let amt = amt_u64 as i128;
+            // Mint to depositor then deposit
+            usdc_admin.mint(&depositor, &amt);
+            let res = vault_client.try_deposit(&depositor, &amt);
+            if res.is_ok() {
+                total_deposits = total_deposits.checked_add(amt).unwrap();
+                expected_vault_internal = expected_vault_internal.checked_add(amt).unwrap();
+                expected_onchain_vault = expected_onchain_vault.checked_add(amt).unwrap();
+            }
+        } else if choice < 75 {
+            // Deduct -> settlement
+            let amt_u64: u64 = rng.gen_range(1..5_000);
+            let amt = amt_u64 as i128;
+            let res = vault_client.try_deduct(&owner, &amt, &None);
+            if res.is_ok() {
+                // Update expectations: vault internal and onchain decreased
+                total_deductions = total_deductions.checked_add(amt).unwrap();
+                expected_vault_internal = expected_vault_internal.checked_sub(amt).unwrap();
+                expected_onchain_vault = expected_onchain_vault.checked_sub(amt).unwrap();
+
+                // Simulate the settlement crediting the amount (to pool or to developer)
+                let to_pool = rng.gen_bool(0.5);
+                if to_pool {
+                    settlement_client.receive_payment(&vault_address, &amt, &true, &None);
+                } else {
+                    settlement_client.receive_payment(&vault_address, &amt, &false, &Some(developer.clone()));
+                }
+            }
+        } else if choice < 90 {
+            // Owner withdraw
+            let amt_u64: u64 = rng.gen_range(1..2_000);
+            let amt = amt_u64 as i128;
+            let res = vault_client.try_withdraw(&amt);
+            if res.is_ok() {
+                total_withdraws = total_withdraws.checked_add(amt).unwrap();
+                expected_vault_internal = expected_vault_internal.checked_sub(amt).unwrap();
+                expected_onchain_vault = expected_onchain_vault.checked_sub(amt).unwrap();
+            }
+        } else {
+            // Revenue pool receive payment (simulate vault transferring to revenue pool)
+            let amt_u64: u64 = rng.gen_range(1..2_000);
+            let amt = amt_u64 as i128;
+            // Transfer tokens from vault to revenue pool on-chain to simulate deduction
+            // Use token client to transfer directly
+            let _ = usdc_client.transfer(&vault_address, &revenue_address, &amt);
+            // Notify revenue pool (admin emits event)
+            revenue_client.receive_payment(&admin, &amt, &true);
+            // Update onchain vault balance expectation
+            expected_onchain_vault = expected_onchain_vault.checked_sub(amt).unwrap_or(0);
+        }
+
+        // After each step assert invariants
+        // 1) Settlement accounting equals cumulative deductions that were credited
+        let g = settlement_client.get_global_pool();
+        let mut settlement_sum: i128 = g.total_balance;
+        let devs = settlement_client.get_all_developer_balances(&admin);
+        for db in devs.iter() {
+            settlement_sum = settlement_sum.checked_add(db.balance).unwrap();
+        }
+        // settlement_sum should equal total_deductions for the amounts we credited
+        assert_eq!(settlement_sum, total_deductions, "seed={}: step {}: settlement accounting mismatch: {} vs {}", seed, i, settlement_sum, total_deductions);
+
+        // 2) Vault internal accounting equals expected
+        let observed_internal = vault_client.balance();
+        assert_eq!(observed_internal, expected_vault_internal, "seed={}: step {}: vault internal mismatch: {} vs {}", seed, i, observed_internal, expected_vault_internal);
+
+        // 3) On-chain token balance for vault equals expected
+        let observed_onchain = usdc_client.balance(&vault_address);
+        assert_eq!(observed_onchain, expected_onchain_vault, "seed={}: step {}: vault onchain mismatch: {} vs {}", seed, i, observed_onchain, expected_onchain_vault);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Deposit tests
 // ---------------------------------------------------------------------------
