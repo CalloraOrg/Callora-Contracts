@@ -421,6 +421,7 @@ impl CalloraVault {
             .get(&StorageKey::Metadata(offering_id))
     }
 
+    #[inline(never)]
     fn get_offering_index(env: &Env) -> Vec<String> {
         env.storage()
             .instance()
@@ -428,6 +429,7 @@ impl CalloraVault {
             .unwrap_or(Vec::new(env))
     }
 
+    #[inline(never)]
     fn add_offering_index(env: &Env, offering_id: &String) {
         let mut list: Vec<String> = Self::get_offering_index(env);
         if !list.contains(offering_id) {
@@ -436,6 +438,7 @@ impl CalloraVault {
         }
     }
 
+    #[inline(never)]
     fn remove_offering_index(env: &Env, offering_id: &String) {
         let list: Vec<String> = Self::get_offering_index(env);
         if list.len() == 0 {
@@ -1188,6 +1191,7 @@ impl CalloraVault {
 
     /// Validate that a vault input string is non-empty, contains no control
     /// characters (0x00–0x1F, 0x7F), and has no leading/trailing whitespace.
+    #[inline(never)]
     fn validate_vault_input(s: &String) -> Result<(), ()> {
         let len = s.len();
         if len == 0 {
@@ -1464,6 +1468,7 @@ impl CalloraVault {
     // Private helpers
     // -----------------------------------------------------------------------
 
+    #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         let auth = match &meta.authorized_caller {
@@ -1513,6 +1518,7 @@ impl CalloraVault {
             .ok_or(VaultError::SettlementNotSet)
     }
 
+    #[inline(never)]
     fn require_not_paused(env: Env) -> Result<(), VaultError> {
         if Self::is_paused(env) {
             return Err(VaultError::Paused);
@@ -1520,6 +1526,7 @@ impl CalloraVault {
         Ok(())
     }
 
+    #[inline(never)]
     fn require_admin_or_owner(env: Env, caller: &Address) -> Result<(), VaultError> {
         let admin: Address = env
             .storage()
