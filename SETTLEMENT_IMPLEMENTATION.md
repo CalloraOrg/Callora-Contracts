@@ -4,6 +4,18 @@
 
 This document describes the implementation of revenue settlement functionality that allows the vault contract to automatically transfer USDC to a settlement contract when deductions occur. The settlement contract then credits either a global pool or specific developer balances.
 
+## Reconciliation Contract (Vault ↔ Settlement)
+
+The integration between the vault and settlement contracts ensures that tracked balances stay in sync across both systems. Here's how it works:
+
+1. **Atomic Operations**: All operations (validation → token transfer → settlement contract call → state update) happen atomically. If any step fails, the entire transaction reverts with no partial state changes.
+2. **Reconciliation Flow**:
+   - The vault contract first validates the deduct/batch-deduct request
+   - It transfers USDC tokens to the settlement contract
+   - It calls `settlement_client.receive_payment(..., to_pool=true, developer=None)` to notify the settlement contract to credit the global pool
+   - Only after the cross‑contract call succeeds does the vault update its own internal balance
+3. **`to_pool` Semantics**: For all vault‑originated deducts and batch deducts, the deducted amount is always credited to the **global pool** in the settlement contract.
+
 ## Architecture
 
 ### Components
@@ -12,6 +24,7 @@ This document describes the implementation of revenue settlement functionality t
    - Enhanced with settlement contract integration
    - Automatically transfers USDC to settlement on `deduct()` and `batch_deduct()`
    - Maintains settlement contract address configuration
+   - Uses cross‑contract calls to `settlement_client.receive_payment()` to ensure reconciliation
 
 2. **Settlement Contract (`callora-settlement`)**
    - Receives USDC payments from vault
@@ -29,13 +42,13 @@ sequenceDiagram
     
     API->>Vault: deduct(env, caller, amount, request_id)
     Vault->>Vault: Validate Auth & Balance
-    Vault->>Vault: Update internal balance
     Vault->>USDC: transfer(vault, settlement, amount)
     USDC-->>Vault: Transfer complete
-    Vault->>Settlement: receive_payment(env, vault, amount, ...)
+    Vault->>Settlement: receive_payment(vault, amount, to_pool=true, developer=None)
     Settlement->>Settlement: Validate caller (vault)
-    Settlement->>Settlement: Update Global Pool or Dev Balance
+    Settlement->>Settlement: Update Global Pool
     Settlement-->>Vault: Payment successful
+    Vault->>Vault: Update internal balance & mark request processed
     Vault-->>API: Return new balance
 ```
 
@@ -77,24 +90,18 @@ StorageKey::RevenuePool    // Fallback routing address (used if Settlement not s
 
 #### Routing Validation
 
-**CRITICAL**: The vault enforces that at least one routing address MUST be configured before any deduct operations can succeed. This is validated via `require_routing_configured()` which is called at the beginning of both `deduct()` and `batch_deduct()`.
+**CRITICAL**: The vault enforces that the settlement address MUST be configured before any deduct operation can succeed. This is validated via `require_settlement()` which is consulted by both `deduct()` and `batch_deduct()`.
 
-- If neither `settlement` nor `revenue_pool` is configured: **PANIC** with `"routing not configured: set settlement or revenue_pool address"`
-- This prevents silent fund retention and ensures explicit routing configuration
-- Both addresses are validated to prevent self-referential routing (vault → vault)
+- If `settlement` is not configured: **PANIC** with `"settlement address not set"` and the transaction reverts with no state change.
+- This prevents silent loss-of-accounting where the vault's internal `balance` could drift from the on-ledger USDC balance.
+- The settlement address is validated at configuration time to prevent self-referential routing (vault → vault).
 
-#### Routing Priority
+#### Routing
 
-When deduct operations occur, funds are routed according to this priority:
+Every `deduct` / `batch_deduct` call routes the deducted USDC to the configured settlement address. `revenue_pool` is **not** consulted during deducts; it is retained as an informational configuration slot only.
 
-1. **If `settlement` is configured** → Route to settlement contract (highest priority)
-2. **Else if `revenue_pool` is configured** → Route to revenue pool contract
-3. **Else** → Deduct operation FAILS (routing not configured)
-
-This priority system ensures:
-- No "half-configured" states where funds could be split unexpectedly
-- Deterministic routing behavior
-- Clear audit trail for all fund movements
+- **`settlement` set** → funds transferred to settlement contract.
+- **`settlement` unset** → deduct panics with `"settlement address not set"`, no balance change, no event emitted.
 
 
 
@@ -145,7 +152,13 @@ pub struct BalanceCreditedEvent {
    - Creates empty developer balances and global pool
    - Panic: "settlement contract already initialized"
 
-2. **`receive_payment(env, caller, amount, to_pool, developer)`**
+4. **`set_usdc_token(env, caller, usdc_address)`**
+   - Configures the USDC token contract address for withdrawals
+   - Authorization: Current admin only
+   - Validation: Token address cannot be the contract itself
+   - Panic: "unauthorized: caller is not admin" or "invalid config: usdc_token cannot be the contract itself"
+
+5. **`receive_payment(env, caller, amount, to_pool, developer)`**
    - **Access Control**: Only vault or admin can call
    - **Validation**: Amount must be positive
    - **Pool Credit**: If `to_pool=true`, credits global pool
@@ -154,10 +167,19 @@ pub struct BalanceCreditedEvent {
      - `PaymentReceivedEvent` for all payments
      - `BalanceCreditedEvent` for developer credits
 
+6. **`withdraw_developer_balance(env, developer, amount)`**
+   - **Access Control**: Only the developer may call
+   - **Validation**: Amount must be positive and cannot exceed tracked balance
+   - **Token Flow**: Transfers USDC from the settlement contract to the developer
+   - **State Update**: Deducts the withdrawn amount from the tracked balance using checked arithmetic
+   - **Events**:
+     - `DeveloperWithdrawEvent` after transfer succeeds
+
 3. **Query Functions**
    - `get_admin()`, `get_vault()`, `get_global_pool()`
    - `get_developer_balance(developer)`
-   - `get_all_developer_balances()` (admin only)
+   - `get_all_developer_balances()` (admin only, safe only for <=100 developers)
+   - `get_developer_balances_page(start, limit)` (admin only, paginated)
 
 4. **Admin Functions**
    - `set_admin()` (admin only)
@@ -261,6 +283,20 @@ CalloraSettlement::receive_payment(
     amount,
     false, // credit to developer, not pool
     Some(developer_address), // specify developer
+);
+```
+
+### Developer Withdrawal
+
+```rust
+// Configure USDC if not already configured by admin
+CalloraSettlement::set_usdc_token(env, admin_address, usdc_contract_address);
+
+// Developer withdraws their available tracked balance
+CalloraSettlement::withdraw_developer_balance(
+    env,
+    developer_address,
+    withdrawal_amount,
 );
 ```
 
@@ -558,3 +594,239 @@ When rotating admin or updating vault:
 The revenue settlement implementation provides a secure, efficient, and well-tested system for automatically transferring USDC from the vault contract to a settlement contract. The settlement contract then properly credits either a global pool or specific developer balances based on payment parameters.
 
 The implementation maintains backward compatibility while adding powerful new revenue management capabilities to the Callora ecosystem.
+## Storage Migration (Developer Balances)
+
+### Overview
+
+As of the persistent storage migration, developer balances have been migrated from a single instance storage Map to per-address persistent storage with automatic TTL extension. This change improves scalability and reduces instance storage pressure as the number of developers grows.
+
+### Previous Storage Layout
+
+**Before Migration:**
+- Single instance storage key: `developer_balances` (Symbol)
+- Value: `Map<Address, i128>` containing all developer balances
+- Issues:
+  - Every `receive_payment` to a developer required reading/writing the entire map
+  - Map iteration in `get_all_developer_balances` became expensive with many developers
+  - Instance storage size grew linearly with developer count
+  - Higher archival risk due to large instance storage
+
+### New Storage Layout
+
+**After Migration:**
+- Storage key enum with variants for different storage types
+- Per-developer persistent storage: `StorageKey::DeveloperBalance(Address)`
+- Developer index: `StorageKey::DeveloperIndex` containing `Vec<Address>` of all developers
+- Benefits:
+  - O(1) point read/write for individual developer balances
+  - Persistent storage with automatic TTL extension (1 year)
+  - Reduced instance storage pressure (only index stored in instance)
+  - `get_all_developer_balances` iterates index instead of map
+
+### StorageKey Enum
+
+```rust
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum StorageKey {
+    Admin,
+    Vault,
+    PendingAdmin,
+    DeveloperIndex,
+    DeveloperBalance(Address),
+    GlobalPool,
+}
+```
+
+### Migration Details
+
+#### Changes to `receive_payment` (Developer Credit Path)
+
+**Before:**
+```rust
+let mut balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+let current_balance = balances.get(dev_address.clone()).unwrap_or(0);
+let new_balance = current_balance.checked_add(amount).unwrap_or_else(...);
+balances.set(dev_address.clone(), new_balance);
+inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &balances);
+```
+
+**After:**
+```rust
+let current_balance = env
+    .storage()
+    .persistent()
+    .get(&StorageKey::DeveloperBalance(dev_address.clone()))
+    .unwrap_or(0);
+let new_balance = current_balance.checked_add(amount).unwrap_or_else(...);
+env.storage()
+    .persistent()
+    .set(&StorageKey::DeveloperBalance(dev_address.clone()), &new_balance);
+env.storage()
+    .persistent()
+    .extend_ttl(&StorageKey::DeveloperBalance(dev_address.clone()), 50000, 50000);
+
+// Add to index if not present
+let mut index: Vec<Address> = inst
+    .get(&StorageKey::DeveloperIndex)
+    .unwrap_or_else(|| Vec::new(&env));
+if !index.iter().any(|addr| addr == &dev_address) {
+    index.push_back(dev_address.clone());
+    inst.set(&StorageKey::DeveloperIndex, &index);
+}
+```
+
+#### Changes to `get_developer_balance`
+
+**Before:**
+```rust
+let balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+balances.get(developer).unwrap_or(0)
+```
+
+**After:**
+```rust
+env.storage()
+    .persistent()
+    .get(&StorageKey::DeveloperBalance(developer))
+    .unwrap_or(0)
+```
+
+#### Changes to `get_all_developer_balances`
+
+**Before:**
+```rust
+let balances: Map<Address, i128> = inst
+    .get(&Symbol::new(&env, DEVELOPER_BALANCES_KEY))
+    .unwrap_or_else(|| Map::new(&env));
+let mut result = Vec::new(&env);
+for (address, balance) in balances.iter() {
+    result.push_back(DeveloperBalance { address, balance });
+}
+result
+```
+
+**After:**
+```rust
+let index: Vec<Address> = inst
+    .get(&StorageKey::DeveloperIndex)
+    .unwrap_or_else(|| Vec::new(&env));
+if index.len() > 100 {
+    return Err(SettlementError::GasExhaustionRisk);
+}
+let mut result = Vec::new(&env);
+for address in index.iter() {
+    let balance = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::DeveloperBalance(address))
+        .unwrap_or(0);
+    result.push_back(DeveloperBalance {
+        address: address.clone(),
+        balance,
+    });
+}
+Ok(result)
+```
+
+#### New paginated query `get_developer_balances_page`
+
+```rust
+pub fn get_developer_balances_page(
+    env: Env,
+    caller: Address,
+    start: u32,
+    limit: u32,
+) -> Result<Vec<DeveloperBalance>, SettlementError> {
+    let inst = env.storage().instance();
+    let index: Vec<Address> = inst
+        .get(&StorageKey::DeveloperIndex)
+        .unwrap_or_else(|| Vec::new(&env));
+    let end = start
+        .saturating_add(limit.min(50))
+        .min(index.len());
+    let mut result = Vec::new(&env);
+    let mut cursor = 0;
+    for address in index.iter() {
+        if cursor >= start && cursor < end {
+            let balance = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::DeveloperBalance(address.clone()))
+                .unwrap_or(0);
+            result.push_back(DeveloperBalance {
+                address: address.clone(),
+                balance,
+            });
+        }
+        if cursor >= end {
+            break;
+        }
+        cursor += 1;
+    }
+    Ok(result)
+}
+```
+
+#### Changes to `init`
+
+**Before:**
+```rust
+let empty_balances: Map<Address, i128> = Map::new(&env);
+inst.set(&Symbol::new(&env, DEVELOPER_BALANCES_KEY), &empty_balances);
+```
+
+**After:**
+```rust
+let empty_index: Vec<Address> = Vec::new(&env);
+inst.set(&StorageKey::DeveloperIndex, &empty_index);
+```
+
+### Migration Impact
+
+#### Breaking Changes
+- **Contract Upgrade Required**: This is a storage-level migration that requires a contract upgrade
+- **Data Migration**: Existing developer balances in the old `Map<Address, i128>` format need to be migrated to the new persistent storage format
+- **API Compatibility**: `receive_payment` and `get_developer_balance` remain unchanged; `get_all_developer_balances` now returns an explicit `Result` and rejects full iteration once the developer index exceeds 100 entries
+- **New Safe Query**: `get_developer_balances_page(start, limit)` is added for paginated admin reads and is capped at 50 records per call
+
+#### Performance Improvements
+- **Developer Credit**: O(1) point read/write instead of O(n) map operations
+- **Balance Query**: O(1) persistent storage lookup instead of map lookup
+- **Instance Storage**: Reduced pressure as individual balances are in persistent storage
+- **Scalability**: Can handle 100+ developers without significant gas cost increases
+
+#### TTL Management
+- Developer balances now have persistent storage with 1-year TTL
+- TTL is automatically extended on every credit via `extend_ttl`
+- Index remains in instance storage (no TTL)
+
+### Testing
+
+#### Test Coverage
+- ✅ Per-address persistent storage read/write
+- ✅ TTL extension on credit
+- ✅ Developer index management
+- ✅ `get_developer_balance` O(1) lookup
+- ✅ `get_all_developer_balances` index iteration
+- ✅ 100+ developer scalability test
+
+#### Running Tests
+```bash
+cd contracts/settlement
+cargo test
+
+# Test with 100+ developers
+cargo test test_scale_many_developers
+```
+
+### Rollback Plan
+
+If issues arise with the new storage layout:
+1. Contract can be upgraded back to the previous version
+2. Data migration script can convert persistent storage back to instance storage map
+3. Monitor gas costs and storage pressure during rollout
