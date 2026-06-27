@@ -15,7 +15,7 @@ All inline `Symbol::new(&env, "...")` event topic literals have been extracted f
 
 - [`contracts/vault/src/events.rs`](contracts/vault/src/events.rs) — 23 topics
 - [`contracts/settlement/src/events.rs`](contracts/settlement/src/events.rs) — 8 topics
-- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 10 topics
+- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 12 topics
 
 Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
 a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
@@ -562,6 +562,44 @@ Emitted when the nominee accepts the admin role (step 2 of 2).
 
 > After this event, only `new_admin` can call `distribute`, `batch_distribute`,
 > `receive_payment`, and `set_admin`.
+
+---
+
+### `pause_guardian_set`
+
+Emitted when the admin sets or replaces the emergency pause guardian.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_set"`                   |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | `guardian` — address allowed to pause    |
+
+```json
+{
+  "topics": ["pause_guardian_set", "GADMIN..."],
+  "data": "GGUARDIAN..."
+}
+```
+
+---
+
+### `pause_guardian_cleared`
+
+Emitted when the admin clears the emergency pause guardian role.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_cleared"`               |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | previous guardian address                |
+
+```json
+{
+  "topics": ["pause_guardian_cleared", "GADMIN..."],
+  "data": "GOLD_GUARDIAN..."
+}
+```
 
 ---
 

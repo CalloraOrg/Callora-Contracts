@@ -218,12 +218,19 @@ The following auth matrix covers every mutating entrypoint in the audited contra
 - `force_credit_developer` → admin (`caller.require_auth()` + admin check) at line ~453
 
 #### contracts/revenue_pool/src/lib.rs
-- `init` → admin (`admin.require_auth()`) at line 46
-- `set_admin` → current admin (`caller.require_auth()` + admin check) at line 114
-- `claim_admin` → pending admin (`caller.require_auth()` + pending check) at line 147
-- `receive_payment` → admin (`caller.require_auth()` + admin check) at line 187
-- `distribute` → admin (`caller.require_auth()` + admin check) at line 225
-- `batch_distribute` → admin (`caller.require_auth()` + admin check) at line 307
+- `init` → admin (`admin.require_auth()`)
+- `set_admin` → current admin (`caller.require_auth()` + admin check)
+- `accept_admin` / `claim_admin` → pending admin (`caller.require_auth()` + pending check)
+- `cancel_admin_transfer` → current admin (`caller.require_auth()` + admin check)
+- `set_pause_guardian` → current admin (`caller.require_auth()` + admin check)
+- `clear_pause_guardian` → current admin (`caller.require_auth()` + admin check)
+- `pause` → current admin or pause guardian (`caller.require_auth()` + admin/guardian check)
+- `unpause` → current admin (`caller.require_auth()` + admin check)
+- `receive_payment` → admin (`caller.require_auth()` + admin check)
+- `set_max_distribute` → admin (`caller.require_auth()` + admin check)
+- `distribute` → admin (`caller.require_auth()` + admin check)
+- `batch_distribute` → admin (`caller.require_auth()` + admin check)
+- `upgrade` → admin (`caller.require_auth()` + admin check)
 
 ### Findings
 - Fixed missing admin auth enforcement in `contracts/settlement/src/lib.rs::init`.

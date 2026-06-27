@@ -38,18 +38,13 @@
     {
       "name": "pause",
       "description": "Activate the circuit-breaker. Blocks distribute and batch_distribute until unpause is called. Admin rotation (set_admin / claim_admin) remains available while paused.",
-      "access": "admin",
+      "access": "admin or pause guardian",
       "params": [
-        {
-          "name": "caller",
-          "type": "Address",
-          "optional": false,
-          "description": "Must be the current admin; must authorize."
-        }
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin or configured pause guardian; must authorize." }
       ],
       "returns": "void",
       "panics": [
-        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"unauthorized: caller is not admin or pause guardian\" — caller is neither current admin nor configured pause guardian.",
         "\"revenue pool already paused\" — pool is already paused."
       ],
       "events": [
@@ -85,6 +80,50 @@
       "access": "any",
       "params": [],
       "returns": "bool",
+      "panics": [],
+      "events": []
+    },
+
+    {
+      "name": "set_pause_guardian",
+      "description": "Set or replace the emergency pause guardian. The guardian can pause the pool but cannot unpause, distribute, rotate admin, change caps, or upgrade.",
+      "access": "admin",
+      "params": [
+        { "name": "caller",   "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "guardian", "type": "Address", "optional": false, "description": "Address that may call pause." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin."
+      ],
+      "events": [
+        { "topics": ["\"pause_guardian_set\"", "caller"], "data": "guardian (Address)" }
+      ]
+    },
+
+    {
+      "name": "clear_pause_guardian",
+      "description": "Remove the configured emergency pause guardian. After clearing, only the admin can pause.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"no pause guardian set\" — no guardian is configured."
+      ],
+      "events": [
+        { "topics": ["\"pause_guardian_cleared\"", "caller"], "data": "previous guardian (Address)" }
+      ]
+    },
+
+    {
+      "name": "get_pause_guardian",
+      "description": "Return the configured emergency pause guardian, or None if no guardian is set.",
+      "access": "any",
+      "params": [],
+      "returns": "Option<Address>",
       "panics": [],
       "events": []
     },
