@@ -114,4 +114,8 @@ pub enum VaultError {
     NewRevenuePoolSameAsCurrent = 33,
     /// No revenue pool transfer is pending (code 34).
     NoRevenuePoolTransferPending = 34,
+    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
+    Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
 }

@@ -113,6 +113,8 @@ pub enum VaultError {
     NoRevenuePoolTransferPending = 34,
     /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
     Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
 }
 
 #[contracttype]
@@ -120,6 +122,7 @@ pub enum VaultError {
 pub struct DeductItem {
     pub amount: i128,
     pub request_id: Option<Symbol>,
+    pub developer: Address,
 }
 
 #[contracttype]
@@ -184,6 +187,10 @@ pub enum StorageKey {
     /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
     /// rotation.  Defaults to `0` before the first rotation.
     AuthorizedCallerNonce,
+    /// Configuration for a developer's rate limit.
+    DeveloperConfig(Address),
+    /// Current rate limit state for a developer.
+    DeveloperState(Address),
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -784,6 +791,7 @@ impl CalloraVault {
         amount: i128,
         request_id: Option<Symbol>,
         max_fee_bps: u16,
+        developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
@@ -799,6 +807,10 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
+        
+        // Rate limit check
+        crate::rate_limit::consume_tokens(&env, &developer, amount)?;
+
         let meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
@@ -835,8 +847,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &amount,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
-            &ut,   // token
+            &Some(developer.clone()), // developer is passed down
         );
 
         // Now that external operations succeeded, update internal state
@@ -921,6 +932,10 @@ impl CalloraVault {
                 }
                 seen_in_batch.push_back(rid.clone());
             }
+            
+            // Rate limit check
+            crate::rate_limit::consume_tokens(&env, &item.developer, item.amount)?;
+            
             running = running
                 .checked_sub(item.amount)
                 .ok_or(VaultError::Overflow)?;
@@ -943,8 +958,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &total,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
-            &ut,   // token
+            &None, // developers are tracked per-item, not passed for whole batch
         );
 
         // Now that external operations succeeded, update internal state
@@ -1691,10 +1705,28 @@ impl CalloraVault {
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
     }
+
+    pub fn set_developer_rate_limit(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        capacity: i128,
+        refill_rate: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let config = crate::rate_limit::RateLimitConfig {
+            capacity,
+            refill_rate,
+        };
+        crate::rate_limit::set_config(&env, &developer, &config);
+        Ok(())
+    }
 }
 
 mod events;
-mod validators;
+pub mod rate_limit;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1726,3 +1758,6 @@ mod test_reentrancy;
 
 #[cfg(test)]
 mod test_balance_property;
+
+#[cfg(test)]
+mod test_rate_limit;
