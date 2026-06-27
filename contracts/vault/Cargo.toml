@@ -14,3 +14,10 @@ soroban-sdk = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
+
+# Declare `kani` as a known cfg so `rustc --check-cfg` does not warn.
+# The `cfg(kani)` flag is injected automatically by `cargo kani`; it is never
+# set during normal `cargo build` or `cargo test` runs.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
