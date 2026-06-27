@@ -1492,8 +1492,24 @@ impl CalloraVault {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
 
+        // Read the previous version before the swap so we can include it in the
+        // upgrade_started payload. None on the first upgrade, Some on subsequent ones.
+        let previous_version: Option<BytesN<32>> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::ContractVersion);
+
+        // Emit upgrade_started BEFORE the WASM swap so indexers can detect
+        // upgrades that were initiated but failed (no matching upgrade_completed).
+        env.events().publish(
+            (events::event_upgrade_started(&env), admin.clone()),
+            upgrade::UpgradeStartedData {
+                new_wasm_hash: new_wasm_hash.clone(),
+                previous_version,
+            },
+        );
+
         // Perform the on-chain upgrade via the deployer interface.
-        // This is a host operation and may only succeed in the live environment.
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
 
@@ -1502,7 +1518,16 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::ContractVersion, &new_wasm_hash);
 
-        // Emit an event for indexers / audit logs.
+        // Emit upgrade_completed to confirm the WASM swap succeeded.
+        env.events().publish(
+            (events::event_upgrade_completed(&env), admin.clone()),
+            upgrade::UpgradeCompletedData {
+                new_wasm_hash: new_wasm_hash.clone(),
+            },
+        );
+
+        // Retain the original `upgraded` event for backward compatibility with
+        // indexers that already parse it.
         env.events()
             .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
@@ -1688,6 +1713,7 @@ impl CalloraVault {
 }
 
 mod events;
+mod upgrade;
 
 // ---------------------------------------------------------------------------
 // Test modules

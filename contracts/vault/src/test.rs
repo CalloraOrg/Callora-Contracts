@@ -5896,6 +5896,247 @@ fn upgrade_multiple_times_updates_version() {
 }
 
 // ---------------------------------------------------------------------------
+// Upgrade lifecycle event tests (Issue #528)
+// ---------------------------------------------------------------------------
+
+/// Verifies that a single upgrade call emits all three expected events:
+/// upgrade_started, upgrade_completed, and upgraded (backward-compat).
+#[test]
+fn upgrade_emits_all_three_lifecycle_events() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[20u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let vault_events: Vec<_> = all.iter()
+        .filter(|ev| ev.0 == vault_address)
+        .collect();
+
+    let find_event = |name: &str| -> bool {
+        vault_events.iter().any(|ev| {
+            ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, name))
+                .unwrap_or(false)
+        })
+    };
+
+    assert!(find_event("upgrade_started"), "upgrade_started event not emitted");
+    assert!(find_event("upgrade_completed"), "upgrade_completed event not emitted");
+    assert!(find_event("upgraded"), "upgraded event not emitted (backward-compat)");
+}
+
+/// Verifies that upgrade_started is emitted before upgrade_completed.
+///
+/// This ordering guarantee lets indexers detect incomplete upgrades: if
+/// upgrade_started appears without upgrade_completed in the same transaction,
+/// the WASM swap failed.
+#[test]
+fn upgrade_started_precedes_upgrade_completed() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[21u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let vault_events: Vec<_> = all.iter()
+        .filter(|ev| ev.0 == vault_address)
+        .collect();
+
+    let started_idx = vault_events.iter().position(|ev| {
+        ev.1.get(0)
+            .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_started"))
+            .unwrap_or(false)
+    });
+    let completed_idx = vault_events.iter().position(|ev| {
+        ev.1.get(0)
+            .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_completed"))
+            .unwrap_or(false)
+    });
+    let upgraded_idx = vault_events.iter().position(|ev| {
+        ev.1.get(0)
+            .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgraded"))
+            .unwrap_or(false)
+    });
+
+    assert!(started_idx.is_some(), "upgrade_started not found");
+    assert!(completed_idx.is_some(), "upgrade_completed not found");
+    assert!(upgraded_idx.is_some(), "upgraded not found");
+    assert!(
+        started_idx.unwrap() < completed_idx.unwrap(),
+        "upgrade_started must precede upgrade_completed"
+    );
+    assert!(
+        completed_idx.unwrap() < upgraded_idx.unwrap(),
+        "upgrade_completed must precede upgraded"
+    );
+}
+
+/// Verifies that upgrade_started carries the caller's address as topic 1.
+#[test]
+fn upgrade_started_topic_includes_caller() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[22u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let started = all.iter().find(|ev| {
+        ev.0 == vault_address
+            && ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_started"))
+                .unwrap_or(false)
+    });
+
+    let started = started.expect("upgrade_started not emitted");
+    let caller_topic: Address = started.1.get(1).unwrap().into_val(&env);
+    assert_eq!(caller_topic, owner, "upgrade_started topic 1 should be the caller");
+}
+
+/// Verifies that upgrade_completed carries the caller's address as topic 1.
+#[test]
+fn upgrade_completed_topic_includes_caller() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[23u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let completed = all.iter().find(|ev| {
+        ev.0 == vault_address
+            && ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_completed"))
+                .unwrap_or(false)
+    });
+
+    let completed = completed.expect("upgrade_completed not emitted");
+    let caller_topic: Address = completed.1.get(1).unwrap().into_val(&env);
+    assert_eq!(caller_topic, owner, "upgrade_completed topic 1 should be the caller");
+}
+
+/// Verifies that upgrade_started carries UpgradeStartedData with the new hash
+/// and None previous_version on the first upgrade.
+#[test]
+fn upgrade_started_data_first_upgrade_has_no_previous_version() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[24u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let started = all.iter().find(|ev| {
+        ev.0 == vault_address
+            && ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_started"))
+                .unwrap_or(false)
+    });
+
+    let started = started.expect("upgrade_started not emitted");
+    let data: super::upgrade::UpgradeStartedData = started.2.into_val(&env);
+    assert_eq!(data.new_wasm_hash, new_hash, "UpgradeStartedData.new_wasm_hash mismatch");
+    assert_eq!(data.previous_version, None, "first upgrade should have no previous version");
+}
+
+/// Verifies that a second upgrade's upgrade_started carries the first hash as previous_version.
+#[test]
+fn upgrade_started_data_second_upgrade_has_previous_version() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let hash1 = BytesN::from_array(&env, &[25u8; 32]);
+    client.upgrade(&owner, &hash1);
+
+    let hash2 = BytesN::from_array(&env, &[26u8; 32]);
+    client.upgrade(&owner, &hash2);
+
+    let all = env.events().all();
+    // Collect all upgrade_started events in order; the second one corresponds to hash2.
+    let started_events: Vec<_> = all.iter().filter(|ev| {
+        ev.0 == vault_address
+            && ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_started"))
+                .unwrap_or(false)
+    }).collect();
+
+    assert_eq!(started_events.len(), 2, "expected 2 upgrade_started events");
+
+    // Second upgrade_started should have hash1 as previous_version.
+    let second_data: super::upgrade::UpgradeStartedData = started_events[1].2.into_val(&env);
+    assert_eq!(second_data.new_wasm_hash, hash2);
+    assert_eq!(second_data.previous_version, Some(hash1),
+        "second upgrade should record first hash as previous_version");
+}
+
+/// Verifies that upgrade_completed carries UpgradeCompletedData with the correct hash.
+#[test]
+fn upgrade_completed_data_contains_new_hash() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let new_hash = BytesN::from_array(&env, &[27u8; 32]);
+    client.upgrade(&owner, &new_hash);
+
+    let all = env.events().all();
+    let completed = all.iter().find(|ev| {
+        ev.0 == vault_address
+            && ev.1.get(0)
+                .map(|v| v.into_val::<Symbol>(&env) == Symbol::new(&env, "upgrade_completed"))
+                .unwrap_or(false)
+    });
+
+    let completed = completed.expect("upgrade_completed not emitted");
+    let data: super::upgrade::UpgradeCompletedData = completed.2.into_val(&env);
+    assert_eq!(data.new_wasm_hash, new_hash, "UpgradeCompletedData.new_wasm_hash mismatch");
+}
+
+// ---------------------------------------------------------------------------
 // BUDGET MEASUREMENT TESTS — for benchmarking and cost analysis
 // ---------------------------------------------------------------------------
 

@@ -474,6 +474,108 @@ Emitted when the nominee accepts the admin role.
 
 ---
 
+### `upgraded`
+
+Emitted by `upgrade()` after the WASM swap succeeds. Retained for backward
+compatibility with indexers already parsing this event.
+
+| Index   | Location | Type       | Description                                        |
+|---------|----------|------------|----------------------------------------------------|
+| topic 0 | topics   | Symbol     | `"upgraded"`                                       |
+| topic 1 | topics   | Address    | `caller` -- admin who executed the upgrade         |
+| data    | data     | BytesN<32> | `new_wasm_hash` -- hash of the deployed WASM blob  |
+
+```json
+{
+  "topics": ["upgraded", "GADMIN..."],
+  "data": "a1b2c3d4e5f6..."
+}
+```
+
+> **Deprecation note:** New indexers should prefer `upgrade_started` and
+> `upgrade_completed` which carry structured payloads and support lifecycle
+> correlation. `upgraded` will remain in every upgrade transaction for
+> backward compatibility.
+
+---
+
+### `upgrade_started`
+
+Emitted **before** `env.deployer().update_current_contract_wasm()` executes.
+Carries the intended WASM hash and the previous version so indexers can
+reconstruct full version history and detect failed upgrades (an `upgrade_started`
+without a subsequent `upgrade_completed` in the same transaction indicates a
+failure before the WASM swap completed).
+
+| Index             | Location | Type               | Description                                                      |
+|-------------------|----------|--------------------|------------------------------------------------------------------|
+| topic 0           | topics   | Symbol             | `"upgrade_started"`                                              |
+| topic 1           | topics   | Address            | `caller` -- admin who initiated the upgrade                      |
+| `new_wasm_hash`   | data     | BytesN<32>         | hash of the WASM intended to be installed                        |
+| `previous_version`| data     | Option<BytesN<32>> | hash from the last `upgrade()` call, or `None` on first upgrade  |
+
+```json
+{
+  "topics": ["upgrade_started", "GADMIN..."],
+  "data": {
+    "new_wasm_hash": "b2c3d4e5f6a1...",
+    "previous_version": "a1b2c3d4e5f6..."
+  }
+}
+```
+
+**First upgrade (no prior version):**
+
+```json
+{
+  "topics": ["upgrade_started", "GADMIN..."],
+  "data": {
+    "new_wasm_hash": "a1b2c3d4e5f6...",
+    "previous_version": null
+  }
+}
+```
+
+**Indexer guidance.**
+- `upgrade_started` and `upgrade_completed` share the same `new_wasm_hash`
+  value. Correlate them by matching that value within the same transaction.
+- Track `previous_version` across consecutive upgrades to build a complete
+  on-chain version timeline.
+
+---
+
+### `upgrade_completed`
+
+Emitted immediately **after** `env.deployer().update_current_contract_wasm()`
+returns successfully, confirming the WASM swap took effect.
+
+| Index           | Location | Type       | Description                               |
+|-----------------|----------|------------|-------------------------------------------|
+| topic 0         | topics   | Symbol     | `"upgrade_completed"`                     |
+| topic 1         | topics   | Address    | `caller` -- admin who executed the upgrade|
+| `new_wasm_hash` | data     | BytesN<32> | hash of the WASM that was installed       |
+
+```json
+{
+  "topics": ["upgrade_completed", "GADMIN..."],
+  "data": {
+    "new_wasm_hash": "b2c3d4e5f6a1..."
+  }
+}
+```
+
+**Indexer guidance.**
+- `upgrade_completed` is always preceded by `upgrade_started` and `upgraded`
+  in the same transaction when upgrade succeeds.
+- The emitted order within a successful `upgrade()` call is:
+  1. `upgrade_started` (pre-swap)
+  2. `upgrade_completed` (post-swap)
+  3. `upgraded` (backward-compat)
+- Absence of `upgrade_completed` after `upgrade_started` means the WASM swap
+  was rejected by the host (bad hash, auth failure, or host error).
+
+---
+
 ## Contract: `callora-revenue-pool` (v0.0.1)
 
 The revenue pool receives USDC forwarded by the vault on every `deduct` / `batch_deduct`
@@ -920,6 +1022,9 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
+| `upgraded`               | vault           | `upgrade()` -- backward-compat           |
+| `upgrade_started`        | vault           | `upgrade()` -- emitted before WASM swap  |
+| `upgrade_completed`      | vault           | `upgrade()` -- emitted after WASM swap   |
 | `init`                   | revenue-pool    | `init()`                                 |
 | `admin_changed`          | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
@@ -946,3 +1051,4 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
+| 0.2.0   | vault         | `upgraded` (documented), `upgrade_started`, `upgrade_completed` -- lifecycle events (Issue #528) |

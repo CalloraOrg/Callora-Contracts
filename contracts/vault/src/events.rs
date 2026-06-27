@@ -220,6 +220,24 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for the `"upgrade_started"` event topic.
+///
+/// Emitted before `env.deployer().update_current_contract_wasm()` executes,
+/// recording the intended WASM hash and the previous version. Indexers can
+/// use the absence of `upgrade_completed` in the same transaction to detect
+/// failed upgrades.
+pub fn event_upgrade_started(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_started")
+}
+
+/// Returns the Symbol for the `"upgrade_completed"` event topic.
+///
+/// Emitted after `env.deployer().update_current_contract_wasm()` returns
+/// successfully, confirming the WASM swap took effect.
+pub fn event_upgrade_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_completed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +453,21 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_broadcast(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
+    }
+
+    /// Snapshot: proves event_upgrade_started maps to exactly the bytes for "upgrade_started".
+    #[test]
+    fn test_event_upgrade_started_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_started(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_started"));
+    }
+
+    /// Snapshot: proves event_upgrade_completed maps to exactly the bytes for "upgrade_completed".
+    #[test]
+    fn test_event_upgrade_completed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_completed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_completed"));
     }
 }
