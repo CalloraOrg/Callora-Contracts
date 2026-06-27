@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contractimpl, contracterror, contracttype, token, Address, BytesN,
+    Env, String, Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
