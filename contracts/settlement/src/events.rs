@@ -83,6 +83,16 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for a proposed developer balance migration.
+pub fn event_admin_migration_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_migration_proposed")
+}
+
+/// Returns the Symbol for an executed developer balance migration.
+pub fn event_admin_migration(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_migration")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +169,18 @@ mod tests {
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
         assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
+    }
+
+    #[test]
+    fn test_admin_migration_event_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_admin_migration_proposed(&env),
+            Symbol::new(&env, "admin_migration_proposed")
+        );
+        assert_eq!(
+            event_admin_migration(&env),
+            Symbol::new(&env, "admin_migration")
+        );
     }
 }

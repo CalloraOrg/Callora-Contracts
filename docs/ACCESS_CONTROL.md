@@ -94,6 +94,11 @@ Allows the current admin to cancel a pending admin transfer before the nominee a
 ### Overview
 The Callora Settlement contract tracks individual developer balances and global protocol revenue. It enforces strict access control for incoming payments and administrative updates.
 
+Developer address compliance recoveries use `propose_balance_migration` and
+`execute_balance_migration`. Both calls require authorization by the current
+admin address, including its native Stellar multisig thresholds, and execution
+is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MIGRATION.md).
+
 ### Roles
 - **Admin**: Primary authority over contract configuration and sensitive data.
 - **Vault**: The registered vault contract authorized to send payments.
@@ -129,20 +134,28 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 ### Roles
 - **Admin**: Handles revenue distributions and nominates administrative successions.
 - **Pending Admin**: A nominated account that has to explicitly accept the role to become the Admin.
+- **Pause Guardian**: Optional emergency role that may pause the revenue pool without receiving any distribution, unpause, upgrade, or admin-management authority.
 
 ### Authorization Matrix
 
-| Function | Admin | Pending Admin | Others |
-|----------|-------|---------------|--------|
-| `distribute` | ✅ | ❌ | ❌ |
-| `batch_distribute` | ✅ | ❌ | ❌ |
-| `set_admin` | ✅ | ❌ | ❌ |
-| `accept_admin` | ❌ | ✅ | ❌ |
-| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ |
-| `cancel_admin_transfer` | ✅ | ❌ | ❌ |
+| Function | Admin | Pending Admin | Pause Guardian | Others |
+|----------|-------|---------------|----------------|--------|
+| `distribute` | ✅ | ❌ | ❌ | ❌ |
+| `batch_distribute` | ✅ | ❌ | ❌ | ❌ |
+| `pause` | ✅ | ❌ | ✅ | ❌ |
+| `unpause` | ✅ | ❌ | ❌ | ❌ |
+| `set_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `clear_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `set_admin` | ✅ | ❌ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ | ❌ |
+| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
 
 ### Cancellation Safety
 The current admin can call `cancel_admin_transfer` to abort a pending admin nomination.
+
+### Pause Guardian Safety
+The current admin can call `set_pause_guardian` to delegate emergency pause authority to a narrow role, and `clear_pause_guardian` to remove that role. The pause guardian can only call `pause`; it cannot unpause, distribute funds, rotate admin, change caps, clear or replace itself, or upgrade the contract.
 
 ---
 

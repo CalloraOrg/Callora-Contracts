@@ -43,11 +43,12 @@ fn test_get_global_pool_uninitialized() {
 fn test_get_developer_balance_uninitialized() {
     let env = Env::default();
     let dev = Address::generate(&env);
+    let token = Address::generate(&env);
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
     assert!(is_not_initialized(
-        client.try_get_developer_balance(&dev)
+        client.try_get_developer_balance(&dev, &token)
     ));
 }
 
@@ -58,9 +59,10 @@ fn test_get_all_developer_balances_uninitialized() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     let dummy = Address::generate(&env);
+    let token = Address::generate(&env);
 
     assert!(is_not_initialized(
-        client.try_get_all_developer_balances(&dummy)
+        client.try_get_all_developer_balances(&dummy, &token)
     ));
 }
 
@@ -72,13 +74,14 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
     let dev = Address::generate(&env);
+    let token = Address::generate(&env);
 
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
 
     client.init(&admin, &vault);
 
-    let balance = client.get_developer_balance(&dev);
+    let balance = client.get_developer_balance(&dev, &token);
     assert_eq!(balance, 0);
 }
 
@@ -91,8 +94,9 @@ fn test_get_developer_balances_cursor_uninitialized() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     let dummy = Address::generate(&env);
+    let token = Address::generate(&env);
 
-    let result = client.try_get_developer_balances_cursor(&dummy, &None, &10u32);
+    let result = client.try_get_developer_balances_cursor(&dummy, &None, &10u32, &token);
     assert!(
         is_not_initialized(result),
         "expected NotInitialized before init"

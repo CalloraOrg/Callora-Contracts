@@ -314,7 +314,7 @@ fn run_property_trace(seed: u64) {
                 } else if balance_before >= amount {
                     client.deduct(&owner, &amount, &rid, &u16::MAX);
                     if let Some(ref id) = rid {
-                        used_request_ids.push(id.clone());
+                        used_request_ids.push(id.clone(), &Address::generate(&env));
                     }
                     trace.push(
                         step,
@@ -464,7 +464,7 @@ fn run_property_trace(seed: u64) {
                     if !paused && balance_before >= amount {
                         let rid = make_request_id(&env, rid_counter);
                         rid_counter += 1;
-                        client.deduct(&owner, &amount, &Some(rid.clone()), &u16::MAX);
+                        client.deduct(&owner, &amount, &Some(rid.clone(), &Address::generate(&env)), &u16::MAX);
                         let retry = client.try_deduct(&owner, &amount, &Some(rid.clone()), &u16::MAX);
                         trace.push(
                             step,
@@ -554,7 +554,7 @@ fn test_balance_property_pause_mid_sequence() {
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 3);
 
     client.unpause(&owner);
-    client.deduct(&owner, &25, &None, &u16::MAX);
+    client.deduct(&owner, &25, &None, &u16::MAX, &Address::generate(&env));
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 4);
 }
 
@@ -620,7 +620,7 @@ fn test_balance_property_request_id_reuse() {
     client.set_settlement(&owner, &settlement);
 
     let rid = Symbol::new(&env, "reuse_test_id");
-    client.deduct(&owner, &100, &Some(rid.clone()), &u16::MAX);
+    client.deduct(&owner, &100, &Some(rid.clone(), &Address::generate(&env)), &u16::MAX);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 1);
 
     let retry = client.try_deduct(&owner, &50, &Some(rid.clone()), &u16::MAX);

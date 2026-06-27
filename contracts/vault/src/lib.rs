@@ -113,6 +113,8 @@ pub enum VaultError {
     NoRevenuePoolTransferPending = 34,
     /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
     Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
 }
 
 #[contracttype]
@@ -120,6 +122,7 @@ pub enum VaultError {
 pub struct DeductItem {
     pub amount: i128,
     pub request_id: Option<Symbol>,
+    pub developer: Address,
 }
 
 #[contracttype]
@@ -197,6 +200,10 @@ pub enum StorageKey {
     /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
     /// rotation.  Defaults to `0` before the first rotation.
     AuthorizedCallerNonce,
+    /// Configuration for a developer's rate limit.
+    DeveloperConfig(Address),
+    /// Current rate limit state for a developer.
+    DeveloperState(Address),
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -209,6 +216,7 @@ trait Settlement {
         amount: i128,
         to_pool: bool,
         developer: Option<Address>,
+        token: Address,
     );
 }
 
@@ -318,7 +326,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::MetaKey, &meta);
+        inst.set(&StorageKey::Meta, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -851,6 +859,7 @@ impl CalloraVault {
         amount: i128,
         request_id: Option<Symbol>,
         max_fee_bps: u16,
+        developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
@@ -866,6 +875,10 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
+        
+        // Rate limit check
+        crate::rate_limit::consume_tokens(&env, &developer, amount)?;
+
         let meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
@@ -902,7 +915,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &amount,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &Some(developer.clone()), // developer is passed down
         );
 
         // Now that external operations succeeded, update internal state
@@ -987,6 +1000,10 @@ impl CalloraVault {
                 }
                 seen_in_batch.push_back(rid.clone());
             }
+            
+            // Rate limit check
+            crate::rate_limit::consume_tokens(&env, &item.developer, item.amount)?;
+            
             running = running
                 .checked_sub(item.amount)
                 .ok_or(VaultError::Overflow)?;
@@ -1009,7 +1026,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &total,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &None, // developers are tracked per-item, not passed for whole batch
         );
 
         // Now that external operations succeeded, update internal state
@@ -1066,7 +1083,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (events::event_ownership_accepted(&env), old, meta.owner),
@@ -1285,6 +1302,13 @@ impl CalloraVault {
         Ok(())
     }
 
+    pub fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
+    }
+
     /// Store the settlement contract address (admin only).
     ///
     /// `deduct` and `batch_deduct` return error until this is called.
@@ -1308,26 +1332,16 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Validate that a vault input string is non-empty, contains no control
-    /// characters (0x00–0x1F, 0x7F), and has no leading/trailing whitespace.
-    #[inline(never)]
+    /// Validate that a vault input string is non-empty visible ASCII with no
+    /// leading or trailing whitespace.
+    ///
+    /// The visible-ASCII policy rejects Unicode confusables, zero-width
+    /// characters, bidi overrides, and controls. Accepted strings are already
+    /// NFC-normalized because ASCII has one canonical Unicode representation.
     fn validate_vault_input(s: &String) -> Result<(), ()> {
-        let len = s.len();
-        if len == 0 {
-            return Err(());
-        }
-        let mut buf = [0u8; 256];
-        s.copy_into_slice(&mut buf[..len as usize]);
-        let bytes = &buf[..len as usize];
-        for &b in bytes {
-            if b <= 0x1F || b == 0x7F {
-                return Err(());
-            }
-        }
-        if bytes[0] == 0x20 || bytes[len as usize - 1] == 0x20 {
-            return Err(());
-        }
-        Ok(())
+        validators::is_visible_ascii_metadata(s)
+            .then_some(())
+            .ok_or(())
     }
 
     pub fn set_metadata(
@@ -1338,17 +1352,17 @@ impl CalloraVault {
     ) -> Result<String, VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
-        if Self::validate_vault_input(&offering_id).is_err() {
-            return Err(VaultError::OfferingIdInvalid);
-        }
-        if Self::validate_vault_input(&metadata).is_err() {
-            return Err(VaultError::MetadataInvalid);
-        }
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
+        }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
         }
         env.storage()
             .instance()
@@ -1473,6 +1487,12 @@ impl CalloraVault {
         }
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
+        }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
         }
         let old: String = env
             .storage()
@@ -1753,9 +1773,28 @@ impl CalloraVault {
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
     }
+
+    pub fn set_developer_rate_limit(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        capacity: i128,
+        refill_rate: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let config = crate::rate_limit::RateLimitConfig {
+            capacity,
+            refill_rate,
+        };
+        crate::rate_limit::set_config(&env, &developer, &config);
+        Ok(())
+    }
 }
 
 mod events;
+pub mod rate_limit;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1787,3 +1826,6 @@ mod test_reentrancy;
 
 #[cfg(test)]
 mod test_balance_property;
+
+#[cfg(test)]
+mod test_rate_limit;
