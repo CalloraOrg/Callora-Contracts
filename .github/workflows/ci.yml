@@ -90,3 +90,15 @@ jobs:
         run: |
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh
+
+  event-shape:
+    name: Event shape vs schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check revenue_pool event shape matches EVENT_SCHEMA.md
+        shell: bash
+        run: |
+          chmod +x scripts/check-event-shape.sh
+          ./scripts/check-event-shape.sh
