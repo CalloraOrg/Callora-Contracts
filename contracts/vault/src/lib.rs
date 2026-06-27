@@ -358,7 +358,13 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::PendingOwner)
     }
 
-    /// Return the pending admin address, or `None` if no admin transfer is in progress.
+    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
+    ///
+    /// Integrators can poll this to detect an in-flight admin handover
+    /// before `accept_admin` is called.
+    ///
+    /// # Returns
+    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
@@ -1460,7 +1466,7 @@ impl CalloraVault {
                     .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
             }
         }
-        
+
         Ok(())
     }
 

@@ -958,9 +958,9 @@ pub fn withdraw_developer_balance(
         (result, next_cursor)
     }
 
-    /// Return the pending admin address, or `None` if no transfer is in progress.
+    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
     ///
-    /// Integrators can poll this to detect an in-flight two-step admin handover
+    /// Integrators can poll this to detect an in-flight admin handover
     /// before `accept_admin` is called.
     ///
     /// # Returns

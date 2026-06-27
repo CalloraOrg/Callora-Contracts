@@ -13,8 +13,18 @@
       "description": "Initialize the revenue pool with an admin and the USDC token address. Can only be called once. The admin must authorize the call.",
       "access": "admin (must sign)",
       "params": [
-        { "name": "admin",      "type": "Address", "optional": false, "description": "Address that may call distribute, batch_distribute, receive_payment, and set_admin." },
-        { "name": "usdc_token", "type": "Address", "optional": false, "description": "Stellar USDC (or wrapped USDC) token contract address." }
+        {
+          "name": "admin",
+          "type": "Address",
+          "optional": false,
+          "description": "Address that may call distribute, batch_distribute, receive_payment, and set_admin."
+        },
+        {
+          "name": "usdc_token",
+          "type": "Address",
+          "optional": false,
+          "description": "Stellar USDC (or wrapped USDC) token contract address."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -30,7 +40,12 @@
       "description": "Activate the circuit-breaker. Blocks distribute and batch_distribute until unpause is called. Admin rotation (set_admin / claim_admin) remains available while paused.",
       "access": "admin",
       "params": [
-        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -47,7 +62,12 @@
       "description": "Deactivate the circuit-breaker, restoring distribute and batch_distribute.",
       "access": "admin",
       "params": [
-        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -74,9 +94,24 @@
       "description": "Transfer USDC from this contract to a developer wallet. Admin only. Blocked while paused.",
       "access": "admin",
       "params": [
-        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
-        { "name": "to",     "type": "Address", "optional": false, "description": "Developer address to receive USDC." },
-        { "name": "amount", "type": "i128",    "optional": false, "description": "Amount in USDC base units; must be > 0." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        },
+        {
+          "name": "to",
+          "type": "Address",
+          "optional": false,
+          "description": "Developer address to receive USDC."
+        },
+        {
+          "name": "amount",
+          "type": "i128",
+          "optional": false,
+          "description": "Amount in USDC base units; must be > 0."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -96,8 +131,18 @@
       "description": "Atomically distribute USDC to multiple developer wallets. Validates the total against the available balance before any transfer. One event is emitted per payment. Admin only. Blocked while paused.",
       "access": "admin",
       "params": [
-        { "name": "caller",   "type": "Address",              "optional": false, "description": "Must be the current admin; must authorize." },
-        { "name": "payments", "type": "Vec<(Address, i128)>", "optional": false, "description": "Ordered list of (developer_address, amount) pairs. All amounts must be > 0." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        },
+        {
+          "name": "payments",
+          "type": "Vec<(Address, i128)>",
+          "optional": false,
+          "description": "Ordered list of (developer_address, amount) pairs. All amounts must be > 0."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -109,7 +154,11 @@
         "\"insufficient USDC balance\" — total amount exceeds contract balance."
       ],
       "events": [
-        { "note": "One event per payment entry.", "topics": ["\"batch_distribute\"", "to"], "data": "amount (i128)" }
+        {
+          "note": "One event per payment entry.",
+          "topics": ["\"batch_distribute\"", "to"],
+          "data": "amount (i128)"
+        }
       ]
     },
 
@@ -118,16 +167,34 @@
       "description": "Event-only helper — does NOT move tokens. Emits a receive_payment event for indexer alignment when the backend wants to log a payment credited from the vault. USDC is received passively when any address transfers tokens to this contract; no explicit call is required for token receipt.",
       "access": "admin",
       "params": [
-        { "name": "caller",     "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
-        { "name": "amount",     "type": "i128",    "optional": false, "description": "Amount received (for event logging only; no tokens are moved)." },
-        { "name": "from_vault", "type": "bool",    "optional": false, "description": "True if the source was the vault contract." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        },
+        {
+          "name": "amount",
+          "type": "i128",
+          "optional": false,
+          "description": "Amount received (for event logging only; no tokens are moved)."
+        },
+        {
+          "name": "from_vault",
+          "type": "bool",
+          "optional": false,
+          "description": "True if the source was the vault contract."
+        }
       ],
       "returns": "void",
       "panics": [
         "\"unauthorized: caller is not admin\" — caller != current admin."
       ],
       "events": [
-        { "topics": ["\"receive_payment\"", "caller"], "data": "(amount, from_vault) tuple" }
+        {
+          "topics": ["\"receive_payment\"", "caller"],
+          "data": "(amount, from_vault) tuple"
+        }
       ]
     },
 
@@ -137,9 +204,7 @@
       "access": "any",
       "params": [],
       "returns": "i128",
-      "panics": [
-        "\"revenue pool not initialized\" — called before init."
-      ],
+      "panics": ["\"revenue pool not initialized\" — called before init."],
       "events": []
     },
 
@@ -149,9 +214,17 @@
       "access": "any",
       "params": [],
       "returns": "Address",
-      "panics": [
-        "\"revenue pool not initialized\" — called before init."
-      ],
+      "panics": ["\"revenue pool not initialized\" — called before init."],
+      "events": []
+    },
+
+    {
+      "name": "get_pending_admin",
+      "description": "Return the pending admin address, or null if no two-step transfer is in progress. Integrators can poll this to detect an in-flight admin handover before accept_admin or claim_admin is called.",
+      "access": "any",
+      "params": [],
+      "returns": "Address | null",
+      "panics": [],
       "events": []
     },
 
@@ -160,15 +233,28 @@
       "description": "Initiate replacement of the current admin. The proposed new admin must call claim_admin to complete the transfer.",
       "access": "admin",
       "params": [
-        { "name": "caller",    "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
-        { "name": "new_admin", "type": "Address", "optional": false, "description": "Address of the proposed new admin." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        },
+        {
+          "name": "new_admin",
+          "type": "Address",
+          "optional": false,
+          "description": "Address of the proposed new admin."
+        }
       ],
       "returns": "void",
       "panics": [
         "\"unauthorized: caller is not admin\" — caller != current admin."
       ],
       "events": [
-        { "topics": ["\"admin_transfer_started\"", "current_admin"], "data": "new_admin (Address)" }
+        {
+          "topics": ["\"admin_transfer_started\"", "current_admin"],
+          "data": "new_admin (Address)"
+        }
       ]
     },
 
@@ -177,7 +263,12 @@
       "description": "Complete the admin transfer. Must be called by the pending admin set via set_admin.",
       "access": "pending admin (must sign)",
       "params": [
-        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the pending admin; must authorize." }
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the pending admin; must authorize."
+        }
       ],
       "returns": "void",
       "panics": [
@@ -185,7 +276,10 @@
         "\"unauthorized: caller is not pending admin\" — caller is not the pending admin."
       ],
       "events": [
-        { "topics": ["\"admin_transfer_completed\"", "new_admin"], "data": "void" }
+        {
+          "topics": ["\"admin_transfer_completed\"", "new_admin"],
+          "data": "void"
+        }
       ]
     }
   ]

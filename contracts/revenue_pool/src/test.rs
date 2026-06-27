@@ -336,6 +336,19 @@ fn create_usdc<'a>(
     }
 
     #[test]
+    fn get_pending_admin_returns_none_before_nomination() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let (_, client) = create_pool(&env);
+        let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+        client.init(&admin, &usdc_address);
+
+        assert_eq!(client.get_pending_admin(), None);
+    }
+
+    #[test]
     fn set_admin_two_step_transfers_control_accept_admin() {
         let env = Env::default();
         env.mock_all_auths();
@@ -345,7 +358,6 @@ fn create_usdc<'a>(
         let (usdc_address, _, _) = create_usdc(&env, &admin);
 
         client.init(&admin, &usdc_address);
-        assert_eq!(client.get_pending_admin(), None);
 
         client.set_admin(&admin, &new_admin);
         assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
