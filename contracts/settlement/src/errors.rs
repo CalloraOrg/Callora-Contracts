@@ -58,4 +58,6 @@ pub enum SettlementError {
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
     MinimumBalanceRequired = 23,
+    InvalidClaimWindow = 24,
+    ClaimWindowClosed = 25,
 }

@@ -3,8 +3,9 @@
 use soroban_sdk::{Address, Env, Vec};
 
 use crate::{
-    events, timelock, AdminMigrationEvent, CalloraSettlement, SettlementError, StorageKey,
+    events, timelock, CalloraSettlement, SettlementError, StorageKey,
 };
+use crate::types::AdminMigrationEvent;
 
 fn require_admin(env: &Env, caller: &Address) {
     caller.require_auth();
