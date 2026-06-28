@@ -199,7 +199,8 @@ trait Settlement {
     );
 }
 
-pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
+pub mod limits;
+pub use limits::{check_max_deduct, DEFAULT_MAX_DEDUCT};
 pub const DEFAULT_MIN_DEPOSIT: i128 = 1;
 pub const MAX_BATCH_SIZE: u32 = 50;
 pub const MAX_METADATA_LEN: u32 = 256;
@@ -791,9 +792,7 @@ impl CalloraVault {
         }
         Self::require_authorized_deduct_caller(env.clone(), &caller)?;
         let max_d = Self::get_max_deduct(env.clone());
-        if amount > max_d {
-            return Err(VaultError::ExceedsMaxDeduct);
-        }
+        check_max_deduct(amount, max_d)?;
         // Idempotency check — must happen before any state mutation.
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
@@ -904,9 +903,7 @@ impl CalloraVault {
             if item.amount <= 0 {
                 return Err(VaultError::AmountNotPositive);
             }
-            if item.amount > max_d {
-                return Err(VaultError::ExceedsMaxDeduct);
-            }
+            check_max_deduct(item.amount, max_d)?;
             if running < item.amount {
                 return Err(VaultError::InsufficientBalance);
             }
@@ -1719,3 +1716,6 @@ mod test_reentrancy;
 
 #[cfg(test)]
 mod test_balance_property;
+
+#[cfg(test)]
+mod test_limits;

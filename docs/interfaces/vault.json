@@ -460,12 +460,37 @@
 
     {
       "name": "get_max_deduct",
-      "description": "Return the configured maximum single-deduction amount.",
+      "description": "Return the configured maximum single-deduction amount. Defaults to i128::MAX (effectively uncapped) when never set. Implemented via DEFAULT_MAX_DEDUCT in limits.rs.",
       "access": "any",
       "params": [],
       "returns": "i128",
       "panics": [],
       "events": []
+    },
+
+    {
+      "name": "set_max_deduct",
+      "description": "Update the per-transaction deduction cap. Only the vault owner may call this. Enforced by check_max_deduct (limits.rs) on every deduct and batch_deduct call.",
+      "access": "owner (must sign)",
+      "params": [
+        {
+          "name": "max_deduct",
+          "type": "i128",
+          "optional": false,
+          "description": "New cap in token base units (stroops). Must be > 0."
+        }
+      ],
+      "returns": "void",
+      "errors": [
+        { "code": 12, "name": "MaxDeductNotPositive", "condition": "max_deduct <= 0" }
+      ],
+      "events": [
+        {
+          "topic": "set_max_deduct",
+          "data": "(old_value: i128, new_value: i128)",
+          "description": "Emitted after the cap is updated."
+        }
+      ]
     },
 
     {
