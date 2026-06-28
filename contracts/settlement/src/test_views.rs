@@ -19,7 +19,10 @@ fn get_developer_balances_cursor_before_init_returns_not_initialized() {
     let env = Env::default();
     let contract = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &contract);
-    assert!(is_not_initialized(client.try_get_developer_balances_cursor(&0, &10)));
+    let admin = Address::generate(&env);
+    assert!(is_not_initialized(
+        client.try_get_developer_balances_cursor(&admin, &Address::zero(), &0, &10)
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -36,7 +39,10 @@ fn version_returns_semver_string() {
     env.mock_all_auths();
     client.init(&admin, &vault_addr);
     let v = client.version();
-    assert_eq!(v, soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        v,
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    );
 }
 
 // ---------------------------------------------------------------------------
