@@ -277,6 +277,74 @@ mod settlement_tests {
         assert_eq!(client.get_developer_balance(&stranger, &token), 0i128);
     }
 
+
+    #[test]
+    fn test_minimum_balance_blocks_claim_until_threshold_met() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.set_minimum_balance(&admin, &developer, &1_000i128);
+        assert_eq!(client.get_minimum_balance(&developer), 1_000i128);
+
+        env.as_contract(&addr, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::DeveloperBalance(developer.clone()), &999i128);
+        });
+        usdc_admin_client.mint(&addr, &999i128);
+
+        let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
+        assert!(is_error(result, SettlementError::MinimumBalanceRequired));
+        assert_eq!(client.get_minimum_balance(&developer), 1_000i128);
+    }
+
+    #[test]
+    fn test_minimum_balance_allows_claim_at_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.set_minimum_balance(&admin, &developer, &1_000i128);
+
+        env.as_contract(&addr, || {
+            env.storage()
+                .persistent()
+                .set(&StorageKey::DeveloperBalance(developer.clone()), &1_000i128);
+        });
+        usdc_admin_client.mint(&addr, &1_000i128);
+
+        let result = client.try_withdraw_developer_balance(&developer, &250i128, &None);
+        assert!(result.is_ok());
+        assert_eq!(token::Client::new(&env, &usdc_address).balance(&developer), 250i128);
+    }
+
+    #[test]
+    fn test_set_minimum_balance_rejects_unauthorized_caller() {
+        let (env, _, admin, _, attacker, _) = setup_contract();
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &Address::generate(&env));
+
+        let result = client.try_set_minimum_balance(&attacker, &developer, &100i128);
+        assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
     #[test]
     fn test_withdraw_developer_balance_succeeds_exact_balance() {
         let env = Env::default();

@@ -1,36 +1,60 @@
-//! Limits module for per-developer minimum balance.
+//! Per-developer minimum accrued-balance limits for settlement claims.
+//!
+//! A configured minimum is checked immediately before a developer withdrawal is
+//! settled. The requirement is intentionally per developer rather than global so
+//! operations can tune eligibility without affecting existing developers.
 
-use soroban_sdk::{Env, Address, Symbol, contracterror, contracttype};
-use crate::errors::SettlementError;
-use crate::types::StorageKey;
+use crate::{SettlementError, StorageKey};
+use soroban_sdk::{Address, Env};
 
-/// Set the minimum balance for a developer.
+const MIN_BALANCE_TTL_THRESHOLD: u32 = 50_000;
+const MIN_BALANCE_TTL_EXTEND_TO: u32 = 50_000;
+
+/// Set the minimum accrued balance required before a developer may claim.
 ///
-/// # Arguments
-/// * `env` - Execution environment.
-/// * `caller` - Must be admin.
-/// * `developer` - Target developer address.
-/// * `min_balance` - Minimum balance in token micro‑units (>= 0).
+/// The settlement admin is the only caller allowed to configure this value. A
+/// minimum of `0` is allowed and behaves the same as an unset minimum.
+/// Negative minimums are rejected because they would make the gate meaningless.
 pub fn set_developer_min_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
-    // Auth check – admin only.
     caller.require_auth();
-    let admin = crate::lib::CalloraSettlement::get_admin(env.clone());
+    let admin = crate::CalloraSettlement::get_admin(env.clone());
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
     if min_balance < 0 {
-        panic!("minimum balance must be non‑negative");
+        env.panic_with_error(SettlementError::AmountNotPositive);
     }
-    // Store the value.
-    env.storage().persistent().set(&StorageKey::DeveloperMinBalance(developer.clone()), &min_balance);
-    // Optional TTL similar to other persistent entries.
-    env.storage().persistent().extend_ttl(&StorageKey::DeveloperMinBalance(developer), 50000, 50000);
+
+    let key = StorageKey::DeveloperMinBalance(developer);
+    env.storage().persistent().set(&key, &min_balance);
+    env.storage().persistent().extend_ttl(
+        &key,
+        MIN_BALANCE_TTL_THRESHOLD,
+        MIN_BALANCE_TTL_EXTEND_TO,
+    );
 }
 
-/// Retrieve the minimum balance for a developer. Returns `0` if not set.
+/// Retrieve a developer's configured claim minimum, or `0` if unset.
 pub fn get_developer_min_balance(env: Env, developer: Address) -> i128 {
     env.storage()
         .persistent()
         .get(&StorageKey::DeveloperMinBalance(developer))
         .unwrap_or(0)
+}
+
+/// Ensure the developer has accrued enough balance to be eligible to claim.
+///
+/// This checks the balance before settlement. The minimum is an eligibility
+/// threshold; once met, the developer may withdraw any amount otherwise allowed
+/// by balance, daily cap, claim window, and contract-token checks.
+pub fn require_developer_min_balance(
+    env: &Env,
+    developer: &Address,
+    current_balance: i128,
+) -> Result<(), SettlementError> {
+    let min_balance = get_developer_min_balance(env.clone(), developer.clone());
+    if min_balance > 0 && current_balance < min_balance {
+        return Err(SettlementError::MinimumBalanceRequired);
+    }
+    Ok(())
 }

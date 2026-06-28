@@ -35,6 +35,7 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 /// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
 /// | 16   | InvalidClaimWindow           | Claim window end is before start                  |
 /// | 17   | ClaimWindowClosed            | Claim attempted outside developer's claim window  |
+/// | 23   | MinimumBalanceRequired       | Developer balance is below configured claim minimum |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -56,6 +57,7 @@ pub enum SettlementError {
     ReasonTooLong = 15,
     InvalidClaimWindow = 16,
     ClaimWindowClosed = 17,
+    MinimumBalanceRequired = 23,
 }
 
 /// Persistent storage keys for settlement contract
@@ -68,6 +70,7 @@ pub enum StorageKey {
     PendingVault,
     DeveloperIndex,
     DeveloperBalance(Address),
+    DeveloperMinBalance(Address),
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
@@ -593,6 +596,7 @@ impl CalloraSettlement {
             .persistent()
             .get(&StorageKey::DeveloperBalance(developer.clone()))
             .unwrap_or(0);
+        limits::require_developer_min_balance(&env, &developer, current_balance)?;
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
         }
@@ -817,12 +821,20 @@ impl CalloraSettlement {
         );
     }
 
-    /// Set the minimum balance for a developer (admin only).
+    /// Set the minimum accrued balance required before a developer may claim.
     ///
-    /// This entrypoint allows the admin to enforce a per‑developer minimum balance.
-    /// It delegates to the limits module for storage and auth checks.
+    /// Only the current admin may configure the per-developer minimum. A value
+    /// of `0` clears the effective requirement and preserves the historical
+    /// behavior for developers with no configured minimum.
     pub fn set_minimum_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
         limits::set_developer_min_balance(env, caller, developer, min_balance);
+    }
+
+    /// Return the minimum accrued balance required before `developer` may claim.
+    ///
+    /// Returns `0` when no per-developer minimum has been configured.
+    pub fn get_minimum_balance(env: Env, developer: Address) -> i128 {
+        limits::get_developer_min_balance(env, developer)
     }
 
     /// Get the daily withdrawal cap for a developer.
@@ -1706,6 +1718,7 @@ impl CalloraSettlement {
 }
 
 mod events;
+mod limits;
 pub mod migrate;
 
 #[cfg(test)]
