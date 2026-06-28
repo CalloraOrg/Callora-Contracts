@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
-    Env, String, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -111,6 +111,10 @@ pub enum VaultError {
     NewRevenuePoolSameAsCurrent = 33,
     /// No revenue pool transfer is pending (code 34).
     NoRevenuePoolTransferPending = 34,
+    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
+    Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
 }
 
 #[contracttype]
@@ -118,6 +122,7 @@ pub enum VaultError {
 pub struct DeductItem {
     pub amount: i128,
     pub request_id: Option<Symbol>,
+    pub developer: Address,
 }
 
 #[contracttype]
@@ -135,6 +140,36 @@ pub struct VaultMeta {
 pub struct WithdrawEventData {
     pub amount: i128,
     pub new_balance: i128,
+}
+
+/// Remaining storage TTL information for a storage category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Event payload for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
 }
 
 /// Canonical storage keys for the Vault contract.
@@ -174,6 +209,10 @@ pub enum StorageKey {
     ///
     /// Stored in instance storage; used by `list_lifetime_deposits` for pagination.
     LifetimeDepositorIndex,
+    /// Configuration for a developer's rate limit.
+    DeveloperConfig(Address),
+    /// Current rate limit state for a developer.
+    DeveloperState(Address),
 }
 
 
@@ -188,6 +227,7 @@ trait Settlement {
         amount: i128,
         to_pool: bool,
         developer: Option<Address>,
+        token: Address,
     );
 }
 
@@ -195,6 +235,7 @@ pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
 pub const DEFAULT_MIN_DEPOSIT: i128 = 1;
 pub const MAX_BATCH_SIZE: u32 = 50;
 pub const MAX_METADATA_LEN: u32 = 256;
+pub const MAX_MESSAGE_LEN: u32 = 256;
 pub const MAX_OFFERING_ID_LEN: u32 = 64;
 pub const MAX_LIST_PRICES_LIMIT: u32 = 100;
 
@@ -304,7 +345,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::MetaKey, &meta);
+        inst.set(&StorageKey::Meta, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -377,7 +418,13 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::PendingOwner)
     }
 
-    /// Return the pending admin address, or `None` if no admin transfer is in progress.
+    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
+    ///
+    /// Integrators can poll this to detect an in-flight admin handover
+    /// before `accept_admin` is called.
+    ///
+    /// # Returns
+    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
@@ -503,6 +550,7 @@ impl CalloraVault {
             .get(&StorageKey::Metadata(offering_id))
     }
 
+    #[inline(never)]
     fn get_offering_index(env: &Env) -> Vec<String> {
         env.storage()
             .instance()
@@ -510,6 +558,7 @@ impl CalloraVault {
             .unwrap_or(Vec::new(env))
     }
 
+    #[inline(never)]
     fn add_offering_index(env: &Env, offering_id: &String) {
         let mut list: Vec<String> = Self::get_offering_index(env);
         if !list.contains(offering_id) {
@@ -518,6 +567,7 @@ impl CalloraVault {
         }
     }
 
+    #[inline(never)]
     fn remove_offering_index(env: &Env, offering_id: &String) {
         let list: Vec<String> = Self::get_offering_index(env);
         if list.len() == 0 {
@@ -542,6 +592,61 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
+    }
+
+    /// Return the remaining TTL for each storage key category.
+    ///
+    /// # Parameters
+    /// - `request_ids` — a list of processed request IDs to check.
+    pub fn get_storage_ttl(env: Env, request_ids: Vec<Symbol>) -> Vec<StorageEntryTtl> {
+        let mut result = Vec::new(&env);
+
+        // 1. Instance Storage
+        let instance_ttl = {
+            #[cfg(any(test, feature = "testutils"))]
+            {
+                env.storage().instance().get_ttl()
+            }
+            #[cfg(not(any(test, feature = "testutils")))]
+            {
+                INSTANCE_BUMP_AMOUNT
+            }
+        };
+        result.push_back(StorageEntryTtl {
+            category: String::from_str(&env, "Instance"),
+            key_desc: String::from_str(&env, "Instance"),
+            storage_type: String::from_str(&env, "Instance"),
+            ttl: instance_ttl,
+            threshold: INSTANCE_BUMP_THRESHOLD,
+            bump_amount: INSTANCE_BUMP_AMOUNT,
+        });
+
+        // 2. ProcessedRequest Storage (Persistent)
+        for rid in request_ids.iter() {
+            let key = StorageKey::ProcessedRequest(rid.clone());
+            if env.storage().persistent().has(&key) {
+                let ttl = {
+                    #[cfg(any(test, feature = "testutils"))]
+                    {
+                        env.storage().persistent().get_ttl(&key)
+                    }
+                    #[cfg(not(any(test, feature = "testutils")))]
+                    {
+                        REQUEST_ID_BUMP_AMOUNT
+                    }
+                };
+                result.push_back(StorageEntryTtl {
+                    category: String::from_str(&env, "ProcessedRequest"),
+                    key_desc: String::from_str(&env, "ProcessedRequest"),
+                    storage_type: String::from_str(&env, "Persistent"),
+                    ttl,
+                    threshold: REQUEST_ID_BUMP_THRESHOLD,
+                    bump_amount: REQUEST_ID_BUMP_AMOUNT,
+                });
+            }
+        }
+
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -574,6 +679,24 @@ impl CalloraVault {
         env.storage().instance().remove(&StorageKey::PendingAdmin);
         env.events()
             .publish((events::event_admin_accepted(&env), cur, pending), ());
+        Ok(())
+    }
+
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        let cur = Self::get_admin(env.clone())?;
+        if caller != cur {
+            return Err(VaultError::Unauthorized);
+        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(VaultError::NoAdminTransferPending)?;
+
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), cur, pending), ());
         Ok(())
     }
 
@@ -820,6 +943,18 @@ impl CalloraVault {
     /// - `caller` must be the owner or `authorized_caller`.
     /// - Vault balance must cover `amount`.
     ///
+    /// # Per-Call Slippage Guard (`max_fee_bps`)
+    /// `max_fee_bps` limits the deducted amount expressed as a fraction of the current
+    /// vault balance in basis points (1 bps = 0.01%).
+    ///
+    /// `calculated_fee_bps = (amount * 10_000) / balance`
+    ///
+    /// If `calculated_fee_bps > max_fee_bps` the call reverts with
+    /// `VaultError::Slippage` **before** any state is mutated.
+    ///
+    /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
+    /// unrestricted behaviour — this is the default for backward compatibility.
+    ///
     /// # Idempotency
     /// When `request_id` is `Some(id)`, the contract checks whether `id` has
     /// already been processed.  If so, `VaultError::DuplicateRequestId` is
@@ -837,6 +972,8 @@ impl CalloraVault {
         caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
+        max_fee_bps: u16,
+        developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
@@ -852,9 +989,25 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
+        
+        // Rate limit check
+        crate::rate_limit::consume_tokens(&env, &developer, amount)?;
+
         let meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
+        }
+        // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
+        // current balance. Calculated before any state mutation or external call.
+        // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
+        if max_fee_bps < u16::MAX && meta.balance > 0 {
+            let calculated_fee_bps = amount
+                .checked_mul(10_000)
+                .ok_or(VaultError::Overflow)?
+                / meta.balance;
+            if calculated_fee_bps > max_fee_bps as i128 {
+                return Err(VaultError::Slippage);
+            }
         }
         let settlement = Self::require_settlement(&env)?;
         let ut: Address = env
@@ -876,7 +1029,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &amount,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &Some(developer.clone()), // developer is passed down
         );
 
         // Now that external operations succeeded, update internal state
@@ -961,6 +1114,10 @@ impl CalloraVault {
                 }
                 seen_in_batch.push_back(rid.clone());
             }
+            
+            // Rate limit check
+            crate::rate_limit::consume_tokens(&env, &item.developer, item.amount)?;
+            
             running = running
                 .checked_sub(item.amount)
                 .ok_or(VaultError::Overflow)?;
@@ -983,7 +1140,7 @@ impl CalloraVault {
             &env.current_contract_address(),
             &total,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &None, // developers are tracked per-item, not passed for whole batch
         );
 
         // Now that external operations succeeded, update internal state
@@ -1040,7 +1197,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (events::event_ownership_accepted(&env), old, meta.owner),
@@ -1259,6 +1416,13 @@ impl CalloraVault {
         Ok(())
     }
 
+    pub fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
+    }
+
     /// Store the settlement contract address (admin only).
     ///
     /// `deduct` and `batch_deduct` return error until this is called.
@@ -1282,25 +1446,16 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Validate that a vault input string is non-empty, contains no control
-    /// characters (0x00–0x1F, 0x7F), and has no leading/trailing whitespace.
+    /// Validate that a vault input string is non-empty visible ASCII with no
+    /// leading or trailing whitespace.
+    ///
+    /// The visible-ASCII policy rejects Unicode confusables, zero-width
+    /// characters, bidi overrides, and controls. Accepted strings are already
+    /// NFC-normalized because ASCII has one canonical Unicode representation.
     fn validate_vault_input(s: &String) -> Result<(), ()> {
-        let len = s.len();
-        if len == 0 {
-            return Err(());
-        }
-        let mut buf = [0u8; 256];
-        s.copy_into_slice(&mut buf[..len as usize]);
-        let bytes = &buf[..len as usize];
-        for &b in bytes {
-            if b <= 0x1F || b == 0x7F {
-                return Err(());
-            }
-        }
-        if bytes[0] == 0x20 || bytes[len as usize - 1] == 0x20 {
-            return Err(());
-        }
-        Ok(())
+        validators::is_visible_ascii_metadata(s)
+            .then_some(())
+            .ok_or(())
     }
 
     pub fn set_metadata(
@@ -1311,17 +1466,17 @@ impl CalloraVault {
     ) -> Result<String, VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
-        if Self::validate_vault_input(&offering_id).is_err() {
-            return Err(VaultError::OfferingIdInvalid);
-        }
-        if Self::validate_vault_input(&metadata).is_err() {
-            return Err(VaultError::MetadataInvalid);
-        }
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
+        }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
         }
         env.storage()
             .instance()
@@ -1447,6 +1602,12 @@ impl CalloraVault {
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
         }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
+        }
         let old: String = env
             .storage()
             .instance()
@@ -1509,6 +1670,26 @@ impl CalloraVault {
     /// After calling `upgrade`, you may need to invoke a separate `migrate` function
     /// (if implemented in the new WASM) to update storage schema or perform data migrations.
     /// See UPGRADE.md for the complete operational flow.
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(VaultError::Unauthorized);
+        }
+        let len = message.len();
+        if len == 0 {
+            panic!("message cannot be empty");
+        }
+        if len > MAX_MESSAGE_LEN {
+            panic!("message length exceeds maximum of 256 characters");
+        }
+        env.events().publish(
+            (events::event_admin_broadcast(&env), caller),
+            AdminBroadcast { severity, message },
+        );
+        Ok(())
+    }
+
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
@@ -1552,7 +1733,7 @@ impl CalloraVault {
                     .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
             }
         }
-        
+
         Ok(())
     }
 
@@ -1560,6 +1741,7 @@ impl CalloraVault {
     // Private helpers
     // -----------------------------------------------------------------------
 
+    #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         let auth = match &meta.authorized_caller {
@@ -1609,6 +1791,7 @@ impl CalloraVault {
             .ok_or(VaultError::SettlementNotSet)
     }
 
+    #[inline(never)]
     fn require_not_paused(env: Env) -> Result<(), VaultError> {
         if Self::is_paused(env) {
             return Err(VaultError::Paused);
@@ -1616,6 +1799,7 @@ impl CalloraVault {
         Ok(())
     }
 
+    #[inline(never)]
     fn require_admin_or_owner(env: Env, caller: &Address) -> Result<(), VaultError> {
         let admin: Address = env
             .storage()
@@ -1626,6 +1810,40 @@ impl CalloraVault {
         if *caller != admin && *caller != meta.owner {
             return Err(VaultError::Unauthorized);
         }
+        Ok(())
+    }
+
+    /// Broadcast an emergency message from the admin.
+    ///
+    /// Only the current admin may call this function.
+    /// The message length is capped at 256 characters.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `severity` - Severity level of the broadcast (Info/Warn/Crit).
+    /// * `message` - The broadcast message, capped at 256 characters.
+    ///
+    /// # Errors
+    /// * `VaultError::Unauthorized` - If the caller is not the current admin.
+    /// * `VaultError::MetadataTooLong` - If the message length exceeds 256 characters.
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(VaultError::Unauthorized);
+        }
+        let len = message.len();
+        if len == 0 {
+            return Err(VaultError::MetadataTooLong); // Reusing existing error for message too long/empty
+        }
+        if len > MAX_MESSAGE_LEN {
+            return Err(VaultError::MetadataTooLong);
+        }
+        env.events().publish(
+            (events::event_admin_broadcast(&env), caller),
+            AdminBroadcast { severity, message },
+        );
         Ok(())
     }
 }
@@ -1669,9 +1887,28 @@ impl CalloraVault {
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
     }
+
+    pub fn set_developer_rate_limit(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        capacity: i128,
+        refill_rate: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let config = crate::rate_limit::RateLimitConfig {
+            capacity,
+            refill_rate,
+        };
+        crate::rate_limit::set_config(&env, &developer, &config);
+        Ok(())
+    }
 }
 
 mod events;
+pub mod rate_limit;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1696,10 +1933,13 @@ mod test_views;
 mod test_idempotency;
 
 #[cfg(test)]
+mod test_error_codes;
+
+#[cfg(test)]
 mod test_reentrancy;
 
 #[cfg(test)]
 mod test_balance_property;
 
 #[cfg(test)]
-mod test_pause_matrix;
+mod test_rate_limit;

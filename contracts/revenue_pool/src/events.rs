@@ -37,6 +37,27 @@ pub fn event_admin_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_completed")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin transfer.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
+/// Returns the Symbol for the `"pause_guardian_set"` event topic.
+///
+/// Emitted when the admin sets or replaces the emergency pause guardian.
+pub fn event_pause_guardian_set(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_set")
+}
+
+/// Returns the Symbol for the `"pause_guardian_cleared"` event topic.
+///
+/// Emitted when the admin clears the emergency pause guardian.
+pub fn event_pause_guardian_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_cleared")
+}
+
 /// Returns the Symbol for the `"pause_set"` event topic.
 ///
 /// Emitted by both `pause` (with data `true`) and `unpause` (with data `false`)
@@ -51,6 +72,14 @@ pub fn event_pause_set(env: &Env) -> Symbol {
 /// from the vault for indexer alignment.
 pub fn event_receive_payment(env: &Env) -> Symbol {
     Symbol::new(env, "receive_payment")
+}
+
+/// Returns the Symbol for the `"yield_deposited"` event topic.
+///
+/// Emitted when the treasury deposits accumulated protocol yield into the
+/// revenue pool via `deposit_yield`.
+pub fn event_yield_deposited(env: &Env) -> Symbol {
+    Symbol::new(env, "yield_deposited")
 }
 
 /// Returns the Symbol for the `"set_max_distribute"` event topic.
@@ -82,6 +111,13 @@ pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
 }
 
+/// Returns the Symbol for the `"admin_broadcast"` event topic.
+///
+/// Emitted when the admin broadcasts an emergency message.
+pub fn event_admin_broadcast(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_broadcast")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,7 +134,10 @@ mod tests {
     #[test]
     fn test_event_admin_changed_bytes() {
         let env = Env::default();
-        assert_eq!(event_admin_changed(&env), Symbol::new(&env, "admin_changed"));
+        assert_eq!(
+            event_admin_changed(&env),
+            Symbol::new(&env, "admin_changed")
+        );
     }
 
     /// Snapshot: proves event_admin_transfer_started still maps to exactly the bytes for "admin_transfer_started".
@@ -121,6 +160,36 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves event_admin_cancelled still maps to exactly the bytes for "admin_cancelled".
+    #[test]
+    fn test_event_admin_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_admin_cancelled(&env),
+            Symbol::new(&env, "admin_cancelled")
+        );
+    }
+
+    /// Snapshot: proves event_pause_guardian_set still maps to exactly the bytes for "pause_guardian_set".
+    #[test]
+    fn test_event_pause_guardian_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_set(&env),
+            Symbol::new(&env, "pause_guardian_set")
+        );
+    }
+
+    /// Snapshot: proves event_pause_guardian_cleared still maps to exactly the bytes for "pause_guardian_cleared".
+    #[test]
+    fn test_event_pause_guardian_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_cleared(&env),
+            Symbol::new(&env, "pause_guardian_cleared")
+        );
+    }
+
     /// Snapshot: proves event_pause_set still maps to exactly the bytes for "pause_set".
     #[test]
     fn test_event_pause_set_bytes() {
@@ -132,14 +201,20 @@ mod tests {
     #[test]
     fn test_event_receive_payment_bytes() {
         let env = Env::default();
-        assert_eq!(event_receive_payment(&env), Symbol::new(&env, "receive_payment"));
+        assert_eq!(
+            event_receive_payment(&env),
+            Symbol::new(&env, "receive_payment")
+        );
     }
 
     /// Snapshot: proves event_set_max_distribute still maps to exactly the bytes for "set_max_distribute".
     #[test]
     fn test_event_set_max_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(event_set_max_distribute(&env), Symbol::new(&env, "set_max_distribute"));
+        assert_eq!(
+            event_set_max_distribute(&env),
+            Symbol::new(&env, "set_max_distribute")
+        );
     }
 
     /// Snapshot: proves event_distribute still maps to exactly the bytes for "distribute".
@@ -153,7 +228,10 @@ mod tests {
     #[test]
     fn test_event_batch_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(event_batch_distribute(&env), Symbol::new(&env, "batch_distribute"));
+        assert_eq!(
+            event_batch_distribute(&env),
+            Symbol::new(&env, "batch_distribute")
+        );
     }
 
     /// Snapshot: proves event_upgraded still maps to exactly the bytes for "upgraded".
@@ -161,5 +239,12 @@ mod tests {
     fn test_event_upgraded_bytes() {
         let env = Env::default();
         assert_eq!(event_upgraded(&env), Symbol::new(&env, "upgraded"));
+    }
+
+    /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".
+    #[test]
+    fn test_event_admin_broadcast_bytes() {
+        let env = Env::default();
+        assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
     }
 }

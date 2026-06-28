@@ -38,21 +38,6 @@ Additional hardening note:
 - [x] View function is read-only, deterministic, and non-panicking
 - [x] Safe default state (returns `false` when unset)
 
-#### Pause Allowlist Matrix (Issue #443)
-
-When the vault is paused, the following entrypoint behavior is enforced:
-
-| Entrypoint | Paused State | Rationale |
-|------------|-----------|-----------|
-| `deposit` | **BLOCKED** — returns `VaultError::Paused` | Prevents new funds entering during incident |
-| `deduct` | **BLOCKED** — returns `VaultError::Paused` | Prevents deductions during incident |
-| `batch_deduct` | **BLOCKED** — returns `VaultError::Paused` | Prevents batch deductions during incident |
-| `withdraw` | **ALLOWED** | Emergency recovery — owner can extract tracked balance |
-| `withdraw_to` | **ALLOWED** | Emergency recovery — owner can extract to arbitrary address |
-| `distribute` | **ALLOWED** | Emergency recovery — admin can move untracked on-ledger surplus |
-
-**Test Coverage:** Full matrix asserted in dedicated test module `contracts/vault/src/test_pause_matrix.rs` (20+ tests covering blocked/allowed per-entrypoint, pause/unpause lifecycle, idempotency, auth enforcement, event emission, and balance immutability on rejected calls).
-
 ### Admin Transfer
 
 - [x] Ownership transfer is two-step (optional but recommended)
@@ -174,6 +159,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - **Excessive Single-Leg Distribution:** A compromised admin could still try to distribute a huge amount in a single `distribute()` or individual `batch_distribute` leg, increasing the blast radius for a compromised admin key.
   - *Mitigation:* `callora-revenue-pool` now exposes a configurable `max_distribute` cap. Every `distribute` and every individual `batch_distribute` payment leg is validated against this cap. The cap is admin-gated, must be positive, and defaults to `i128::MAX` until configured.
 
+- **Emergency Pause Delegation:** The admin can configure a `pause_guardian` for operational emergencies where the pool needs to be stopped quickly without sharing full admin power.
+  - *Mitigation:* `pause_guardian` is scoped to `pause` only. It cannot unpause, distribute funds, rotate admin, update caps, clear or replace itself, or upgrade the contract. `set_pause_guardian` and `clear_pause_guardian` are admin-only and emit dedicated events for monitoring.
+
 ### Input Validation
 
 - [ ] All amounts validated to be > 0
@@ -281,4 +269,3 @@ As part of the authorization matrix hardening for the `callora-settlement` contr
 - Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
 - Overflow regression tests now assert `receive_payment` panics with `"pool balance overflow"` and `"developer balance overflow"` when credits would exceed `i128::MAX`.
 - Admin rotation (two-step) has been verified to correctly gate access during the transition period.
-

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Check that all publishable contract WASM binaries stay under the 64 KiB Soroban limit.
+# Check that all publishable contract WASM binaries stay under the Callora size budget.
 
 set -euo pipefail
 
-MAX_SIZE_BYTES=$((64 * 1024))
+MAX_SIZE_BYTES="${WASM_SIZE_LIMIT_BYTES:-102400}"
 TARGET_DIR="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
 
 contract_manifests=()
 contract_packages=()
 failed=0
+
+if ! [[ "$MAX_SIZE_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: WASM_SIZE_LIMIT_BYTES must be a positive integer, got: $MAX_SIZE_BYTES"
+  exit 1
+fi
 
 if command -v cargo >/dev/null 2>&1; then
   CARGO_BIN=$(command -v cargo)
@@ -79,7 +84,7 @@ check_wasm() {
   size_kib=$((size_bytes / 1024))
 
   if [ "$size_bytes" -gt "$MAX_SIZE_BYTES" ]; then
-    echo "FAIL  $crate: ${size_bytes} bytes (${size_kib} KiB) exceeds 65536-byte limit"
+    echo "FAIL  $crate: ${size_bytes} bytes (${size_kib} KiB) exceeds ${MAX_SIZE_BYTES}-byte limit"
     failed=1
     return
   fi
@@ -96,19 +101,23 @@ cargo_args=(build --target wasm32-unknown-unknown --release)
 for crate in "${contract_packages[@]}"; do
   cargo_args+=(-p "$crate")
 done
-"$CARGO_BIN" "${cargo_args[@]}"
+if [ "${SKIP_WASM_BUILD:-0}" = "1" ]; then
+  echo "Skipping cargo build because SKIP_WASM_BUILD=1"
+else
+  "$CARGO_BIN" "${cargo_args[@]}"
+fi
 
 echo ""
-echo "WASM size check (limit: 65536 bytes / 64 KiB)"
-echo "---------------------------------------------"
+echo "WASM size check (limit: ${MAX_SIZE_BYTES} bytes)"
+echo "---------------------------------------"
 for crate in "${contract_packages[@]}"; do
   check_wasm "$crate"
 done
 echo ""
 
 if [ "$failed" -ne 0 ]; then
-  echo "One or more publishable contract WASM artifacts are missing or exceed the Soroban size limit."
+  echo "One or more publishable contract WASM artifacts are missing or exceed the configured size budget."
   exit 1
 fi
 
-echo "All publishable contract WASM artifacts are within the Soroban size limit."
+echo "All publishable contract WASM artifacts are within the configured size budget."

@@ -163,7 +163,7 @@ fn invariant_trace(seed: u64) {
                         batch_total += leg_amt;
                     }
 
-                    if payments.len() > 0 {
+                    if !payments.is_empty() {
                         let result = catch_unwind(AssertUnwindSafe(|| {
                             pool.batch_distribute(&admin, &payments);
                         }));
@@ -195,7 +195,6 @@ fn invariant_trace(seed: u64) {
                 let _ = catch_unwind(AssertUnwindSafe(|| {
                     pool.pause(&admin);
                 }));
-                paused = true;
 
                 // Attempt a distribute while paused — must fail; scheduled unchanged.
                 if scheduled > 0 {

@@ -28,6 +28,13 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin transfer.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 /// Returns the Symbol for the `"set_authorized_caller"` event topic.
 ///
 /// Emitted when an owner adds a new authorized caller for `deduct` operations.
@@ -206,6 +213,13 @@ pub fn event_revenue_pool_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "revenue_pool_cancelled")
 }
 
+/// Returns the Symbol for the `"admin_broadcast"` event topic.
+///
+/// Emitted when the admin broadcasts an emergency message.
+pub fn event_admin_broadcast(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_broadcast")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +245,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_accepted"));
+    }
+
+    #[test]
+    fn test_event_admin_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_admin_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "admin_cancelled"));
     }
 
     #[test]
@@ -406,5 +427,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_revenue_pool_cancelled(&env);
         assert_eq!(sym, Symbol::new(&env, "revenue_pool_cancelled"));
+    }
+
+    /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".
+    #[test]
+    fn test_event_admin_broadcast_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_admin_broadcast(&env);
+        assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
     }
 }

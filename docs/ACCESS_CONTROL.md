@@ -94,6 +94,11 @@ Allows the current admin to cancel a pending admin transfer before the nominee a
 ### Overview
 The Callora Settlement contract tracks individual developer balances and global protocol revenue. It enforces strict access control for incoming payments and administrative updates.
 
+Developer address compliance recoveries use `propose_balance_migration` and
+`execute_balance_migration`. Both calls require authorization by the current
+admin address, including its native Stellar multisig thresholds, and execution
+is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MIGRATION.md).
+
 ### Roles
 - **Admin**: Primary authority over contract configuration and sensitive data.
 - **Vault**: The registered vault contract authorized to send payments.
@@ -107,15 +112,55 @@ The Callora Settlement contract tracks individual developer balances and global 
 | `receive_payment` | ✅ | ✅ | ❌ | ❌ |
 | `set_admin` | ✅ | ❌ | ❌ | ❌ |
 | `accept_admin` | ❌ | ❌ | ✅ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
 | `propose_vault` | ✅ | ❌ | ❌ | ❌ |
 | `accept_vault` | ✅ | ✅ | ❌ | ❌ |
 | `set_vault` (alias of `propose_vault`) | ✅ | ❌ | ❌ | ❌ |
+| `set_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
+| `clear_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
 | `get_all_developer_balances` | ✅ | ❌ | ❌ | ❌ |
 
 ### Security Model
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Two-Step Vault Rotation**: Prevents accidentally misrouting settlement credits by requiring the proposed vault to accept (or the admin to finalize).
+- **Per-Developer Claim Windows**: Admins may configure inclusive ledger timestamp windows that restrict when each developer can claim accrued settlement balance. Developers without a configured window remain unrestricted.
 - **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
+- **Cancellation Safety**: The admin can invoke `cancel_admin_transfer` to clear a mistaken nomination.
+
+---
+
+## 3. Revenue Pool Access Control
+
+### Overview
+The Callora Revenue Pool contract processes USDC distribution to developer wallets. Like Settlement and Vault, it implements standard administrative roles and rotation procedures.
+
+### Roles
+- **Admin**: Handles revenue distributions and nominates administrative successions.
+- **Pending Admin**: A nominated account that has to explicitly accept the role to become the Admin.
+- **Pause Guardian**: Optional emergency role that may pause the revenue pool without receiving any distribution, unpause, upgrade, or admin-management authority.
+
+### Authorization Matrix
+
+| Function | Admin | Pending Admin | Pause Guardian | Others |
+|----------|-------|---------------|----------------|--------|
+| `distribute` | ✅ | ❌ | ❌ | ❌ |
+| `batch_distribute` | ✅ | ❌ | ❌ | ❌ |
+| `pause` | ✅ | ❌ | ✅ | ❌ |
+| `unpause` | ✅ | ❌ | ❌ | ❌ |
+| `set_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `clear_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `set_admin` | ✅ | ❌ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ | ❌ |
+| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
+
+### Cancellation Safety
+The current admin can call `cancel_admin_transfer` to abort a pending admin nomination.
+
+### Pause Guardian Safety
+The current admin can call `set_pause_guardian` to delegate emergency pause authority to a narrow role, and `clear_pause_guardian` to remove that role. The pause guardian can only call `pause`; it cannot unpause, distribute funds, rotate admin, change caps, clear or replace itself, or upgrade the contract.
+
+---
 
 ## Test Coverage
 The implementation includes comprehensive tests covering:
@@ -136,7 +181,7 @@ The implementation includes comprehensive tests covering:
 - ✅ Only Admin can call `get_all_developer_balances`
 - ✅ All rotation and update logic preserves state integrity
 - ✅ Only current owner can call `cancel_ownership_transfer`
-- ✅ Only current admin can call `cancel_admin_transfer`
+- ✅ Only current admin can call `cancel_admin_transfer` in Vault, Settlement, and Revenue Pool
 - ✅ Cancel functions clear pending state and emit events
 - ✅ Cancel functions fail when no transfer is pending
 - ✅ Cancel functions fail for unauthorized callers
@@ -144,6 +189,5 @@ The implementation includes comprehensive tests covering:
 
 Run tests with:
 ```bash
-cargo test -p callora-settlement
-cargo test -p callora-vault
+cargo build --workspace --release --target=wasm32-unknown-unknown
 ```

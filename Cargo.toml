@@ -10,12 +10,15 @@ members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/helpers",
 ]
 default-members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/helpers",
 ]
+
 
 [workspace.dependencies]
 soroban-sdk = "22"
