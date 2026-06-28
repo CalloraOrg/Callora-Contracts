@@ -1675,6 +1675,7 @@ mod limits;
 mod migrate;
 mod pagination;
 mod timelock;
+mod types;
 
 #[cfg(test)]
 mod test;
