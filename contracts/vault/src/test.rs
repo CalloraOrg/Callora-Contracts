@@ -4828,7 +4828,6 @@ fn batch_deduct_each_item_constrained_by_max_deduct() {
     let balance = client.batch_deduct(&owner, &items);
     assert_eq!(balance, 150);
 }
-
 #[test]
 #[should_panic(expected = "deduct amount exceeds max_deduct")]
 fn batch_deduct_one_item_above_max_deduct_panics() {
@@ -4855,6 +4854,316 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
         },
     ];
     client.batch_deduct(&owner, &items);
+}
+
+// ---------------------------------------------------------------------------
+// Lifetime deposit tracker tests (Issue #444)
+// ---------------------------------------------------------------------------
+
+/// get_lifetime_deposit returns 0 for an address that has never deposited.
+#[test]
+fn lifetime_deposit_zero_for_new_address() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    assert_eq!(client.get_lifetime_deposit(&stranger), 0i128);
+}
+
+/// Single deposit is fully reflected in the lifetime total.
+#[test]
+fn lifetime_deposit_single_deposit() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    usdc_admin.mint(&owner, &500);
+    usdc_client.approve(&owner, &vault_address, &500, &10_000);
+    client.deposit(&owner, &500);
+
+    assert_eq!(client.get_lifetime_deposit(&owner), 500i128);
+}
+
+/// Multiple deposits by the same address accumulate correctly.
+#[test]
+fn lifetime_deposit_accumulates_across_multiple_deposits() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    usdc_admin.mint(&owner, &1_000);
+    usdc_client.approve(&owner, &vault_address, &1_000, &10_000);
+
+    client.deposit(&owner, &100);
+    client.deposit(&owner, &200);
+    client.deposit(&owner, &300);
+
+    assert_eq!(client.get_lifetime_deposit(&owner), 600i128);
+}
+
+/// Lifetime total never decrements after a withdrawal.
+#[test]
+fn lifetime_deposit_not_decremented_by_withdraw() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    usdc_admin.mint(&owner, &300);
+    usdc_client.approve(&owner, &vault_address, &300, &10_000);
+    client.deposit(&owner, &300);
+
+    // Withdraw everything
+    client.withdraw(&300);
+    assert_eq!(client.balance(), 0i128);
+
+    // Lifetime total must remain unchanged
+    assert_eq!(client.get_lifetime_deposit(&owner), 300i128);
+}
+
+/// Lifetime total never decrements after a deduct.
+#[test]
+fn lifetime_deposit_not_decremented_by_deduct() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 500);
+    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    let settlement = create_settlement(&env, &owner, &vault_address);
+    client.set_settlement(&owner, &settlement);
+
+    // No deposit by owner — initial balance set via init, not deposit()
+    // so owner lifetime is still 0 before we deposit.
+    let (usdc2, usdc_client2, _) = create_usdc(&env, &owner);
+    // Re-use existing setup: mint and deposit via owner.
+    usdc_admin.mint(&owner, &200);
+    usdc_client2.approve(&owner, &vault_address, &200, &10_000);
+
+    // Use a fresh simpler setup
+    let env2 = Env::default();
+    let owner2 = Address::generate(&env2);
+    let (vault_address2, client2) = create_vault(&env2);
+    let (usdc3, usdc_client3, usdc_admin3) = create_usdc(&env2, &owner2);
+
+    env2.mock_all_auths();
+    client2.init(&owner2, &usdc3, &None, &None, &None, &None, &None);
+    let settlement2 = create_settlement(&env2, &owner2, &vault_address2);
+    client2.set_settlement(&owner2, &settlement2);
+
+    usdc_admin3.mint(&owner2, &400);
+    usdc_client3.approve(&owner2, &vault_address2, &400, &10_000);
+    client2.deposit(&owner2, &400);
+
+    // Deduct half
+    client2.deduct(&owner2, &200, &None);
+    assert_eq!(client2.balance(), 200i128);
+
+    // Lifetime must still reflect the full deposited amount
+    assert_eq!(client2.get_lifetime_deposit(&owner2), 400i128);
+}
+
+/// Multiple depositors each have independent lifetime totals.
+#[test]
+fn lifetime_deposit_multi_depositor_accumulation() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_allowed_depositor(&owner, &Some(alice.clone()));
+    client.set_allowed_depositor(&owner, &Some(bob.clone()));
+
+    usdc_admin.mint(&alice, &600);
+    usdc_admin.mint(&bob, &900);
+    usdc_client.approve(&alice, &vault_address, &600, &10_000);
+    usdc_client.approve(&bob, &vault_address, &900, &10_000);
+
+    client.deposit(&alice, &100);
+    client.deposit(&bob, &300);
+    client.deposit(&alice, &200);
+    client.deposit(&bob, &400);
+    client.deposit(&alice, &300);
+
+    assert_eq!(client.get_lifetime_deposit(&alice), 600i128);
+    assert_eq!(client.get_lifetime_deposit(&bob), 700i128);
+    assert_eq!(client.get_lifetime_deposit(&owner), 0i128);
+}
+
+/// list_lifetime_deposits returns empty when no deposits have been made.
+#[test]
+fn list_lifetime_deposits_empty_before_any_deposit() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    let page = client.list_lifetime_deposits(&0, &10);
+    assert_eq!(page.len(), 0);
+}
+
+/// list_lifetime_deposits returns correct entries for known depositors.
+#[test]
+fn list_lifetime_deposits_returns_entries() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_allowed_depositor(&owner, &Some(alice.clone()));
+
+    usdc_admin.mint(&owner, &100);
+    usdc_admin.mint(&alice, &250);
+    usdc_client.approve(&owner, &vault_address, &100, &10_000);
+    usdc_client.approve(&alice, &vault_address, &250, &10_000);
+
+    client.deposit(&owner, &100);
+    client.deposit(&alice, &250);
+
+    let page = client.list_lifetime_deposits(&0, &10);
+    assert_eq!(page.len(), 2);
+
+    // Order: owner deposited first, alice second.
+    let (addr0, total0) = page.get(0).unwrap();
+    let (addr1, total1) = page.get(1).unwrap();
+    assert_eq!(addr0, owner);
+    assert_eq!(total0, 100i128);
+    assert_eq!(addr1, alice);
+    assert_eq!(total1, 250i128);
+}
+
+/// list_lifetime_deposits paginates correctly.
+#[test]
+fn list_lifetime_deposits_pagination() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    // Create 5 additional depositors and have each deposit once.
+    let mut depositors = soroban_sdk::vec![&env];
+    for _ in 0..5u32 {
+        let d = Address::generate(&env);
+        client.set_allowed_depositor(&owner, &Some(d.clone()));
+        usdc_admin.mint(&d, &50);
+        usdc_client.approve(&d, &vault_address, &50, &10_000);
+        client.deposit(&d, &50);
+        depositors.push_back(d);
+    }
+
+    // Page 1: first 3
+    let page1 = client.list_lifetime_deposits(&0, &3);
+    assert_eq!(page1.len(), 3);
+
+    // Page 2: next 3 (only 2 remain)
+    let page2 = client.list_lifetime_deposits(&3, &3);
+    assert_eq!(page2.len(), 2);
+
+    // Page 3: beyond end
+    let page3 = client.list_lifetime_deposits(&6, &3);
+    assert_eq!(page3.len(), 0);
+}
+
+/// list_lifetime_deposits caps limit at 100.
+#[test]
+fn list_lifetime_deposits_limit_capped_at_100() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    for _ in 0..105u32 {
+        let d = Address::generate(&env);
+        client.set_allowed_depositor(&owner, &Some(d.clone()));
+        usdc_admin.mint(&d, &1);
+        usdc_client.approve(&d, &vault_address, &1, &10_000);
+        client.deposit(&d, &1);
+    }
+
+    let page = client.list_lifetime_deposits(&0, &200);
+    assert_eq!(page.len(), 100);
+}
+
+/// Overflow protection: depositing i128::MAX then 1 more must fail.
+#[test]
+fn lifetime_deposit_overflow_protected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+
+    // Seed vault with i128::MAX and set that as the initial balance so init succeeds.
+    fund_vault(&usdc_admin, &vault_address, i128::MAX);
+    client.init(&owner, &usdc, &Some(i128::MAX), &None, &None, &None, &None);
+
+    // Try to deposit 1 more — both meta.balance AND lifetime total would overflow.
+    usdc_admin.mint(&owner, &1);
+    usdc_client.approve(&owner, &vault_address, &1, &10_000);
+    let result = client.try_deposit(&owner, &1);
+    assert!(result.is_err(), "expected overflow error");
+}
+
+/// Depositor index deduplication: depositing multiple times does not add
+/// duplicate entries to the index used by list_lifetime_deposits.
+#[test]
+fn lifetime_deposit_index_no_duplicates() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+
+    usdc_admin.mint(&owner, &300);
+    usdc_client.approve(&owner, &vault_address, &300, &10_000);
+
+    client.deposit(&owner, &100);
+    client.deposit(&owner, &100);
+    client.deposit(&owner, &100);
+
+    // Only one entry in the list despite three deposits.
+    let page = client.list_lifetime_deposits(&0, &10);
+    assert_eq!(page.len(), 1);
+    let (addr, total) = page.get(0).unwrap();
+    assert_eq!(addr, owner);
+    assert_eq!(total, 300i128);
 }
 
 // ---------------------------------------------------------------------------
@@ -6063,3 +6372,5 @@ fn budget_measure_all() {
 
     std::println!("\n=== END VAULT BUDGET MEASUREMENTS ===\n");
 }
+
+

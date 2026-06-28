@@ -162,10 +162,21 @@ pub enum StorageKey {
     /// Stored in **persistent storage**. The value is `true` (a `bool`);
     /// presence of the key is the authoritative signal. Must be pruned explicitly.
     ProcessedRequest(Symbol),
-    /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
+ /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
     /// rotation.  Defaults to `0` before the first rotation.
     AuthorizedCallerNonce,
+    /// Per-depositor cumulative lifetime USDC deposited (compliance reporting).
+    ///
+    /// Stored in **persistent storage** so it outlives instance TTL windows.
+    /// Never decremented — withdrawals and deducts do not affect this value.
+    LifetimeDeposit(Address),
+    /// Ordered index of every address that has made at least one successful deposit.
+    ///
+    /// Stored in instance storage; used by `list_lifetime_deposits` for pagination.
+    LifetimeDepositorIndex,
 }
+
+
 
 /// Settlement contract client for crediting the global pool.
 #[contractclient(name = "SettlementClient")]
@@ -197,6 +208,14 @@ pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60; // ~60 days
 // Must be pruned via prune_processed_requests when they are no longer needed.
 pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
 pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
+
+// Lifetime deposit records live in persistent storage — same TTL policy as
+// processed-request markers.  They are never deleted, only bumped.
+pub const LIFETIME_DEPOSIT_BUMP_THRESHOLD: u32 = 17_280 * 30; // ~30 days
+pub const LIFETIME_DEPOSIT_BUMP_AMOUNT: u32 = 17_280 * 365;   // ~1 year
+
+/// Maximum page size for `list_lifetime_deposits`.
+pub const MAX_LIST_LIFETIME_LIMIT: u32 = 100;
 
 #[contract]
 pub struct CalloraVault;
@@ -397,6 +416,69 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::AuthorizedCallerNonce)
             .unwrap_or(0u64)
+    }
+
+  /// Return the cumulative lifetime USDC ever deposited by `addr`.
+    ///
+    /// Returns `0` if `addr` has never made a successful deposit.
+    /// This value never decrements — withdrawals and deducts do not affect it.
+    ///
+    /// # Compliance use-case
+    /// Off-chain compliance systems can call this to get the total historical
+    /// inflow for any depositor without reading transaction history.
+    pub fn get_lifetime_deposit(env: Env, addr: Address) -> i128 {
+        let key = StorageKey::LifetimeDeposit(addr);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(0i128)
+    }
+
+    /// Return a paginated slice of `(Address, lifetime_deposit_total)` pairs.
+    ///
+    /// Results are ordered by first-deposit time (insertion order of the
+    /// depositor index).  `cursor` is a zero-based start offset into that
+    /// ordered list; `limit` is capped at [`MAX_LIST_LIFETIME_LIMIT`] (100).
+    ///
+    /// Returns an empty `Vec` when `cursor` is beyond the end of the index.
+    ///
+    /// # Parameters
+    /// - `cursor` — zero-based page start index.
+    /// - `limit`  — maximum entries to return; silently capped at 100.
+    pub fn list_lifetime_deposits(env: Env, cursor: u32, limit: u32) -> Vec<(Address, i128)> {
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::LifetimeDepositorIndex)
+            .unwrap_or(Vec::new(&env));
+
+        let total = index.len();
+        if cursor >= total {
+            return Vec::new(&env);
+        }
+
+        let cap = if limit > MAX_LIST_LIFETIME_LIMIT {
+            MAX_LIST_LIFETIME_LIMIT
+        } else if limit == 0 {
+            1
+        } else {
+            limit
+        };
+
+        let end = core::cmp::min(cursor.saturating_add(cap), total);
+        let mut result: Vec<(Address, i128)> = Vec::new(&env);
+
+        for i in cursor..end {
+            if let Some(addr) = index.get(i) {
+                let lifetime: i128 = env
+                    .storage()
+                    .persistent()
+                    .get(&StorageKey::LifetimeDeposit(addr.clone()))
+                    .unwrap_or(0i128);
+                result.push_back((addr, lifetime));
+            }
+        }
+        result
     }
 
     /// Return `true` if `caller` is the owner or an allowed depositor.
@@ -670,12 +752,44 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // ── Effects ───────────────────────────────────────────────────────
+    // ── Effects ───────────────────────────────────────────────────────
         meta.balance = meta
             .balance
             .checked_add(amount)
             .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
+
+        // ── Lifetime deposit accumulation (compliance) ────────────────────
+        // Accumulate into persistent storage. Uses checked_add to guard
+        // against i128 overflow on astronomically large cumulative totals.
+        let ld_key = StorageKey::LifetimeDeposit(caller.clone());
+        let prev_lifetime: i128 = env
+            .storage()
+            .persistent()
+            .get(&ld_key)
+            .unwrap_or(0i128);
+        let new_lifetime = prev_lifetime
+            .checked_add(amount)
+            .ok_or(VaultError::Overflow)?;
+        env.storage().persistent().set(&ld_key, &new_lifetime);
+        env.storage().persistent().extend_ttl(
+            &ld_key,
+            LIFETIME_DEPOSIT_BUMP_THRESHOLD,
+            LIFETIME_DEPOSIT_BUMP_AMOUNT,
+        );
+
+        // Append caller to the depositor index if not already present.
+        let idx_key = StorageKey::LifetimeDepositorIndex;
+        let mut depositor_index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&idx_key)
+            .unwrap_or(Vec::new(&env));
+        if !depositor_index.contains(&caller) {
+            depositor_index.push_back(caller.clone());
+            env.storage().instance().set(&idx_key, &depositor_index);
+        }
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
