@@ -76,6 +76,7 @@ must not be reassigned once released.
 | 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
+| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
 
 ## Revenue Pool
 

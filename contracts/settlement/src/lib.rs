@@ -11,7 +11,6 @@ pub use timelock::{PendingDeveloperMigration, DEVELOPER_MIGRATION_TIMELOCK_SECON
 mod types;
 pub use types::*;
 
-
 #[contract]
 pub struct CalloraSettlement;
 
@@ -221,17 +220,11 @@ impl CalloraSettlement {
         for item in items.iter() {
             let (dev, amount) = item;
             let balance_key = StorageKey::DeveloperBalance(dev.clone(), token.clone());
-            let current: i128 = env
-                .storage()
-                .persistent()
-                .get(&balance_key)
-                .unwrap_or(0);
+            let current: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
             let new_balance = current
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
-            env.storage()
-                .persistent()
-                .set(&balance_key, &new_balance);
+            env.storage().persistent().set(&balance_key, &new_balance);
             env.storage()
                 .persistent()
                 .extend_ttl(&balance_key, 50000, 50000);
@@ -427,7 +420,7 @@ impl CalloraSettlement {
     ///
     /// # Errors
     /// - `AmountNotPositive` if amount is ≤ 0
-    /// - `InsufficientDeveloperBalance` if developer balance < amount
+    /// - `OverDraft` if developer balance < amount
     /// - `DailyWithdrawCapExceeded` if daily cap is exceeded
     /// - `DeveloperBalanceUnderflow` if subtraction underflows
     /// - `InsufficientContractBalance` if contract has insufficient token balance
@@ -451,13 +444,9 @@ impl CalloraSettlement {
         }
 
         let balance_key = StorageKey::DeveloperBalance(developer.clone(), token.clone());
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0);
+        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if amount > current_balance {
-            return Err(SettlementError::InsufficientDeveloperBalance);
+            return Err(SettlementError::OverDraft);
         }
 
         let cap: i128 = env
@@ -471,7 +460,10 @@ impl CalloraSettlement {
                 .storage()
                 .persistent()
                 .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-                .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
+                .unwrap_or(DailyWithdrawState {
+                    day: today,
+                    amount: 0,
+                });
             if daily.day != today {
                 daily.day = today;
                 daily.amount = 0;
@@ -504,7 +496,10 @@ impl CalloraSettlement {
             .storage()
             .persistent()
             .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-            .unwrap_or(DailyWithdrawState { day: today, amount: 0 });
+            .unwrap_or(DailyWithdrawState {
+                day: today,
+                amount: 0,
+            });
         if daily.day != today {
             daily.day = today;
             daily.amount = 0;
@@ -513,9 +508,11 @@ impl CalloraSettlement {
         env.storage()
             .persistent()
             .set(&StorageKey::WithdrawalToday(developer.clone()), &daily);
-        env.storage()
-            .persistent()
-            .extend_ttl(&StorageKey::WithdrawalToday(developer.clone()), 50000, 50000);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::WithdrawalToday(developer.clone()),
+            50000,
+            50000,
+        );
 
         env.events().publish(
             (events::event_developer_withdraw(&env), developer.clone()),
@@ -549,13 +546,18 @@ impl CalloraSettlement {
         env.storage()
             .persistent()
             .set(&StorageKey::DailyWithdrawCap(developer.clone()), &cap);
-        env.storage()
-            .persistent()
-            .extend_ttl(&StorageKey::DailyWithdrawCap(developer.clone()), 50000, 50000);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::DailyWithdrawCap(developer.clone()),
+            50000,
+            50000,
+        );
 
         env.events().publish(
             (events::event_daily_withdraw_cap_changed(&env), caller),
-            DailyWithdrawCapChanged { developer, new_cap: cap },
+            DailyWithdrawCapChanged {
+                developer,
+                new_cap: cap,
+            },
         );
     }
 
@@ -653,7 +655,10 @@ impl CalloraSettlement {
         }
 
         env.events().publish(
-            (Symbol::new(&env, "developer_force_credited"), developer.clone()),
+            (
+                Symbol::new(&env, "developer_force_credited"),
+                developer.clone(),
+            ),
             DeveloperForceCreditedEvent {
                 developer,
                 amount,
@@ -725,7 +730,10 @@ impl CalloraSettlement {
             let balance: i128 = env
                 .storage()
                 .persistent()
-                .get(&StorageKey::DeveloperBalance(address.clone(), token.clone()))
+                .get(&StorageKey::DeveloperBalance(
+                    address.clone(),
+                    token.clone(),
+                ))
                 .unwrap_or(0i128);
             result.push_back(DeveloperBalance {
                 address: address.clone(),
@@ -779,7 +787,10 @@ impl CalloraSettlement {
                 let balance = env
                     .storage()
                     .persistent()
-                    .get(&StorageKey::DeveloperBalance(address.clone(), token.clone()))
+                    .get(&StorageKey::DeveloperBalance(
+                        address.clone(),
+                        token.clone(),
+                    ))
                     .unwrap_or(0);
                 result.push_back(DeveloperBalance {
                     address: address.clone(),
@@ -911,7 +922,10 @@ impl CalloraSettlement {
             let balance: i128 = env
                 .storage()
                 .persistent()
-                .get(&StorageKey::DeveloperBalance(address.clone(), token.clone()))
+                .get(&StorageKey::DeveloperBalance(
+                    address.clone(),
+                    token.clone(),
+                ))
                 .unwrap_or(0i128);
             result.push_back(DeveloperBalance {
                 address: address.clone(),
@@ -1163,10 +1177,8 @@ impl CalloraSettlement {
 
         inst.remove(&StorageKey::PendingAdmin);
 
-        env.events().publish(
-            (events::event_admin_cancelled(&env), current, pending),
-            (),
-        );
+        env.events()
+            .publish((events::event_admin_cancelled(&env), current, pending), ());
     }
 
     /// Propose a new vault address (admin only).
@@ -1300,7 +1312,8 @@ impl CalloraSettlement {
         }
 
         // Perform the on-chain upgrade via the deployer interface.
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
 
         // Persist the version marker for on-chain queries.
         env.storage()
@@ -1316,9 +1329,7 @@ impl CalloraSettlement {
     ///
     /// Returns `None` if no upgrade has been performed yet (initial deployment).
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::ContractVersion)
+        env.storage().instance().get(&StorageKey::ContractVersion)
     }
 
     /// Insert `addr` into `index` in sorted order (ascending by raw bytes).
