@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
@@ -489,9 +490,10 @@ impl CalloraSettlement {
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
-            env.storage()
-                .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone(), token.clone()), &new_balance);
+            env.storage().persistent().set(
+                &StorageKey::DeveloperBalance(dev.clone(), token.clone()),
+                &new_balance,
+            );
             env.storage().persistent().extend_ttl(
                 &StorageKey::DeveloperBalance(dev.clone(), token.clone()),
                 50000,
@@ -677,7 +679,10 @@ impl CalloraSettlement {
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()))
+            .get(&StorageKey::DeveloperBalance(
+                developer.clone(),
+                usdc_address.clone(),
+            ))
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
@@ -1228,6 +1233,7 @@ impl CalloraSettlement {
         let instance_ttl = {
             #[cfg(any(test, feature = "testutils"))]
             {
+                use soroban_sdk::testutils::storage::Instance;
                 env.storage().instance().get_ttl()
             }
             #[cfg(not(any(test, feature = "testutils")))]
@@ -1261,6 +1267,7 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
+                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&bal_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
@@ -1284,6 +1291,7 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
+                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&cap_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]

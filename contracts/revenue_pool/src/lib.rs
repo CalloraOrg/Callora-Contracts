@@ -927,7 +927,6 @@ impl RevenuePool {
     }
 }
 
-
 mod events;
 /// Split `payments` into consecutive chunks of at most `chunk_size` legs each,
 /// preserving order.

@@ -45,7 +45,10 @@ fn vault_error_codes_are_stable_and_unique() {
     let mut seen = BTreeSet::new();
     for (expected_code, variant) in mappings {
         assert_eq!(variant as u32, expected_code);
-        assert!(seen.insert(expected_code), "duplicate vault error code {expected_code}");
+        assert!(
+            seen.insert(expected_code),
+            "duplicate vault error code {expected_code}"
+        );
     }
 
     assert_eq!(seen.len(), 34);
