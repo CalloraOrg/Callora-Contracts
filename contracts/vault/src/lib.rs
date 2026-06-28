@@ -435,6 +435,21 @@ impl CalloraVault {
             .unwrap_or(false)
     }
 
+    /// Return the contract semver string.
+    ///
+    /// This is a read-only view that returns the Cargo package version
+    /// embedded at compile time, enabling off-chain tooling to detect
+    /// capability deltas after upgrades.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// version() => "0.0.1"
+    /// ```
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// Return the current authorized-caller rotation nonce.
     ///
     /// Returns `0` before the first `set_authorized_caller` call.

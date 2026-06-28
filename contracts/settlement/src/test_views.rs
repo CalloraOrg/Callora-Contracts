@@ -247,3 +247,20 @@ fn test_pagination_invalid_cursor() {
     assert!(next_cursor.is_none());
 }
 
+
+// ---------------------------------------------------------------------------
+// version
+// ---------------------------------------------------------------------------
+
+#[test]
+fn version_returns_semver_string() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let vault_addr = Address::generate(&env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract);
+    env.mock_all_auths();
+    client.init(&admin, &vault_addr);
+    let v = client.version();
+    assert_eq!(v, String::from_str(&env, env!("CARGO_PKG_VERSION")));
+}

@@ -152,6 +152,15 @@ impl RevenuePool {
             .expect("revenue pool not initialized")
     }
 
+    /// Return the contract semver string.
+    ///
+    /// Read-only view returning the Cargo package version embedded at
+    /// compile time, enabling off-chain tooling to detect capability
+    /// deltas after upgrades.
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// Initiate replacement of the current admin. Only the existing admin may call this.
     /// The new admin must call `claim_admin` to complete the transfer.
     ///

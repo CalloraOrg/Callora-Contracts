@@ -449,6 +449,15 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
+    /// Return the contract semver string.
+    ///
+    /// Read-only view returning the Cargo package version embedded at
+    /// compile time, enabling off-chain tooling to detect capability
+    /// deltas after upgrades.
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
         env.storage()
