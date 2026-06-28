@@ -1721,7 +1721,7 @@ impl CalloraSettlement {
         env.storage().persistent().set(&StorageKey::Checkpoint, &cp);
 
         env.events().publish(
-            Symbol::new(&env, "checkpoint"),
+            (Symbol::new(&env, "checkpoint"),),
             (new_id, cp.total_pool_balance, cp.developer_count),
         );
 
