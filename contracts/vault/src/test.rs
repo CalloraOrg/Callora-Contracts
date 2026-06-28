@@ -291,15 +291,7 @@ fn cross_contract_conservation_fuzz() {
 
     // Fund vault on-chain and init contracts
     fund_vault(&usdc_admin, &vault_address, 1_000_000);
-    let _ = vault_client.init(
-        &owner,
-        &usdc,
-        &Some(1_000_000),
-        &None,
-        &None,
-        &Some(revenue_address),
-        &None,
-    );
+    let _ = vault_client.init(&owner, &usdc, &Some(1_000_000), &None, &None, &Some(revenue_address), &None);
 
     settlement_client.init(&admin, &vault_address);
     revenue_client.init(&admin, &usdc);
@@ -344,12 +336,7 @@ fn cross_contract_conservation_fuzz() {
                 if to_pool {
                     settlement_client.receive_payment(&vault_address, &amt, &true, &None);
                 } else {
-                    settlement_client.receive_payment(
-                        &vault_address,
-                        &amt,
-                        &false,
-                        &Some(developer.clone()),
-                    );
+                    settlement_client.receive_payment(&vault_address, &amt, &false, &Some(developer.clone()));
                 }
             }
         } else if choice < 90 {
@@ -384,27 +371,15 @@ fn cross_contract_conservation_fuzz() {
             settlement_sum = settlement_sum.checked_add(db.balance).unwrap();
         }
         // settlement_sum should equal total_deductions for the amounts we credited
-        assert_eq!(
-            settlement_sum, total_deductions,
-            "seed={}: step {}: settlement accounting mismatch: {} vs {}",
-            seed, i, settlement_sum, total_deductions
-        );
+        assert_eq!(settlement_sum, total_deductions, "seed={}: step {}: settlement accounting mismatch: {} vs {}", seed, i, settlement_sum, total_deductions);
 
         // 2) Vault internal accounting equals expected
         let observed_internal = vault_client.balance();
-        assert_eq!(
-            observed_internal, expected_vault_internal,
-            "seed={}: step {}: vault internal mismatch: {} vs {}",
-            seed, i, observed_internal, expected_vault_internal
-        );
+        assert_eq!(observed_internal, expected_vault_internal, "seed={}: step {}: vault internal mismatch: {} vs {}", seed, i, observed_internal, expected_vault_internal);
 
         // 3) On-chain token balance for vault equals expected
         let observed_onchain = usdc_client.balance(&vault_address);
-        assert_eq!(
-            observed_onchain, expected_onchain_vault,
-            "seed={}: step {}: vault onchain mismatch: {} vs {}",
-            seed, i, observed_onchain, expected_onchain_vault
-        );
+        assert_eq!(observed_onchain, expected_onchain_vault, "seed={}: step {}: vault onchain mismatch: {} vs {}", seed, i, observed_onchain, expected_onchain_vault);
     }
 }
 
@@ -933,7 +908,7 @@ fn set_authorized_caller_sets_and_emits_event() {
     assert_eq!(now, Some(new_caller.clone()));
     assert_eq!(nonce, 0u64);
 
-    let remaining = client.deduct(&new_caller, &50, &None, &u32::MAX, &Address::generate(&env));
+    let remaining = client.deduct(&new_caller, &50, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(remaining, 150);
 }
 
@@ -950,7 +925,7 @@ fn deduct_reduces_balance() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    let returned = client.deduct(&owner, &50, &None, &u32::MAX, &Address::generate(&env));
+    let returned = client.deduct(&owner, &50, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(returned, 250);
     assert_eq!(client.balance(), 250);
 }
@@ -968,13 +943,7 @@ fn deduct_with_request_id() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    let remaining = client.deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "req123")),
-        &u32::MAX,
-        &Address::generate(&env),
-    );
+    let remaining = client.deduct(&owner, &100, &Some(Symbol::new(&env, "req123")), &u16::MAX, &Address::generate(&env));
     assert_eq!(remaining, 900);
 }
 
@@ -989,7 +958,7 @@ fn deduct_insufficient_balance_fails() {
     fund_vault(&usdc_admin, &vault_address, 10);
     client.init(&owner, &usdc, &Some(10), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &100, &None, &u32::MAX);
+    let result = client.try_deduct(&owner, &100, &None, &u16::MAX);
     assert!(result.is_err(), "expected error for insufficient balance");
 }
 
@@ -1006,7 +975,7 @@ fn deduct_exact_balance_succeeds() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    let remaining = client.deduct(&owner, &75, &None, &u32::MAX, &Address::generate(&env));
+    let remaining = client.deduct(&owner, &75, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(remaining, 0);
     assert_eq!(client.balance(), 0);
 }
@@ -1025,12 +994,7 @@ fn deduct_event_contains_request_id() {
     client.set_settlement(&owner, &settlement);
 
     let request_id = Symbol::new(&env, "api_call_42");
-    client.deduct(
-        &owner,
-        &150,
-        &Some(request_id.clone(), &Address::generate(&env)),
-        &u32::MAX,
-    );
+    client.deduct(&owner, &150, &Some(request_id.clone(), &Address::generate(&env)), &u16::MAX);
 
     let events = env.events().all();
     let ev = events.last().expect("expected deduct event");
@@ -1059,7 +1023,7 @@ fn deduct_zero_amount_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &client.address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-    client.deduct(&owner, &0, &None, &u32::MAX);
+    client.deduct(&owner, &0, &None, &u16::MAX);
 }
 
 #[test]
@@ -1073,7 +1037,7 @@ fn deduct_exceeding_max_fails() {
     fund_vault(&usdc_admin, &client.address, 1000);
     // Set max_deduct to 500
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(500));
-    client.deduct(&owner, &501, &None, &u32::MAX);
+    client.deduct(&owner, &501, &None, &u16::MAX);
 }
 
 #[test]
@@ -1096,13 +1060,7 @@ fn deduct_authorized_caller_succeeds() {
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
-    let remaining = client.deduct(
-        &authorized,
-        &100,
-        &None,
-        &u32::MAX,
-        &Address::generate(&env),
-    );
+    let remaining = client.deduct(&authorized, &100, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(remaining, 900);
 }
 
@@ -1117,7 +1075,7 @@ fn deduct_paused_fails() {
     fund_vault(&usdc_admin, &client.address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None, &u16::MAX);
 }
 
 #[test]
@@ -1132,7 +1090,7 @@ fn deduct_event_no_request_id_uses_empty_symbol() {
     client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None, &u16::MAX);
 
     let events = env.events().all();
     let ev = events.last().expect("expected deduct event");
@@ -1161,7 +1119,7 @@ fn deduct_zero_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
-    client.deduct(&owner, &0, &None, &u32::MAX);
+    client.deduct(&owner, &0, &None, &u16::MAX);
 }
 
 #[test]
@@ -1175,7 +1133,7 @@ fn deduct_negative_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-    client.deduct(&owner, &-50, &None, &u32::MAX);
+    client.deduct(&owner, &-50, &None, &u16::MAX);
 }
 
 #[test]
@@ -1189,7 +1147,7 @@ fn deduct_exceeds_balance_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 50);
     client.init(&owner, &usdc, &Some(50), &None, &None, &None, &None);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None, &u16::MAX);
 }
 
 #[test]
@@ -1203,7 +1161,7 @@ fn balance_unchanged_after_failed_deduct() {
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    let _ = client.try_deduct(&owner, &200, &None, &u32::MAX);
+    let _ = client.try_deduct(&owner, &200, &None, &u16::MAX);
     assert_eq!(client.balance(), 100);
 }
 
@@ -1225,10 +1183,7 @@ fn propose_and_accept_revenue_pool_stores_address() {
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
     client.propose_revenue_pool(&Some(revenue_pool.clone()));
     // pending should be set
-    assert_eq!(
-        client.get_pending_revenue_pool(),
-        Some(revenue_pool.clone())
-    );
+    assert_eq!(client.get_pending_revenue_pool(), Some(revenue_pool.clone()));
     // accept
     client.accept_revenue_pool();
     assert_eq!(client.get_revenue_pool(), Some(revenue_pool));
@@ -1284,15 +1239,7 @@ fn propose_revenue_pool_same_as_current_fails() {
     let (usdc, _, _) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
-    client.init(
-        &owner,
-        &usdc,
-        &None,
-        &None,
-        &None,
-        &Some(pool.clone()),
-        &None,
-    );
+    client.init(&owner, &usdc, &None, &None, &None, &Some(pool.clone()), &None);
     let result = client.try_propose_revenue_pool(&Some(pool));
     assert_eq!(result, Err(Ok(VaultError::NewRevenuePoolSameAsCurrent)));
 }
@@ -1452,10 +1399,10 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     assert_eq!(before, Some(revenue_pool.clone()));
 
     // Perform deduct operation (routes to settlement, not revenue_pool)
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool();
+    let after = client.get_revenue_pool(, &Address::generate(&env));
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2305,9 +2252,8 @@ fn vault_full_lifecycle() {
         },
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 25,
             request_id: Some(Symbol::new(&env, "r3"))
@@ -2318,13 +2264,7 @@ fn vault_full_lifecycle() {
     assert_eq!(client.balance(), 525);
 
     // Single deduct
-    let after_deduct = client.deduct(
-        &owner,
-        &25,
-        &Some(Symbol::new(&env, "r4")),
-        &u32::MAX,
-        &Address::generate(&env),
-    );
+    let after_deduct = client.deduct(&owner, &25, &Some(Symbol::new(&env, "r4")), &u16::MAX, &Address::generate(&env));
     assert_eq!(after_deduct, 500);
 
     // Admin change
@@ -2398,7 +2338,7 @@ fn deduct_with_only_revenue_pool_panics() {
         &None,
     );
 
-    client.deduct(&caller, &300, &None, &u32::MAX);
+    client.deduct(&caller, &300, &None, &u16::MAX);
 }
 
 #[test]
@@ -2423,7 +2363,7 @@ fn deduct_with_settlement_transfers_usdc() {
     );
     client.set_settlement(&owner, &settlement);
 
-    client.deduct(&caller, &250, &None, &u32::MAX);
+    client.deduct(&caller, &250, &None, &u16::MAX);
 
     assert_eq!(client.balance(, &Address::generate(&env)), 550);
     assert_eq!(usdc_client.balance(&settlement), 250);
@@ -2456,14 +2396,12 @@ fn batch_deduct_with_only_revenue_pool_panics() {
         &env,
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 150,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     client.batch_deduct(&caller, &items);
 }
@@ -2494,14 +2432,12 @@ fn batch_deduct_with_settlement_transfers_total_usdc() {
         &env,
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 150,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     client.batch_deduct(&caller, &items);
 
@@ -2672,10 +2608,10 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     assert_eq!(before, Some(revenue_pool.clone()));
 
     // Perform deduct operation (routes to settlement, not revenue_pool)
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool();
+    let after = client.get_revenue_pool(, &Address::generate(&env));
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2822,7 +2758,7 @@ fn deduct_routes_to_settlement_when_both_configured() {
     );
     client.set_settlement(&owner, &settlement);
 
-    client.deduct(&caller, &400, &None, &u32::MAX, &Address::generate(&env));
+    client.deduct(&caller, &400, &None, &u16::MAX, &Address::generate(&env));
 
     // settlement gets the funds, revenue_pool gets nothing
     assert_eq!(usdc_client.balance(&settlement), 400);
@@ -2995,10 +2931,10 @@ fn get_settlement_consistent_after_deduct_operations() {
     assert_eq!(before, settlement);
 
     // Perform deduct operation
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement();
+    let after = client.get_settlement(, &Address::generate(&env));
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -3097,7 +3033,10 @@ fn set_authorized_caller_vault_address_fails() {
     client.init(&owner, &usdc, &None, &None, &None, &None, &None);
 
     let result = client.try_set_authorized_caller(&Some(vault_address), &0u64);
-    assert_eq!(result, Err(Ok(VaultError::AuthorizedCallerCannotBeVault)));
+    assert_eq!(
+        result,
+        Err(Ok(VaultError::AuthorizedCallerCannotBeVault))
+    );
 }
 
 #[test]
@@ -3315,7 +3254,7 @@ fn test_deduct_with_settlement_success() {
     );
     client.set_settlement(&owner, &settlement);
 
-    client.deduct(&owner, &300, &None, &u32::MAX);
+    client.deduct(&owner, &300, &None, &u16::MAX);
 
     assert_eq!(client.balance(, &Address::generate(&env)), 700);
     assert_eq!(usdc_client.balance(&settlement), 300);
@@ -3377,10 +3316,7 @@ fn deduct_to_zero_succeeds() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
 
-    assert_eq!(
-        client.deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env)),
-        0
-    );
+    assert_eq!(client.deduct(&owner, &500, &None, &u16::MAX, &Address::generate(&env)), 0);
 }
 
 #[test]
@@ -3433,19 +3369,16 @@ fn batch_deduct_to_zero_succeeds() {
         &env,
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     assert_eq!(client.batch_deduct(&owner, &items), 0);
 }
@@ -3615,7 +3548,7 @@ fn deduct_while_paused_fails() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None, &u16::MAX);
 }
 
 #[test]
@@ -3635,9 +3568,8 @@ fn batch_deduct_while_paused_fails() {
         &env,
         DeductItem {
             amount: 100,
-            request_id: None,
-            developer: Address::generate(&env)
-        }
+            request_id: None
+        , developer: Address::generate(&env) }
     ];
     client.batch_deduct(&owner, &items); // must panic with "vault is paused"
 }
@@ -3655,7 +3587,7 @@ fn deduct_unauthorized_caller_fails() {
     // init with an authorized_caller so the None branch is not taken
     let auth = Address::generate(&env);
     client.init(&owner, &usdc, &Some(500), &Some(auth), &None, &None, &None);
-    client.deduct(&attacker, &100, &None, &u32::MAX);
+    client.deduct(&attacker, &100, &None, &u16::MAX);
 }
 
 #[test]
@@ -3690,7 +3622,7 @@ fn deduct_exceeds_max_deduct_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(50));
-    client.deduct(&owner, &100, &None, &u32::MAX); // 100 > max_deduct(50)
+    client.deduct(&owner, &100, &None, &u16::MAX); // 100 > max_deduct(50)
 }
 
 #[test]
@@ -3789,6 +3721,7 @@ fn cancel_admin_transfer_no_pending_fails() {
     client.cancel_admin_transfer(&owner);
 }
 
+
 #[test]
 #[should_panic(expected = "no ownership transfer pending")]
 fn accept_ownership_without_pending_fails() {
@@ -3843,11 +3776,11 @@ fn deduct_without_settlement_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
-    client.deduct(&owner, &200, &None, &u32::MAX);
+    client.deduct(&owner, &200, &None, &u16::MAX);
 }
 
 #[test]
-fn deduct_without_settlement_does_not_mutate_state() {
+fn deduct_without_settlement_does_not_mutate_state(, &Address::generate(&env)) {
     // When deduct panics due to missing settlement, vault state must be unchanged.
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -3857,7 +3790,7 @@ fn deduct_without_settlement_does_not_mutate_state() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &200, &None, &u32::MAX);
+    let result = client.try_deduct(&owner, &200, &None, &u16::MAX);
     assert!(result.is_err(), "expected panic for missing settlement");
     assert_eq!(client.balance(), 500);
     assert_eq!(usdc_client.balance(&vault_address), 500);
@@ -4124,17 +4057,13 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=op_cap);
                     if paused {
                         // deduct must fail while paused
-                        assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
-                            .is_err());
+                        assert!(client.try_deduct(&caller, &amount, &None, &u16::MAX).is_err());
                     } else if sim >= amount {
                         sim -= amount;
-                        client.deduct(&caller, &amount, &None, &u32::MAX);
+                        client.deduct(&caller, &amount, &None, &u16::MAX);
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
-                        assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
-                            .is_err());
+                        assert!(client.try_deduct(&caller, &amount, &None, &u16::MAX).is_err());
                     }
                 }
 
@@ -4412,13 +4341,11 @@ mod fuzz {
                 let amount: i128 = rng.gen_range(1..=max_d);
                 if sim >= amount {
                     sim -= amount;
-                    client.deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env));
+                    client.deduct(&caller, &amount, &None, &u16::MAX, &Address::generate(&env));
                 } else {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None, &u16::MAX).is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
                 }
@@ -4595,19 +4522,15 @@ mod fuzz {
                 let amount: i128 = rng.gen_range(1..=max_d);
                 if paused {
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None, &u16::MAX).is_err(),
                         "deduct must fail while paused at step {step}"
                     );
                 } else if sim >= amount {
                     sim -= amount;
-                    client.deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env));
+                    client.deduct(&caller, &amount, &None, &u16::MAX, &Address::generate(&env));
                 } else {
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None, &u16::MAX).is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
                 }
@@ -4761,11 +4684,11 @@ mod fuzz {
                 client.deposit(&owner, &1);
             } else if sim >= 1 {
                 sim -= 1;
-                client.deduct(&caller, &1, &None, &u32::MAX, &Address::generate(&env));
+                client.deduct(&caller, &1, &None, &u16::MAX, &Address::generate(&env));
             } else {
                 // Balance exhausted: deduct must fail.
                 assert!(
-                    client.try_deduct(&caller, &1, &None, &u32::MAX).is_err(),
+                    client.try_deduct(&caller, &1, &None, &u16::MAX).is_err(),
                     "deduct must fail when balance=0 at step {step}"
                 );
             }
@@ -4827,12 +4750,10 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=max_d);
                     if sim >= amount {
                         sim -= amount;
-                        client.deduct(&owner, &amount, &None, &u32::MAX, &Address::generate(&env));
+                        client.deduct(&owner, &amount, &None, &u16::MAX, &Address::generate(&env));
                     } else {
                         assert!(
-                            client
-                                .try_deduct(&owner, &amount, &None, &u32::MAX)
-                                .is_err(),
+                            client.try_deduct(&owner, &amount, &None, &u16::MAX).is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
                     }
@@ -4841,18 +4762,10 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=max_d);
                     if sim >= amount {
                         sim -= amount;
-                        client.deduct(
-                            &caller_b,
-                            &amount,
-                            &None,
-                            &u32::MAX,
-                            &Address::generate(&env),
-                        );
+                        client.deduct(&caller_b, &amount, &None, &u16::MAX, &Address::generate(&env));
                     } else {
                         assert!(
-                            client
-                                .try_deduct(&caller_b, &amount, &None, &u32::MAX)
-                                .is_err(),
+                            client.try_deduct(&caller_b, &amount, &None, &u16::MAX).is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
                     }
@@ -5023,7 +4936,7 @@ fn deduct_equal_to_max_deduct_succeeds() {
     usdc_client.approve(&owner, &vault_address, &200, &1000);
     client.deposit(&owner, &200);
     // deduct exactly equal to max_deduct — must succeed
-    let balance = client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env));
+    let balance = client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(balance, 600);
 }
 
@@ -5041,7 +4954,7 @@ fn deduct_above_max_deduct_panics() {
     usdc_client.approve(&owner, &vault_address, &200, &1000);
     client.deposit(&owner, &200);
     // deduct 101 > max_deduct 100 — must panic
-    client.deduct(&owner, &101, &None, &u32::MAX);
+    client.deduct(&owner, &101, &None, &u16::MAX);
 }
 
 #[test]
@@ -5060,7 +4973,7 @@ fn deduct_default_cap_is_i128_max() {
     usdc_client.approve(&owner, &vault_address, &1_000_000, &1000);
     client.deposit(&owner, &1_000_000);
     // large deduct well below i128::MAX should succeed
-    let balance = client.deduct(&owner, &999_999, &None, &u32::MAX, &Address::generate(&env));
+    let balance = client.deduct(&owner, &999_999, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(balance, 1);
 }
 
@@ -5084,19 +4997,16 @@ fn batch_deduct_each_item_constrained_by_max_deduct() {
         &env,
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     let balance = client.batch_deduct(&owner, &items);
     assert_eq!(balance, 150);
@@ -5120,14 +5030,12 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
         &env,
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 51,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     client.batch_deduct(&owner, &items);
 }
@@ -5358,7 +5266,7 @@ fn instance_ttl_extended_on_deduct_and_batch_deduct() {
     client.deposit(&owner, &500);
 
     // deduct — bumps TTL
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None, &u16::MAX);
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
@@ -5373,14 +5281,12 @@ fn instance_ttl_extended_on_deduct_and_batch_deduct() {
         &env,
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 50,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
     client.batch_deduct(&owner, &items);
     let seq = env.ledger().sequence();
@@ -5469,14 +5375,7 @@ mod malicious_token {
                 let vault_client = CalloraVaultClient::new(&env, &vault_addr);
 
                 // 😈 ATTACK: Call back into the vault
-                vault_client.deduct(
-                    &caller,
-                    &attack_amount,
-                    &Some(Symbol::new(&env, "reentry")),
-                    &u32::MAX,
-                    &Address::generate(&env),
-                    &Address::generate(&env),
-                );
+                vault_client.deduct(&caller, &attack_amount, &Some(Symbol::new(&env, "reentry")), &u16::MAX, &Address::generate(&env), &Address::generate(&env));
             }
         }
 
@@ -5550,7 +5449,7 @@ fn test_reentry_protection_single_deduct() {
     // Call 2 (Re-entrant): deduct(600) -> sees balance 500 -> PANIC "insufficient balance".
     malicious_client.set_attack_config(&vault_address, &owner, &600, &1);
 
-    let result = vault_client.try_deduct(&owner, &500, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &500, &None, &u16::MAX);
 
     // Acceptable Outcome A: Re-entrant call fails due to state guard (insufficient balance).
     assert!(
@@ -5611,14 +5510,12 @@ fn test_reentry_protection_batch_deduct() {
         &env,
         DeductItem {
             amount: 300,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
 
     let result = vault_client.try_batch_deduct(&owner, &items);
@@ -5674,7 +5571,7 @@ fn test_reentry_success_preserves_accounting() {
     // Call 1 resumes.
     malicious_client.set_attack_config(&vault_address, &owner, &100, &1);
 
-    vault_client.deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env));
+    vault_client.deduct(&owner, &200, &None, &u16::MAX, &Address::generate(&env));
 
     // Final balance must be exactly 700.
     assert_eq!(
@@ -5714,7 +5611,7 @@ fn test_nested_reentry_protection() {
     // Total should be: 100 (original) + 3 * 100 (re-entries) = 400.
     token_client.set_attack_config(&vault_address, &owner, &100, &3);
 
-    vault_client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env));
+    vault_client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env));
 
     assert_eq!(vault_client.balance(, &Address::generate(&env)), 600);
 }
@@ -5758,7 +5655,7 @@ fn test_reentry_exact_balance_exhaustion() {
     // re-entry deduct(500) -> balance 0. (Success)
     malicious_client.set_attack_config(&vault_address, &owner, &500, &1);
 
-    vault_client.deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env));
+    vault_client.deduct(&owner, &500, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(vault_client.balance(, &Address::generate(&env)), 0);
 
     // Try again with over-exhaustion
@@ -5766,7 +5663,7 @@ fn test_reentry_exact_balance_exhaustion() {
     // deduct(600) -> balance 400.
     // re-entry deduct(401) -> Fail.
     malicious_client.set_attack_config(&vault_address, &owner, &401, &1);
-    let result = vault_client.try_deduct(&owner, &600, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &600, &None, &u16::MAX);
     assert!(result.is_err());
     assert_eq!(vault_client.balance(), 1000);
 }
@@ -5806,7 +5703,7 @@ fn test_reentry_near_zero_balance() {
     // Call 2 (Re-entrant): deduct(1) -> sees balance 0 -> PANIC "insufficient balance"
     malicious_client.set_attack_config(&vault_address, &owner, &1, &1);
 
-    let result = vault_client.try_deduct(&owner, &1, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &1, &None, &u16::MAX);
 
     // Must fail due to insufficient balance in re-entrant call
     assert!(result.is_err());
@@ -5858,19 +5755,16 @@ fn test_reentry_multiple_recipients_batch() {
         &env,
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 200,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
 
     vault_client.batch_deduct(&owner, &items);
@@ -5923,14 +5817,12 @@ fn test_reentry_callback_after_partial_batch() {
         &env,
         DeductItem {
             amount: 300,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
         DeductItem {
             amount: 400,
-            request_id: None,
-            developer: Address::generate(&env)
-        },
+            request_id: None
+        , developer: Address::generate(&env) },
     ];
 
     vault_client.batch_deduct(&owner, &items);
@@ -5977,14 +5869,7 @@ fn test_reentry_repeated_attempts() {
     // This tests that the vault's balance validation prevents over-deduction
     malicious_client.set_attack_config(&vault_address, &owner, &100, &5);
 
-    vault_client.deduct(
-        &owner,
-        &100,
-        &None,
-        &u32::MAX,
-        &Address::generate(&env),
-        &Address::generate(&env),
-    );
+    vault_client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env), &Address::generate(&env));
 
     // With 5 re-entries of 100 each, plus original 100, total should be 600
     // So final balance should be 1000 - 600 = 400
@@ -6218,7 +6103,7 @@ fn budget_measure_single_deduct() {
     let (owner, client) = setup_vault_for_deduct(&env, 100_000_000);
 
     let before = BudgetSnapshot::capture(&env);
-    client.deduct(&owner, &1_000_000, &None, &u32::MAX);
+    client.deduct(&owner, &1_000_000, &None, &u16::MAX);
     let after = BudgetSnapshot::capture(&env);
 
     let delta = after.delta(&before, &Address::generate(&env));
@@ -6242,9 +6127,8 @@ fn budget_measure_batch_deduct_size_1() {
         &env,
         DeductItem {
             amount: 1_000_000,
-            request_id: None,
-            developer: Address::generate(&env)
-        }
+            request_id: None
+        , developer: Address::generate(&env) }
     ];
 
     let before = BudgetSnapshot::capture(&env);
@@ -6409,14 +6293,14 @@ fn slippage_fee_above_limit_returns_slippage_error() {
     );
 }
 
-/// Passing u32::MAX behaves like the old unrestricted deduct.
+/// Passing u16::MAX behaves like the old unrestricted deduct.
 #[test]
 fn slippage_max_u16_is_unrestricted() {
     let env = Env::default();
     let (owner, client) = setup_slippage_vault(&env, 1000);
     env.mock_all_auths();
-    // Deduct 99% of balance — would fail any real limit, but u32::MAX = no limit
-    let remaining = client.deduct(&owner, &999, &None, &u32::MAX, &Address::generate(&env));
+    // Deduct 99% of balance — would fail any real limit, but u16::MAX = no limit
+    let remaining = client.deduct(&owner, &999, &None, &u16::MAX, &Address::generate(&env));
     assert_eq!(remaining, 1);
 }
 
@@ -6455,25 +6339,15 @@ fn slippage_check_before_state_mutation() {
     let balance_before = client.balance();
     // This should fail with Slippage
     let _ = client.try_deduct(&owner, &500, &None, &10);
-    assert_eq!(
-        client.balance(),
-        balance_before,
-        "balance must be unchanged after slippage revert"
-    );
+    assert_eq!(client.balance(), balance_before, "balance must be unchanged after slippage revert");
 }
 
-/// Existing deductions (u32::MAX) continue to work — no regression.
+/// Existing deductions (u16::MAX) continue to work — no regression.
 #[test]
 fn slippage_no_regression_existing_deductions() {
     let env = Env::default();
     let (owner, client) = setup_slippage_vault(&env, 500);
     env.mock_all_auths();
-    assert_eq!(
-        client.deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env)),
-        300
-    );
-    assert_eq!(
-        client.deduct(&owner, &300, &None, &u32::MAX, &Address::generate(&env)),
-        0
-    );
+    assert_eq!(client.deduct(&owner, &200, &None, &u16::MAX, &Address::generate(&env)), 300);
+    assert_eq!(client.deduct(&owner, &300, &None, &u16::MAX, &Address::generate(&env)), 0);
 }

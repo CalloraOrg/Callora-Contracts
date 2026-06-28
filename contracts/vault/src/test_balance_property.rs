@@ -128,12 +128,7 @@ impl Trace {
             self.seed
         );
         for s in &self.steps {
-            msg.push_str(&std::format!(
-                "  [{}] {} — {}\n",
-                s.index,
-                s.label,
-                s.detail
-            ));
+            msg.push_str(&std::format!("  [{}] {} — {}\n", s.index, s.label, s.detail));
         }
         panic!("{msg}");
     }
@@ -293,10 +288,7 @@ fn run_property_trace(seed: u64) {
                     trace.push(
                         step,
                         "deposit",
-                        std::format!(
-                            "caller={} amount={amount}",
-                            if use_alt { "alt" } else { "owner" }
-                        ),
+                        std::format!("caller={} amount={amount}", if use_alt { "alt" } else { "owner" }),
                     );
                 }
             }
@@ -430,7 +422,11 @@ fn run_property_trace(seed: u64) {
                 }
                 // Distribute the full surplus so meta.balance stays equal to on-ledger USDC.
                 client.distribute(&owner, &recipient, &surplus);
-                trace.push(step, "distribute", std::format!("amount={surplus}"));
+                trace.push(
+                    step,
+                    "distribute",
+                    std::format!("amount={surplus}"),
+                );
             }
 
             x if x == OpKind::PauseToggle as u8 => {
@@ -468,14 +464,8 @@ fn run_property_trace(seed: u64) {
                     if !paused && balance_before >= amount {
                         let rid = make_request_id(&env, rid_counter);
                         rid_counter += 1;
-                        client.deduct(
-                            &owner,
-                            &amount,
-                            &Some(rid.clone(), &Address::generate(&env)),
-                            &u16::MAX,
-                        );
-                        let retry =
-                            client.try_deduct(&owner, &amount, &Some(rid.clone()), &u16::MAX);
+                        client.deduct(&owner, &amount, &Some(rid.clone(), &Address::generate(&env)), &u16::MAX);
+                        let retry = client.try_deduct(&owner, &amount, &Some(rid.clone()), &u16::MAX);
                         trace.push(
                             step,
                             "request_id_reuse",
@@ -630,12 +620,7 @@ fn test_balance_property_request_id_reuse() {
     client.set_settlement(&owner, &settlement);
 
     let rid = Symbol::new(&env, "reuse_test_id");
-    client.deduct(
-        &owner,
-        &100,
-        &Some(rid.clone(), &Address::generate(&env)),
-        &u16::MAX,
-    );
+    client.deduct(&owner, &100, &Some(rid.clone(), &Address::generate(&env)), &u16::MAX);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 1);
 
     let retry = client.try_deduct(&owner, &50, &Some(rid.clone()), &u16::MAX);
