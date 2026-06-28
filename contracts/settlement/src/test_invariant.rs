@@ -219,7 +219,7 @@ fn setup_env() -> (
         token::StellarAssetClient::new(env, &usdc_addr);
 
     (
-        (*env).clone(),
+        &(*env).clone(),
         contract,
         client,
         admin,
