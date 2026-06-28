@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String,
+    Symbol, Vec,
 };
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
@@ -28,6 +29,7 @@ const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
+const ERR_INVALID_RECIPIENT_SHAPE: &str = "invalid recipient: expected account address shape";
 const PAUSED_KEY: &str = "paused";
 const ERR_PAUSED: &str = "revenue pool paused";
 const VERSION_KEY: &str = "version";
@@ -84,7 +86,6 @@ pub struct StorageEntryTtl {
     pub threshold: u32,
     pub bump_amount: u32,
 }
-
 
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
@@ -570,6 +571,19 @@ impl RevenuePool {
         if recipient == contract_self {
             panic!("invalid recipient: cannot distribute to the contract itself");
         }
+
+        // Rule 2 — recipients must be account addresses (`G...`) and not
+        // contract addresses (`C...`) or other unsupported shapes.
+        let shape = recipient.to_string();
+        let len = shape.len();
+        let mut bytes = [0u8; 64];
+        if len == 0 || len > 64 {
+            panic!("{}", ERR_INVALID_RECIPIENT_SHAPE);
+        }
+        shape.copy_into_slice(&mut bytes[..len as usize]);
+        if len != 56 || bytes[0] != b'G' {
+            panic!("{}", ERR_INVALID_RECIPIENT_SHAPE);
+        }
     }
 
     /// Distribute USDC from this contract to a developer wallet.
@@ -586,6 +600,7 @@ impl RevenuePool {
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If the amount is zero or negative (`"amount must be positive"`).
     /// * If the revenue pool has not been initialized.
+    /// * If `to` is not an account-address shape (`"invalid recipient: expected account address shape"`).
     /// * If the revenue pool holds less than the requested amount (`"insufficient USDC balance"`).
     ///
     /// # Events
@@ -917,7 +932,6 @@ impl RevenuePool {
         result
     }
 }
-
 
 mod events;
 /// Split `payments` into consecutive chunks of at most `chunk_size` legs each,

@@ -156,6 +156,23 @@ fn distribute_excess_panics() {
 }
 
 #[test]
+#[should_panic(expected = "invalid recipient: expected account address shape")]
+fn distribute_contract_recipient_shape_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    // Create a different contract address (shape `C...`) as an invalid recipient.
+    let other_contract_recipient = env.register(RevenuePool, ());
+
+    client.init(&admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool_addr, 100);
+    client.distribute(&admin, &other_contract_recipient, &10);
+}
+
+#[test]
 fn pause_guardian_can_pause_but_not_unpause() {
     let env = Env::default();
     env.mock_all_auths();
