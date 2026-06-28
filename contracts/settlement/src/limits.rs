@@ -2,7 +2,7 @@
 
 use soroban_sdk::{Env, Address, Symbol, contracterror, contracttype};
 use crate::errors::SettlementError;
-use crate::types::StorageKey;
+use crate::StorageKey;
 
 /// Set the minimum balance for a developer.
 ///

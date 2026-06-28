@@ -326,7 +326,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::Meta, &meta);
+        inst.set(&StorageKey::MetaKey, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -873,7 +873,7 @@ impl CalloraVault {
         caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
-        max_fee_bps: u16,
+        max_fee_bps: u32,
         developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
@@ -900,8 +900,8 @@ impl CalloraVault {
         }
         // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
         // current balance. Calculated before any state mutation or external call.
-        // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
-        if max_fee_bps < u16::MAX && meta.balance > 0 {
+        // Uses u32::MAX as the sentinel for "no limit" (backward-compatible default).
+        if max_fee_bps < u32::MAX && meta.balance > 0 {
             let calculated_fee_bps = amount
                 .checked_mul(10_000)
                 .ok_or(VaultError::Overflow)?
@@ -931,6 +931,7 @@ impl CalloraVault {
             &amount,
             &true, // to_pool = true: credit global pool
             &Some(developer.clone()), // developer is passed down
+            &ut,
         );
 
         // Now that external operations succeeded, update internal state
@@ -1042,6 +1043,7 @@ impl CalloraVault {
             &total,
             &true, // to_pool = true: credit global pool
             &None, // developers are tracked per-item, not passed for whole batch
+            &ut,
         );
 
         // Now that external operations succeeded, update internal state
@@ -1098,7 +1100,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (events::event_ownership_accepted(&env), old, meta.owner),
@@ -1770,6 +1772,7 @@ impl CalloraVault {
 
 mod events;
 pub mod rate_limit;
+mod validators;
 
 // ---------------------------------------------------------------------------
 // Test modules
