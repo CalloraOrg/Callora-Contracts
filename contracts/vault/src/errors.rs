@@ -42,6 +42,9 @@ use soroban_sdk::contracterror;
 /// | 32   | StaleNonce                     | Rotation nonce does not match the stored current nonce   |
 /// | 33   | NewRevenuePoolSameAsCurrent    | Proposed revenue pool matches the current revenue pool   |
 /// | 34   | NoRevenuePoolTransferPending   | No revenue-pool transfer is pending                      |
+/// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
+/// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
+/// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -118,4 +121,6 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Operation is rejected because the vault is paused (code 37).
+    PausedState = 37,
 }

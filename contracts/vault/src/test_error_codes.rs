@@ -40,15 +40,21 @@ fn vault_error_codes_are_stable_and_unique() {
         (32, VaultError::StaleNonce),
         (33, VaultError::NewRevenuePoolSameAsCurrent),
         (34, VaultError::NoRevenuePoolTransferPending),
+        (35, VaultError::Slippage),
+        (36, VaultError::RateLimited),
+        (37, VaultError::PausedState),
     ];
 
     let mut seen = BTreeSet::new();
     for (expected_code, variant) in mappings {
         assert_eq!(variant as u32, expected_code);
-        assert!(seen.insert(expected_code), "duplicate vault error code {expected_code}");
+        assert!(
+            seen.insert(expected_code),
+            "duplicate vault error code {expected_code}"
+        );
     }
 
-    assert_eq!(seen.len(), 34);
+    assert_eq!(seen.len(), 37);
 }
 
 #[test]
@@ -89,6 +95,9 @@ fn error_code_docs_list_every_vault_code() {
         "| 32 | `StaleNonce` | Vault | Rotation nonce does not match the stored current nonce |",
         "| 33 | `NewRevenuePoolSameAsCurrent` | Vault | Proposed revenue pool matches the current revenue pool |",
         "| 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |",
+        "| 35 | `Slippage` | Vault | Fee basis points exceeds the caller-supplied maximum |",
+        "| 36 | `RateLimited` | Vault | Developer rate limit has been exceeded |",
+        "| 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |",
     ];
 
     for line in expected_lines {
