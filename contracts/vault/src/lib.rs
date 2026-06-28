@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -1302,13 +1302,6 @@ impl CalloraVault {
         Ok(())
     }
 
-    pub fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
-    }
-
     /// Store the settlement contract address (admin only).
     ///
     /// `deduct` and `batch_deduct` return error until this is called.
@@ -1698,41 +1691,6 @@ impl CalloraVault {
         }
         Ok(())
     }
-
-    /// Broadcast an emergency message from the admin.
-    ///
-    /// Only the current admin may call this function.
-    /// The message length is capped at 256 characters.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin; must authorize.
-    /// * `severity` - Severity level of the broadcast (Info/Warn/Crit).
-    /// * `message` - The broadcast message, capped at 256 characters.
-    ///
-    /// # Errors
-    /// * `VaultError::Unauthorized` - If the caller is not the current admin.
-    /// * `VaultError::MetadataTooLong` - If the message length exceeds 256 characters.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
-        }
-        let len = message.len();
-        if len == 0 {
-            return Err(VaultError::MetadataTooLong); // Reusing existing error for message too long/empty
-        }
-        if len > MAX_MESSAGE_LEN {
-            return Err(VaultError::MetadataTooLong);
-        }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
-        Ok(())
-    }
-}
 
 // Allowlist aliases — convenience wrappers used by tests and external callers.
 #[contractimpl]
