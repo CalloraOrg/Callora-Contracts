@@ -839,34 +839,73 @@ impl CalloraSettlement {
             env.panic_with_error(SettlementError::Unauthorized);
         }
 
-        // Cap limit to the maximum safe page size.
-        let effective_limit = if limit == 0 {
-            return (Vec::new(&env), None);
-        } else {
-            limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE)
-        };
-
         let inst = env.storage().instance();
         let index: Vec<Address> = inst
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
 
-        let mut result: Vec<DeveloperBalance> = Vec::new(&env);
-        // When a cursor is supplied we skip addresses up to and including it.
-        // `past_cursor` becomes true once we have consumed the cursor entry (or
-        // immediately when cursor is None).
-        let mut past_cursor = cursor.is_none();
-        let mut last_address: Option<Address> = None;
+        pagination::get_page(&env, &index, cursor, limit)
+    }
 
-        for address in index.iter() {
-            if !past_cursor {
-                if let Some(ref c) = cursor {
-                    if &address == c {
-                        // We've reached the cursor entry; start collecting from next.
-                        past_cursor = true;
+    /// Return the remaining TTL for each storage key category.
+    ///
+    /// # Parameters
+    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
+    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
+        let mut result = Vec::new(&env);
+
+        // 1. Instance Storage
+        let instance_ttl = {
+            #[cfg(any(test, feature = "testutils"))]
+            {
+                env.storage().instance().get_ttl()
+            }
+            #[cfg(not(any(test, feature = "testutils")))]
+            {
+                17_280 * 60
+            }
+        };
+        result.push_back(StorageEntryTtl {
+            category: String::from_str(&env, "Instance"),
+            key_desc: String::from_str(&env, "Instance"),
+            storage_type: String::from_str(&env, "Instance"),
+            ttl: instance_ttl,
+            threshold: 17_280 * 30,
+            bump_amount: 17_280 * 60,
+        });
+
+        // Determine which developer addresses to inspect
+        let devs = if developer_addresses.len() > 0 {
+            developer_addresses
+        } else {
+            env.storage()
+                .instance()
+                .get(&StorageKey::DeveloperIndex)
+                .unwrap_or_else(|| Vec::new(&env))
+        };
+
+        for dev in devs.iter() {
+            // Check DeveloperBalance (Persistent)
+            let bal_key = StorageKey::DeveloperBalance(dev.clone());
+            if env.storage().persistent().has(&bal_key) {
+                let ttl = {
+                    #[cfg(any(test, feature = "testutils"))]
+                    {
+                        env.storage().persistent().get_ttl(&bal_key)
                     }
-                }
-                continue;
+                    #[cfg(not(any(test, feature = "testutils")))]
+                    {
+                        50000
+                    }
+                };
+                result.push_back(StorageEntryTtl {
+                    category: String::from_str(&env, "DeveloperBalance"),
+                    key_desc: String::from_str(&env, "DeveloperBalance"),
+                    storage_type: String::from_str(&env, "Persistent"),
+                    ttl,
+                    threshold: 50000,
+                    bump_amount: 50000,
+                });
             }
 
             let balance: i128 = env
@@ -881,21 +920,31 @@ impl CalloraSettlement {
             });
             last_address = Some(address.clone());
 
-            if result.len() >= effective_limit {
-                break;
+            // Check DailyWithdrawCap (Persistent)
+            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
+            if env.storage().persistent().has(&cap_key) {
+                let ttl = {
+                    #[cfg(any(test, feature = "testutils"))]
+                    {
+                        env.storage().persistent().get_ttl(&cap_key)
+                    }
+                    #[cfg(not(any(test, feature = "testutils")))]
+                    {
+                        50000
+                    }
+                };
+                result.push_back(StorageEntryTtl {
+                    category: String::from_str(&env, "DailyWithdrawCap"),
+                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
+                    storage_type: String::from_str(&env, "Persistent"),
+                    ttl,
+                    threshold: 50000,
+                    bump_amount: 50000,
+                });
             }
         }
 
-        // next_cursor is the address of the last record returned, provided the
-        // page is full (meaning there may be more records).  When the page is
-        // not full we have reached the end of the index.
-        let next_cursor = if result.len() >= effective_limit {
-            last_address
-        } else {
-            None
-        };
-
-        (result, next_cursor)
+        result
     }
 
     /// Return the remaining TTL for each storage key category.
