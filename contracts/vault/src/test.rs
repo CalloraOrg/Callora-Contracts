@@ -1402,7 +1402,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2611,7 +2611,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2934,7 +2934,7 @@ fn get_settlement_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement(, &Address::generate(&env));
+    let after = client.get_settlement();
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -3780,7 +3780,7 @@ fn deduct_without_settlement_panics() {
 }
 
 #[test]
-fn deduct_without_settlement_does_not_mutate_state(, &Address::generate(&env)) {
+fn deduct_without_settlement_does_not_mutate_state() {
     // When deduct panics due to missing settlement, vault state must be unchanged.
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -6350,4 +6350,110 @@ fn slippage_no_regression_existing_deductions() {
     env.mock_all_auths();
     assert_eq!(client.deduct(&owner, &200, &None, &u16::MAX, &Address::generate(&env)), 300);
     assert_eq!(client.deduct(&owner, &300, &None, &u16::MAX, &Address::generate(&env)), 0);
+}
+// ---------------------------------------------------------------------------
+// Rescue funds tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rescue_funds_admin_can_recover_non_usdc_token() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+    let (other_token, other_client, other_admin) = create_usdc(&env, &admin);
+
+    env.mock_all_auths();
+    client.init(&admin, &usdc, &None, &None, &None, &None, &None);
+    fund_vault(&other_admin, &vault_address, 500);
+
+    client.rescue_funds(&admin, &other_token, &recipient, &300);
+
+    assert_eq!(other_client.balance(&recipient), 300);
+    assert_eq!(other_client.balance(&vault_address), 200);
+    assert_eq!(client.balance(), 0);
+}
+
+#[test]
+fn rescue_funds_for_usdc_only_allows_surplus_above_tracked_balance() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1_200);
+    client.init(&admin, &usdc, &Some(1_000), &None, &None, &None, &None);
+
+    assert!(client
+        .try_rescue_funds(&admin, &usdc, &recipient, &201)
+        .is_err());
+
+    client.rescue_funds(&admin, &usdc, &recipient, &200);
+
+    assert_eq!(usdc_client.balance(&recipient), 200);
+    assert_eq!(usdc_client.balance(&vault_address), 1_000);
+    assert_eq!(client.balance(), 1_000);
+}
+
+#[test]
+fn rescue_funds_rejects_non_admin_and_non_positive_amounts() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let intruder = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+    let (other_token, _, other_admin) = create_usdc(&env, &admin);
+
+    env.mock_all_auths();
+    client.init(&admin, &usdc, &None, &None, &None, &None, &None);
+    fund_vault(&other_admin, &vault_address, 100);
+
+    assert!(client
+        .try_rescue_funds(&intruder, &other_token, &recipient, &50)
+        .is_err());
+    assert!(client
+        .try_rescue_funds(&admin, &other_token, &recipient, &0)
+        .is_err());
+}
+
+#[test]
+fn rescue_funds_emits_event() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+    let (other_token, _, other_admin) = create_usdc(&env, &admin);
+
+    env.mock_all_auths();
+    client.init(&admin, &usdc, &None, &None, &None, &None, &None);
+    fund_vault(&other_admin, &vault_address, 100);
+
+    client.rescue_funds(&admin, &other_token, &recipient, &75);
+
+    let events = env.events().all();
+    let rescue_event = events
+        .iter()
+        .find(|e| {
+            if e.0 != vault_address || e.1.len() != 4 {
+                return false;
+            }
+            let topic: Symbol = e.1.get(0).unwrap().into_val(&env);
+            topic == Symbol::new(&env, "rescue_funds")
+        })
+        .expect("expected rescue_funds event");
+
+    let event_admin: Address = rescue_event.1.get(1).unwrap().into_val(&env);
+    let event_token: Address = rescue_event.1.get(2).unwrap().into_val(&env);
+    let event_to: Address = rescue_event.1.get(3).unwrap().into_val(&env);
+    let amount: i128 = rescue_event.2.into_val(&env);
+
+    assert_eq!(event_admin, admin);
+    assert_eq!(event_token, other_token);
+    assert_eq!(event_to, recipient);
+    assert_eq!(amount, 75);
 }

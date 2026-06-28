@@ -830,6 +830,30 @@
     },
 
     {
+      "name": "rescue_funds",
+      "description": "Admin-only rescue entrypoint for tokens accidentally sent to the vault. The admin address should be configured as the campaign multisig/timelock. For the configured USDC token, only surplus above the tracked vault balance is rescueable; non-USDC tokens can be rescued up to their on-ledger vault balance.",
+      "access": "admin (must sign; expected to be multisig/timelock in production)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Current admin address; must authorize." },
+        { "name": "token", "type": "Address", "optional": false, "description": "Token contract address to rescue from the vault." },
+        { "name": "to", "type": "Address", "optional": false, "description": "Recipient for rescued tokens." },
+        { "name": "amount", "type": "i128", "optional": false, "description": "Amount to rescue; must be positive." }
+      ],
+      "returns": "void",
+      "panics": [
+        "VaultError::Unauthorized — caller is not the current admin.",
+        "VaultError::AmountNotPositive — amount <= 0.",
+        "VaultError::InsufficientBalance — requested amount exceeds rescueable token balance."
+      ],
+      "events": [
+        {
+          "topics": ["\"rescue_funds\"", "caller", "token", "to"],
+          "data": "amount (i128)"
+        }
+      ]
+    },
+
+    {
       "name": "require_owner",
       "description": "Utility: panic with 'unauthorized: owner only' if caller is not the vault owner. Exposed publicly so external contracts can use it as a guard.",
       "access": "any (panics if caller != owner)",
