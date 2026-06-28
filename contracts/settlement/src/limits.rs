@@ -1,7 +1,7 @@
 //! Limits module for per-developer minimum balance.
 
 use soroban_sdk::{Env, Address, Symbol, contracterror, contracttype};
-use crate::errors::SettlementError;
+use crate::SettlementError;
 use crate::StorageKey;
 
 /// Set the minimum balance for a developer.
