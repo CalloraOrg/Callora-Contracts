@@ -100,6 +100,11 @@ pub fn event_admin_migration(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration")
 }
 
+/// Returns the Symbol for a checkpoint snapshot.
+pub fn event_checkpoint_created(env: &Env) -> Symbol {
+    Symbol::new(env, "checkpoint_created")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,7 +214,10 @@ mod tests {
     #[test]
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
-        assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
+        assert_eq!(
+            event_admin_broadcast(&env),
+            Symbol::new(&env, "admin_broadcast")
+        );
     }
 
     #[test]

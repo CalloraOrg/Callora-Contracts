@@ -1,4 +1,3 @@
-
 extern crate std;
 
 use crate::{RevenuePool, RevenuePoolClient, Severity};

@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String,
+    Symbol, Vec,
 };
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
@@ -85,7 +86,6 @@ pub struct StorageEntryTtl {
     pub bump_amount: u32,
 }
 
-
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 /// Bumping TTL ensures state remains accessible for critical operations.
@@ -150,6 +150,15 @@ impl RevenuePool {
             .instance()
             .get(&Symbol::new(&env, ADMIN_KEY))
             .expect("revenue pool not initialized")
+    }
+
+    /// Return the contract semver string.
+    ///
+    /// Read-only view returning the Cargo package version embedded at
+    /// compile time, enabling off-chain tooling to detect capability
+    /// deltas after upgrades.
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
     }
 
     /// Initiate replacement of the current admin. Only the existing admin may call this.

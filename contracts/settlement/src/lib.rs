@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
@@ -68,14 +68,16 @@ pub enum StorageKey {
     PendingVault,
     DeveloperIndex,
     DeveloperBalance(Address),
+    DeveloperBalanceV1(Address),
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
     DeveloperClaimWindow(Address),
+    PendingDeveloperMigration(Address),
     ContractVersion,
+    StorageVersion,
     Checkpoint,
-    CheckpointCounter,
 }
 
 /// Checkpoint snapshot for bounded storage growth.
@@ -218,14 +220,47 @@ pub struct DeveloperForceCreditedEvent {
 /// this constant is used for explicit defense-in-depth validation.
 pub const MAX_REASON_LENGTH: u32 = 32;
 
-/// Emitted when a checkpoint snapshot is created.
+/// Maximum message length for broadcast calls.
+pub const MAX_MESSAGE_LEN: u32 = 256;
+
+/// Severity levels for admin broadcast messages.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct CheckpointEvent {
-    pub checkpoint_id: u64,
-    pub total_pool_balance: i128,
-    pub developer_count: u32,
-    pub timestamp: u64,
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Payload for the admin_broadcast event.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: soroban_sdk::String,
+}
+
+/// Storage entry TTL information for diagnostics.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+/// Pending developer balance migration record.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingDeveloperMigration {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub proposed_at: u64,
+    pub execute_after: u64,
 }
 
 #[contract]
@@ -476,6 +511,15 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
+    /// Return the contract semver string.
+    ///
+    /// Read-only view returning the Cargo package version embedded at
+    /// compile time, enabling off-chain tooling to detect capability
+    /// deltas after upgrades.
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
         env.storage()
@@ -516,77 +560,7 @@ impl CalloraSettlement {
             .unwrap_or(0)
     }
 
-    /// Create a checkpoint snapshot of the global pool and developer index.
-    ///
-    /// Records a timestamped snapshot that establishes a consistent baseline
-    /// for bounded storage growth. Subsequent archival and pruning logic can
-    /// safely remove historical data older than the latest checkpoint without
-    /// pausing the contract.
-    ///
-    /// # Access Control
-    /// Only the registered admin may call this function.
-    ///
-    /// # Events
-    /// Emits a `checkpoint_created` event with the checkpoint data.
-    ///
-    /// # Storage Operations
-    /// - Reads `StorageKey::GlobalPool` (persistent)
-    /// - Reads `StorageKey::DeveloperIndex` (persistent, for count)
-    /// - Writes `StorageKey::Checkpoint(checkpoint_id)` (persistent)
-    pub fn checkpoint(env: Env, caller: Address) {
-        admin::require_admin(&env, &caller);
-        let global_pool = Self::get_global_pool(env.clone());
-        let dev_count = Self::get_developer_index_length(env.clone());
-        let ts = env.ledger().timestamp();
-        let checkpoint_id = Self::next_checkpoint_id(env.clone());
-        let cp = Checkpoint {
-            checkpoint_id,
-            total_pool_balance: global_pool.total_balance,
-            developer_count: dev_count,
-            ledger_timestamp: env.ledger().sequence(),
-            timestamp: ts,
-        };
-        env.storage().persistent().set(&StorageKey::Checkpoint, &cp);
-        env.events().publish(
-            (events::event_checkpoint_created(&env), checkpoint_id),
-            CheckpointEvent {
-                checkpoint_id,
-                total_pool_balance: cp.total_pool_balance,
-                developer_count: cp.developer_count,
-                timestamp: ts,
-            },
-        );
-    }
-
-    /// Return the current developer index length.
-    fn get_developer_index_length(env: Env) -> u32 {
-        let index: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or_default();
-        index.len() as u32
-    }
-
-    /// Return the most recent checkpoint snapshot, or None if none exists.
-    pub fn current_checkpoint(env: Env) -> Option<Checkpoint> {
-        env.storage().instance().get(&StorageKey::Checkpoint)
-    }
-
-    /// Compute the next checkpoint ID by reading and incrementing a counter.
-    fn next_checkpoint_id(env: Env) -> u64 {
-        let current: u64 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::CheckpointCounter)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(&StorageKey::CheckpointCounter, &(current + 1));
-        current + 1
-    }
-
-    /// Propose replacement of
+    /// Propose moving a developer's current balance to a replacement address.
     ///
     /// The current admin must authorize this state change. If the admin is a
     /// Stellar multisig account, `require_auth` enforces that account's signer
@@ -617,7 +591,9 @@ impl CalloraSettlement {
 
     /// Return the pending migration for `from`, if one exists.
     pub fn get_balance_migration(env: Env, from: Address) -> Option<PendingDeveloperMigration> {
-        timelock::get_pending_migration(&env, &from)
+        env.storage()
+            .persistent()
+            .get(&StorageKey::PendingDeveloperMigration(from))
     }
 
     /// Configure the USDC token contract address.
@@ -1278,132 +1254,6 @@ impl CalloraSettlement {
                 result.push_back(StorageEntryTtl {
                     category: String::from_str(&env, "DeveloperBalance"),
                     key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address: address.clone(),
-                token: token.clone(),
-                balance,
-            });
-            last_address = Some(address.clone());
-
-            // Check DailyWithdrawCap (Persistent)
-            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
-            if env.storage().persistent().has(&cap_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&cap_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DailyWithdrawCap"),
-                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-        }
-
-        result
-    }
-
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
-        let mut result = Vec::new(&env);
-
-        // 1. Instance Storage
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                17_280 * 60
-            }
-        };
-        result.push_back(StorageEntryTtl {
-            category: String::from_str(&env, "Instance"),
-            key_desc: String::from_str(&env, "Instance"),
-            storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
-            threshold: 17_280 * 30,
-            bump_amount: 17_280 * 60,
-        });
-
-        // Determine which developer addresses to inspect
-        let devs = if developer_addresses.len() > 0 {
-            developer_addresses
-        } else {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DeveloperIndex)
-                .unwrap_or_else(|| Vec::new(&env))
-        };
-
-        for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            // Check WithdrawalToday (Persistent)
-            let today_key = StorageKey::WithdrawalToday(dev.clone());
-            if env.storage().persistent().has(&today_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&today_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "WithdrawalToday"),
-                    key_desc: String::from_str(&env, "WithdrawalToday"),
                     storage_type: String::from_str(&env, "Persistent"),
                     ttl,
                     threshold: 50000,
