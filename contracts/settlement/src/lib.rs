@@ -38,7 +38,33 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
-pub use errors::SettlementError;
+pub enum SettlementError {
+    NotInitialized = 1,
+    AlreadyInitialized = 2,
+    Unauthorized = 3,
+    AmountNotPositive = 4,
+    DeveloperRequired = 5,
+    DeveloperMustBeNone = 6,
+    PoolOverflow = 7,
+    DeveloperOverflow = 8,
+    UsdcTokenNotConfigured = 9,
+    InsufficientDeveloperBalance = 10,
+    DeveloperBalanceUnderflow = 11,
+    InsufficientContractBalance = 12,
+    DailyWithdrawCapExceeded = 13,
+    GasExhaustionRisk = 14,
+    ReasonTooLong = 15,
+    MigrationSameAddress = 16,
+    InvalidMigrationTarget = 17,
+    NoDeveloperBalance = 18,
+    TimelockOverflow = 19,
+    MigrationNotFound = 20,
+    TimelockNotExpired = 21,
+    MigrationBalanceChanged = 22,
+    MinimumBalanceRequired = 23,
+    InvalidClaimWindow = 24,
+    ClaimWindowClosed = 25,
+}
 
 /// Persistent storage keys for settlement contract
 #[contracttype]
@@ -1644,7 +1670,6 @@ impl CalloraSettlement {
 }
 
 mod admin;
-mod errors;
 mod events;
 mod limits;
 mod migrate;
