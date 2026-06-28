@@ -67,7 +67,7 @@ pub enum StorageKey {
     PendingAdmin,
     PendingVault,
     DeveloperIndex,
-    DeveloperBalance(Address),
+    DeveloperBalance(Address, Address),
     DeveloperBalanceV1(Address),
     GlobalPool,
     Usdc,
@@ -75,6 +75,7 @@ pub enum StorageKey {
     WithdrawalToday(Address),
     DeveloperClaimWindow(Address),
     PendingDeveloperMigration(Address),
+    DeveloperMinBalance(Address),
     ContractVersion,
     StorageVersion,
     Checkpoint,
@@ -100,6 +101,7 @@ pub struct Checkpoint {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeveloperBalance {
     pub address: Address,
+    pub token: Address,
     pub balance: i128,
 }
 
@@ -147,8 +149,9 @@ pub struct DeveloperClaimWindow {
 pub struct PaymentReceivedEvent {
     pub from_vault: Address,
     pub amount: i128,
-    pub to_pool: bool, // true if credited to global pool, false if to specific developer
-    pub developer: Option<Address>, // developer address if credited to specific developer
+    pub to_pool: bool,
+    pub developer: Option<Address>,
+    pub token: Address,
 }
 
 /// Balance credited event
@@ -158,6 +161,7 @@ pub struct BalanceCreditedEvent {
     pub developer: Address,
     pub amount: i128,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when a new vault address is proposed via `propose_vault()`.
@@ -479,9 +483,9 @@ impl CalloraSettlement {
             env.storage().persistent().set(&balance_key, &new_balance);
             env.storage()
                 .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
+                .set(&StorageKey::DeveloperBalance(dev.clone(), token.clone()), &new_balance);
             env.storage().persistent().extend_ttl(
-                &StorageKey::DeveloperBalance(dev.clone()),
+                &StorageKey::DeveloperBalance(dev.clone(), token.clone()),
                 50000,
                 50000,
             );
@@ -661,10 +665,11 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .get(&StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()))
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
@@ -698,7 +703,6 @@ impl CalloraSettlement {
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
 
-        let usdc_address = Self::get_usdc_token(env.clone())?;
         let usdc = token::Client::new(&env, &usdc_address);
 
         if usdc.balance(&contract_address) < amount {
@@ -708,11 +712,11 @@ impl CalloraSettlement {
         usdc.transfer(&contract_address, &recipient, &amount);
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             50000,
             50000,
         );
@@ -975,11 +979,11 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             50000,
             50000,
         );
@@ -1197,7 +1201,7 @@ impl CalloraSettlement {
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
 
-        pagination::get_page(&env, &index, cursor, limit)
+        pagination::get_page(&env, &index, cursor, limit, &token)
     }
 
     /// Return the remaining TTL for each storage key category.
@@ -1206,6 +1210,11 @@ impl CalloraSettlement {
     /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
     pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
         let mut result = Vec::new(&env);
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Usdc)
+            .unwrap_or(Address::generate(&env));
 
         // 1. Instance Storage
         let instance_ttl = {
@@ -1239,7 +1248,7 @@ impl CalloraSettlement {
 
         for dev in devs.iter() {
             // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
+            let bal_key = StorageKey::DeveloperBalance(dev.clone(), usdc_address.clone());
             if env.storage().persistent().has(&bal_key) {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
@@ -1652,8 +1661,12 @@ impl CalloraSettlement {
     }
 }
 
+mod admin;
 mod events;
 pub mod migrate;
+mod limits;
+mod pagination;
+mod timelock;
 
 #[cfg(test)]
 mod test;

@@ -1287,11 +1287,12 @@ mod settlement_tests {
         env.mock_all_auths();
         let admin = Address::generate(&env);
         let vault = Address::generate(&env);
+        let token = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.receive_payment(&vault, &750i128, &true, &None);
+        client.receive_payment(&vault, &750i128, &true, &None, &token);
 
         let events = env.events().all();
         let ev = events
@@ -1328,11 +1329,12 @@ mod settlement_tests {
         let admin = Address::generate(&env);
         let vault = Address::generate(&env);
         let developer = Address::generate(&env);
+        let token = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()));
+        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()), &token);
 
         let events = env.events().all();
         let ev = events
@@ -2018,7 +2020,7 @@ mod settlement_tests {
 
         env.as_contract(&addr, || {
             env.storage().persistent().set(
-                &crate::StorageKey::DeveloperBalance(developer.clone()),
+                &crate::StorageKey::DeveloperBalance(developer.clone(), token.clone()),
                 &i128::MAX,
             );
         });
