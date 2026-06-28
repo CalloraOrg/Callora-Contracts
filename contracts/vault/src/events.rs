@@ -220,6 +220,13 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for the `"rescue_funds"` event topic.
+///
+/// Emitted when the admin rescues mis-sent tokens from the vault.
+pub fn event_rescue_funds(env: &Env) -> Symbol {
+    Symbol::new(env, "rescue_funds")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +252,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_accepted"));
+    }
+
+    #[test]
+    fn test_event_rescue_funds_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_rescue_funds(&env);
+        assert_eq!(sym, Symbol::new(&env, "rescue_funds"));
     }
 
     #[test]
