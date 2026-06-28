@@ -74,6 +74,23 @@ pub enum StorageKey {
     WithdrawalToday(Address),
     DeveloperClaimWindow(Address),
     ContractVersion,
+    Checkpoint,
+    CheckpointCounter,
+}
+
+/// Checkpoint snapshot for bounded storage growth.
+///
+/// Captures a consistent point-in-time view of the global pool and
+/// developer index so that archival/pruning logic can be applied
+/// without pausing the contract.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkpoint {
+    pub checkpoint_id: u64,
+    pub total_pool_balance: i128,
+    pub developer_count: u32,
+    pub ledger_timestamp: u64,
+    pub timestamp: u64,
 }
 
 /// Developer balance record in settlement contract
@@ -200,6 +217,16 @@ pub struct DeveloperForceCreditedEvent {
 /// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
 /// this constant is used for explicit defense-in-depth validation.
 pub const MAX_REASON_LENGTH: u32 = 32;
+
+/// Emitted when a checkpoint snapshot is created.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckpointEvent {
+    pub checkpoint_id: u64,
+    pub total_pool_balance: i128,
+    pub developer_count: u32,
+    pub timestamp: u64,
+}
 
 #[contract]
 pub struct CalloraSettlement;
@@ -489,7 +516,77 @@ impl CalloraSettlement {
             .unwrap_or(0)
     }
 
-    /// Propose moving a developer's current balance to a replacement address.
+    /// Create a checkpoint snapshot of the global pool and developer index.
+    ///
+    /// Records a timestamped snapshot that establishes a consistent baseline
+    /// for bounded storage growth. Subsequent archival and pruning logic can
+    /// safely remove historical data older than the latest checkpoint without
+    /// pausing the contract.
+    ///
+    /// # Access Control
+    /// Only the registered admin may call this function.
+    ///
+    /// # Events
+    /// Emits a `checkpoint_created` event with the checkpoint data.
+    ///
+    /// # Storage Operations
+    /// - Reads `StorageKey::GlobalPool` (persistent)
+    /// - Reads `StorageKey::DeveloperIndex` (persistent, for count)
+    /// - Writes `StorageKey::Checkpoint(checkpoint_id)` (persistent)
+    pub fn checkpoint(env: Env, caller: Address) {
+        admin::require_admin(&env, &caller);
+        let global_pool = Self::get_global_pool(env.clone());
+        let dev_count = Self::get_developer_index_length(env.clone());
+        let ts = env.ledger().timestamp();
+        let checkpoint_id = Self::next_checkpoint_id(env.clone());
+        let cp = Checkpoint {
+            checkpoint_id,
+            total_pool_balance: global_pool.total_balance,
+            developer_count: dev_count,
+            ledger_timestamp: env.ledger().sequence(),
+            timestamp: ts,
+        };
+        env.storage().persistent().set(&StorageKey::Checkpoint, &cp);
+        env.events().publish(
+            (events::event_checkpoint_created(&env), checkpoint_id),
+            CheckpointEvent {
+                checkpoint_id,
+                total_pool_balance: cp.total_pool_balance,
+                developer_count: cp.developer_count,
+                timestamp: ts,
+            },
+        );
+    }
+
+    /// Return the current developer index length.
+    fn get_developer_index_length(env: Env) -> u32 {
+        let index: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperIndex)
+            .unwrap_or_default();
+        index.len() as u32
+    }
+
+    /// Return the most recent checkpoint snapshot, or None if none exists.
+    pub fn current_checkpoint(env: Env) -> Option<Checkpoint> {
+        env.storage().instance().get(&StorageKey::Checkpoint)
+    }
+
+    /// Compute the next checkpoint ID by reading and incrementing a counter.
+    fn next_checkpoint_id(env: Env) -> u64 {
+        let current: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::CheckpointCounter)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&StorageKey::CheckpointCounter, &(current + 1));
+        current + 1
+    }
+
+    /// Propose replacement of
     ///
     /// The current admin must authorize this state change. If the admin is a
     /// Stellar multisig account, `require_auth` enforces that account's signer
