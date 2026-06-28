@@ -225,7 +225,7 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
     let v1_key = StorageKey::DeveloperBalanceV1(addr.clone());
     let v1_balance: Option<i128> = env.storage().persistent().get(&v1_key);
     if let Some(v1) = v1_balance {
-        let v2_key = StorageKey::DeveloperBalance(addr.clone());
+        let v2_key = StorageKey::DeveloperBalance(addr.clone(), usdc_token.clone());
         let existing_v2: i128 = env
             .storage()
             .persistent()

@@ -38,25 +38,7 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
-pub enum SettlementError {
-    NotInitialized = 1,
-    AlreadyInitialized = 2,
-    Unauthorized = 3,
-    AmountNotPositive = 4,
-    DeveloperRequired = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow = 7,
-    DeveloperOverflow = 8,
-    UsdcTokenNotConfigured = 9,
-    InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow = 11,
-    InsufficientContractBalance = 12,
-    DailyWithdrawCapExceeded = 13,
-    GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
-    InvalidClaimWindow = 16,
-    ClaimWindowClosed = 17,
-}
+pub use errors::SettlementError;
 
 /// Persistent storage keys for settlement contract
 #[contracttype]
@@ -1214,7 +1196,7 @@ impl CalloraSettlement {
             .storage()
             .instance()
             .get(&StorageKey::Usdc)
-            .unwrap_or(Address::generate(&env));
+            .unwrap_or_else(|| env.current_contract_address());
 
         // 1. Instance Storage
         let instance_ttl = {
@@ -1662,9 +1644,10 @@ impl CalloraSettlement {
 }
 
 mod admin;
+mod errors;
 mod events;
-pub mod migrate;
 mod limits;
+mod migrate;
 mod pagination;
 mod timelock;
 
