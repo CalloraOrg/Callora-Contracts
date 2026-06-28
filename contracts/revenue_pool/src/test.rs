@@ -1579,8 +1579,8 @@ fn version_returns_semver_string() {
     let env = Env::default();
     let admin = Address::generate(&env);
     let usdc = env.register_stellar_asset_contract_v2(admin.clone());
-    let contract = env.register(CalloraRevenuePool, ());
-    let client = CalloraRevenuePoolClient::new(&env, &contract);
+    let contract = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &contract);
     env.mock_all_auths();
     client.init(&admin, &usdc.address());
     let v = client.version();

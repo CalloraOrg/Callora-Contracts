@@ -1,8 +1,7 @@
 extern crate std;
 
-use crate::{RevenuePool, RevenuePoolClient, Severity};
+use crate::{RevenuePool, RevenuePoolClient};
 use proptest::prelude::*;
-use proptest::strategy::ValueTree;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::{self, StellarAssetClient};
 use soroban_sdk::Vec as SorobanVec;

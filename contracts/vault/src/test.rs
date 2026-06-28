@@ -332,7 +332,8 @@ fn cross_contract_conservation_fuzz() {
             // Deduct -> settlement
             let amt_u64: u64 = rng.gen_range(1..5_000);
             let amt = amt_u64 as i128;
-            let res = vault_client.try_deduct(&owner, &amt, &None, &u32::MAX, &Address::generate(&env));
+            let res =
+                vault_client.try_deduct(&owner, &amt, &None, &u32::MAX, &Address::generate(&env));
             if res.is_ok() {
                 // Update expectations: vault internal and onchain decreased
                 total_deductions = total_deductions.checked_add(amt).unwrap();
@@ -4125,7 +4126,13 @@ mod fuzz {
                     if paused {
                         // deduct must fail while paused
                         assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env))
+                            .try_deduct(
+                                &caller,
+                                &amount,
+                                &None,
+                                &u32::MAX,
+                                &Address::generate(&env)
+                            )
                             .is_err());
                     } else if sim >= amount {
                         sim -= amount;
@@ -4133,7 +4140,13 @@ mod fuzz {
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
                         assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env))
+                            .try_deduct(
+                                &caller,
+                                &amount,
+                                &None,
+                                &u32::MAX,
+                                &Address::generate(&env)
+                            )
                             .is_err());
                     }
                 }
@@ -4417,7 +4430,13 @@ mod fuzz {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env))
+                            .try_deduct(
+                                &caller,
+                                &amount,
+                                &None,
+                                &u32::MAX,
+                                &Address::generate(&env)
+                            )
                             .is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
@@ -4596,7 +4615,13 @@ mod fuzz {
                 if paused {
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env))
+                            .try_deduct(
+                                &caller,
+                                &amount,
+                                &None,
+                                &u32::MAX,
+                                &Address::generate(&env)
+                            )
                             .is_err(),
                         "deduct must fail while paused at step {step}"
                     );
@@ -4606,7 +4631,13 @@ mod fuzz {
                 } else {
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env))
+                            .try_deduct(
+                                &caller,
+                                &amount,
+                                &None,
+                                &u32::MAX,
+                                &Address::generate(&env)
+                            )
                             .is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
@@ -4765,7 +4796,9 @@ mod fuzz {
             } else {
                 // Balance exhausted: deduct must fail.
                 assert!(
-                    client.try_deduct(&caller, &1, &None, &u32::MAX, &Address::generate(&env)).is_err(),
+                    client
+                        .try_deduct(&caller, &1, &None, &u32::MAX, &Address::generate(&env))
+                        .is_err(),
                     "deduct must fail when balance=0 at step {step}"
                 );
             }
@@ -4831,7 +4864,13 @@ mod fuzz {
                     } else {
                         assert!(
                             client
-                                .try_deduct(&owner, &amount, &None, &u32::MAX, &Address::generate(&env))
+                                .try_deduct(
+                                    &owner,
+                                    &amount,
+                                    &None,
+                                    &u32::MAX,
+                                    &Address::generate(&env)
+                                )
                                 .is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
@@ -4851,7 +4890,13 @@ mod fuzz {
                     } else {
                         assert!(
                             client
-                                .try_deduct(&caller_b, &amount, &None, &u32::MAX, &Address::generate(&env))
+                                .try_deduct(
+                                    &caller_b,
+                                    &amount,
+                                    &None,
+                                    &u32::MAX,
+                                    &Address::generate(&env)
+                                )
                                 .is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
