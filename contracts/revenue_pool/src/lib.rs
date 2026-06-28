@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(missing_docs)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
@@ -534,7 +535,11 @@ impl RevenuePool {
     }
 
     /// Get the current per-leg distribution cap.
-    /// Defaults to `i128::MAX` when unset.
+    ///
+    /// The cap limits the maximum USDC amount that can be distributed in a single
+    /// [`Self::distribute`] call. Admins raise/lower it via [`Self::set_max_distribute`].
+    ///
+    /// Defaults to `i128::MAX` when unset (effectively no cap).
     pub fn get_max_distribute(env: Env) -> i128 {
         env.storage()
             .instance()
