@@ -209,7 +209,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let all = client.get_all_developer_balances(&admin, &token);
+        let _all = client.get_all_developer_balances(&admin, &token);
         assert_eq!(all.len(), 0);
     }
 
@@ -498,7 +498,7 @@ mod settlement_tests {
         client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token);
         client.receive_payment(&vault, &150i128, &false, &Some(dev1.clone()), &token);
 
-        let all = client.get_all_developer_balances(&admin, &token);
+        let _all = client.get_all_developer_balances(&admin, &token);
         assert_eq!(all.len(), 2);
         let mut dev1_seen = false;
         let mut dev2_seen = false;
@@ -528,7 +528,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let all = client.get_all_developer_balances(&admin, &token);
+        let _all = client.get_all_developer_balances(&admin, &token);
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
@@ -588,7 +588,7 @@ mod settlement_tests {
             client.receive_payment(&vault, &1i128, &false, &Some(developer), &token);
         }
 
-        let all = client.get_all_developer_balances(&admin, &token);
+        let _all = client.get_all_developer_balances(&admin, &token);
         assert_eq!(all.len(), 101);
     }
 
@@ -1289,7 +1289,7 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.receive_payment(&vault, &750i128, &true, &None);
+        client.receive_payment(&vault, &750i128, &true, &None, &token);
 
         let events = env.events().all();
         let ev = events
@@ -1330,7 +1330,7 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
 
-        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()));
+        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()), &token);
 
         let events = env.events().all();
         let ev = events
