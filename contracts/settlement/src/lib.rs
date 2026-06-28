@@ -1237,6 +1237,7 @@ impl CalloraSettlement {
         let instance_ttl = {
             #[cfg(any(test, feature = "testutils"))]
             {
+                use soroban_sdk::testutils::storage::{Instance, Persistent};
                 env.storage().instance().get_ttl()
             }
             #[cfg(not(any(test, feature = "testutils")))]
@@ -1270,6 +1271,7 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
+                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&bal_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
@@ -1293,6 +1295,7 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
+                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&cap_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
