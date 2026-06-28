@@ -150,7 +150,11 @@ fn deduct_duplicate_request_id_rejected() {
         &owner,
         &100,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     assert_eq!(remaining, 900);
 
@@ -179,7 +183,11 @@ fn deduct_distinct_request_ids_both_succeed() {
         &owner,
         &100,
         &Some(rid_a.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     assert_eq!(after_a, 900);
 
@@ -187,7 +195,11 @@ fn deduct_distinct_request_ids_both_succeed() {
         &owner,
         &200,
         &Some(rid_b.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     assert_eq!(after_b, 700);
 
@@ -202,6 +214,7 @@ fn deduct_none_request_id_not_deduplicated() {
 
     // Three calls with None — all must succeed.
     assert_eq!(
+<<<<<<< HEAD
         client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env)),
         900
     );
@@ -211,6 +224,17 @@ fn deduct_none_request_id_not_deduplicated() {
     );
     assert_eq!(
         client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env)),
+=======
+        client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env)),
+        900
+    );
+    assert_eq!(
+        client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env)),
+        800
+    );
+    assert_eq!(
+        client.deduct(&owner, &100, &None, &u16::MAX, &Address::generate(&env)),
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
         700
     );
     assert_eq!(client.balance(), 700);
@@ -280,7 +304,11 @@ fn is_request_processed_true_after_successful_deduct() {
         &owner,
         &50,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     assert!(
@@ -302,7 +330,11 @@ fn is_request_processed_false_for_different_id() {
         &owner,
         &50,
         &Some(rid_a.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     assert!(client.is_request_processed(&rid_a));
@@ -326,7 +358,11 @@ fn batch_deduct_duplicate_request_id_rejected_atomically() {
         &owner,
         &100,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     assert_eq!(client.balance(), 900);
 
@@ -517,7 +553,11 @@ fn deduct_retry_with_different_amount_still_rejected() {
         &owner,
         &100,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     // Retry with a different amount — still rejected.
@@ -563,16 +603,28 @@ fn batch_deduct_mixed_ids_marks_only_some_ids() {
     // Retrying either Some id must fail.
     assert!(
         client.try_deduct(&owner, &10, &Some(rid_x)).is_err(),
+<<<<<<< HEAD
         &u32::MAX
     );
     assert!(
         client.try_deduct(&owner, &10, &Some(rid_z)).is_err(),
         &u32::MAX
+=======
+        &u16::MAX
+    );
+    assert!(
+        client.try_deduct(&owner, &10, &Some(rid_z)).is_err(),
+        &u16::MAX
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     // None deducts still go through.
     assert_eq!(
+<<<<<<< HEAD
         client.deduct(&owner, &10, &None, &u32::MAX, &Address::generate(&env)),
+=======
+        client.deduct(&owner, &10, &None, &u16::MAX, &Address::generate(&env)),
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
         765
     );
 }
@@ -589,7 +641,11 @@ fn replay_across_long_window_rejected() {
         &owner,
         &100,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     // Fast-forward ledger 6 months (approx 6 * 30 days)
@@ -622,13 +678,21 @@ fn gc_entrypoint_prunes_and_emits_event() {
         &owner,
         &100,
         &Some(rid1.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     client.deduct(
         &owner,
         &100,
         &Some(rid2.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     let mut ids_to_prune = soroban_sdk::Vec::new(&env);
@@ -658,7 +722,11 @@ fn gc_entrypoint_prunes_and_emits_event() {
         &owner,
         &100,
         &Some(rid1, &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 }
 
@@ -688,7 +756,11 @@ fn gc_allowed_during_pause() {
         &owner,
         &100,
         &Some(rid1.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     client.pause(&owner);

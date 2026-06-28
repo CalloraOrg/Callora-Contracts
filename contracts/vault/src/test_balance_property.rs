@@ -472,10 +472,17 @@ fn run_property_trace(seed: u64) {
                             &owner,
                             &amount,
                             &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
                             &u32::MAX,
                         );
                         let retry =
                             client.try_deduct(&owner, &amount, &Some(rid.clone()), &u32::MAX);
+=======
+                            &u16::MAX,
+                        );
+                        let retry =
+                            client.try_deduct(&owner, &amount, &Some(rid.clone()), &u16::MAX);
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                         trace.push(
                             step,
                             "request_id_reuse",
@@ -634,7 +641,11 @@ fn test_balance_property_request_id_reuse() {
         &owner,
         &100,
         &Some(rid.clone(), &Address::generate(&env)),
+<<<<<<< HEAD
         &u32::MAX,
+=======
+        &u16::MAX,
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 1);
 

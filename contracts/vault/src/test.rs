@@ -4126,6 +4126,7 @@ mod fuzz {
                     if paused {
                         // deduct must fail while paused
                         assert!(client
+<<<<<<< HEAD
                             .try_deduct(
                                 &caller,
                                 &amount,
@@ -4133,6 +4134,9 @@ mod fuzz {
                                 &u32::MAX,
                                 &Address::generate(&env)
                             )
+=======
+                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err());
                     } else if sim >= amount {
                         sim -= amount;
@@ -4140,6 +4144,7 @@ mod fuzz {
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
                         assert!(client
+<<<<<<< HEAD
                             .try_deduct(
                                 &caller,
                                 &amount,
@@ -4147,6 +4152,9 @@ mod fuzz {
                                 &u32::MAX,
                                 &Address::generate(&env)
                             )
+=======
+                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err());
                     }
                 }
@@ -4430,6 +4438,7 @@ mod fuzz {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
                         client
+<<<<<<< HEAD
                             .try_deduct(
                                 &caller,
                                 &amount,
@@ -4437,6 +4446,9 @@ mod fuzz {
                                 &u32::MAX,
                                 &Address::generate(&env)
                             )
+=======
+                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
@@ -4615,6 +4627,7 @@ mod fuzz {
                 if paused {
                     assert!(
                         client
+<<<<<<< HEAD
                             .try_deduct(
                                 &caller,
                                 &amount,
@@ -4622,6 +4635,9 @@ mod fuzz {
                                 &u32::MAX,
                                 &Address::generate(&env)
                             )
+=======
+                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "deduct must fail while paused at step {step}"
                     );
@@ -4631,6 +4647,7 @@ mod fuzz {
                 } else {
                     assert!(
                         client
+<<<<<<< HEAD
                             .try_deduct(
                                 &caller,
                                 &amount,
@@ -4638,6 +4655,9 @@ mod fuzz {
                                 &u32::MAX,
                                 &Address::generate(&env)
                             )
+=======
+                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
@@ -4864,6 +4884,7 @@ mod fuzz {
                     } else {
                         assert!(
                             client
+<<<<<<< HEAD
                                 .try_deduct(
                                     &owner,
                                     &amount,
@@ -4871,6 +4892,9 @@ mod fuzz {
                                     &u32::MAX,
                                     &Address::generate(&env)
                                 )
+=======
+                                .try_deduct(&owner, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                                 .is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
@@ -4890,6 +4914,7 @@ mod fuzz {
                     } else {
                         assert!(
                             client
+<<<<<<< HEAD
                                 .try_deduct(
                                     &caller_b,
                                     &amount,
@@ -4897,6 +4922,9 @@ mod fuzz {
                                     &u32::MAX,
                                     &Address::generate(&env)
                                 )
+=======
+                                .try_deduct(&caller_b, &amount, &None, &u32::MAX)
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                                 .is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
@@ -6499,7 +6527,11 @@ fn slippage_check_before_state_mutation() {
     env.mock_all_auths();
     let balance_before = client.balance();
     // This should fail with Slippage
+<<<<<<< HEAD
     let _ = client.try_deduct(&owner, &500, &None, &10, &Address::generate(&env));
+=======
+    let _ = client.try_deduct(&owner, &500, &None, &10);
+>>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     assert_eq!(
         client.balance(),
         balance_before,

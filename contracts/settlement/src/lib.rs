@@ -5,6 +5,9 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
+#[cfg(any(test, feature = "testutils"))]
+use soroban_sdk::testutils::storage::{Instance, Persistent};
+
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
@@ -62,7 +65,7 @@ pub enum SettlementError {
     MigrationNotFound = 20,
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
-    MinimumBalanceRequired = 23,
+    OverDraft = 23,
     InvalidClaimWindow = 24,
     ClaimWindowClosed = 25,
 }
@@ -88,6 +91,7 @@ pub enum StorageKey {
     ContractVersion,
     StorageVersion,
     Checkpoint,
+    CheckpointCounter,
 }
 
 /// Checkpoint snapshot for bounded storage growth.
@@ -1233,7 +1237,6 @@ impl CalloraSettlement {
         let instance_ttl = {
             #[cfg(any(test, feature = "testutils"))]
             {
-                use soroban_sdk::testutils::storage::Instance;
                 env.storage().instance().get_ttl()
             }
             #[cfg(not(any(test, feature = "testutils")))]
@@ -1267,7 +1270,6 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
-                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&bal_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
@@ -1291,7 +1293,6 @@ impl CalloraSettlement {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
-                        use soroban_sdk::testutils::storage::Persistent;
                         env.storage().persistent().get_ttl(&cap_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
@@ -1674,6 +1675,62 @@ impl CalloraSettlement {
     /// `2` = V2 per-token layout (migration complete).
     pub fn migration_storage_version(env: Env) -> u32 {
         migrate::storage_version(&env)
+    }
+
+    /// Create a checkpoint snapshot of the current global pool balance and developer index.
+    ///
+    /// Admin-only entrypoint that records a timestamped snapshot for bounded storage growth.
+    /// Each call increments a monotonic checkpoint ID.
+    pub fn checkpoint(env: Env, caller: Address) -> Checkpoint {
+        caller.require_auth();
+        Self::require_admin(env.clone(), caller).unwrap();
+
+        let pool = env
+            .storage()
+            .instance()
+            .get::<_, GlobalPool>(&StorageKey::GlobalPool)
+            .unwrap_or(GlobalPool {
+                total_balance: 0i128,
+                last_updated: 0u64,
+            });
+
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::CheckpointCounter)
+            .unwrap_or(0u64);
+        let new_id = counter + 1;
+        env.storage()
+            .instance()
+            .set(&StorageKey::CheckpointCounter, &new_id);
+
+        let dev_index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DeveloperIndex)
+            .unwrap_or(Vec::new(&env));
+
+        let cp = Checkpoint {
+            checkpoint_id: new_id,
+            total_pool_balance: pool.total_balance,
+            developer_count: dev_index.len(),
+            ledger_timestamp: env.ledger().timestamp(),
+            timestamp: env.ledger().timestamp(),
+        };
+
+        env.storage().persistent().set(&StorageKey::Checkpoint, &cp);
+
+        env.events().publish(
+            Symbol::new(&env, "checkpoint"),
+            (new_id, cp.total_pool_balance, cp.developer_count),
+        );
+
+        cp
+    }
+
+    /// Return the latest checkpoint snapshot, or `None` if no checkpoints exist.
+    pub fn current_checkpoint(env: Env) -> Option<Checkpoint> {
+        env.storage().persistent().get(&StorageKey::Checkpoint)
     }
 }
 

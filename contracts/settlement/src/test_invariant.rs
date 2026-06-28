@@ -387,8 +387,7 @@ fn run_trace(seed: u64) {
                 let current: i128 = client.get_developer_balance(&dev, &usdc_addr);
                 if current > 0 {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
-                    let result =
-                        client.try_withdraw_developer_balance(&dev, &amount, &None, &usdc_addr);
+                    let result = client.try_withdraw_developer_balance(&dev, &amount, &None);
                     if result.is_ok() {
                         expected_dev_total = expected_dev_total
                             .checked_sub(amount)
