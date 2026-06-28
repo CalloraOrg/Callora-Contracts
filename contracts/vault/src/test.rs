@@ -6351,3 +6351,45 @@ fn slippage_no_regression_existing_deductions() {
     assert_eq!(client.deduct(&owner, &200, &None, &u16::MAX, &Address::generate(&env)), 300);
     assert_eq!(client.deduct(&owner, &300, &None, &u16::MAX, &Address::generate(&env)), 0);
 }
+
+/// Enforce max-batch-size: a batch of exactly MAX_BATCH_SIZE must succeed,
+/// while a batch of MAX_BATCH_SIZE + 1 must be rejected with BatchTooLarge.
+#[test]
+fn batch_deduct_rejects_oversized_batch() {
+    use crate::MAX_BATCH_SIZE;
+    let env = Env::default();
+    let (owner, client) = setup_vault_for_deduct(&env, 100_000_000);
+    env.mock_all_auths();
+
+    // MAX_BATCH_SIZE items — must succeed.
+    let mut ok_items = soroban_sdk::Vec::new(&env);
+    for _ in 0..MAX_BATCH_SIZE {
+        ok_items.push_back(DeductItem {
+            amount: 100,
+            request_id: None,
+            developer: Address::generate(&env),
+        });
+    }
+    let res_ok = client.batch_deduct(&owner, &ok_items);
+    assert!(res_ok.is_ok(), "batch of exactly MAX_BATCH_SIZE should succeed");
+
+    // MAX_BATCH_SIZE + 1 items — must be rejected.
+    let mut big_items = soroban_sdk::Vec::new(&env);
+    for _ in 0..=MAX_BATCH_SIZE {
+        big_items.push_back(DeductItem {
+            amount: 100,
+            request_id: None,
+            developer: Address::generate(&env),
+        });
+    }
+    let res_big = client.try_batch_deduct(&owner, &big_items);
+    assert!(res_big.is_err(), "batch exceeding MAX_BATCH_SIZE must be rejected");
+    assert_eq!(res_big.unwrap_err().unwrap(), VaultError::BatchTooLarge);
+}
+
+/// Verify MAX_BATCH_SIZE constant is correctly set to 50.
+#[test]
+fn max_batch_size_constant_is_50() {
+    use crate::MAX_BATCH_SIZE;
+    assert_eq!(MAX_BATCH_SIZE, 50, "MAX_BATCH_SIZE must be 50");
+}
