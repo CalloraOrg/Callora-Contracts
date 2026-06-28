@@ -200,7 +200,7 @@ fn test_migrate_developer_balance() {
     );
 
     // Run migration
-    client.migrate_developer_balance(&admin, &developer);
+    client.migrate_v1_to_v2(&admin);
 
     // After migration, new per-token read returns the migrated value
     assert_eq!(
@@ -249,11 +249,11 @@ fn test_migrate_developer_balance_idempotent() {
     });
 
     // First migration
-    client.migrate_developer_balance(&admin, &developer);
+    client.migrate_v1_to_v2(&admin);
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 
     // Second migration — idempotent, no error, balance unchanged
-    client.migrate_developer_balance(&admin, &developer);
+    client.migrate_v1_to_v2(&admin);
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 }
 
@@ -278,7 +278,7 @@ fn test_migrate_developer_balance_unauthorized() {
 
     // Non-admin tries to migrate — should panic
     let attacker = Address::generate(&env);
-    client.migrate_developer_balance(&attacker, &developer);
+    client.migrate_v1_to_v2(&attacker);
 }
 
 /// Migration fails if USDC token not configured.
@@ -298,7 +298,7 @@ fn test_migrate_developer_balance_no_usdc() {
     client.init(&admin, &vault);
     // Do NOT set USDC token
 
-    client.migrate_developer_balance(&admin, &developer);
+    client.migrate_v1_to_v2(&admin);
 }
 
 /// Batch receive payment per-token works correctly.
