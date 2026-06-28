@@ -1603,11 +1603,12 @@ impl CalloraVault {
             .set(&StorageKey::ContractVersion, &new_wasm_hash);
 
         // Emit required Soroban event: topic = (symbol_short!("upgrade"),), data = new_wasm_hash
-        env.events()
-            .publish((symbol_short!("upgrade"),), new_wasm_hash);
+        env.events().publish((soroban_sdk::symbol_short!("upgrade"),), new_wasm_hash);
 
             .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
+
+
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
     ///
