@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -1708,11 +1708,7 @@ impl CalloraVault {
         Ok(())
     }
 
-}
-
-// Allowlist aliases — convenience wrappers used by tests and external callers.
-#[contractimpl]
-impl CalloraVault {
+    /// Allowlist alias: add a depositor to the allowlist (admin only).
     pub fn add_address(env: Env, caller: Address, depositor: Address) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
@@ -1732,6 +1728,7 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Allowlist alias: clear all depositors (admin only).
     pub fn clear_all(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
@@ -1743,6 +1740,7 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Allowlist alias: return the current allowlist.
     pub fn get_allowlist(env: Env) -> Vec<Address> {
         env.storage()
             .instance()
@@ -1750,6 +1748,7 @@ impl CalloraVault {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Allowlist alias: set rate limit for a developer (admin only).
     pub fn set_developer_rate_limit(
         env: Env,
         caller: Address,
@@ -1759,7 +1758,7 @@ impl CalloraVault {
     ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
-        
+
         let config = crate::rate_limit::RateLimitConfig {
             capacity,
             refill_rate,

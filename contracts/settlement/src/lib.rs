@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String, Symbol, Vec,
 };
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
@@ -68,12 +68,31 @@ pub enum StorageKey {
     PendingVault,
     DeveloperIndex,
     DeveloperBalance(Address),
+    DeveloperBalanceV1(Address),
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
     DeveloperClaimWindow(Address),
+    PendingDeveloperMigration(Address),
     ContractVersion,
+    StorageVersion,
+    Checkpoint,
+}
+
+/// Checkpoint snapshot for bounded storage growth.
+///
+/// Captures a consistent point-in-time view of the global pool and
+/// developer index so that archival/pruning logic can be applied
+/// without pausing the contract.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkpoint {
+    pub checkpoint_id: u64,
+    pub total_pool_balance: i128,
+    pub developer_count: u32,
+    pub ledger_timestamp: u64,
+    pub timestamp: u64,
 }
 
 /// Developer balance record in settlement contract
@@ -200,6 +219,49 @@ pub struct DeveloperForceCreditedEvent {
 /// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
 /// this constant is used for explicit defense-in-depth validation.
 pub const MAX_REASON_LENGTH: u32 = 32;
+
+/// Maximum message length for broadcast calls.
+pub const MAX_MESSAGE_LEN: u32 = 256;
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Payload for the admin_broadcast event.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: soroban_sdk::String,
+}
+
+/// Storage entry TTL information for diagnostics.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+/// Pending developer balance migration record.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingDeveloperMigration {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+}
 
 #[contract]
 pub struct CalloraSettlement;
@@ -529,7 +591,9 @@ impl CalloraSettlement {
 
     /// Return the pending migration for `from`, if one exists.
     pub fn get_balance_migration(env: Env, from: Address) -> Option<PendingDeveloperMigration> {
-        timelock::get_pending_migration(&env, &from)
+        env.storage()
+            .persistent()
+            .get(&StorageKey::PendingDeveloperMigration(from))
     }
 
     /// Configure the USDC token contract address.
@@ -1190,132 +1254,6 @@ impl CalloraSettlement {
                 result.push_back(StorageEntryTtl {
                     category: String::from_str(&env, "DeveloperBalance"),
                     key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address: address.clone(),
-                token: token.clone(),
-                balance,
-            });
-            last_address = Some(address.clone());
-
-            // Check DailyWithdrawCap (Persistent)
-            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
-            if env.storage().persistent().has(&cap_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&cap_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DailyWithdrawCap"),
-                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-        }
-
-        result
-    }
-
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
-        let mut result = Vec::new(&env);
-
-        // 1. Instance Storage
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                17_280 * 60
-            }
-        };
-        result.push_back(StorageEntryTtl {
-            category: String::from_str(&env, "Instance"),
-            key_desc: String::from_str(&env, "Instance"),
-            storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
-            threshold: 17_280 * 30,
-            bump_amount: 17_280 * 60,
-        });
-
-        // Determine which developer addresses to inspect
-        let devs = if developer_addresses.len() > 0 {
-            developer_addresses
-        } else {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DeveloperIndex)
-                .unwrap_or_else(|| Vec::new(&env))
-        };
-
-        for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            // Check WithdrawalToday (Persistent)
-            let today_key = StorageKey::WithdrawalToday(dev.clone());
-            if env.storage().persistent().has(&today_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&today_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "WithdrawalToday"),
-                    key_desc: String::from_str(&env, "WithdrawalToday"),
                     storage_type: String::from_str(&env, "Persistent"),
                     ttl,
                     threshold: 50000,
