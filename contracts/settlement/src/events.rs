@@ -76,6 +76,21 @@ pub fn event_vault_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "vault_accepted")
 }
 
+/// Returns the Symbol for the `"upgraded"` event topic.
+///
+/// Emitted when the admin upgrades the contract to a new WASM hash via `upgrade`.
+pub fn event_upgraded(env: &Env) -> Symbol {
+    Symbol::new(env, "upgraded")
+}
+
+/// Returns the Symbol for the `"developer_force_credited"` event topic.
+///
+/// Emitted when the admin force-credits a developer's balance outside the
+/// normal `receive_payment` flow (e.g. correcting an error or migrating funds).
+pub fn event_developer_force_credited(env: &Env) -> Symbol {
+    Symbol::new(env, "developer_force_credited")
+}
+
 /// Returns the Symbol for the `"admin_broadcast"` event topic.
 ///
 /// Emitted when the admin broadcasts an emergency message.
@@ -152,6 +167,23 @@ mod tests {
     fn test_event_vault_accepted_bytes() {
         let env = Env::default();
         assert_eq!(event_vault_accepted(&env), Symbol::new(&env, "vault_accepted"));
+    }
+
+    /// Snapshot: proves event_upgraded still maps to exactly the bytes for "upgraded".
+    #[test]
+    fn test_event_upgraded_bytes() {
+        let env = Env::default();
+        assert_eq!(event_upgraded(&env), Symbol::new(&env, "upgraded"));
+    }
+
+    /// Snapshot: proves event_developer_force_credited still maps to exactly the bytes for "developer_force_credited".
+    #[test]
+    fn test_event_developer_force_credited_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_developer_force_credited(&env),
+            Symbol::new(&env, "developer_force_credited")
+        );
     }
 
     /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".

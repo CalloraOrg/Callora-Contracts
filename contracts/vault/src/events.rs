@@ -213,6 +213,13 @@ pub fn event_revenue_pool_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "revenue_pool_cancelled")
 }
 
+/// Returns the Symbol for the `"request_id_pruned"` event topic.
+///
+/// Emitted when an expired idempotency request ID is pruned from storage.
+pub fn event_request_id_pruned(env: &Env) -> Symbol {
+    Symbol::new(env, "request_id_pruned")
+}
+
 /// Returns the Symbol for the `"admin_broadcast"` event topic.
 ///
 /// Emitted when the admin broadcasts an emergency message.
@@ -427,6 +434,14 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_revenue_pool_cancelled(&env);
         assert_eq!(sym, Symbol::new(&env, "revenue_pool_cancelled"));
+    }
+
+    /// Snapshot: proves event_request_id_pruned still maps to exactly the bytes for "request_id_pruned".
+    #[test]
+    fn test_event_request_id_pruned_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_request_id_pruned(&env);
+        assert_eq!(sym, Symbol::new(&env, "request_id_pruned"));
     }
 
     /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".

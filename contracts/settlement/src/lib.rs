@@ -678,7 +678,7 @@ pub fn withdraw_developer_balance(
         }
 
         env.events().publish(
-            (Symbol::new(&env, "developer_force_credited"), developer.clone()),
+            (events::event_developer_force_credited(&env), developer.clone()),
             DeveloperForceCreditedEvent {
                 developer,
                 amount,
@@ -1168,7 +1168,7 @@ pub fn withdraw_developer_balance(
 
         // Emit an event for indexers / audit logs.
         env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+            .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
