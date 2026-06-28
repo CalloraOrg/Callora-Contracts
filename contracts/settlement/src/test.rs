@@ -290,12 +290,21 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
-        let result = client.try_withdraw_developer_balance(&developer, &100i128, &None, &usdc_address);
+        let result = client.try_withdraw_developer_balance(&developer, &100i128, &None);
         assert!(result.is_ok());
-        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            0i128
+        );
         assert_eq!(
             token::Client::new(&env, &usdc_address).balance(&addr),
             0i128
@@ -319,12 +328,21 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
-        let result = client.try_withdraw_developer_balance(&developer, &101i128, &None, &usdc_address);
+        let result = client.try_withdraw_developer_balance(&developer, &101i128, &None);
         assert!(result.is_err());
-        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 100i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            100i128
+        );
     }
 
     #[test]
@@ -340,8 +358,9 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
 
-        let zero_result = client.try_withdraw_developer_balance(&developer, &0i128, &None, &token);
-        let negative_result = client.try_withdraw_developer_balance(&developer, &-1i128, &None, &token);
+        let zero_result = client.try_withdraw_developer_balance(&developer, &0i128, &None);
+        let negative_result =
+            client.try_withdraw_developer_balance(&developer, &-1i128, &None, &token);
 
         assert!(zero_result.is_err());
         assert!(negative_result.is_err());
@@ -363,10 +382,16 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &200i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
-        let result = client.try_withdraw_developer_balance(&developer, &200i128, &None, &usdc_address);
+        let result = client.try_withdraw_developer_balance(&developer, &200i128, &None);
         assert!(result.is_ok());
 
         let events = env.events().all();
@@ -404,13 +429,26 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &150i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &150i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &150i128);
 
-        let result =
-            client.try_withdraw_developer_balance(&developer, &150i128, &Some(custodial.clone()));
+        let result = client.try_withdraw_developer_balance(
+            &developer,
+            &150i128,
+            &Some(custodial.clone()),
+            &usdc_address,
+        );
         assert!(result.is_ok());
-        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            0i128
+        );
         assert_eq!(
             token::Client::new(&env, &usdc_address).balance(&addr),
             0i128
@@ -438,11 +476,21 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &200i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
-        let result =
-            client.try_withdraw_developer_balance(&developer, &200i128, &Some(custodial.clone()));
+        let result = client.try_withdraw_developer_balance(
+            &developer,
+            &200i128,
+            &Some(custodial.clone()),
+            &usdc_address,
+        );
         assert!(result.is_ok());
 
         let events = env.events().all();
@@ -477,7 +525,13 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
         client.withdraw_developer_balance(&developer, &100i128, &Some(addr.clone()), &usdc_address);
@@ -977,7 +1031,10 @@ mod settlement_tests {
         client.accept_admin();
 
         // State preserved
-        assert_eq!(client.get_developer_balance(&developer, &token), dev_balance_before);
+        assert_eq!(
+            client.get_developer_balance(&developer, &token),
+            dev_balance_before
+        );
         assert_eq!(
             client.get_global_pool().total_balance,
             pool_before.total_balance
@@ -1312,6 +1369,7 @@ mod settlement_tests {
             amount: 750i128,
             to_pool: true,
             developer: None,
+            token: usdc_address.clone(),
         };
 
         assert_eq!(data, expected);
@@ -1354,6 +1412,7 @@ mod settlement_tests {
             amount: 321i128,
             to_pool: false,
             developer: Some(developer.clone()),
+            token: usdc_address.clone(),
         };
 
         assert_eq!(data, expected);
@@ -1547,8 +1606,20 @@ mod settlement_tests {
         client.accept_vault(&new_vault);
 
         // More payments from new vault
-        client.receive_payment(&new_vault, &150i128, &false, &Some(developer.clone()), &token);
-        client.receive_payment(&new_vault, &200i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(
+            &new_vault,
+            &150i128,
+            &false,
+            &Some(developer.clone()),
+            &token,
+        );
+        client.receive_payment(
+            &new_vault,
+            &200i128,
+            &false,
+            &Some(developer.clone()),
+            &token,
+        );
 
         // Total should accumulate correctly
         assert_eq!(client.get_developer_balance(&developer, &token), 450i128);
@@ -1911,8 +1982,20 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let developer = Address::generate(&env);
 
-        client.force_credit_developer(&admin, &developer, &500i128, &Symbol::new(&env, "first"));
-        client.force_credit_developer(&admin, &developer, &300i128, &Symbol::new(&env, "second"));
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &500i128,
+            &token,
+            &Symbol::new(&env, "first"),
+        );
+        client.force_credit_developer(
+            &admin,
+            &developer,
+            &300i128,
+            &token,
+            &Symbol::new(&env, "second"),
+        );
 
         assert_eq!(client.get_developer_balance(&developer, &token), 800i128);
     }
@@ -1924,7 +2007,8 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let reason = Symbol::new(&env, "unauthorized_test");
 
-        let vault_result = client.try_force_credit_developer(&vault, &developer, &100i128, &reason);
+        let vault_result =
+            client.try_force_credit_developer(&vault, &developer, &100i128, &token, &reason);
         assert!(is_error(vault_result, SettlementError::Unauthorized));
 
         let third_party_result =
@@ -2068,7 +2152,13 @@ mod settlement_tests {
             } else {
                 let dev_idx = (next_rand() % 10) as usize;
                 if let Some(developer) = developers.get(dev_idx) {
-                    client.receive_payment(&vault, &amount, &false, &Some(developer.clone()), &token);
+                    client.receive_payment(
+                        &vault,
+                        &amount,
+                        &false,
+                        &Some(developer.clone()),
+                        &token,
+                    );
                 }
             }
             total_credited += amount;
@@ -2088,7 +2178,13 @@ mod settlement_tests {
 
             // Large credit to a developer
             if let Some(developer) = developers.get(0) {
-                client.receive_payment(&vault, &half_remaining, &false, &Some(developer.clone()), &token);
+                client.receive_payment(
+                    &vault,
+                    &half_remaining,
+                    &false,
+                    &Some(developer.clone()),
+                    &token,
+                );
                 total_credited += half_remaining;
             }
         }
@@ -2143,18 +2239,30 @@ mod settlement_tests {
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
         client.set_daily_withdraw_cap(&admin, &developer, &500i128);
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         // First withdrawal of 300 should succeed (under 500 cap)
         let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(result.is_ok());
-        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 700i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            700i128
+        );
 
         // Second withdrawal of 300 would push total to 600 (over 500 cap)
         let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
-        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 700i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            700i128
+        );
     }
 
     #[test]
@@ -2171,7 +2279,13 @@ mod settlement_tests {
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
         client.set_daily_withdraw_cap(&admin, &developer, &500i128);
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         // Withdraw 200 + 200 = 400, still under 500
@@ -2181,13 +2295,19 @@ mod settlement_tests {
         assert!(client
             .try_withdraw_developer_balance(&developer, &200i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 600i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            600i128
+        );
 
         // Third withdrawal of 100 would push to 500 (exact cap — allowed)
         assert!(client
             .try_withdraw_developer_balance(&developer, &100i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 500i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            500i128
+        );
 
         // Fourth withdrawal of 1 would exceed cap
         let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
@@ -2209,13 +2329,22 @@ mod settlement_tests {
         client.set_usdc_token(&admin, &usdc_address);
         // Cap = 0 explicitly means unlimited
         client.set_daily_withdraw_cap(&admin, &developer, &0i128);
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         assert!(client
             .try_withdraw_developer_balance(&developer, &1000i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            0i128
+        );
     }
 
     #[test]
@@ -2232,13 +2361,22 @@ mod settlement_tests {
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
         // No cap set at all — should be unlimited
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         assert!(client
             .try_withdraw_developer_balance(&developer, &1000i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            0i128
+        );
     }
 
     #[test]
@@ -2257,14 +2395,23 @@ mod settlement_tests {
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
         client.set_daily_withdraw_cap(&admin, &developer, &500i128);
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         // Withdraw 400 on day 0
         assert!(client
             .try_withdraw_developer_balance(&developer, &400i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 600i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            600i128
+        );
 
         // Another 200 would exceed the 500 cap
         let result = client.try_withdraw_developer_balance(&developer, &200i128, &None);
@@ -2279,7 +2426,10 @@ mod settlement_tests {
         assert!(client
             .try_withdraw_developer_balance(&developer, &500i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 100i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            100i128
+        );
     }
 
     #[test]
@@ -2366,15 +2516,21 @@ mod settlement_tests {
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
         client.set_daily_withdraw_cap(&admin, &developer, &1000i128);
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &1000i128);
 
         assert_eq!(client.get_withdrawal_today(&developer), 0i128);
 
-        client.withdraw_developer_balance(&developer, &300i128, &None);
+        client.withdraw_developer_balance(&developer, &300i128, &None, &usdc_address);
         assert_eq!(client.get_withdrawal_today(&developer), 300i128);
 
-        client.withdraw_developer_balance(&developer, &200i128, &None);
+        client.withdraw_developer_balance(&developer, &200i128, &None, &usdc_address);
         assert_eq!(client.get_withdrawal_today(&developer), 500i128);
     }
 
@@ -2395,7 +2551,13 @@ mod settlement_tests {
         client.set_usdc_token(&admin, &usdc_address);
         client.set_daily_withdraw_cap(&admin, &dev1, &500i128);
         // dev2 has no cap (unlimited)
-        client.receive_payment(&vault, &1000i128, &false, &Some(dev1.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &1000i128,
+            &false,
+            &Some(dev1.clone()),
+            &usdc_address,
+        );
         client.receive_payment(&vault, &500i128, &false, &Some(dev2.clone()), &usdc_address);
         usdc_admin_client.mint(&addr, &1500i128);
 
@@ -2437,12 +2599,21 @@ mod settlement_tests {
             .try_set_developer_claim_window(&admin, &developer, &100u64, &200u64)
             .unwrap()
             .unwrap();
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
         let result = client.try_withdraw_developer_balance(&developer, &100i128, &None);
         assert!(is_error(result, SettlementError::ClaimWindowClosed));
-        assert_eq!(client.get_developer_balance(&developer), 100i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            100i128
+        );
         assert_eq!(
             token::Client::new(&env, &usdc_address).balance(&developer),
             0i128
@@ -2467,7 +2638,13 @@ mod settlement_tests {
             .try_set_developer_claim_window(&admin, &developer, &100u64, &200u64)
             .unwrap()
             .unwrap();
-        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()));
+        client.receive_payment(
+            &vault,
+            &200i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
         assert!(client
@@ -2504,12 +2681,21 @@ mod settlement_tests {
             .try_set_developer_claim_window(&admin, &developer, &100u64, &200u64)
             .unwrap()
             .unwrap();
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
         let result = client.try_withdraw_developer_balance(&developer, &100i128, &None);
         assert!(is_error(result, SettlementError::ClaimWindowClosed));
-        assert_eq!(client.get_developer_balance(&developer), 100i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            100i128
+        );
     }
 
     #[test]
@@ -2538,13 +2724,22 @@ mod settlement_tests {
             .unwrap();
         assert!(client.get_developer_claim_window(&developer).is_none());
 
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()));
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &100i128);
 
         assert!(client
             .try_withdraw_developer_balance(&developer, &100i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&developer), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            0i128
+        );
     }
 
     #[test]
@@ -2595,8 +2790,20 @@ mod settlement_tests {
             .try_set_developer_claim_window(&admin, &restricted, &100u64, &200u64)
             .unwrap()
             .unwrap();
-        client.receive_payment(&vault, &100i128, &false, &Some(restricted.clone()));
-        client.receive_payment(&vault, &100i128, &false, &Some(unrestricted.clone()));
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(restricted.clone()),
+            &usdc_address,
+        );
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(unrestricted.clone()),
+            &usdc_address,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
         let result = client.try_withdraw_developer_balance(&restricted, &100i128, &None);
@@ -2604,8 +2811,14 @@ mod settlement_tests {
         assert!(client
             .try_withdraw_developer_balance(&unrestricted, &100i128, &None)
             .is_ok());
-        assert_eq!(client.get_developer_balance(&restricted), 100i128);
-        assert_eq!(client.get_developer_balance(&unrestricted), 0i128);
+        assert_eq!(
+            client.get_developer_balance(&restricted, &usdc_address),
+            100i128
+        );
+        assert_eq!(
+            client.get_developer_balance(&unrestricted, &usdc_address),
+            0i128
+        );
     }
 
     #[test]
@@ -2715,7 +2928,7 @@ mod settlement_tests {
         assert!(next1.is_some());
 
         // Page 2 — use next_cursor from page 1
-        let (page2, next2) = client.get_developer_balances_cursor(&admin, &next1, &2u32);
+        let (page2, next2) = client.get_developer_balances_cursor(&admin, &next1, &2u32, &token);
         assert_eq!(
             page2.len(),
             1,
@@ -2756,7 +2969,8 @@ mod settlement_tests {
         client.receive_payment(&vault, &2i128, &false, &Some(dev2.clone()), &token);
 
         // Exhaust the index with a large limit to find the last cursor.
-        let (full_page, last_cursor) = client.get_developer_balances_cursor(&admin, &None, &100u32, &token);
+        let (full_page, last_cursor) =
+            client.get_developer_balances_cursor(&admin, &None, &100u32, &token);
         assert_eq!(full_page.len(), 2);
         assert!(last_cursor.is_none());
 
@@ -2799,7 +3013,8 @@ mod settlement_tests {
         client.receive_payment(&vault, &999i128, &false, &Some(first_addr.clone()), &token);
 
         // Continue pagination from the saved cursor.
-        let (page2, _) = client.get_developer_balances_cursor(&admin, &cursor_after_first, &10u32);
+        let (page2, _) =
+            client.get_developer_balances_cursor(&admin, &cursor_after_first, &10u32, &token);
         assert_eq!(page2.len(), 2, "two records must remain after the cursor");
 
         // The first developer must not appear again in page2.
@@ -2836,6 +3051,7 @@ mod settlement_tests {
             &admin,
             &None,
             &(MAX_DEVELOPER_BALANCES_PAGE_SIZE + 50),
+            &token,
         );
         assert_eq!(
             page.len(),

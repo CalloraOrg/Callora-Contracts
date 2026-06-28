@@ -103,7 +103,9 @@ pub fn setup<'a>(env: &Env) -> Harness<'a> {
     let dev_b = Address::generate(env);
 
     // ---- Mock USDC -------------------------------------------------------
-    let usdc_id = env.register_stellar_asset_contract_v2(owner.clone()).address();
+    let usdc_id = env
+        .register_stellar_asset_contract_v2(owner.clone())
+        .address();
     let usdc_admin_client = StellarAssetClient::new(env, &usdc_id);
     let usdc = TokenClient::new(env, &usdc_id);
 
@@ -127,16 +129,15 @@ pub fn setup<'a>(env: &Env) -> Harness<'a> {
     usdc_admin_client.mint(&owner, &INITIAL_MINT);
 
     // ---- Initialize vault --------------------------------------------------
-    vault
-        .init(
-            &owner,
-            &usdc_id,
-            &None,                       // initial_balance: deposit explicitly in the test
-            &Some(backend.clone()),       // authorized_caller
-            &None,                        // min_deposit: default (1)
-            &Some(revenue_pool_id.clone()), // revenue_pool: informational on vault
-            &None,                        // max_deduct: default (i128::MAX)
-        );
+    vault.init(
+        &owner,
+        &usdc_id,
+        &None,                          // initial_balance: deposit explicitly in the test
+        &Some(backend.clone()),         // authorized_caller
+        &None,                          // min_deposit: default (1)
+        &Some(revenue_pool_id.clone()), // revenue_pool: informational on vault
+        &None,                          // max_deduct: default (i128::MAX)
+    );
     vault.set_settlement(&owner, &settlement_id);
 
     // ---- Initialize settlement ---------------------------------------------
