@@ -39,6 +39,7 @@ An **Authorized Caller** is an account (typically a backend service or matching 
 - **Management**: Set by the **Owner** via `set_authorized_caller`.
 - **Permission**: Required to call deduction entrypoints.
 - **Implicit Permission**: The **Owner** is always an implicit Authorized Caller.
+- **Security Validation**: Fuzz target `fuzz/targets/set_auth.rs` stresses auth/nonce invariants for `set_authorized_caller`.
 
 ### 4. Allowed Depositor
 
