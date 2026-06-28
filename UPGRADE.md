@@ -171,6 +171,20 @@ pub fn init(env: Env, admin: Address, usdc_token: Address)
 | `global_pool` | `GlobalPool` | Total balance and last updated timestamp |
 | `ContractVersion` | `BytesN<32>` | WASM hash set by `upgrade` function |
 
+#### Per-developer minimum claim balance
+
+Settlement admins can configure a per-developer minimum accrued balance that must be met before `withdraw_developer_balance` settles a claim:
+
+```rust
+pub fn set_minimum_balance(env: Env, caller: Address, developer: Address, min_balance: i128)
+pub fn get_minimum_balance(env: Env, developer: Address) -> i128
+```
+
+- `caller` must be the current settlement admin.
+- `min_balance` is denominated in token micro-units and must be non-negative.
+- `0` means no minimum requirement, matching previous behavior.
+- If a developer's accrued balance is below their configured minimum, withdrawal returns `SettlementError::MinimumBalanceRequired` before token transfer or balance mutation.
+
 #### Upgradeability
 
 The settlement contract supports in-place upgrades via an admin-gated `upgrade` function. 
