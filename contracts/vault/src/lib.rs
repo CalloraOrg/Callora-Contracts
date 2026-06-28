@@ -1829,3 +1829,4 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_rate_limit;
+#[cfg(test)] mod test_gas_budget;
