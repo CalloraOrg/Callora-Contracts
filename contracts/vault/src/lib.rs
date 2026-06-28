@@ -1604,6 +1604,23 @@ impl CalloraVault {
             .get(&StorageKey::ContractVersion)
     }
 
+    /// Return the capability bitmap for this contract version.
+    ///
+    /// Each set bit represents a feature that this contract supports.  Bits are
+    /// stable — a position once assigned is never reused for a different feature.
+    /// Reserved bits (18–63) are always zero.
+    ///
+    /// No authentication required; this is a pure view function.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let caps = client.capabilities();
+    /// let has_batch = caps & capabilities::CAP_BATCH_DEDUCT != 0;
+    /// ```
+    pub fn capabilities(env: Env) -> u64 {
+        capabilities::capabilities(&env)
+    }
+
     /// Garbage-collect processed request markers from persistent storage.
     /// Only the owner can call this.
     /// Emits a `request_id_pruned` event for each removed ID.
@@ -1794,6 +1811,7 @@ impl CalloraVault {
 }
 
 mod events;
+pub mod capabilities;
 pub mod rate_limit;
 
 // ---------------------------------------------------------------------------
@@ -1829,3 +1847,6 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_rate_limit;
+
+#[cfg(test)]
+mod test_capabilities;
