@@ -1127,22 +1127,30 @@ impl CalloraVault {
     /// (if implemented in the new WASM) to update storage schema or perform data migrations.
     /// See UPGRADE.md for the complete operational flow.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
-        caller.require_auth();
         let admin = Self::get_admin(env.clone())
             .expect("vault must be initialized before upgrade");
+        // Admin authorization must be the first gating check.
+        admin.require_auth();
+
+        // Upgrade is not allowed while paused.
+        if Self::is_paused(env.clone()) {
+            panic!("vault is paused");
+        }
+
 
         // Perform the on-chain upgrade via the deployer interface.
-        // This is a host operation and may only succeed in the live environment.
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
 
         // Persist the version marker for on-chain queries.
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &new_wasm_hash);
 
-        // Emit an event for indexers / audit logs.
+        // Emit required Soroban event: topic = (symbol_short!("upgrade"),), data = new_wasm_hash
         env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+            .publish((symbol_short!("upgrade"),), new_wasm_hash);
+
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
