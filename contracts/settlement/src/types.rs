@@ -30,6 +30,7 @@ pub enum StorageKey {
     DeveloperBalanceV1(Address),
     /// Per-token developer balance `(developer, token)`.
     DeveloperBalance(Address, Address),
+    DeveloperMinBalance(Address),
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),

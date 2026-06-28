@@ -9,7 +9,9 @@ pub use errors::SettlementError;
 pub use timelock::{PendingDeveloperMigration, DEVELOPER_MIGRATION_TIMELOCK_SECONDS};
 
 mod types;
+mod limits;
 pub use types::*;
+pub use limits::*;
 
 #[contract]
 pub struct CalloraSettlement;
@@ -476,7 +478,10 @@ impl CalloraSettlement {
         let new_balance = current_balance
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-
+        let min_balance = limits::get_developer_min_balance(env.clone(), developer.clone());
+        if new_balance < min_balance {
+            return Err(SettlementError::MinimumBalanceRequired);
+        }
         let token_client = token::Client::new(&env, &token);
 
         if token_client.balance(&contract_address) < amount {
@@ -559,6 +564,14 @@ impl CalloraSettlement {
                 new_cap: cap,
             },
         );
+    }
+
+    /// Set the minimum balance for a developer (admin only).
+    ///
+    /// This entrypoint allows the admin to enforce a per‑developer minimum balance.
+    /// It delegates to the limits module for storage and auth checks.
+    pub fn set_minimum_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
+        limits::set_developer_min_balance(env, caller, developer, min_balance);
     }
 
     /// Get the daily withdrawal cap for a developer.

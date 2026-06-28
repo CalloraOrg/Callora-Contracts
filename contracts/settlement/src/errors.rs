@@ -57,6 +57,5 @@ pub enum SettlementError {
     MigrationNotFound = 20,
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
-    /// Withdrawal amount exceeds the developer's current balance.
-    OverDraft = 23,
+    MinimumBalanceRequired = 23,
 }
