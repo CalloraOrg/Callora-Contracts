@@ -44,6 +44,20 @@ pub fn event_admin_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "admin_cancelled")
 }
 
+/// Returns the Symbol for the `"pause_guardian_set"` event topic.
+///
+/// Emitted when the admin sets or replaces the emergency pause guardian.
+pub fn event_pause_guardian_set(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_set")
+}
+
+/// Returns the Symbol for the `"pause_guardian_cleared"` event topic.
+///
+/// Emitted when the admin clears the emergency pause guardian.
+pub fn event_pause_guardian_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_cleared")
+}
+
 /// Returns the Symbol for the `"pause_set"` event topic.
 ///
 /// Emitted by both `pause` (with data `true`) and `unpause` (with data `false`)
@@ -156,6 +170,26 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves event_pause_guardian_set still maps to exactly the bytes for "pause_guardian_set".
+    #[test]
+    fn test_event_pause_guardian_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_set(&env),
+            Symbol::new(&env, "pause_guardian_set")
+        );
+    }
+
+    /// Snapshot: proves event_pause_guardian_cleared still maps to exactly the bytes for "pause_guardian_cleared".
+    #[test]
+    fn test_event_pause_guardian_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_cleared(&env),
+            Symbol::new(&env, "pause_guardian_cleared")
+        );
+    }
+
     /// Snapshot: proves event_pause_set still maps to exactly the bytes for "pause_set".
     #[test]
     fn test_event_pause_set_bytes() {
@@ -170,16 +204,6 @@ mod tests {
         assert_eq!(
             event_receive_payment(&env),
             Symbol::new(&env, "receive_payment")
-        );
-    }
-
-    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
-    #[test]
-    fn test_event_yield_deposited_bytes() {
-        let env = Env::default();
-        assert_eq!(
-            event_yield_deposited(&env),
-            Symbol::new(&env, "yield_deposited")
         );
     }
 

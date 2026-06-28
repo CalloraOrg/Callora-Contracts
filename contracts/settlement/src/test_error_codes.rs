@@ -21,6 +21,13 @@ fn settlement_error_codes_are_stable_and_unique() {
         (13, SettlementError::DailyWithdrawCapExceeded),
         (14, SettlementError::GasExhaustionRisk),
         (15, SettlementError::ReasonTooLong),
+        (16, SettlementError::MigrationSameAddress),
+        (17, SettlementError::InvalidMigrationTarget),
+        (18, SettlementError::NoDeveloperBalance),
+        (19, SettlementError::TimelockOverflow),
+        (20, SettlementError::MigrationNotFound),
+        (21, SettlementError::TimelockNotExpired),
+        (22, SettlementError::MigrationBalanceChanged),
     ];
 
     let mut seen = BTreeSet::new();
@@ -32,7 +39,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 15);
+    assert_eq!(seen.len(), 22);
 }
 
 #[test]
@@ -54,6 +61,13 @@ fn error_code_docs_list_every_settlement_code() {
         "| 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |",
         "| 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |",
         "| 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |",
+        "| 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |",
+        "| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |",
+        "| 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |",
+        "| 19 | `TimelockOverflow` | Settlement | Timelock timestamp addition overflowed |",
+        "| 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |",
+        "| 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |",
+        "| 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |",
     ];
 
     for line in expected_lines {

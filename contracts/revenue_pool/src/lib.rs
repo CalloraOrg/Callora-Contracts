@@ -17,12 +17,14 @@ use soroban_sdk::{
 /// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
+const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const USDC_KEY: &str = "usdc";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield_deposited";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
@@ -278,6 +280,78 @@ impl RevenuePool {
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
     }
 
+    /// Set or replace the emergency pause guardian.
+    ///
+    /// The guardian may call `pause` but has no authority to unpause, distribute,
+    /// rotate admin, change caps, or upgrade the contract.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `guardian` - Address that may pause the revenue pool.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `pause_guardian_set` with `caller` as topic and `guardian` as data.
+    pub fn set_pause_guardian(env: Env, caller: Address, guardian: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSE_GUARDIAN_KEY), &guardian);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_guardian_set(&env), caller), guardian);
+    }
+
+    /// Clear the emergency pause guardian role.
+    ///
+    /// Only the current admin may call this. After clearing, only the admin can
+    /// pause the revenue pool.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin; must authorize.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If no pause guardian is configured.
+    ///
+    /// # Events
+    /// Emits `pause_guardian_cleared` with `caller` as topic and the previous
+    /// guardian as data.
+    pub fn clear_pause_guardian(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        let inst = env.storage().instance();
+        let guardian: Address = inst
+            .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
+            .expect("no pause guardian set");
+        inst.remove(&Symbol::new(&env, PAUSE_GUARDIAN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_pause_guardian_cleared(&env), caller),
+            guardian,
+        );
+    }
+
+    /// Return the configured pause guardian, or `None` if no guardian is set.
+    pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
+    }
+
     fn require_not_paused(env: &Env) {
         if env
             .storage()
@@ -291,10 +365,11 @@ impl RevenuePool {
 
     /// Pause the revenue pool, blocking `distribute` and `batch_distribute`.
     ///
-    /// Only the admin may call. Admin rotation remains available while paused.
+    /// The admin or configured pause guardian may call. Admin rotation remains
+    /// available while paused.
     ///
     /// # Panics
-    /// * If the caller is not the current admin.
+    /// * If the caller is not the current admin or configured pause guardian.
     /// * If the pool is already paused.
     ///
     /// # Events
@@ -302,13 +377,17 @@ impl RevenuePool {
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("{}", ERR_UNAUTHORIZED);
+        let guardian = Self::get_pause_guardian(env.clone());
+        if caller != admin && guardian.as_ref() != Some(&caller) {
+            panic!("{}", ERR_UNAUTHORIZED_PAUSE);
         }
         assert!(!Self::is_paused(env.clone()), "revenue pool already paused");
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_pause_set(&env), caller), true);
     }
@@ -333,6 +412,9 @@ impl RevenuePool {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_pause_set(&env), caller), false);
     }

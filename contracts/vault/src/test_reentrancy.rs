@@ -78,6 +78,7 @@ impl MaliciousSettlement {
         _amount: i128,
         _to_pool: bool,
         _developer: Option<Address>,
+        _token: Address,
     ) {
         let vault_addr: Option<Address> = env
             .storage()
