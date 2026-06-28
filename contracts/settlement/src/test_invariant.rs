@@ -221,7 +221,7 @@ fn setup_env() -> (
         token::StellarAssetClient::new(env, &usdc_addr);
 
     (
-        (*env).clone(),
+        env,
         contract,
         client,
         admin,
@@ -519,7 +519,7 @@ fn test_invariant_single_dev_full_withdraw() {
     assert_eq!(dev_sum, 3_500, "dev sum before withdraw");
 
     // Full withdraw.
-    client.withdraw_developer_balance(&dev, &3_500, &None, &usdc_addr);
+    client.withdraw_developer_balance(&dev, &3_500, &None);
 
     let dev_sum_after: i128 = client
         .get_all_developer_balances(&admin, &usdc_addr)

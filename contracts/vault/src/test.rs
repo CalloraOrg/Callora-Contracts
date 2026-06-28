@@ -332,8 +332,7 @@ fn cross_contract_conservation_fuzz() {
             // Deduct -> settlement
             let amt_u64: u64 = rng.gen_range(1..5_000);
             let amt = amt_u64 as i128;
-            let res =
-                vault_client.try_deduct(&owner, &amt, &None, &u32::MAX, &Address::generate(&env));
+            let res = vault_client.try_deduct(&owner, &amt, &None);
             if res.is_ok() {
                 // Update expectations: vault internal and onchain decreased
                 total_deductions = total_deductions.checked_add(amt).unwrap();
@@ -990,7 +989,7 @@ fn deduct_insufficient_balance_fails() {
     fund_vault(&usdc_admin, &vault_address, 10);
     client.init(&owner, &usdc, &Some(10), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env));
+    let result = client.try_deduct(&owner, &100, &None, &u32::MAX);
     assert!(result.is_err(), "expected error for insufficient balance");
 }
 
@@ -1204,7 +1203,7 @@ fn balance_unchanged_after_failed_deduct() {
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    let _ = client.try_deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env));
+    let _ = client.try_deduct(&owner, &200, &None, &u32::MAX);
     assert_eq!(client.balance(), 100);
 }
 
@@ -3858,7 +3857,7 @@ fn deduct_without_settlement_does_not_mutate_state() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env));
+    let result = client.try_deduct(&owner, &200, &None, &u32::MAX);
     assert!(result.is_err(), "expected panic for missing settlement");
     assert_eq!(client.balance(), 500);
     assert_eq!(usdc_client.balance(&vault_address), 500);
@@ -4126,35 +4125,15 @@ mod fuzz {
                     if paused {
                         // deduct must fail while paused
                         assert!(client
-<<<<<<< HEAD
-                            .try_deduct(
-                                &caller,
-                                &amount,
-                                &None,
-                                &u32::MAX,
-                                &Address::generate(&env)
-                            )
-=======
                             .try_deduct(&caller, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err());
                     } else if sim >= amount {
                         sim -= amount;
-                        client.deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env));
+                        client.deduct(&caller, &amount, &None, &u32::MAX);
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
                         assert!(client
-<<<<<<< HEAD
-                            .try_deduct(
-                                &caller,
-                                &amount,
-                                &None,
-                                &u32::MAX,
-                                &Address::generate(&env)
-                            )
-=======
                             .try_deduct(&caller, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err());
                     }
                 }
@@ -4438,17 +4417,7 @@ mod fuzz {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
                         client
-<<<<<<< HEAD
-                            .try_deduct(
-                                &caller,
-                                &amount,
-                                &None,
-                                &u32::MAX,
-                                &Address::generate(&env)
-                            )
-=======
                             .try_deduct(&caller, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
@@ -4627,17 +4596,7 @@ mod fuzz {
                 if paused {
                     assert!(
                         client
-<<<<<<< HEAD
-                            .try_deduct(
-                                &caller,
-                                &amount,
-                                &None,
-                                &u32::MAX,
-                                &Address::generate(&env)
-                            )
-=======
                             .try_deduct(&caller, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "deduct must fail while paused at step {step}"
                     );
@@ -4647,17 +4606,7 @@ mod fuzz {
                 } else {
                     assert!(
                         client
-<<<<<<< HEAD
-                            .try_deduct(
-                                &caller,
-                                &amount,
-                                &None,
-                                &u32::MAX,
-                                &Address::generate(&env)
-                            )
-=======
                             .try_deduct(&caller, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                             .is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
@@ -4816,9 +4765,7 @@ mod fuzz {
             } else {
                 // Balance exhausted: deduct must fail.
                 assert!(
-                    client
-                        .try_deduct(&caller, &1, &None, &u32::MAX, &Address::generate(&env))
-                        .is_err(),
+                    client.try_deduct(&caller, &1, &None, &u32::MAX).is_err(),
                     "deduct must fail when balance=0 at step {step}"
                 );
             }
@@ -4884,17 +4831,7 @@ mod fuzz {
                     } else {
                         assert!(
                             client
-<<<<<<< HEAD
-                                .try_deduct(
-                                    &owner,
-                                    &amount,
-                                    &None,
-                                    &u32::MAX,
-                                    &Address::generate(&env)
-                                )
-=======
                                 .try_deduct(&owner, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                                 .is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
@@ -4914,17 +4851,7 @@ mod fuzz {
                     } else {
                         assert!(
                             client
-<<<<<<< HEAD
-                                .try_deduct(
-                                    &caller_b,
-                                    &amount,
-                                    &None,
-                                    &u32::MAX,
-                                    &Address::generate(&env)
-                                )
-=======
                                 .try_deduct(&caller_b, &amount, &None, &u32::MAX)
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                                 .is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
@@ -5623,7 +5550,7 @@ fn test_reentry_protection_single_deduct() {
     // Call 2 (Re-entrant): deduct(600) -> sees balance 500 -> PANIC "insufficient balance".
     malicious_client.set_attack_config(&vault_address, &owner, &600, &1);
 
-    let result = vault_client.try_deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env));
+    let result = vault_client.try_deduct(&owner, &500, &None, &u32::MAX);
 
     // Acceptable Outcome A: Re-entrant call fails due to state guard (insufficient balance).
     assert!(
@@ -5839,7 +5766,7 @@ fn test_reentry_exact_balance_exhaustion() {
     // deduct(600) -> balance 400.
     // re-entry deduct(401) -> Fail.
     malicious_client.set_attack_config(&vault_address, &owner, &401, &1);
-    let result = vault_client.try_deduct(&owner, &600, &None, &u32::MAX, &Address::generate(&env));
+    let result = vault_client.try_deduct(&owner, &600, &None, &u32::MAX);
     assert!(result.is_err());
     assert_eq!(vault_client.balance(), 1000);
 }
@@ -5879,7 +5806,7 @@ fn test_reentry_near_zero_balance() {
     // Call 2 (Re-entrant): deduct(1) -> sees balance 0 -> PANIC "insufficient balance"
     malicious_client.set_attack_config(&vault_address, &owner, &1, &1);
 
-    let result = vault_client.try_deduct(&owner, &1, &None, &u32::MAX, &Address::generate(&env));
+    let result = vault_client.try_deduct(&owner, &1, &None, &u32::MAX);
 
     // Must fail due to insufficient balance in re-entrant call
     assert!(result.is_err());
@@ -6474,7 +6401,7 @@ fn slippage_fee_above_limit_returns_slippage_error() {
     let (owner, client) = setup_slippage_vault(&env, 1000);
     env.mock_all_auths();
     // 11 / 1000 * 10_000 = 110 bps; limit = 100 → exceeds, should fail
-    let result = client.try_deduct(&owner, &11, &None, &100, &Address::generate(&env));
+    let result = client.try_deduct(&owner, &11, &None, &100);
     assert_eq!(
         result,
         Err(Ok(VaultError::Slippage)),
@@ -6500,7 +6427,7 @@ fn slippage_zero_limit_always_fails() {
     let (owner, client) = setup_slippage_vault(&env, 1000);
     env.mock_all_auths();
     // Even 1 stroop / 1000 = 10 bps > 0 → Slippage
-    let result = client.try_deduct(&owner, &1, &None, &0, &Address::generate(&env));
+    let result = client.try_deduct(&owner, &1, &None, &0);
     assert_eq!(result, Err(Ok(VaultError::Slippage)));
 }
 
@@ -6515,7 +6442,7 @@ fn slippage_one_bps_limit() {
     let remaining = client.deduct(&owner, &10, &None, &1, &Address::generate(&env));
     assert_eq!(remaining, 99_990);
     // 20 / 99_990 * 10_000 = 2000_000/99990 = 2 bps → exceeds limit of 1
-    let result = client.try_deduct(&owner, &20, &None, &1, &Address::generate(&env));
+    let result = client.try_deduct(&owner, &20, &None, &1);
     assert_eq!(result, Err(Ok(VaultError::Slippage)));
 }
 
@@ -6527,11 +6454,7 @@ fn slippage_check_before_state_mutation() {
     env.mock_all_auths();
     let balance_before = client.balance();
     // This should fail with Slippage
-<<<<<<< HEAD
-    let _ = client.try_deduct(&owner, &500, &None, &10, &Address::generate(&env));
-=======
     let _ = client.try_deduct(&owner, &500, &None, &10);
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     assert_eq!(
         client.balance(),
         balance_before,

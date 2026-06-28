@@ -20,8 +20,9 @@ fn get_developer_balances_cursor_before_init_returns_not_initialized() {
     let contract = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &contract);
     let admin = Address::generate(&env);
+    let token = Address::generate(&env);
     assert!(is_not_initialized(
-        client.try_get_developer_balances_cursor(&admin, &Address::zero(), &0, &10)
+        client.try_get_developer_balances_cursor(&admin, &None, &10, &token)
     ));
 }
 
@@ -54,7 +55,7 @@ fn checkpoint_before_init_returns_none() {
     let env = Env::default();
     let contract = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &contract);
-    assert!(client.try_current_checkpoint().unwrap().is_none());
+    assert!(client.try_current_checkpoint().unwrap().unwrap().is_none());
 }
 
 #[test]
@@ -67,8 +68,8 @@ fn checkpoint_creates_snapshot() {
     env.mock_all_auths();
     client.init(&admin, &vault_addr);
 
-    assert!(client.try_current_checkpoint().unwrap().is_none());
-    client.checkbox(&admin);
+    assert!(client.try_current_checkpoint().unwrap().unwrap().is_none());
+    client.checkpoint(&admin);
     let cp = client.current_checkpoint().unwrap();
     assert_eq!(cp.checkpoint_id, 1);
     assert_eq!(cp.total_pool_balance, 0);
@@ -85,11 +86,11 @@ fn checkpoint_increments_id() {
     env.mock_all_auths();
     client.init(&admin, &vault_addr);
 
-    client.checkbox(&admin);
+    client.checkpoint(&admin);
     let cp1 = client.current_checkpoint().unwrap();
     assert_eq!(cp1.checkpoint_id, 1);
 
-    client.checkbox(&admin);
+    client.checkpoint(&admin);
     let cp2 = client.current_checkpoint().unwrap();
     assert_eq!(cp2.checkpoint_id, 2);
 }

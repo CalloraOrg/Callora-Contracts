@@ -45,11 +45,7 @@ impl MaliciousToken {
                     &caller,
                     &1,
                     &Some(Symbol::new(&env, "reentry_token")),
-<<<<<<< HEAD
-                    &u32::MAX,
-=======
                     &u16::MAX,
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                 );
             }
         }
@@ -116,11 +112,7 @@ impl MaliciousSettlement {
                     &caller,
                     &1,
                     &Some(Symbol::new(&env, "reentry_settle")),
-<<<<<<< HEAD
-                    &u32::MAX,
-=======
                     &u16::MAX,
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
                 );
             }
         }
@@ -177,11 +169,7 @@ fn test_reentrancy_via_token_transfer_is_blocked_by_auth() {
         &owner,
         &100,
         &Some(Symbol::new(&env, "first_call")),
-<<<<<<< HEAD
-        &u32::MAX,
-=======
         &u16::MAX,
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     assert!(result.is_ok(), "First deduct should succeed");
@@ -228,11 +216,7 @@ fn test_reentrancy_via_settlement_callback_is_blocked() {
         &owner,
         &100,
         &Some(Symbol::new(&env, "first_call")),
-<<<<<<< HEAD
-        &u32::MAX,
-=======
         &u16::MAX,
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     assert!(result.is_ok(), "First deduct should succeed");
@@ -338,11 +322,7 @@ fn test_reentrancy_by_authorized_attacker() {
         &attacker,
         &100,
         &Some(Symbol::new(&env, "first_call")),
-<<<<<<< HEAD
-        &u32::MAX,
-=======
         &u16::MAX,
->>>>>>> 5d4d8b8 (feat: implement checkpoint/current_checkpoint, fix OverDraft variant, fix test arg counts)
     );
 
     assert!(result.is_ok(), "First deduct should succeed");
