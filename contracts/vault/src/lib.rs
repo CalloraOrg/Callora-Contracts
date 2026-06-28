@@ -1691,6 +1691,7 @@ impl CalloraVault {
         }
         Ok(())
     }
+}
 
 // Allowlist aliases — convenience wrappers used by tests and external callers.
 #[contractimpl]
