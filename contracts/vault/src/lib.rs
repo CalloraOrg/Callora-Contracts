@@ -37,8 +37,10 @@ use soroban_sdk::{
 
 mod errors;
 mod validators;
+mod views;
 
 pub use errors::VaultError;
+pub use views::SweepPreview;
 
 #[contracttype]
 #[derive(Clone)]
