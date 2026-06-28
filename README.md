@@ -53,6 +53,7 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
 - `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
 - `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
+- `nuclear_pause(caller)` — Admin-only emergency pause path. If admin is a Stellar multisig account, native account thresholds and signer weights are enforced by `require_auth`.
 - `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
 - `is_paused()` — View; returns current pause state.
 - `get_meta()` — View; returns `VaultMeta` (owner, balance, authorized_caller, min_deposit). Panics if uninitialized.
@@ -189,4 +190,3 @@ See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit r
 ---
 
 Part of [Callora](https://github.com/CalloraOrg).
-

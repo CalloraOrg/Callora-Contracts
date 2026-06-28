@@ -748,6 +748,30 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Activate the circuit breaker through the configured admin address only.
+    ///
+    /// This is the emergency "nuclear pause" path intended for deployments where
+    /// `StorageKey::Admin` is a Stellar multisig account. Calling
+    /// `admin.require_auth()` makes the host enforce that account's multisig
+    /// thresholds and signer weights before the vault can be paused.
+    ///
+    /// Unlike `pause`, the owner fallback is intentionally not accepted here:
+    /// the nuclear-pause authority is the configured admin/multisig account.
+    pub fn nuclear_pause(env: Env, caller: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(VaultError::Unauthorized);
+        }
+        if Self::is_paused(env.clone()) {
+            return Err(VaultError::AlreadyPaused);
+        }
+        env.storage().instance().set(&StorageKey::Paused, &true);
+        env.events()
+            .publish((events::event_vault_paused(&env), caller), ());
+        Ok(())
+    }
+
     pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_admin_or_owner(env.clone(), &caller)?;
