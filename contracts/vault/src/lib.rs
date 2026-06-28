@@ -115,6 +115,8 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Recipient address cannot be zero (code 37).
+    ZeroAddressRecipient = 37,
 }
 
 #[contracttype]
@@ -1127,9 +1129,23 @@ impl CalloraVault {
         Ok(meta.balance)
     }
 
+    /// Withdraw USDC from the vault to a specified recipient (owner only).
+    ///
+    /// # Parameters
+    /// - `to` — recipient address; must not be the zero address.
+    /// - `amount` — amount to withdraw; must be positive.
+    ///
+    /// # Errors
+    /// - `VaultError::ZeroAddressRecipient` — recipient is the zero address.
+    /// - `VaultError::AmountNotPositive` — `amount <= 0`.
+    /// - `VaultError::InsufficientBalance` — vault balance is less than `amount`.
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let mut meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
+        // Reject zero-address recipient
+        if Self::is_zero_address(&env, &to) {
+            return Err(VaultError::ZeroAddressRecipient);
+        }
         if amount <= 0 {
             return Err(VaultError::AmountNotPositive);
         }
@@ -1699,6 +1715,16 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Check if an address is the zero address (all zero bytes).
+    ///
+    /// Returns `true` if the address is a contract address with all zero bytes.
+    #[inline(never)]
+    fn is_zero_address(env: &Env, addr: &Address) -> bool {
+        let zero_bytes = BytesN::<32>::from_array(env, &[0u8; 32]);
+        let zero_addr = Address::from_contract_id(&zero_bytes);
+        *addr == zero_addr
+    }
+
     /// Broadcast an emergency message from the admin.
     ///
     /// Only the current admin may call this function.
@@ -1829,3 +1855,6 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_rate_limit;
+
+#[cfg(test)]
+mod test_withdraw_to_zero_address;
