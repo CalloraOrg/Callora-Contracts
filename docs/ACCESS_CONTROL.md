@@ -11,6 +11,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Authorized Caller**: Optional address permitted to trigger `deduct` operations.
 - **Pending Owner**: Nominee awaiting acceptance of the owner role.
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
+- **Admin / Multisig Admin**: Current admin address. If this address is a Stellar multisig account, native thresholds and signer weights are enforced by `require_auth`.
 - **Pending Revenue Pool**: Proposed revenue pool address awaiting acceptance.
 
 ### Authorization Matrix
@@ -35,6 +36,7 @@ The Callora Vault implements role-based access control for deposit operations to
 | `accept_revenue_pool` | ❌ | ❌ | ❌ | ❌ | ✅ |
 | `cancel_revenue_pool` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `pause` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `nuclear_pause` | ❌ | ❌ | ❌ | ❌ | Admin only |
 | `unpause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ### Security Model
@@ -42,6 +44,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Cancellation Safety**: Provides `cancel_ownership_transfer` and `cancel_admin_transfer` functions to abort mistaken nominations before acceptance.
 - **Restricted Depositors**: Only owner and explicitly allowed depositors can increase vault balance.
+- **Multisig-Guarded Nuclear Pause**: `nuclear_pause(caller)` accepts only the current admin address and calls `caller.require_auth()`, so deployments that set admin to a Stellar multisig account get native threshold enforcement for the emergency pause.
 - **Nonce-Bound Authorized-Caller Rotation**: `set_authorized_caller` requires the caller to supply the current monotonic nonce (see below), preventing a leaked owner signature from being replayed to reinstate a stale `authorized_caller`.
 
 ### Authorized-Caller Replay Protection

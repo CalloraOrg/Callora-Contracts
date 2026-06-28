@@ -519,6 +519,26 @@
     },
 
     {
+      "name": "nuclear_pause",
+      "description": "Admin-only emergency circuit breaker. Intended for a configured Stellar multisig admin account; require_auth enforces that account's thresholds and signer weights. Blocks deposit, deduct, and batch_deduct.",
+      "access": "admin only (must sign; native account multisig thresholds apply)",
+      "params": [
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin address; must authorize."
+        }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" â€” auth failure.",
+        "\"vault already paused\" â€” already in paused state."
+      ],
+      "events": [{ "topics": ["\"vault_paused\"", "caller"], "data": "void" }]
+    },
+
+    {
       "name": "set_allowed_depositor",
       "description": "Add or clear the set of allowed depositors. Pass Some(address) to add; None to revoke all.",
       "access": "owner",
