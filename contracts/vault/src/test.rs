@@ -1402,7 +1402,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2611,7 +2611,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2934,7 +2934,7 @@ fn get_settlement_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement(, &Address::generate(&env));
+    let after = client.get_settlement();
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -3780,7 +3780,7 @@ fn deduct_without_settlement_panics() {
 }
 
 #[test]
-fn deduct_without_settlement_does_not_mutate_state(, &Address::generate(&env)) {
+fn deduct_without_settlement_does_not_mutate_state() {
     // When deduct panics due to missing settlement, vault state must be unchanged.
     let env = Env::default();
     let owner = Address::generate(&env);
