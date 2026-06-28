@@ -43,6 +43,22 @@ pub enum StorageKey {
     /// Absent   → V1 (pre-migration, no version tracking).
     /// Value 2  → V2 (single-token → per-token migration complete).
     StorageVersion,
+    Checkpoint,
+    CheckpointCounter,
+}
+
+/// Checkpoint snapshot for bounded storage growth.
+///
+/// Captures a consistent point-in-time view of the global pool and developer
+/// index so that future archival / pruning logic can bound on-chain state.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Checkpoint {
+    pub checkpoint_id: u32,
+    pub total_pool_balance: i128,
+    pub developer_count: u32,
+    pub ledger_timestamp: u64,
+    pub timestamp: u64,
 }
 
 /// Severity levels for admin broadcast messages.
