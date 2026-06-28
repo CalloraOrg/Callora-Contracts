@@ -544,9 +544,7 @@ fn deposit_paused_fails() {
     usdc_client.approve(&owner, &vault_address, &100, &1000);
 
     let result = client.try_deposit(&owner, &100);
-    assert!(result.is_err());
-    // Should contain "vault is paused" but Error doesn't easily expose the string in tests without more setup
-    // but the transaction should fail.
+    assert_eq!(result, Err(Ok(VaultError::PausedState)));
 
     client.unpause(&owner);
     assert!(!client.is_paused());
@@ -1065,7 +1063,6 @@ fn deduct_authorized_caller_succeeds() {
 }
 
 #[test]
-#[should_panic(expected = "vault is paused")]
 fn deduct_paused_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1075,7 +1072,8 @@ fn deduct_paused_fails() {
     fund_vault(&usdc_admin, &client.address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u16::MAX);
+    let result = client.try_deduct(&owner, &100, &None, &u16::MAX);
+    assert_eq!(result, Err(Ok(VaultError::PausedState)));
 }
 
 #[test]
@@ -1402,7 +1400,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2611,7 +2609,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query revenue pool after deduct - should be unchanged
-    let after = client.get_revenue_pool(, &Address::generate(&env));
+    let after = client.get_revenue_pool();
     assert_eq!(after, Some(revenue_pool.clone()));
     assert_eq!(before, after);
 
@@ -2934,7 +2932,7 @@ fn get_settlement_consistent_after_deduct_operations() {
     client.deduct(&caller, &200, &None, &u16::MAX);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement(, &Address::generate(&env));
+    let after = client.get_settlement();
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -3536,7 +3534,6 @@ fn get_pending_admin_returns_some_after_transfer() {
     assert_eq!(client.get_pending_admin(), None);
 }
 #[test]
-#[should_panic(expected = "vault is paused")]
 fn deduct_while_paused_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -3548,11 +3545,11 @@ fn deduct_while_paused_fails() {
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u16::MAX);
+    let result = client.try_deduct(&owner, &100, &None, &u16::MAX);
+    assert_eq!(result, Err(Ok(VaultError::PausedState)));
 }
 
 #[test]
-#[should_panic(expected = "vault is paused")]
 fn batch_deduct_while_paused_fails() {
     let env = Env::default();
     let owner = Address::generate(&env, &Address::generate(&env));
@@ -3571,7 +3568,8 @@ fn batch_deduct_while_paused_fails() {
             request_id: None
         , developer: Address::generate(&env) }
     ];
-    client.batch_deduct(&owner, &items); // must panic with "vault is paused"
+    let result = client.try_batch_deduct(&owner, &items);
+    assert_eq!(result, Err(Ok(VaultError::PausedState)));
 }
 
 #[test]
@@ -3780,7 +3778,7 @@ fn deduct_without_settlement_panics() {
 }
 
 #[test]
-fn deduct_without_settlement_does_not_mutate_state(, &Address::generate(&env)) {
+fn deduct_without_settlement_does_not_mutate_state() {
     // When deduct panics due to missing settlement, vault state must be unchanged.
     let env = Env::default();
     let owner = Address::generate(&env);

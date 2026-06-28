@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
+    Env, String, Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -115,6 +115,8 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Operation is rejected because the vault is paused (code 37).
+    PausedState = 37,
 }
 
 #[contracttype]
@@ -1680,7 +1682,7 @@ impl CalloraVault {
     #[inline(never)]
     fn require_not_paused(env: Env) -> Result<(), VaultError> {
         if Self::is_paused(env) {
-            return Err(VaultError::Paused);
+            return Err(VaultError::PausedState);
         }
         Ok(())
     }

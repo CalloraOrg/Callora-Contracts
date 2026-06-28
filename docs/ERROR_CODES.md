@@ -49,6 +49,9 @@ must not be reassigned once released.
 | 32 | `StaleNonce` | Vault | Rotation nonce does not match the stored current nonce |
 | 33 | `NewRevenuePoolSameAsCurrent` | Vault | Proposed revenue pool matches the current revenue pool |
 | 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |
+| 35 | `Slippage` | Vault | Fee basis points exceeds the caller-supplied maximum |
+| 36 | `RateLimited` | Vault | Developer rate limit has been exceeded |
+| 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
 
 ## Settlement
 
