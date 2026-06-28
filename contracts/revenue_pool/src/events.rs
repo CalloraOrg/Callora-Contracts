@@ -245,6 +245,9 @@ mod tests {
     #[test]
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
-        assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
+        assert_eq!(
+            event_admin_broadcast(&env),
+            Symbol::new(&env, "admin_broadcast")
+        );
     }
 }

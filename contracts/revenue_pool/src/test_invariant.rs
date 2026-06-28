@@ -125,51 +125,47 @@ fn invariant_trace(seed: u64) {
             }
 
             // ── 7-8: Distribute to a single developer ──
-            7..=8 => {
-                if scheduled > 0 {
-                    let idx = rng.gen_index(DEV_COUNT);
-                    let max_amt = core::cmp::min(scheduled, 200_000);
-                    if max_amt > 0 {
-                        let amt = rng.gen_range(1, max_amt + 1);
-                        let result = catch_unwind(AssertUnwindSafe(|| {
-                            pool.distribute(&admin, &devs[idx], &amt);
-                        }));
-                        if result.is_ok() {
-                            scheduled -= amt;
-                        }
+            7..=8 if scheduled > 0 => {
+                let idx = rng.gen_index(DEV_COUNT);
+                let max_amt = core::cmp::min(scheduled, 200_000);
+                if max_amt > 0 {
+                    let amt = rng.gen_range(1, max_amt + 1);
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        pool.distribute(&admin, &devs[idx], &amt);
+                    }));
+                    if result.is_ok() {
+                        scheduled -= amt;
                     }
                 }
             }
 
             // ── 9: Batch distribute to several developers ──
-            9 => {
-                if scheduled > 0 {
-                    let batch_size = rng.gen_index(6).max(1) as u32; // 1..6
-                    let mut payments: Vec<(Address, i128)> = Vec::new(&env);
-                    let mut batch_total: i128 = 0;
+            9 if scheduled > 0 => {
+                let batch_size = rng.gen_index(6).max(1) as u32; // 1..6
+                let mut payments: Vec<(Address, i128)> = Vec::new(&env);
+                let mut batch_total: i128 = 0;
 
-                    for _ in 0..batch_size {
-                        let remaining = scheduled - batch_total;
-                        if remaining <= 0 {
-                            break;
-                        }
-                        let max_leg = core::cmp::min(remaining, 100_000);
-                        if max_leg <= 0 {
-                            break;
-                        }
-                        let leg_amt = rng.gen_range(1, max_leg + 1);
-                        let idx = rng.gen_index(DEV_COUNT);
-                        payments.push_back((devs[idx].clone(), leg_amt));
-                        batch_total += leg_amt;
+                for _ in 0..batch_size {
+                    let remaining = scheduled - batch_total;
+                    if remaining <= 0 {
+                        break;
                     }
+                    let max_leg = core::cmp::min(remaining, 100_000);
+                    if max_leg <= 0 {
+                        break;
+                    }
+                    let leg_amt = rng.gen_range(1, max_leg + 1);
+                    let idx = rng.gen_index(DEV_COUNT);
+                    payments.push_back((devs[idx].clone(), leg_amt));
+                    batch_total += leg_amt;
+                }
 
-                    if !payments.is_empty() {
-                        let result = catch_unwind(AssertUnwindSafe(|| {
-                            pool.batch_distribute(&admin, &payments);
-                        }));
-                        if result.is_ok() {
-                            scheduled -= batch_total;
-                        }
+                if !payments.is_empty() {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        pool.batch_distribute(&admin, &payments);
+                    }));
+                    if result.is_ok() {
+                        scheduled -= batch_total;
                     }
                 }
             }

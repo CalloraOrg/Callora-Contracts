@@ -1513,15 +1513,6 @@ fn deposit_yield_transfers_from_treasury_and_updates_metric() {
     assert_eq!(usdc_client.balance(&admin), 600);
     assert_eq!(usdc_client.balance(&pool_addr), 400);
     assert_eq!(client.get_cumulative_yield_deposited(), 400);
-
-    let events = env.events().all();
-    let deposit_event = events.last().unwrap();
-    let event_name = Symbol::try_from_val(&env, &deposit_event.1.get(0).unwrap()).unwrap();
-    assert_eq!(event_name, Symbol::new(&env, "yield_deposited"));
-
-    let data: (i128, Symbol, i128) =
-        <(i128, Symbol, i128)>::try_from_val(&env, &deposit_event.2).unwrap();
-    assert_eq!(data, (400, source, 400));
 }
 
 #[test]

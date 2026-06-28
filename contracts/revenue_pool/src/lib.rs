@@ -1,8 +1,12 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String,
+    Symbol, Vec,
 };
+
+#[cfg(any(test, feature = "testutils"))]
+use soroban_sdk::testutils::storage::Instance;
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -84,7 +88,6 @@ pub struct StorageEntryTtl {
     pub threshold: u32,
     pub bump_amount: u32,
 }
-
 
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
@@ -917,7 +920,6 @@ impl RevenuePool {
         result
     }
 }
-
 
 mod events;
 /// Split `payments` into consecutive chunks of at most `chunk_size` legs each,

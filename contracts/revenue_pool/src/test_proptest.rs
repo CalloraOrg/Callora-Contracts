@@ -1,13 +1,11 @@
-
 extern crate std;
 
-use crate::{RevenuePool, RevenuePoolClient, Severity};
+use crate::{RevenuePool, RevenuePoolClient};
 use proptest::prelude::*;
-use proptest::strategy::ValueTree;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::{self, StellarAssetClient};
-use soroban_sdk::{Address, Env};
 use soroban_sdk::Vec as SorobanVec;
+use soroban_sdk::{Address, Env};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn create_usdc<'a>(
@@ -98,7 +96,7 @@ proptest! {
 // Stateful testing harness
 // ---------------------------------------------------------------------------
 
-/// Generate a list of valid actions and run them
+// Generate a list of valid actions and run them
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(32))]
 
@@ -163,9 +161,14 @@ proptest! {
                 4 | 5 if !paused && virtual_scheduled > 0 => {
                     let batch_size = (next_rand() % 10) as usize + 1;
                     let mut payments = SorobanVec::new(&env);
+                    let mut selected = std::vec::Vec::new();
                     let mut total = 0;
                     for _ in 0..batch_size {
                         let idx = (next_rand() % DEV_COUNT as u64) as usize;
+                        if selected.contains(&idx) {
+                            continue;
+                        }
+                        selected.push(idx);
                         let remaining = virtual_scheduled - total;
                         if remaining <= 0 {
                             break;
@@ -177,7 +180,7 @@ proptest! {
                         payments.push_back((devs[idx].clone(), amount));
                         total += amount;
                     }
-                    if payments.len() > 0 {
+                    if !payments.is_empty() {
                         let admin = &admins[admin_idx];
                         let result = catch_unwind(AssertUnwindSafe(|| {
                             pool.batch_distribute(admin, &payments);
@@ -248,7 +251,6 @@ proptest! {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
                         pool.receive_payment(admin, &amount, &from_vault);
                     }));
-                    virtual_scheduled += amount;
                 }
                 _ => {}
             }
