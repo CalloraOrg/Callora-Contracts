@@ -115,6 +115,8 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Deposit would exceed the configured per-token reserve cap (code 37).
+    ExceedsReserveCap = 37,
 }
 
 #[contracttype]
@@ -204,6 +206,8 @@ pub enum StorageKey {
     DeveloperConfig(Address),
     /// Current rate limit state for a developer.
     DeveloperState(Address),
+    /// Maximum total balance the vault may hold for a given token.
+    ReserveCap(Address),
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -792,6 +796,9 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
+
+        // Reserve cap guard — reject if deposit would push balance past the cap.
+        limits::check(&env, &usdc_addr, meta.balance, amount)?;
 
         // ── Effects ───────────────────────────────────────────────────────
         meta.balance = meta
@@ -1783,7 +1790,7 @@ impl CalloraVault {
     ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
-        
+
         let config = crate::rate_limit::RateLimitConfig {
             capacity,
             refill_rate,
@@ -1791,10 +1798,53 @@ impl CalloraVault {
         crate::rate_limit::set_config(&env, &developer, &config);
         Ok(())
     }
+
+    /// Set or update the reserve cap for a token (owner only).
+    ///
+    /// The reserve cap is the maximum total balance the vault may hold for
+    /// `token`.  Any `deposit` call that would push the balance beyond `cap`
+    /// is rejected with [`VaultError::ExceedsReserveCap`].
+    ///
+    /// Pass `i128::MAX` to remove the effective cap (restore unlimited deposits).
+    ///
+    /// # Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `token` — token contract address the cap applies to.
+    /// - `cap` — maximum balance in token stroops; must be > 0.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the owner.
+    /// - [`VaultError::AmountNotPositive`] — `cap <= 0`.
+    pub fn set_reserve_cap(
+        env: Env,
+        caller: Address,
+        token: Address,
+        cap: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if cap <= 0 {
+            return Err(VaultError::AmountNotPositive);
+        }
+        let prev = limits::set(&env, &token, cap);
+        env.events().publish(
+            (events::event_reserve_cap_set(&env), caller, token),
+            (prev, cap),
+        );
+        Ok(())
+    }
+
+    /// Return the reserve cap for `token`.
+    ///
+    /// Returns `i128::MAX` when no cap has been configured (effectively unlimited).
+    pub fn get_reserve_cap(env: Env, token: Address) -> i128 {
+        limits::get(&env, &token)
+    }
 }
 
 mod events;
 pub mod rate_limit;
+pub mod limits;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1829,3 +1879,6 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_rate_limit;
+
+#[cfg(test)]
+mod test_reserve_cap;

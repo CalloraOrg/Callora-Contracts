@@ -220,6 +220,14 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for the `"reserve_cap_set"` event topic.
+///
+/// Emitted when the owner sets or updates the reserve cap for a token.
+/// Data payload: `(prev_cap: Option<i128>, new_cap: i128)`.
+pub fn event_reserve_cap_set(env: &Env) -> Symbol {
+    Symbol::new(env, "reserve_cap_set")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
