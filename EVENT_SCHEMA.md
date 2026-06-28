@@ -762,10 +762,54 @@ so indexers can link the cancellation to the in-flight handover without a data d
 
 ---
 
-### `upgraded`
+### `upgrade_started`, `upgrade_completed`, `upgraded`
 
-Emitted when the admin upgrades the contract WASM via `upgrade()`. The new WASM hash
-is persisted to instance storage and is queryable via `get_version()`.
+A successful `upgrade()` call publishes three events in this order:
+
+1. `upgrade_started` — published *before* the host swaps the contract WASM.
+2. `upgrade_completed` — published *after* the WASM swap and the
+   `ContractVersion` storage write.
+3. `upgraded` — legacy single-event shape retained for backwards
+   compatibility with off-chain subscribers written against the
+   pre-lifecycle schema. New indexers should subscribe to the structured
+   pair above.
+
+Receipt of `upgrade_started` without a matching `upgrade_completed` at the
+same `(ledger, timestamp)` means the host trapped between the two emits;
+the WASM swap and `ContractVersion` write were rolled back.
+
+#### `upgrade_started` and `upgrade_completed`
+
+| Index   | Location | Type           | Description                                                  |
+|---------|----------|----------------|--------------------------------------------------------------|
+| topic 0 | topics   | Symbol         | `"upgrade_started"` or `"upgrade_completed"`                 |
+| topic 1 | topics   | Address        | `caller` -- the address that authorized `upgrade()`          |
+| data    | data     | `UpgradeEvent` | structured payload (see below)                               |
+
+`UpgradeEvent` fields:
+
+| Field           | Type                  | Description                                                                 |
+|-----------------|-----------------------|-----------------------------------------------------------------------------|
+| `caller`        | `Address`             | Same as topic 1; included in data for indexers that store the payload only. |
+| `previous_wasm` | `Option<BytesN<32>>`  | Hash recorded by the prior `upgrade()`. `None` on the first upgrade.        |
+| `new_wasm`      | `BytesN<32>`          | Hash being deployed by this call.                                           |
+| `ledger`        | `u32`                 | `env.ledger().sequence()` captured before the WASM swap.                    |
+| `timestamp`     | `u64`                 | `env.ledger().timestamp()` captured before the WASM swap.                   |
+
+```json
+{
+  "topics": ["upgrade_completed", "GADMIN..."],
+  "data": {
+    "caller": "GADMIN...",
+    "previous_wasm": "a1b2c3d4...",
+    "new_wasm": "f0e1d2c3...",
+    "ledger": 1234567,
+    "timestamp": 1700000000
+  }
+}
+```
+
+#### `upgraded` (legacy)
 
 | Index   | Location | Type       | Description                                       |
 |---------|----------|------------|---------------------------------------------------|
@@ -780,8 +824,10 @@ is persisted to instance storage and is queryable via `get_version()`.
 }
 ```
 
-> `get_version()` returns this hash immediately after the transaction. Only one WASM
-> version is stored; calling `upgrade()` again overwrites the previous value.
+> `get_version()` returns the new hash immediately after the transaction. Only
+> one WASM version is stored; calling `upgrade()` again overwrites the
+> previous value (which is then visible to consumers as the next event's
+> `previous_wasm`).
 ---
 
 ### `yield_deposited`

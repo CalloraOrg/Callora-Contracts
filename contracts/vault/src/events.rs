@@ -174,8 +174,30 @@ pub fn event_metadata_removed(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"upgraded"` event topic.
 ///
 /// Emitted when the vault contract is upgraded to a new WASM hash.
+///
+/// Retained for backwards compatibility with off-chain consumers that subscribed
+/// to the original single-event shape. Newly written indexers should prefer the
+/// structured [`event_upgrade_started`] / [`event_upgrade_completed`] pair.
 pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
+}
+
+/// Returns the Symbol for the `"upgrade_started"` event topic.
+///
+/// Emitted *before* the host swaps the contract WASM. Pairs with
+/// [`event_upgrade_completed`] so indexers can distinguish a host-level trap
+/// mid-upgrade from a fully applied upgrade.
+pub fn event_upgrade_started(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_started")
+}
+
+/// Returns the Symbol for the `"upgrade_completed"` event topic.
+///
+/// Emitted *after* the WASM swap and the `ContractVersion` storage write.
+/// Receipt of this event without a preceding `upgrade_started` at the same
+/// `(ledger, timestamp)` would indicate event-emission tampering.
+pub fn event_upgrade_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_completed")
 }
 
 /// Returns the Symbol for the `"allowlist_add"` event topic.
@@ -392,6 +414,20 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_upgraded(&env);
         assert_eq!(sym, Symbol::new(&env, "upgraded"));
+    }
+
+    #[test]
+    fn test_event_upgrade_started_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_started(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_started"));
+    }
+
+    #[test]
+    fn test_event_upgrade_completed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_completed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_completed"));
     }
 
     #[test]

@@ -95,6 +95,30 @@ pub struct AdminBroadcast {
     pub message: String,
 }
 
+/// Structured payload emitted by `upgrade_started` and `upgrade_completed`
+/// events on every successful invocation of [`CalloraVault::upgrade`].
+///
+/// Indexers can rely on each upgrade emitting the *pair* in order: a
+/// `upgrade_started` event before the host-level WASM swap, then an
+/// `upgrade_completed` event once the new contract version is persisted.
+/// A `upgrade_started` without a matching `upgrade_completed` at the same
+/// `ledger`/`timestamp` indicates the host trapped between the two emits.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct UpgradeEvent {
+    /// Address that invoked `upgrade` and whose signature gated the call.
+    pub caller: Address,
+    /// WASM hash recorded by the previous successful `upgrade`, if any.
+    /// `None` on the first upgrade after deployment.
+    pub previous_wasm: Option<BytesN<32>>,
+    /// 32-byte hash of the WASM the contract is being upgraded to.
+    pub new_wasm: BytesN<32>,
+    /// Ledger sequence at the moment the event is emitted.
+    pub ledger: u32,
+    /// Ledger timestamp at the moment the event is emitted.
+    pub timestamp: u64,
+}
+
 /// Canonical storage keys for the Vault contract.
 #[contracttype]
 pub enum StorageKey {
@@ -1468,7 +1492,18 @@ impl CalloraVault {
     /// - `"unauthorized: caller is not admin"` — `caller` is not the admin.
     ///
     /// # Events
-    /// Emits an `upgraded` event with the admin as topic and the new WASM hash as data.
+    /// Emits three events per successful invocation, in this order:
+    /// 1. `upgrade_started` — topic `(symbol, caller)`, data [`UpgradeEvent`]
+    ///    with `previous_wasm` set to the prior stored version (or `None` on
+    ///    the first upgrade) and `new_wasm` set to `new_wasm_hash`. Published
+    ///    *before* the host swaps the WASM, so indexers see an in-flight upgrade
+    ///    even if the host traps mid-call.
+    /// 2. `upgrade_completed` — topic `(symbol, caller)`, data [`UpgradeEvent`]
+    ///    with the same payload. Published *after* the WASM swap and version
+    ///    persist.
+    /// 3. `upgraded` — legacy topic kept for backwards compatibility with
+    ///    existing off-chain subscribers. Indexers added going forward should
+    ///    prefer the structured pair above.
     ///
     /// # Post-Upgrade Migration
     /// After calling `upgrade`, you may need to invoke a separate `migrate` function
@@ -1477,6 +1512,25 @@ impl CalloraVault {
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
+
+        let previous_wasm: Option<BytesN<32>> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::ContractVersion);
+        let payload = UpgradeEvent {
+            caller: caller.clone(),
+            previous_wasm,
+            new_wasm: new_wasm_hash.clone(),
+            ledger: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        };
+
+        // Lifecycle: emit `started` BEFORE the host swap so indexers can detect
+        // an in-progress upgrade if the host traps between the two emits.
+        env.events().publish(
+            (events::event_upgrade_started(&env), caller.clone()),
+            payload.clone(),
+        );
 
         // Perform the on-chain upgrade via the deployer interface.
         // This is a host operation and may only succeed in the live environment.
@@ -1488,7 +1542,12 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::ContractVersion, &new_wasm_hash);
 
-        // Emit an event for indexers / audit logs.
+        env.events().publish(
+            (events::event_upgrade_completed(&env), caller),
+            payload,
+        );
+
+        // Backwards-compatible legacy event.
         env.events()
             .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
