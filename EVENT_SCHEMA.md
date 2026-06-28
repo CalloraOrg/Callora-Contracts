@@ -7,6 +7,21 @@ All topic/data types refer to Soroban/Stellar XDR values.
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
 
+## Change Note (2026-06)
+
+**Event topic centralization (PR: task/event-symbol-catalog).**
+All inline `Symbol::new(&env, "...")` event topic literals have been extracted from
+`lib.rs` call sites into dedicated `src/events.rs` modules per crate:
+
+- [`contracts/vault/src/events.rs`](contracts/vault/src/events.rs) — 23 topics
+- [`contracts/settlement/src/events.rs`](contracts/settlement/src/events.rs) — 8 topics
+- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 12 topics
+
+Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
+a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
+No topic strings were renamed; this refactor is a zero-semantic-change migration.
+
+
 ## Contract: Callora Vault
 
 ### `init`
@@ -550,6 +565,44 @@ Emitted when the nominee accepts the admin role (step 2 of 2).
 
 ---
 
+### `pause_guardian_set`
+
+Emitted when the admin sets or replaces the emergency pause guardian.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_set"`                   |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | `guardian` — address allowed to pause    |
+
+```json
+{
+  "topics": ["pause_guardian_set", "GADMIN..."],
+  "data": "GGUARDIAN..."
+}
+```
+
+---
+
+### `pause_guardian_cleared`
+
+Emitted when the admin clears the emergency pause guardian role.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_cleared"`               |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | previous guardian address                |
+
+```json
+{
+  "topics": ["pause_guardian_cleared", "GADMIN..."],
+  "data": "GOLD_GUARDIAN..."
+}
+```
+
+---
+
 ### `receive_payment`
 
 Emitted when the admin logs an inbound payment from the vault.
@@ -660,6 +713,129 @@ three payments, three `batch_distribute` events are emitted in order.
 
 ---
 
+
+
+---
+
+### `pause_set`
+
+Emitted by both `pause()` (data = `true`) and `unpause()` (data = `false`) to signal
+a change in the pool's pause state. Only the admin may trigger either function.
+
+| Index   | Location | Type    | Description                                      |
+|---------|----------|---------|--------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_set"`                                    |
+| topic 1 | topics   | Address | `caller` -- the admin who called pause/unpause   |
+| data    | data     | bool    | `true` = pool is now paused; `false` = unpaused  |
+
+```json
+{ "topics": ["pause_set", "GADMIN..."], "data": true }
+```
+
+> While paused, `distribute` and `batch_distribute` are blocked.
+> Admin rotation (`set_admin`, `claim_admin`) remains available.
+
+---
+
+### `admin_cancelled`
+
+Emitted when the current admin cancels a pending two-step admin transfer via
+`cancel_admin_transfer()`. Both the current and the pending admin are recorded as topics
+so indexers can link the cancellation to the in-flight handover without a data decode.
+
+| Index   | Location | Type    | Description                                        |
+|---------|-----------|---------|----------------------------------------------------|
+| topic 0 | topics    | Symbol  | `"admin_cancelled"`                                |
+| topic 1 | topics    | Address | `current_admin` -- admin who issued the cancel     |
+| topic 2 | topics    | Address | `pending_admin` -- nominee whose claim is revoked  |
+| data    | data      | ()      | empty                                              |
+
+```json
+{
+  "topics": ["admin_cancelled", "GCURRENT_ADMIN...", "GPENDING_ADMIN..."],
+  "data": null
+}
+```
+
+> After this event `get_pending_admin()` returns `None`. The current admin remains
+> unchanged and may initiate a new transfer at any time.
+
+---
+
+### `upgraded`
+
+Emitted when the admin upgrades the contract WASM via `upgrade()`. The new WASM hash
+is persisted to instance storage and is queryable via `get_version()`.
+
+| Index   | Location | Type       | Description                                       |
+|---------|----------|------------|---------------------------------------------------|
+| topic 0 | topics   | Symbol     | `"upgraded"`                                      |
+| topic 1 | topics   | Address    | `caller` -- admin who executed the upgrade        |
+| data    | data     | BytesN<32> | `new_wasm_hash` -- hash of the deployed WASM blob |
+
+```json
+{
+  "topics": ["upgraded", "GADMIN..."],
+  "data": "a1b2c3d4e5f6..."
+}
+```
+
+> `get_version()` returns this hash immediately after the transaction. Only one WASM
+> version is stored; calling `upgrade()` again overwrites the previous value.
+---
+
+### `yield_deposited`
+
+Emitted when the treasury deposits accumulated protocol yield into the revenue pool
+via `deposit_yield()`. The cumulative tracker is updated atomically with the transfer.
+
+| Index   | Location | Type    | Description                                            |
+|---------|----------|---------|--------------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"yield_deposited"`                                    |
+| topic 1 | topics   | Address | `treasury` -- current admin who called `deposit_yield`  |
+| data[0] | data     | i128    | `amount` -- USDC deposited in this call (stroops)       |
+| data[1] | data     | Symbol  | `source` -- short label, e.g. `"fees"` or `"yield"`    |
+| data[2] | data     | i128    | `cumulative_yield_deposited` -- running total after deposit |
+
+```json
+{
+  "topics": ["yield_deposited", "GTREASURY..."],
+  "data": [5000000, "fees", 42000000]
+}
+```
+
+> `cumulative_yield_deposited` equals `get_cumulative_yield_deposited()` immediately
+> after the emitting transaction. It never decreases and panics on `i128` overflow.
+
+---
+
+### `admin_broadcast`
+
+Emitted when the admin publishes an emergency message via `broadcast()`.
+No tokens are moved; this is an out-of-band signaling channel for indexers and frontends.
+
+| Index   | Location | Type             | Description                                    |
+|---------|----------|------------------|------------------------------------------------|
+| topic 0 | topics   | Symbol           | `"admin_broadcast"`                            |
+| topic 1 | topics   | Address          | `caller` -- must be current admin               |
+| data    | data     | `AdminBroadcast`   | struct with `severity` and `message` fields    |
+
+`AdminBroadcast` struct fields:
+
+| Field      | Type     | Description                                      |
+|------------|----------|--------------------------------------------------|
+| `severity` | Severity | One of `Info`, `Warn`, or `Crit`                 |
+| `message`  | String   | Broadcast text; max 256 characters, never empty  |
+
+```json
+{
+  "topics": ["admin_broadcast", "GADMIN..."],
+  "data": { "severity": "Crit", "message": "Emergency: pausing distribution pending audit." }
+}
+```
+
+> Indexers SHOULD alert on `severity = Crit`. The `message` field is capped at
+> 256 characters; longer strings are rejected before the event is emitted.
 ## Contract: `callora-settlement` (v0.1.0)
 
 Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
@@ -811,6 +987,77 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 
 ---
 
+### `developer_withdraw`
+
+Emitted by `withdraw_developer_balance()` when a developer withdraws their balance as USDC.
+
+| Index             | Location | Type    | Description                                                     |
+|-------------------|----------|---------|-----------------------------------------------------------------|
+| topic 0           | topics   | Symbol  | `"developer_withdraw"`                                          |
+| topic 1           | topics   | Address | `developer` — address withdrawing the balance                   |
+| `developer`       | data     | Address | same as topic 1; duplicated for data-only indexers              |
+| `amount`          | data     | i128    | amount withdrawn in USDC micro-units                            |
+| `remaining_balance`| data    | i128    | developer's cumulative balance after this withdrawal (post-state)|
+| `to`              | data     | Address | recipient address the funds were sent to (defaults to developer)|
+
+```json
+{
+    "topics": ["developer_withdraw", "GDEV..."],
+    "data": {
+        "developer": "GDEV...",
+        "amount": 2000000,
+        "remaining_balance": 0,
+        "to": "GRECIPIENT..."
+    }
+}
+```
+
+**Invariants.**
+- `remaining_balance = prior_balance - amount`, checked for underflow.
+- `to` cannot be the contract's own address.
+- If `to` is not provided (None), it defaults to `developer`.
+
+### `developer_force_credited`
+
+Emitted by `force_credit_developer()` when an admin manually credits a developer balance (escape hatch).
+
+This is an **admin-authorized inflow** — no on-ledger USDC is moved. It is designed for
+operational edge cases (off-chain payment reconciliation, dispute resolution).
+
+| Index         | Location | Type    | Description                                                     |
+|---------------|----------|---------|-----------------------------------------------------------------|
+| topic 0       | topics   | Symbol  | `"developer_force_credited"`                                    |
+| topic 1       | topics   | Address | `developer` — address whose balance was updated                  |
+| `developer`   | data     | Address | same as topic 1; duplicated for data-only indexers              |
+| `amount`      | data     | i128    | amount credited to the developer in USDC micro-units            |
+| `reason`      | data     | Symbol  | on-chain reason code for the manual credit                      |
+| `new_balance` | data     | i128    | developer's cumulative balance after this credit (post-state)   |
+
+```json
+{
+    "topics": ["developer_force_credited", "GDEV..."],
+    "data": {
+        "developer": "GDEV...",
+        "amount": 5000000,
+        "reason": "offline_settlement",
+        "new_balance": 7500000
+    }
+}
+```
+
+**Invariants.**
+- `new_balance = prior_balance + amount`, checked for `i128` overflow.
+- Only the contract admin may call `force_credit_developer`.
+- This is an audit-only path; every credit includes an on-chain `reason` Symbol.
+
+**Indexer guidance.**
+- Subscribe to `developer_force_credited` to track admin-initiated manual credits.
+- The `reason` field distinguishes different operational scenarios (e.g., `"dispute_resolution"`, `"offline_settlement"`, `"bulk_reconciliation"`).
+- This event is **never** paired with a `payment_received` event.
+- For full accounting, sum `balance_credited.amount` + `developer_force_credited.amount` to compute total developer inflows.
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -842,9 +1089,15 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 | `receive_payment`        | revenue-pool    | `receive_payment()`                      |
 | `distribute`             | revenue-pool    | `distribute()`                           |
 | `batch_distribute`       | revenue-pool    | each payment in `batch_distribute()`     |
+| `pause_set`              | revenue-pool    | `pause()` / `unpause()`                  |
+| `admin_cancelled`        | revenue-pool    | `cancel_admin_transfer()`                |
+| `upgraded`               | revenue-pool    | `upgrade()`                              |
+| `yield_deposited`        | revenue-pool    | `deposit_yield()`                        |
+| `admin_broadcast`        | revenue-pool    | `broadcast()`                            |
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
+| `developer_force_credited`| settlement     | `force_credit_developer()`               |
 
 ---
 
@@ -858,3 +1111,4 @@ Emitted by `set_vault()` when the admin updates the registered vault address.
 | 0.0.1   | revenue-pool  | Full revenue pool event suite with JSON examples             |
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
+| 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |

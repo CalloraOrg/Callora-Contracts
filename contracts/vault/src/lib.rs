@@ -25,14 +25,14 @@
 /// treated as a fire-and-forget deduction with no idempotency guarantee.
 ///
 /// ### Retention / TTL
-/// Processed-request markers live in temporary storage and are bumped to
-/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct.  The threshold
-/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`.  After the TTL expires
-/// the marker is archived and a previously-seen `request_id` can be reused —
-/// callers must not rely on deduplication beyond the retention window.
+/// Processed-request markers live in persistent storage and are bumped to
+/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct. The threshold
+/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
+/// persistent, they do not silently archive. To prevent state bloat, an owner
+/// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
-    Env, String, Symbol, Vec,
+    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -101,6 +101,20 @@ pub enum VaultError {
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
     DuplicateRequestId = 29,
+    /// Offering ID is empty or contains invalid characters (code 30).
+    OfferingIdInvalid = 30,
+    /// Metadata string is empty or contains invalid characters (code 31).
+    MetadataInvalid = 31,
+    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
+    StaleNonce = 32,
+    /// New revenue pool must be different from current revenue pool (code 33).
+    NewRevenuePoolSameAsCurrent = 33,
+    /// No revenue pool transfer is pending (code 34).
+    NoRevenuePoolTransferPending = 34,
+    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
+    Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
 }
 
 #[contracttype]
@@ -108,6 +122,7 @@ pub enum VaultError {
 pub struct DeductItem {
     pub amount: i128,
     pub request_id: Option<Symbol>,
+    pub developer: Address,
 }
 
 #[contracttype]
@@ -127,6 +142,36 @@ pub struct WithdrawEventData {
     pub new_balance: i128,
 }
 
+/// Remaining storage TTL information for a storage category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Event payload for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
+}
+
 /// Canonical storage keys for the Vault contract.
 #[contracttype]
 pub enum StorageKey {
@@ -140,17 +185,25 @@ pub enum StorageKey {
     Paused,
     Metadata(String),
     Price(String),
+    OfferingIndex,
     PendingOwner,
     PendingAdmin,
+    PendingRevenuePool,
     DepositorList,
     /// Contract version marker (WASM hash) set by `upgrade`.
     ContractVersion,
     /// Idempotency marker for a processed deduct request.
     ///
-    /// Stored in **temporary storage** so it expires automatically after
-    /// `REQUEST_ID_BUMP_AMOUNT` ledgers.  The value is `true` (a `bool`);
-    /// presence of the key is the authoritative signal.
+    /// Stored in **persistent storage**. The value is `true` (a `bool`);
+    /// presence of the key is the authoritative signal. Must be pruned explicitly.
     ProcessedRequest(Symbol),
+    /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
+    /// rotation.  Defaults to `0` before the first rotation.
+    AuthorizedCallerNonce,
+    /// Configuration for a developer's rate limit.
+    DeveloperConfig(Address),
+    /// Current rate limit state for a developer.
+    DeveloperState(Address),
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -163,6 +216,7 @@ trait Settlement {
         amount: i128,
         to_pool: bool,
         developer: Option<Address>,
+        token: Address,
     );
 }
 
@@ -170,16 +224,18 @@ pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
 pub const DEFAULT_MIN_DEPOSIT: i128 = 1;
 pub const MAX_BATCH_SIZE: u32 = 50;
 pub const MAX_METADATA_LEN: u32 = 256;
+pub const MAX_MESSAGE_LEN: u32 = 256;
 pub const MAX_OFFERING_ID_LEN: u32 = 64;
+pub const MAX_LIST_PRICES_LIMIT: u32 = 100;
 
 // ~17 280 ledgers per day at 5-second close time.
 // Bump when fewer than 30 days remain; extend to 60 days.
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30; // ~30 days
 pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60; // ~60 days
 
-// Processed-request idempotency markers live in temporary storage.
+// Processed-request idempotency markers live in persistent storage.
 // Bump when fewer than 7 days remain; extend to 30 days.
-// After the TTL expires the marker is archived and the request_id can be reused.
+// Must be pruned via prune_processed_requests when they are no longer needed.
 pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
 pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
 
@@ -270,7 +326,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::MetaKey, &meta);
+        inst.set(&StorageKey::Meta, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -279,7 +335,7 @@ impl CalloraVault {
         inst.set(&StorageKey::MaxDeduct, &max_d);
         inst.extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events()
-            .publish((Symbol::new(&env, "init"), owner.clone()), balance);
+            .publish((events::event_init(&env), owner.clone()), balance);
         Ok(meta)
     }
 
@@ -343,9 +399,20 @@ impl CalloraVault {
         env.storage().instance().get(&StorageKey::PendingOwner)
     }
 
-    /// Return the pending admin address, or `None` if no admin transfer is in progress.
+    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
+    ///
+    /// Integrators can poll this to detect an in-flight admin handover
+    /// before `accept_admin` is called.
+    ///
+    /// # Returns
+    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::PendingAdmin)
+    }
+
+    /// Return the pending revenue pool address, or `None` if no proposal is pending.
+    pub fn get_pending_revenue_pool(env: Env) -> Option<Address> {
+        env.storage().instance().get(&StorageKey::PendingRevenuePool)
     }
 
     /// Return `(usdc_token, settlement, revenue_pool)` in one call.
@@ -366,6 +433,17 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Paused)
             .unwrap_or(false)
+    }
+
+    /// Return the current authorized-caller rotation nonce.
+    ///
+    /// Returns `0` before the first `set_authorized_caller` call.
+    /// Pass this value as `expected_nonce` in the next `set_authorized_caller` call.
+    pub fn get_authorized_caller_nonce(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::AuthorizedCallerNonce)
+            .unwrap_or(0u64)
     }
 
     /// Return `true` if `caller` is the owner or an allowed depositor.
@@ -390,12 +468,103 @@ impl CalloraVault {
             .get(&StorageKey::Metadata(offering_id))
     }
 
+    #[inline(never)]
+    fn get_offering_index(env: &Env) -> Vec<String> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::OfferingIndex)
+            .unwrap_or(Vec::new(env))
+    }
+
+    #[inline(never)]
+    fn add_offering_index(env: &Env, offering_id: &String) {
+        let mut list: Vec<String> = Self::get_offering_index(env);
+        if !list.contains(offering_id) {
+            list.push_back(offering_id.clone());
+            env.storage().instance().set(&StorageKey::OfferingIndex, &list);
+        }
+    }
+
+    #[inline(never)]
+    fn remove_offering_index(env: &Env, offering_id: &String) {
+        let list: Vec<String> = Self::get_offering_index(env);
+        if list.len() == 0 {
+            return;
+        }
+        let mut updated = Vec::new(env);
+        for id in list.iter() {
+            if id != *offering_id {
+                updated.push_back(id.clone());
+            }
+        }
+        if updated.len() == 0 {
+            env.storage().instance().remove(&StorageKey::OfferingIndex);
+        } else {
+            env.storage().instance().set(&StorageKey::OfferingIndex, &updated);
+        }
+    }
+
     /// Return the full allowed-depositor list.
     pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
         env.storage()
             .instance()
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
+    }
+
+    /// Return the remaining TTL for each storage key category.
+    ///
+    /// # Parameters
+    /// - `request_ids` — a list of processed request IDs to check.
+    pub fn get_storage_ttl(env: Env, request_ids: Vec<Symbol>) -> Vec<StorageEntryTtl> {
+        let mut result = Vec::new(&env);
+
+        // 1. Instance Storage
+        let instance_ttl = {
+            #[cfg(any(test, feature = "testutils"))]
+            {
+                env.storage().instance().get_ttl()
+            }
+            #[cfg(not(any(test, feature = "testutils")))]
+            {
+                INSTANCE_BUMP_AMOUNT
+            }
+        };
+        result.push_back(StorageEntryTtl {
+            category: String::from_str(&env, "Instance"),
+            key_desc: String::from_str(&env, "Instance"),
+            storage_type: String::from_str(&env, "Instance"),
+            ttl: instance_ttl,
+            threshold: INSTANCE_BUMP_THRESHOLD,
+            bump_amount: INSTANCE_BUMP_AMOUNT,
+        });
+
+        // 2. ProcessedRequest Storage (Persistent)
+        for rid in request_ids.iter() {
+            let key = StorageKey::ProcessedRequest(rid.clone());
+            if env.storage().persistent().has(&key) {
+                let ttl = {
+                    #[cfg(any(test, feature = "testutils"))]
+                    {
+                        env.storage().persistent().get_ttl(&key)
+                    }
+                    #[cfg(not(any(test, feature = "testutils")))]
+                    {
+                        REQUEST_ID_BUMP_AMOUNT
+                    }
+                };
+                result.push_back(StorageEntryTtl {
+                    category: String::from_str(&env, "ProcessedRequest"),
+                    key_desc: String::from_str(&env, "ProcessedRequest"),
+                    storage_type: String::from_str(&env, "Persistent"),
+                    ttl,
+                    threshold: REQUEST_ID_BUMP_THRESHOLD,
+                    bump_amount: REQUEST_ID_BUMP_AMOUNT,
+                });
+            }
+        }
+
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -412,7 +581,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
         env.events()
-            .publish((Symbol::new(&env, "admin_nominated"), cur, new_admin), ());
+            .publish((events::event_admin_nominated(&env), cur, new_admin), ());
         Ok(())
     }
 
@@ -427,7 +596,25 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Admin, &pending);
         env.storage().instance().remove(&StorageKey::PendingAdmin);
         env.events()
-            .publish((Symbol::new(&env, "admin_accepted"), cur, pending), ());
+            .publish((events::event_admin_accepted(&env), cur, pending), ());
+        Ok(())
+    }
+
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        let cur = Self::get_admin(env.clone())?;
+        if caller != cur {
+            return Err(VaultError::Unauthorized);
+        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(VaultError::NoAdminTransferPending)?;
+
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), cur, pending), ());
         Ok(())
     }
 
@@ -440,21 +627,51 @@ impl CalloraVault {
     }
 
     /// Set or clear the authorized caller for `deduct`/`batch_deduct` (owner only).
+    ///
+    /// # Replay Protection
+    /// A monotonic u64 nonce (stored under `StorageKey::AuthorizedCallerNonce`)
+    /// guards this function against replay attacks.  The caller must supply the
+    /// current nonce as `expected_nonce`; the stored value defaults to `0` before
+    /// the first rotation.  Each successful rotation increments the stored nonce
+    /// (wrapping at `u64::MAX`) and emits it in the event payload so off-chain
+    /// indexers can detect gaps or replays.
+    ///
+    /// # Errors
+    /// - `VaultError::StaleNonce` — `expected_nonce` differs from the stored nonce.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` — `new_caller` is the vault itself.
     pub fn set_authorized_caller(
         env: Env,
         new_caller: Option<Address>,
+        expected_nonce: u64,
     ) -> Result<(), VaultError> {
         let mut meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
+        if let Some(ref nc) = new_caller {
+            if nc == &env.current_contract_address() {
+                return Err(VaultError::AuthorizedCallerCannotBeVault);
+            }
+        }
+        let stored_nonce: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::AuthorizedCallerNonce)
+            .unwrap_or(0u64);
+        if expected_nonce != stored_nonce {
+            return Err(VaultError::StaleNonce);
+        }
+        let next_nonce = stored_nonce.wrapping_add(1);
         let old = meta.authorized_caller.clone();
         meta.authorized_caller = new_caller.clone();
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage()
+            .instance()
+            .set(&StorageKey::AuthorizedCallerNonce, &next_nonce);
         env.events().publish(
             (
-                Symbol::new(&env, "set_authorized_caller"),
+                events::event_set_authorized_caller(&env),
                 meta.owner.clone(),
             ),
-            (old, new_caller),
+            (old, new_caller, expected_nonce),
         );
         Ok(())
     }
@@ -474,7 +691,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::MaxDeduct, &max_deduct);
         env.events().publish(
-            (Symbol::new(&env, "set_max_deduct"), meta.owner),
+            (events::event_set_max_deduct(&env), meta.owner),
             (old, max_deduct),
         );
         Ok(())
@@ -527,7 +744,7 @@ impl CalloraVault {
         }
         env.storage().instance().set(&StorageKey::Paused, &true);
         env.events()
-            .publish((Symbol::new(&env, "vault_paused"), caller), ());
+            .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
     }
 
@@ -539,7 +756,7 @@ impl CalloraVault {
         }
         env.storage().instance().set(&StorageKey::Paused, &false);
         env.events()
-            .publish((Symbol::new(&env, "vault_unpaused"), caller), ());
+            .publish((events::event_vault_unpaused(&env), caller), ());
         Ok(())
     }
 
@@ -586,7 +803,7 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "deposit"), caller.clone()),
+            (events::event_deposit(&env), caller.clone()),
             (amount, meta.balance),
         );
 
@@ -594,8 +811,11 @@ impl CalloraVault {
         // Transfer USDC from caller to vault. If this panics, the Soroban host
         // reverts the entire transaction — the Effects above are atomically rolled
         // back, leaving no inconsistent state.
-        token::Client::new(&env, &usdc_addr)
-            .transfer(&caller, &env.current_contract_address(), &amount);
+        token::Client::new(&env, &usdc_addr).transfer(
+            &caller,
+            &env.current_contract_address(),
+            &amount,
+        );
 
         Ok(meta.balance)
     }
@@ -609,11 +829,23 @@ impl CalloraVault {
     /// - `caller` must be the owner or `authorized_caller`.
     /// - Vault balance must cover `amount`.
     ///
+    /// # Per-Call Slippage Guard (`max_fee_bps`)
+    /// `max_fee_bps` limits the deducted amount expressed as a fraction of the current
+    /// vault balance in basis points (1 bps = 0.01%).
+    ///
+    /// `calculated_fee_bps = (amount * 10_000) / balance`
+    ///
+    /// If `calculated_fee_bps > max_fee_bps` the call reverts with
+    /// `VaultError::Slippage` **before** any state is mutated.
+    ///
+    /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
+    /// unrestricted behaviour — this is the default for backward compatibility.
+    ///
     /// # Idempotency
     /// When `request_id` is `Some(id)`, the contract checks whether `id` has
     /// already been processed.  If so, `VaultError::DuplicateRequestId` is
     /// returned immediately — no funds are moved.  On first success the marker
-    /// is persisted in temporary storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
+    /// is persisted in persistent storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
     ///
     /// When `request_id` is `None`, no deduplication is performed.
     ///
@@ -626,6 +858,8 @@ impl CalloraVault {
         caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
+        max_fee_bps: u16,
+        developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
@@ -641,9 +875,25 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
+        
+        // Rate limit check
+        crate::rate_limit::consume_tokens(&env, &developer, amount)?;
+
         let meta = Self::get_meta(env.clone())?;
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
+        }
+        // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
+        // current balance. Calculated before any state mutation or external call.
+        // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
+        if max_fee_bps < u16::MAX && meta.balance > 0 {
+            let calculated_fee_bps = amount
+                .checked_mul(10_000)
+                .ok_or(VaultError::Overflow)?
+                / meta.balance;
+            if calculated_fee_bps > max_fee_bps as i128 {
+                return Err(VaultError::Slippage);
+            }
         }
         let settlement = Self::require_settlement(&env)?;
         let ut: Address = env
@@ -651,23 +901,23 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
-        
-        // SECURITY: Perform all external operations FIRST. 
+
+        // SECURITY: Perform all external operations FIRST.
         // Although this is a CEI violation (Check-Effect-Interaction), re-entry is
         // blocked by Soroban's authorization model. Each call to `deduct` requires
-        // `caller.require_auth()`, which prevents recursive calls from stealing 
+        // `caller.require_auth()`, which prevents recursive calls from stealing
         // authorization unless the user explicitly signs a nested call.
         Self::transfer_funds(&env, &ut, &settlement, amount);
-        
+
         // Create a settlement client and call receive_payment to credit the global pool
         let settlement_client = SettlementClient::new(&env, &settlement);
         settlement_client.receive_payment(
             &env.current_contract_address(),
             &amount,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &Some(developer.clone()), // developer is passed down
         );
-        
+
         // Now that external operations succeeded, update internal state
         let mut meta = Self::get_meta(env.clone())?;
         meta.balance = meta
@@ -682,10 +932,10 @@ impl CalloraVault {
         if let Some(ref rid) = request_id {
             Self::mark_request_processed(&env, rid);
         }
-        
+
         let rid = request_id.unwrap_or(Symbol::new(&env, ""));
         env.events().publish(
-            (Symbol::new(&env, "deduct"), caller, rid),
+            (events::event_deduct(&env), caller, rid),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -750,7 +1000,13 @@ impl CalloraVault {
                 }
                 seen_in_batch.push_back(rid.clone());
             }
-            running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
+            
+            // Rate limit check
+            crate::rate_limit::consume_tokens(&env, &item.developer, item.amount)?;
+            
+            running = running
+                .checked_sub(item.amount)
+                .ok_or(VaultError::Overflow)?;
             total = total.checked_add(item.amount).ok_or(VaultError::Overflow)?;
         }
         let settlement = Self::require_settlement(&env)?;
@@ -759,20 +1015,20 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
-        
+
         // SECURITY: External operations performed before internal state update.
         // Protected by `require_auth` and Soroban invocation semantics.
         Self::transfer_funds(&env, &ut, &settlement, total);
-        
+
         // Create a settlement client and call receive_payment to credit the global pool
         let settlement_client = SettlementClient::new(&env, &settlement);
         settlement_client.receive_payment(
             &env.current_contract_address(),
             &total,
             &true, // to_pool = true: credit global pool
-            &None, // no specific developer
+            &None, // developers are tracked per-item, not passed for whole batch
         );
-        
+
         // Now that external operations succeeded, update internal state
         let mut meta = Self::get_meta(env.clone())?;
         meta.balance = running;
@@ -786,11 +1042,11 @@ impl CalloraVault {
                 Self::mark_request_processed(&env, rid);
             }
         }
-        
+
         for item in items.iter() {
             let rid = item.request_id.unwrap_or(Symbol::new(&env, ""));
             env.events().publish(
-                (Symbol::new(&env, "deduct"), caller.clone(), rid),
+                (events::event_deduct(&env), caller.clone(), rid),
                 (item.amount, meta.balance),
             );
         }
@@ -808,7 +1064,7 @@ impl CalloraVault {
             .set(&StorageKey::PendingOwner, &new_owner);
         env.events().publish(
             (
-                Symbol::new(&env, "ownership_nominated"),
+                events::event_ownership_nominated(&env),
                 meta.owner,
                 new_owner,
             ),
@@ -827,10 +1083,10 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage().instance().set(&StorageKey::Meta, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
-            (Symbol::new(&env, "ownership_accepted"), old, meta.owner),
+            (events::event_ownership_accepted(&env), old, meta.owner),
             (),
         );
         Ok(())
@@ -856,13 +1112,16 @@ impl CalloraVault {
             &meta.owner,
             &amount,
         );
-        meta.balance = meta.balance.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "withdraw"), meta.owner.clone()),
+            (events::event_withdraw(&env), meta.owner.clone()),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -883,13 +1142,16 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
         token::Client::new(&env, &ua).transfer(&env.current_contract_address(), &to, &amount);
-        meta.balance = meta.balance.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (Symbol::new(&env, "withdraw_to"), meta.owner.clone(), to.clone()),
+            (events::event_withdraw_to(&env), meta.owner.clone(), to.clone()),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -935,36 +1197,116 @@ impl CalloraVault {
         }
         // CEI: emit event before external transfer
         env.events()
-            .publish((Symbol::new(&env, "distribute"), to.clone()), amount);
+            .publish((events::event_distribute(&env), to.clone()), amount);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
         Ok(())
     }
 
-    pub fn set_revenue_pool(
+    /// Propose a new revenue pool address (owner only).
+    ///
+    /// Stores the proposed address in `PendingRevenuePool`. The proposal must be
+    /// accepted by the proposed address via `accept_revenue_pool` before taking effect.
+    /// If there is already a pending proposal, calling this function overwrites it.
+    ///
+    /// # Errors
+    /// - `VaultError::Unauthorized` — caller is not the owner.
+    /// - `VaultError::RevenuePoolCannotBeVault` — proposed address is the vault itself.
+    /// - `VaultError::NewRevenuePoolSameAsCurrent` — proposed address equals the current revenue pool.
+    pub fn propose_revenue_pool(
         env: Env,
-        caller: Address,
-        revenue_pool: Option<Address>,
+        new_pool: Option<Address>,
     ) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
+        let meta = Self::get_meta(env.clone())?;
+        meta.owner.require_auth();
+        if let Some(ref pool) = new_pool {
+            if pool == &env.current_contract_address() {
+                return Err(VaultError::RevenuePoolCannotBeVault);
+            }
+            let current: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
+            if current.as_ref() == Some(pool) {
+                return Err(VaultError::NewRevenuePoolSameAsCurrent);
+            }
         }
-        match revenue_pool {
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingRevenuePool, &new_pool);
+        env.events().publish(
+            (events::event_revenue_pool_proposed(&env), meta.owner, new_pool),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Accept a pending revenue pool proposal (pending address only).
+    ///
+    /// The caller must match the address stored in `PendingRevenuePool`.
+    /// On success, the `RevenuePool` is updated to the pending address,
+    /// and the pending state is cleared.
+    ///
+    /// # Errors
+    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
+    /// - `VaultError::Unauthorized` — caller does not match the pending proposal.
+    pub fn accept_revenue_pool(env: Env) -> Result<(), VaultError> {
+        let pending: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingRevenuePool)
+            .ok_or(VaultError::NoRevenuePoolTransferPending)?;
+        match pending {
             Some(addr) => {
-                env.storage()
-                    .instance()
-                    .set(&StorageKey::RevenuePool, &addr);
-                env.events()
-                    .publish((Symbol::new(&env, "set_revenue_pool"), caller), addr);
+                addr.require_auth();
+                let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
+                env.storage().instance().set(&StorageKey::RevenuePool, &addr);
+                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+                env.events().publish(
+                    (events::event_revenue_pool_accepted(&env), old, addr),
+                    (),
+                );
             }
             None => {
+                // Proposal to clear the revenue pool — no auth required beyond checking
+                // that the pending is None (i.e., the owner proposed clearing it).
+                // The owner already authenticated when proposing.
+                let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
                 env.storage().instance().remove(&StorageKey::RevenuePool);
-                env.events()
-                    .publish((Symbol::new(&env, "clear_revenue_pool"), caller), ());
+                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+                env.events().publish(
+                    (events::event_revenue_pool_accepted(&env), old, None::<Address>),
+                    (),
+                );
             }
         }
         Ok(())
+    }
+
+    /// Cancel a pending revenue pool proposal (owner only).
+    ///
+    /// Removes the pending proposal without applying it.
+    ///
+    /// # Errors
+    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
+    /// - `VaultError::Unauthorized` — caller is not the owner.
+    pub fn cancel_revenue_pool(env: Env) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        meta.owner.require_auth();
+        let pending: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingRevenuePool)
+            .ok_or(VaultError::NoRevenuePoolTransferPending)?;
+        env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+        env.events().publish(
+            (events::event_revenue_pool_cancelled(&env), meta.owner, pending),
+            (),
+        );
+        Ok(())
+    }
+
+    pub fn get_max_deduct(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::MaxDeduct)
+            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     /// Store the settlement contract address (admin only).
@@ -984,10 +1326,22 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::Settlement, &settlement_address);
         env.events().publish(
-            (Symbol::new(&env, "set_settlement"), caller),
+            (events::event_set_settlement(&env), caller),
             settlement_address,
         );
         Ok(())
+    }
+
+    /// Validate that a vault input string is non-empty visible ASCII with no
+    /// leading or trailing whitespace.
+    ///
+    /// The visible-ASCII policy rejects Unicode confusables, zero-width
+    /// characters, bidi overrides, and controls. Accepted strings are already
+    /// NFC-normalized because ASCII has one canonical Unicode representation.
+    fn validate_vault_input(s: &String) -> Result<(), ()> {
+        validators::is_visible_ascii_metadata(s)
+            .then_some(())
+            .ok_or(())
     }
 
     pub fn set_metadata(
@@ -1004,11 +1358,17 @@ impl CalloraVault {
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
         }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
+        }
         env.storage()
             .instance()
             .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
-            (Symbol::new(&env, "metadata_set"), offering_id, caller),
+            (events::event_metadata_set(&env), offering_id, caller),
             metadata.clone(),
         );
         Ok(metadata)
@@ -1019,15 +1379,24 @@ impl CalloraVault {
     /// # Errors
     /// - `VaultError::OfferingIdTooLong` when `offering_id` exceeds maximum length.
     /// - `VaultError::PriceParseError` when `price` cannot be parsed to a positive i128.
-    pub fn set_price(env: Env, caller: Address, offering_id: String, price: String) -> Result<(), VaultError> {
+    pub fn set_price(
+        env: Env,
+        caller: Address,
+        offering_id: String,
+        price: String,
+    ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
         if offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(VaultError::OfferingIdTooLong);
         }
         let mut price_buf = [0u8; 64];
-        price.copy_into_slice(&mut price_buf);
-        let price_str = core::str::from_utf8(&price_buf[..price.len() as usize])
+        let price_len = price.len() as usize;
+        price.copy_into_slice(&mut price_buf[..price_len]);
+        let price_str = core::str::from_utf8(&price_buf[..price_len])
             .map_err(|_| VaultError::PriceParseError)?;
         let price_i128: i128 = price_str.parse().map_err(|_| VaultError::PriceParseError)?;
         if price_i128 <= 0 {
@@ -1036,8 +1405,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&StorageKey::Price(offering_id.clone()), &price);
+        Self::add_offering_index(&env, &offering_id);
         env.events().publish(
-            (Symbol::new(&env, "price_set"), caller, offering_id),
+            (events::event_price_set(&env), caller, offering_id),
             price.clone(),
         );
         Ok(())
@@ -1048,6 +1418,60 @@ impl CalloraVault {
         env.storage()
             .instance()
             .get(&StorageKey::Price(offering_id))
+    }
+
+    pub fn list_prices(env: Env, start: u32, limit: u32) -> Vec<(String, i128)> {
+        let index: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::OfferingIndex)
+            .unwrap_or(Vec::new(&env));
+        let len = index.len();
+        if start >= len {
+            return Vec::new(&env);
+        }
+
+        let cap = if limit > MAX_LIST_PRICES_LIMIT {
+            MAX_LIST_PRICES_LIMIT
+        } else {
+            limit
+        };
+        let end = core::cmp::min(start.saturating_add(cap), len);
+        let mut result: Vec<(String, i128)> = Vec::new(&env);
+
+        for i in start..end {
+            if let Some(offering_id) = index.get(i) {
+                if let Some(price_str) = Self::get_price(env.clone(), offering_id.clone()) {
+                    let mut buffer = [0u8; 64];
+                    price_str.copy_into_slice(&mut buffer);
+                    if let Some(price_i128) = core::str::from_utf8(&buffer[..price_str.len() as usize])
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                    {
+                        result.push_back((offering_id.clone(), price_i128));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    pub fn remove_price(env: Env, caller: Address, offering_id: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if offering_id.len() > MAX_OFFERING_ID_LEN {
+            return Err(VaultError::OfferingIdTooLong);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::Price(offering_id.clone()));
+        Self::remove_offering_index(&env, &offering_id);
+        env.events().publish(
+            (events::event_price_removed(&env), caller, offering_id),
+            (),
+        );
+        Ok(())
     }
 
     pub fn update_metadata(
@@ -1064,6 +1488,12 @@ impl CalloraVault {
         if metadata.len() > MAX_METADATA_LEN {
             return Err(VaultError::MetadataTooLong);
         }
+        if Self::validate_vault_input(&offering_id).is_err() {
+            return Err(VaultError::OfferingIdInvalid);
+        }
+        if Self::validate_vault_input(&metadata).is_err() {
+            return Err(VaultError::MetadataInvalid);
+        }
         let old: String = env
             .storage()
             .instance()
@@ -1073,7 +1503,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::Metadata(offering_id.clone()), &metadata);
         env.events().publish(
-            (Symbol::new(&env, "metadata_updated"), offering_id, caller),
+            (events::event_metadata_updated(&env), offering_id, caller),
             (old, metadata.clone()),
         );
         Ok(metadata)
@@ -1101,7 +1531,7 @@ impl CalloraVault {
             .instance()
             .remove(&StorageKey::Metadata(offering_id.clone()));
         env.events().publish(
-            (Symbol::new(&env, "metadata_removed"), offering_id, caller),
+            (events::event_metadata_removed(&env), offering_id, caller),
             (),
         );
         Ok(())
@@ -1126,6 +1556,26 @@ impl CalloraVault {
     /// After calling `upgrade`, you may need to invoke a separate `migrate` function
     /// (if implemented in the new WASM) to update storage schema or perform data migrations.
     /// See UPGRADE.md for the complete operational flow.
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(VaultError::Unauthorized);
+        }
+        let len = message.len();
+        if len == 0 {
+            panic!("message cannot be empty");
+        }
+        if len > MAX_MESSAGE_LEN {
+            panic!("message length exceeds maximum of 256 characters");
+        }
+        env.events().publish(
+            (events::event_admin_broadcast(&env), caller),
+            AdminBroadcast { severity, message },
+        );
+        Ok(())
+    }
+
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         let admin = Self::get_admin(env.clone())
             .expect("vault must be initialized before upgrade");
@@ -1139,6 +1589,11 @@ impl CalloraVault {
 
 
         // Perform the on-chain upgrade via the deployer interface.
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
+
+        // Perform the on-chain upgrade via the deployer interface.
+        // This is a host operation and may only succeed in the live environment.
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
 
@@ -1151,21 +1606,42 @@ impl CalloraVault {
         env.events()
             .publish((symbol_short!("upgrade"),), new_wasm_hash);
 
+            .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
     ///
     /// Returns `None` if no upgrade has been performed yet (initial deployment).
-    pub fn version(env: Env) -> Option<BytesN<32>> {
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
         env.storage()
             .instance()
             .get(&StorageKey::ContractVersion)
+    }
+
+    /// Garbage-collect processed request markers from persistent storage.
+    /// Only the owner can call this.
+    /// Emits a `request_id_pruned` event for each removed ID.
+    pub fn prune_processed_requests(env: Env, caller: Address, ids: Vec<Symbol>) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+
+        for id in ids.iter() {
+            let key = StorageKey::ProcessedRequest(id.clone());
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                env.events()
+                    .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
+            }
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
 
+    #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         let auth = match &meta.authorized_caller {
@@ -1179,32 +1655,28 @@ impl CalloraVault {
     }
 
     /// Return `true` if `request_id` has already been processed (marker present
-    /// in temporary storage and not yet expired).
+    /// in persistent storage, or temporary storage for legacy markers).
     pub fn is_request_processed(env: Env, request_id: Symbol) -> bool {
-        env.storage()
-            .temporary()
-            .has(&StorageKey::ProcessedRequest(request_id))
+        let key = StorageKey::ProcessedRequest(request_id);
+        env.storage().persistent().has(&key) || env.storage().temporary().has(&key)
     }
 
     /// Check that `request_id` has NOT been processed yet.
     /// Returns `VaultError::DuplicateRequestId` if the marker exists.
     fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
-        if env
-            .storage()
-            .temporary()
-            .has(&StorageKey::ProcessedRequest(request_id.clone()))
-        {
+        let key = StorageKey::ProcessedRequest(request_id.clone());
+        if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
             return Err(VaultError::DuplicateRequestId);
         }
         Ok(())
     }
 
-    /// Persist a processed-request marker in temporary storage and set its TTL.
+    /// Persist a processed-request marker in persistent storage and set its TTL.
     fn mark_request_processed(env: &Env, request_id: &Symbol) {
         let key = StorageKey::ProcessedRequest(request_id.clone());
-        env.storage().temporary().set(&key, &true);
+        env.storage().persistent().set(&key, &true);
         env.storage()
-            .temporary()
+            .persistent()
             .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
     }
 
@@ -1219,6 +1691,7 @@ impl CalloraVault {
             .ok_or(VaultError::SettlementNotSet)
     }
 
+    #[inline(never)]
     fn require_not_paused(env: Env) -> Result<(), VaultError> {
         if Self::is_paused(env) {
             return Err(VaultError::Paused);
@@ -1226,6 +1699,7 @@ impl CalloraVault {
         Ok(())
     }
 
+    #[inline(never)]
     fn require_admin_or_owner(env: Env, caller: &Address) -> Result<(), VaultError> {
         let admin: Address = env
             .storage()
@@ -1236,6 +1710,40 @@ impl CalloraVault {
         if *caller != admin && *caller != meta.owner {
             return Err(VaultError::Unauthorized);
         }
+        Ok(())
+    }
+
+    /// Broadcast an emergency message from the admin.
+    ///
+    /// Only the current admin may call this function.
+    /// The message length is capped at 256 characters.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `severity` - Severity level of the broadcast (Info/Warn/Crit).
+    /// * `message` - The broadcast message, capped at 256 characters.
+    ///
+    /// # Errors
+    /// * `VaultError::Unauthorized` - If the caller is not the current admin.
+    /// * `VaultError::MetadataTooLong` - If the message length exceeds 256 characters.
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(VaultError::Unauthorized);
+        }
+        let len = message.len();
+        if len == 0 {
+            return Err(VaultError::MetadataTooLong); // Reusing existing error for message too long/empty
+        }
+        if len > MAX_MESSAGE_LEN {
+            return Err(VaultError::MetadataTooLong);
+        }
+        env.events().publish(
+            (events::event_admin_broadcast(&env), caller),
+            AdminBroadcast { severity, message },
+        );
         Ok(())
     }
 }
@@ -1258,7 +1766,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::DepositorList, &list);
         env.events()
-            .publish((Symbol::new(&env, "allowlist_add"), caller, depositor), ());
+            .publish((events::event_allowlist_add(&env), caller, depositor), ());
         Ok(())
     }
 
@@ -1269,7 +1777,7 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::DepositorList, &Vec::<Address>::new(&env));
         env.events()
-            .publish((Symbol::new(&env, "allowlist_clear"), caller), ());
+            .publish((events::event_allowlist_clear(&env), caller), ());
         Ok(())
     }
 
@@ -1279,7 +1787,28 @@ impl CalloraVault {
             .get(&StorageKey::DepositorList)
             .unwrap_or(Vec::new(&env))
     }
+
+    pub fn set_developer_rate_limit(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        capacity: i128,
+        refill_rate: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let config = crate::rate_limit::RateLimitConfig {
+            capacity,
+            refill_rate,
+        };
+        crate::rate_limit::set_config(&env, &developer, &config);
+        Ok(())
+    }
 }
+
+mod events;
+pub mod rate_limit;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1304,4 +1833,13 @@ mod test_views;
 mod test_idempotency;
 
 #[cfg(test)]
+mod test_error_codes;
+
+#[cfg(test)]
 mod test_reentrancy;
+
+#[cfg(test)]
+mod test_balance_property;
+
+#[cfg(test)]
+mod test_rate_limit;

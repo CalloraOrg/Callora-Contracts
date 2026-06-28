@@ -1,0 +1,43 @@
+name: Storage TTL Doctor
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # Run nightly at 2:00 AM UTC
+
+jobs:
+  ttl-doctor:
+    name: Run Storage TTL Doctor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run TTL Doctor Script
+        env:
+          SOROBAN_RPC_URL: "https://soroban-testnet.stellar.org"
+          VAULT_CONTRACT_ID: ${{ secrets.VAULT_CONTRACT_ID }}
+          SETTLEMENT_CONTRACT_ID: ${{ secrets.SETTLEMENT_CONTRACT_ID }}
+          REVENUE_POOL_CONTRACT_ID: ${{ secrets.REVENUE_POOL_CONTRACT_ID }}
+        run: |
+          echo "Executing Storage TTL Doctor..."
+          if [ -n "$VAULT_CONTRACT_ID" ] || [ -n "$SETTLEMENT_CONTRACT_ID" ] || [ -n "$REVENUE_POOL_CONTRACT_ID" ]; then
+            npx ts-node scripts/storage-ttl-doctor.ts \
+              --rpc-url "$SOROBAN_RPC_URL" \
+              ${VAULT_CONTRACT_ID:+--vault-id "$VAULT_CONTRACT_ID"} \
+              ${SETTLEMENT_CONTRACT_ID:+--settlement-id "$SETTLEMENT_CONTRACT_ID"} \
+              ${REVENUE_POOL_CONTRACT_ID:+--revenue-pool-id "$REVENUE_POOL_CONTRACT_ID"}
+          else
+            echo "WARNING: Contract IDs are not set in GitHub repository secrets."
+            echo "To configure, please set secrets: VAULT_CONTRACT_ID, SETTLEMENT_CONTRACT_ID, REVENUE_POOL_CONTRACT_ID."
+            echo "Running mock self-validation check..."
+            # We can run it against dummy IDs or just print a message so the workflow doesn't fail when no secrets are set yet
+            npx ts-node scripts/storage-ttl-doctor.ts --vault-id "CDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD"
+          fi

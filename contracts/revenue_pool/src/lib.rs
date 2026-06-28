@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
+};
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
 ///
@@ -15,15 +17,36 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symb
 /// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
+const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const USDC_KEY: &str = "usdc";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield_deposited";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
+const PAUSED_KEY: &str = "paused";
+const ERR_PAUSED: &str = "revenue pool paused";
 const VERSION_KEY: &str = "version";
+
+/// Typed contract errors for the revenue pool.
+///
+/// Returned (instead of string panics) for batch-size violations so backend
+/// integrators can branch on a stable numeric code rather than parsing panic
+/// strings. See [`chunk_iter`] for pre-chunking large payout lists to avoid
+/// [`RevenuePoolError::BatchTooLarge`] entirely.
+#[contracterror]
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum RevenuePoolError {
+    /// `batch_distribute` was called with an empty `payments` vector (code 1).
+    BatchEmpty = 1,
+    /// `batch_distribute` received more than [`MAX_BATCH_SIZE`] payment legs (code 2).
+    BatchTooLarge = 2,
+}
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
@@ -31,6 +54,37 @@ pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 /// Caps CPU/memory usage well within Soroban resource limits and aligns with
 /// the vault's `MAX_BATCH_SIZE` for `batch_deduct`.
 pub const MAX_BATCH_SIZE: u32 = 50;
+pub const MAX_MESSAGE_LEN: u32 = 256;
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Event payload for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
+}
+
+/// Remaining storage TTL information for a storage category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
 
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
@@ -78,7 +132,7 @@ impl RevenuePool {
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
-            .publish((Symbol::new(&env, "init"), admin), usdc_token);
+            .publish((events::event_init(&env), admin), usdc_token);
     }
 
     /// Return the current admin address.
@@ -123,12 +177,12 @@ impl RevenuePool {
 
         // Emit explicit before/after admin intent for indexers and audit trails.
         env.events().publish(
-            (Symbol::new(&env, "admin_changed"), current.clone()),
+            (events::event_admin_changed(&env), current.clone()),
             (current.clone(), new_admin.clone()),
         );
 
         env.events().publish(
-            (Symbol::new(&env, "admin_transfer_started"), current),
+            (events::event_admin_transfer_started(&env), current),
             new_admin,
         );
     }
@@ -159,7 +213,7 @@ impl RevenuePool {
     ///
     /// # Events
     /// Emits an `admin_transfer_completed` event with the `new_admin` as a topic.
-    pub fn claim_admin(env: Env, caller: Address) {
+    pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
         let inst = env.storage().instance();
         let pending: Address = inst
@@ -175,7 +229,127 @@ impl RevenuePool {
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events()
-            .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
+            .publish((events::event_admin_transfer_completed(&env), pending), ());
+    }
+
+    /// Complete the admin transfer. Legacy name for `accept_admin`.
+    pub fn claim_admin(env: Env, caller: Address) {
+        Self::accept_admin(env, caller);
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call this.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If no admin transfer is pending.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` event with `(current_admin, pending_admin)`.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let current = Self::get_admin(env.clone());
+        if caller != current {
+            panic!("unauthorized: caller is not admin");
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .expect("no admin transfer pending");
+
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        env.events()
+            .publish((events::event_admin_cancelled(&env), current, pending), ());
+    }
+
+    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
+    ///
+    /// Integrators can poll this to detect an in-flight admin handover
+    /// before `accept_admin` or `claim_admin` is called.
+    ///
+    /// # Returns
+    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+    }
+
+    /// Set or replace the emergency pause guardian.
+    ///
+    /// The guardian may call `pause` but has no authority to unpause, distribute,
+    /// rotate admin, change caps, or upgrade the contract.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `guardian` - Address that may pause the revenue pool.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `pause_guardian_set` with `caller` as topic and `guardian` as data.
+    pub fn set_pause_guardian(env: Env, caller: Address, guardian: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSE_GUARDIAN_KEY), &guardian);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_guardian_set(&env), caller), guardian);
+    }
+
+    /// Clear the emergency pause guardian role.
+    ///
+    /// Only the current admin may call this. After clearing, only the admin can
+    /// pause the revenue pool.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin; must authorize.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If no pause guardian is configured.
+    ///
+    /// # Events
+    /// Emits `pause_guardian_cleared` with `caller` as topic and the previous
+    /// guardian as data.
+    pub fn clear_pause_guardian(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        let inst = env.storage().instance();
+        let guardian: Address = inst
+            .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
+            .expect("no pause guardian set");
+        inst.remove(&Symbol::new(&env, PAUSE_GUARDIAN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_pause_guardian_cleared(&env), caller),
+            guardian,
+        );
+    }
+
+    /// Return the configured pause guardian, or `None` if no guardian is set.
+    pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
     }
 
     fn require_not_paused(env: &Env) {
@@ -191,10 +365,11 @@ impl RevenuePool {
 
     /// Pause the revenue pool, blocking `distribute` and `batch_distribute`.
     ///
-    /// Only the admin may call. Admin rotation remains available while paused.
+    /// The admin or configured pause guardian may call. Admin rotation remains
+    /// available while paused.
     ///
     /// # Panics
-    /// * If the caller is not the current admin.
+    /// * If the caller is not the current admin or configured pause guardian.
     /// * If the pool is already paused.
     ///
     /// # Events
@@ -202,15 +377,19 @@ impl RevenuePool {
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("{}", ERR_UNAUTHORIZED);
+        let guardian = Self::get_pause_guardian(env.clone());
+        if caller != admin && guardian.as_ref() != Some(&caller) {
+            panic!("{}", ERR_UNAUTHORIZED_PAUSE);
         }
         assert!(!Self::is_paused(env.clone()), "revenue pool already paused");
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((Symbol::new(&env, "pause_set"), caller), true);
+            .publish((events::event_pause_set(&env), caller), true);
     }
 
     /// Unpause the revenue pool, restoring `distribute` and `batch_distribute`.
@@ -233,8 +412,11 @@ impl RevenuePool {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((Symbol::new(&env, "pause_set"), caller), false);
+            .publish((events::event_pause_set(&env), caller), false);
     }
 
     /// Return `true` if the revenue pool is currently paused, `false` otherwise.
@@ -276,9 +458,79 @@ impl RevenuePool {
             panic!("unauthorized: caller is not admin");
         }
         env.events().publish(
-            (Symbol::new(&env, "receive_payment"), caller),
+            (events::event_receive_payment(&env), caller),
             (amount, from_vault),
         );
+    }
+
+    /// Deposit accumulated protocol yield into the revenue pool.
+    ///
+    /// The current admin acts as the treasury authority. The treasury must
+    /// authorize the call, and USDC is transferred from that treasury address to
+    /// this revenue-pool contract. The cumulative deposited-yield metric is
+    /// updated atomically with the transfer and event emission.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `treasury` - Must be the current admin and must authorize the call.
+    /// * `amount` - USDC amount in base units. Must be positive.
+    /// * `source` - Short source label for indexers, e.g. `fees` or `yield`.
+    ///
+    /// # Panics
+    /// * If `treasury` is not the current admin (`"unauthorized: caller is not admin"`).
+    /// * If `amount` is zero or negative (`"amount must be positive"`).
+    /// * If the cumulative metric would overflow (`"cumulative yield overflow"`).
+    /// * If the revenue pool has not been initialized.
+    ///
+    /// # Events
+    /// Emits `yield_deposited` with `treasury` as topic and
+    /// `(amount, source, cumulative_yield_deposited)` as data.
+    pub fn deposit_yield(env: Env, treasury: Address, amount: i128, source: Symbol) {
+        treasury.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if treasury != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        if amount <= 0 {
+            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+        }
+
+        let previous_total = Self::get_cumulative_yield_deposited(env.clone());
+        let new_total = match previous_total.checked_add(amount) {
+            Some(total) => total,
+            None => panic!("cumulative yield overflow"),
+        };
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect(ERR_NOT_INITIALIZED);
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+
+        let inst = env.storage().instance();
+        inst.set(
+            &Symbol::new(&env, CUMULATIVE_YIELD_DEPOSITED_KEY),
+            &new_total,
+        );
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        usdc.transfer(&treasury, &contract_address, &amount);
+        env.events().publish(
+            (events::event_yield_deposited(&env), treasury),
+            (amount, source, new_total),
+        );
+    }
+
+    /// Return the cumulative USDC yield deposited through [`Self::deposit_yield`].
+    ///
+    /// Defaults to zero before the first yield deposit.
+    pub fn get_cumulative_yield_deposited(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, CUMULATIVE_YIELD_DEPOSITED_KEY))
+            .unwrap_or(0)
     }
 
     /// Get the current per-leg distribution cap.
@@ -307,7 +559,7 @@ impl RevenuePool {
             .instance()
             .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
         env.events().publish(
-            (Symbol::new(&env, "set_max_distribute"), admin),
+            (events::event_set_max_distribute(&env), admin),
             (old_max, max_distribute),
         );
     }
@@ -380,7 +632,7 @@ impl RevenuePool {
 
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
-            .publish((Symbol::new(&env, "distribute"), to), amount);
+            .publish((events::event_distribute(&env), to), amount);
     }
 
     /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.
@@ -415,9 +667,14 @@ impl RevenuePool {
     ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
     ///   Each `Address` must be unique within the vector.
     ///
+    /// # Errors
+    /// Returns a typed [`RevenuePoolError`] for batch-size violations so callers can
+    /// branch on a stable numeric code without parsing panic strings:
+    /// * [`RevenuePoolError::BatchEmpty`] if `payments` is empty.
+    /// * [`RevenuePoolError::BatchTooLarge`] if `payments` exceeds [`MAX_BATCH_SIZE`] entries.
+    ///   Use [`chunk_iter`] to pre-split large payout lists and avoid this error.
+    ///
     /// # Panics
-    /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
-    /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
     /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
     /// * If any individual amount is zero or negative (`"amount must be positive"`).
     /// * If any individual amount exceeds `max_distribute` (`"amount exceeds max_distribute"`).
@@ -452,7 +709,11 @@ impl RevenuePool {
     /// ];
     /// pool.batch_distribute(&admin, &bad_payments); // panics
     /// ```
-    pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
+    pub fn batch_distribute(
+        env: Env,
+        caller: Address,
+        payments: Vec<(Address, i128)>,
+    ) -> Result<(), RevenuePoolError> {
         // Phase 0: Authorization
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -461,12 +722,14 @@ impl RevenuePool {
             panic!("{}", ERR_UNAUTHORIZED);
         }
 
+        // Size guards return typed errors so backend integrators can branch on a
+        // stable code instead of parsing panic strings. See `chunk_iter`.
         let n = payments.len();
         if n == 0 {
-            panic!("batch_distribute requires at least one payment");
+            return Err(RevenuePoolError::BatchEmpty);
         }
         if n > MAX_BATCH_SIZE {
-            panic!("batch too large");
+            return Err(RevenuePoolError::BatchTooLarge);
         }
 
         // Phase 1: Precomputation, validation, and duplicate detection.
@@ -517,7 +780,9 @@ impl RevenuePool {
         }
 
         // Extend TTL before executing transfers.
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         // Phase 3: Execution — all validation passed, perform transfers.
         // Soroban's transaction model guarantees that if any transfer fails,
@@ -529,8 +794,10 @@ impl RevenuePool {
 
             // Emit one event per leg reflecting the final transferred amount.
             env.events()
-                .publish((Symbol::new(&env, "batch_distribute"), to), amount);
+                .publish((events::event_batch_distribute(&env), to), amount);
         }
+
+        Ok(())
     }
 
     /// Return this contract's USDC balance (for testing and dashboards).
@@ -577,18 +844,131 @@ impl RevenuePool {
 
         // Emit an event for indexers / audit logs.
         env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
+            .publish((events::event_upgraded(&env), admin), new_wasm_hash);
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
     ///
-    /// Panics if no version has been stored yet.
-    pub fn version(env: Env) -> BytesN<32> {
+    /// Returns `None` if no version has been stored yet.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
         env.storage()
             .instance()
             .get(&Symbol::new(&env, VERSION_KEY))
-            .expect("version not set")
     }
+
+    /// Broadcast an emergency message from the admin.
+    ///
+    /// Only the current admin may call this function.
+    /// The message length is capped at 256 characters.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `severity` - Severity level of the broadcast (Info/Warn/Crit).
+    /// * `message` - The broadcast message, capped at 256 characters.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If the message length exceeds 256 characters.
+    /// * If the message is empty.
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("unauthorized: caller is not admin");
+        }
+        let len = message.len();
+        if len == 0 {
+            panic!("message cannot be empty");
+        }
+        if len > MAX_MESSAGE_LEN {
+            panic!("message length exceeds maximum of 256 characters");
+        }
+        env.events().publish(
+            (events::event_admin_broadcast(&env), caller),
+            AdminBroadcast { severity, message },
+        );
+    }
+
+    /// Return the remaining TTL for each storage key category.
+    pub fn get_storage_ttl(env: Env) -> Vec<StorageEntryTtl> {
+        let mut result = Vec::new(&env);
+
+        // 1. Instance Storage
+        let instance_ttl = {
+            #[cfg(any(test, feature = "testutils"))]
+            {
+                env.storage().instance().get_ttl()
+            }
+            #[cfg(not(any(test, feature = "testutils")))]
+            {
+                BUMP_AMOUNT
+            }
+        };
+        result.push_back(StorageEntryTtl {
+            category: String::from_str(&env, "Instance"),
+            key_desc: String::from_str(&env, "Instance"),
+            storage_type: String::from_str(&env, "Instance"),
+            ttl: instance_ttl,
+            threshold: LIFETIME_THRESHOLD,
+            bump_amount: BUMP_AMOUNT,
+        });
+
+        result
+    }
+}
+
+
+mod events;
+/// Split `payments` into consecutive chunks of at most `chunk_size` legs each,
+/// preserving order.
+///
+/// Intended for backend integrators who need to distribute to more than
+/// [`MAX_BATCH_SIZE`] developers: pre-chunk the full payout list and submit one
+/// [`RevenuePool::batch_distribute`] call per chunk. Every chunk is guaranteed to
+/// satisfy the size cap, so no call ever returns [`RevenuePoolError::BatchTooLarge`],
+/// and there is no panic string to parse.
+///
+/// The last chunk may contain fewer than `chunk_size` entries. An empty `payments`
+/// vector — or a `chunk_size` of `0` — yields an empty result (no chunks). A single
+/// remaining leg produces a one-element chunk.
+///
+/// This is a pure, read-only helper: it performs no storage access, no
+/// authorization, and moves no tokens.
+///
+/// # Examples
+/// ```ignore
+/// // Distribute to an arbitrarily large list, MAX_BATCH_SIZE legs at a time.
+/// for chunk in chunk_iter(&env, payments, MAX_BATCH_SIZE).iter() {
+///     pool.batch_distribute(&admin, &chunk);
+/// }
+/// ```
+pub fn chunk_iter(
+    env: &Env,
+    payments: Vec<(Address, i128)>,
+    chunk_size: u32,
+) -> Vec<Vec<(Address, i128)>> {
+    let mut chunks: Vec<Vec<(Address, i128)>> = Vec::new(env);
+    // A zero chunk size has no well-defined chunking; return no chunks rather
+    // than looping forever.
+    if chunk_size == 0 {
+        return chunks;
+    }
+
+    let mut current: Vec<(Address, i128)> = Vec::new(env);
+    for payment in payments.iter() {
+        current.push_back(payment);
+        if current.len() == chunk_size {
+            chunks.push_back(current);
+            current = Vec::new(env);
+        }
+    }
+    // Flush the trailing partial chunk, if any.
+    if !current.is_empty() {
+        chunks.push_back(current);
+    }
+
+    chunks
 }
 
 #[cfg(test)]
@@ -596,3 +976,12 @@ mod test;
 
 #[cfg(test)]
 mod test_balance;
+
+#[cfg(test)]
+mod test_invariant;
+
+#[cfg(test)]
+mod test_proptest;
+
+#[cfg(test)]
+mod test_error_codes;
