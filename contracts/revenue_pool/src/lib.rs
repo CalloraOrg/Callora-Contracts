@@ -1,7 +1,10 @@
 #![no_std]
 
+#[cfg(test)]
+use soroban_sdk::testutils::storage::Instance;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String,
+    Symbol, Vec,
 };
 
 /// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
@@ -17,6 +20,8 @@ use soroban_sdk::{
 /// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 const ADMIN_KEY: &str = "admin";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
+const TREASURY_KEY: &str = "treasury";
+const PENDING_TREASURY_KEY: &str = "pending_treasury";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const USDC_KEY: &str = "usdc";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
@@ -85,7 +90,6 @@ pub struct StorageEntryTtl {
     pub bump_amount: u32,
 }
 
-
 /// TTL bump constants for instance storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 /// Bumping TTL ensures state remains accessible for critical operations.
@@ -126,6 +130,7 @@ impl RevenuePool {
             panic!("revenue pool already initialized");
         }
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
+        inst.set(&Symbol::new(&env, TREASURY_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
 
         // Extend TTL on initialization to prevent archival
@@ -185,6 +190,89 @@ impl RevenuePool {
             (events::event_admin_transfer_started(&env), current),
             new_admin,
         );
+    }
+
+    /// Return the current treasury address authorized to deposit yield.
+    ///
+    /// Existing deployments that predate the dedicated treasury key fall back
+    /// to the admin address, preserving the original behavior where the admin
+    /// acted as treasury.
+    pub fn get_treasury(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, TREASURY_KEY))
+            .unwrap_or_else(|| Self::get_admin(env))
+    }
+
+    /// Return the pending treasury address, or `None` if no transfer is pending.
+    pub fn get_pending_treasury(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PENDING_TREASURY_KEY))
+    }
+
+    /// Initiate a two-step treasury rotation.
+    ///
+    /// Only the current admin may nominate a new treasury. The nominee must call
+    /// `accept_treasury` before it can deposit yield.
+    pub fn set_treasury(env: Env, caller: Address, new_treasury: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        let current = Self::get_treasury(env.clone());
+        if new_treasury == current {
+            panic!("new treasury is already current treasury");
+        }
+
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, PENDING_TREASURY_KEY), &new_treasury);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_treasury_transfer_started(&env), caller),
+            (current, new_treasury),
+        );
+    }
+
+    /// Accept a pending treasury nomination.
+    ///
+    /// Only the pending treasury may complete the rotation.
+    pub fn accept_treasury(env: Env, caller: Address) {
+        caller.require_auth();
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_TREASURY_KEY))
+            .expect("no pending treasury");
+        if caller != pending {
+            panic!("unauthorized: caller is not pending treasury");
+        }
+
+        let old = Self::get_treasury(env.clone());
+        inst.set(&Symbol::new(&env, TREASURY_KEY), &pending);
+        inst.remove(&Symbol::new(&env, PENDING_TREASURY_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_treasury_transfer_completed(&env), pending),
+            old,
+        );
+    }
+
+    /// Cancel a pending treasury rotation. Only the current admin may call this.
+    pub fn cancel_treasury_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_TREASURY_KEY))
+            .expect("no treasury transfer pending");
+        inst.remove(&Symbol::new(&env, PENDING_TREASURY_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_treasury_cancelled(&env), caller), pending);
     }
 
     /// Return the USDC token address configured for this pool.
@@ -465,19 +553,19 @@ impl RevenuePool {
 
     /// Deposit accumulated protocol yield into the revenue pool.
     ///
-    /// The current admin acts as the treasury authority. The treasury must
-    /// authorize the call, and USDC is transferred from that treasury address to
+    /// The configured treasury must authorize the call, and USDC is transferred
+    /// from that treasury address to
     /// this revenue-pool contract. The cumulative deposited-yield metric is
     /// updated atomically with the transfer and event emission.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
-    /// * `treasury` - Must be the current admin and must authorize the call.
+    /// * `treasury` - Must be the configured treasury and must authorize the call.
     /// * `amount` - USDC amount in base units. Must be positive.
     /// * `source` - Short source label for indexers, e.g. `fees` or `yield`.
     ///
     /// # Panics
-    /// * If `treasury` is not the current admin (`"unauthorized: caller is not admin"`).
+    /// * If `treasury` is not the configured treasury (`"unauthorized: caller is not treasury"`).
     /// * If `amount` is zero or negative (`"amount must be positive"`).
     /// * If the cumulative metric would overflow (`"cumulative yield overflow"`).
     /// * If the revenue pool has not been initialized.
@@ -487,9 +575,9 @@ impl RevenuePool {
     /// `(amount, source, cumulative_yield_deposited)` as data.
     pub fn deposit_yield(env: Env, treasury: Address, amount: i128, source: Symbol) {
         treasury.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if treasury != admin {
-            panic!("{}", ERR_UNAUTHORIZED);
+        let current_treasury = Self::get_treasury(env.clone());
+        if treasury != current_treasury {
+            panic!("unauthorized: caller is not treasury");
         }
         if amount <= 0 {
             panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
@@ -917,7 +1005,6 @@ impl RevenuePool {
         result
     }
 }
-
 
 mod events;
 /// Split `payments` into consecutive chunks of at most `chunk_size` legs each,

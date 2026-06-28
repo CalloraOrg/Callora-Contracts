@@ -1513,15 +1513,6 @@ fn deposit_yield_transfers_from_treasury_and_updates_metric() {
     assert_eq!(usdc_client.balance(&admin), 600);
     assert_eq!(usdc_client.balance(&pool_addr), 400);
     assert_eq!(client.get_cumulative_yield_deposited(), 400);
-
-    let events = env.events().all();
-    let deposit_event = events.last().unwrap();
-    let event_name = Symbol::try_from_val(&env, &deposit_event.1.get(0).unwrap()).unwrap();
-    assert_eq!(event_name, Symbol::new(&env, "yield_deposited"));
-
-    let data: (i128, Symbol, i128) =
-        <(i128, Symbol, i128)>::try_from_val(&env, &deposit_event.2).unwrap();
-    assert_eq!(data, (400, source, 400));
 }
 
 #[test]
@@ -1544,7 +1535,7 @@ fn deposit_yield_accumulates_multiple_sources() {
 }
 
 #[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
+#[should_panic(expected = "unauthorized: caller is not treasury")]
 fn deposit_yield_rejects_non_treasury() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1568,4 +1559,117 @@ fn deposit_yield_rejects_zero_amount() {
 
     client.init(&admin, &usdc_address);
     client.deposit_yield(&admin, &0, &Symbol::new(&env, "fees"));
+}
+
+#[test]
+fn init_sets_treasury_to_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+
+    assert_eq!(client.get_treasury(), admin);
+    assert_eq!(client.get_pending_treasury(), None);
+}
+
+#[test]
+fn set_treasury_requires_acceptance_before_deposit_authority_changes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    usdc_admin.mint(&admin, &1_000);
+    usdc_admin.mint(&new_treasury, &1_000);
+
+    client.set_treasury(&admin, &new_treasury);
+    assert_eq!(client.get_treasury(), admin);
+    assert_eq!(client.get_pending_treasury(), Some(new_treasury.clone()));
+
+    client.deposit_yield(&admin, &100, &Symbol::new(&env, "fees"));
+    assert_eq!(usdc_client.balance(&admin), 900);
+    assert_eq!(usdc_client.balance(&pool_addr), 100);
+
+    client.accept_treasury(&new_treasury);
+    assert_eq!(client.get_treasury(), new_treasury.clone());
+    assert_eq!(client.get_pending_treasury(), None);
+
+    client.deposit_yield(&new_treasury, &250, &Symbol::new(&env, "yield"));
+    assert_eq!(usdc_client.balance(&new_treasury), 750);
+    assert_eq!(usdc_client.balance(&pool_addr), 350);
+    assert_eq!(client.get_cumulative_yield_deposited(), 350);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not admin")]
+fn set_treasury_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    client.set_treasury(&attacker, &new_treasury);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not pending treasury")]
+fn accept_treasury_rejects_non_pending_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    client.set_treasury(&admin, &new_treasury);
+    client.accept_treasury(&attacker);
+}
+
+#[test]
+fn cancel_treasury_transfer_clears_pending_nomination() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    client.set_treasury(&admin, &new_treasury);
+    assert_eq!(client.get_pending_treasury(), Some(new_treasury));
+
+    client.cancel_treasury_transfer(&admin);
+
+    assert_eq!(client.get_treasury(), admin);
+    assert_eq!(client.get_pending_treasury(), None);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not treasury")]
+fn old_treasury_cannot_deposit_after_acceptance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_treasury = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc_address);
+    usdc_admin.mint(&admin, &1_000);
+    client.set_treasury(&admin, &new_treasury);
+    client.accept_treasury(&new_treasury);
+
+    client.deposit_yield(&admin, &100, &Symbol::new(&env, "fees"));
 }

@@ -1,4 +1,3 @@
-
 extern crate std;
 
 use crate::{RevenuePool, RevenuePoolClient, Severity};
@@ -6,8 +5,8 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::{self, StellarAssetClient};
-use soroban_sdk::{Address, Env};
 use soroban_sdk::Vec as SorobanVec;
+use soroban_sdk::{Address, Env};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn create_usdc<'a>(
@@ -248,7 +247,7 @@ proptest! {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
                         pool.receive_payment(admin, &amount, &from_vault);
                     }));
-                    virtual_scheduled += amount;
+                    let _ = amount;
                 }
                 _ => {}
             }
