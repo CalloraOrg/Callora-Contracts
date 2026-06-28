@@ -838,7 +838,7 @@ impl CalloraVault {
     /// If `calculated_fee_bps > max_fee_bps` the call reverts with
     /// `VaultError::Slippage` **before** any state is mutated.
     ///
-    /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
+    /// Pass `u32::MAX` (4294967295) to disable the guard and preserve the existing
     /// unrestricted behaviour — this is the default for backward compatibility.
     ///
     /// # Idempotency
@@ -858,7 +858,7 @@ impl CalloraVault {
         caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
-        max_fee_bps: u16,
+        max_fee_bps: u32,
         developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
@@ -885,8 +885,8 @@ impl CalloraVault {
         }
         // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
         // current balance. Calculated before any state mutation or external call.
-        // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
-        if max_fee_bps < u16::MAX && meta.balance > 0 {
+        // Uses u32::MAX as the sentinel for "no limit" (backward-compatible default).
+        if max_fee_bps < u32::MAX && meta.balance > 0 {
             let calculated_fee_bps = amount
                 .checked_mul(10_000)
                 .ok_or(VaultError::Overflow)?
@@ -916,6 +916,7 @@ impl CalloraVault {
             &amount,
             &true, // to_pool = true: credit global pool
             &Some(developer.clone()), // developer is passed down
+            &ut, // token: USDC token address
         );
 
         // Now that external operations succeeded, update internal state
@@ -1027,6 +1028,7 @@ impl CalloraVault {
             &total,
             &true, // to_pool = true: credit global pool
             &None, // developers are tracked per-item, not passed for whole batch
+            &ut, // token: USDC token address
         );
 
         // Now that external operations succeeded, update internal state
@@ -1754,6 +1756,7 @@ impl CalloraVault {
 
 mod events;
 pub mod rate_limit;
+mod validators;
 
 // ---------------------------------------------------------------------------
 // Test modules
