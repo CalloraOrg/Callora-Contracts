@@ -377,15 +377,3 @@ fn remove_price_removes_index_entry() {
     assert_eq!(client.get_price(&offer), None);
     assert_eq!(client.list_prices(&0, &10).len(), 0);
 }
-
-// ---------------------------------------------------------------------------
-// version
-// ---------------------------------------------------------------------------
-
-#[test]
-fn version_returns_semver_string() {
-    let env = Env::default();
-    let (_owner, client, _) = setup(&env);
-    let v = client.version();
-    assert_eq!(v, String::from_str(&env, env!("CARGO_PKG_VERSION")));
-}
