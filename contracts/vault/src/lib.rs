@@ -31,8 +31,8 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, token, Address, BytesN,
+    Env, String, Symbol, Vec,
 };
 
 /// Typed error codes for the Callora Vault contract.
@@ -326,7 +326,7 @@ impl CalloraVault {
             authorized_caller,
             min_deposit: min_d,
         };
-        inst.set(&StorageKey::Meta, &meta);
+        inst.set(&StorageKey::MetaKey, &meta);
         inst.set(&StorageKey::UsdcToken, &usdc_token);
         inst.set(&StorageKey::Admin, &owner);
         if let Some(p) = revenue_pool {
@@ -838,7 +838,7 @@ impl CalloraVault {
     /// If `calculated_fee_bps > max_fee_bps` the call reverts with
     /// `VaultError::Slippage` **before** any state is mutated.
     ///
-    /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
+    /// Pass `u32::MAX` to disable the guard and preserve the existing
     /// unrestricted behaviour — this is the default for backward compatibility.
     ///
     /// # Idempotency
@@ -858,7 +858,7 @@ impl CalloraVault {
         caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
-        max_fee_bps: u16,
+        max_fee_bps: u32,
         developer: Address,
     ) -> Result<i128, VaultError> {
         Self::require_not_paused(env.clone())?;
@@ -885,8 +885,8 @@ impl CalloraVault {
         }
         // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
         // current balance. Calculated before any state mutation or external call.
-        // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
-        if max_fee_bps < u16::MAX && meta.balance > 0 {
+        // Uses u32::MAX as the sentinel for "no limit" (backward-compatible default).
+        if max_fee_bps < u32::MAX && meta.balance > 0 {
             let calculated_fee_bps = amount
                 .checked_mul(10_000)
                 .ok_or(VaultError::Overflow)?
@@ -916,6 +916,7 @@ impl CalloraVault {
             &amount,
             &true, // to_pool = true: credit global pool
             &Some(developer.clone()), // developer is passed down
+            &ut,
         );
 
         // Now that external operations succeeded, update internal state
@@ -1027,6 +1028,7 @@ impl CalloraVault {
             &total,
             &true, // to_pool = true: credit global pool
             &None, // developers are tracked per-item, not passed for whole batch
+            &ut,
         );
 
         // Now that external operations succeeded, update internal state
@@ -1083,7 +1085,7 @@ impl CalloraVault {
         let mut meta = Self::get_meta(env.clone())?;
         let old = meta.owner.clone();
         meta.owner = pending;
-        env.storage().instance().set(&StorageKey::Meta, &meta);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
         env.storage().instance().remove(&StorageKey::PendingOwner);
         env.events().publish(
             (events::event_ownership_accepted(&env), old, meta.owner),
@@ -1300,13 +1302,6 @@ impl CalloraVault {
             (),
         );
         Ok(())
-    }
-
-    pub fn get_max_deduct(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&StorageKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
     }
 
     /// Store the settlement contract address (admin only).
@@ -1556,26 +1551,6 @@ impl CalloraVault {
     /// After calling `upgrade`, you may need to invoke a separate `migrate` function
     /// (if implemented in the new WASM) to update storage schema or perform data migrations.
     /// See UPGRADE.md for the complete operational flow.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
-        }
-        let len = message.len();
-        if len == 0 {
-            panic!("message cannot be empty");
-        }
-        if len > MAX_MESSAGE_LEN {
-            panic!("message length exceeds maximum of 256 characters");
-        }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
-        Ok(())
-    }
-
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).expect("vault must be initialized before upgrade");
@@ -1795,6 +1770,7 @@ impl CalloraVault {
 
 mod events;
 pub mod rate_limit;
+mod validators;
 
 // ---------------------------------------------------------------------------
 // Test modules

@@ -1,14 +1,20 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    Symbol, Vec,
 };
+
+use crate::timelock::PendingDeveloperMigration;
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+
+/// Maximum message length in bytes for admin broadcast messages.
+pub const MAX_MESSAGE_LEN: u32 = 256;
 
 /// Typed errors for the settlement contract.
 ///
@@ -35,6 +41,13 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 /// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
 /// | 16   | InvalidClaimWindow           | Claim window end is before start                  |
 /// | 17   | ClaimWindowClosed            | Claim attempted outside developer's claim window  |
+/// | 18   | MigrationSameAddress         | Migration source == target                        |
+/// | 19   | InvalidMigrationTarget       | Destination is the contract itself                |
+/// | 20   | NoDeveloperBalance           | Source developer has no balance to migrate        |
+/// | 21   | TimelockOverflow             | Timelock addition overflows u64                   |
+/// | 22   | MigrationNotFound            | No pending migration for source address           |
+/// | 23   | TimelockNotExpired           | Timelock period has not elapsed                   |
+/// | 24   | MigrationBalanceChanged      | Source balance changed since proposal             |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -56,6 +69,13 @@ pub enum SettlementError {
     ReasonTooLong = 15,
     InvalidClaimWindow = 16,
     ClaimWindowClosed = 17,
+    MigrationSameAddress = 18,
+    InvalidMigrationTarget = 19,
+    NoDeveloperBalance = 20,
+    TimelockOverflow = 21,
+    MigrationNotFound = 22,
+    TimelockNotExpired = 23,
+    MigrationBalanceChanged = 24,
 }
 
 /// Persistent storage keys for settlement contract
@@ -67,13 +87,21 @@ pub enum StorageKey {
     PendingAdmin,
     PendingVault,
     DeveloperIndex,
-    DeveloperBalance(Address),
+    /// Legacy single-token balance — kept for V1 → V2 migration reads only.
+    DeveloperBalanceV1(Address),
+    /// Per-token developer balance `(developer, token)`.
+    DeveloperBalance(Address, Address),
+    DeveloperMinBalance(Address),
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
     DeveloperClaimWindow(Address),
     ContractVersion,
+    /// Pending timelock'd developer balance migration record.
+    PendingDeveloperMigration(Address),
+    /// Storage-layout version marker (u32).
+    StorageVersion,
 }
 
 /// Developer balance record in settlement contract
@@ -81,6 +109,7 @@ pub enum StorageKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeveloperBalance {
     pub address: Address,
+    pub token: Address,
     pub balance: i128,
 }
 
@@ -130,6 +159,7 @@ pub struct PaymentReceivedEvent {
     pub amount: i128,
     pub to_pool: bool, // true if credited to global pool, false if to specific developer
     pub developer: Option<Address>, // developer address if credited to specific developer
+    pub token: Address,
 }
 
 /// Balance credited event
@@ -139,6 +169,7 @@ pub struct BalanceCreditedEvent {
     pub developer: Address,
     pub amount: i128,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when a new vault address is proposed via `propose_vault()`.
@@ -166,6 +197,7 @@ pub struct DeveloperWithdrawEvent {
     pub amount: i128,
     pub remaining_balance: i128,
     pub to: Address,
+    pub token: Address,
 }
 
 /// Emitted when the admin sets or changes a developer's daily withdrawal cap.
@@ -194,6 +226,46 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
+}
+
+/// Emitted when the admin proposes or executes a timelock'd developer balance migration.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminMigrationEvent {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub executed_at: u64,
+}
+
+/// Storage TTL entry for a given storage key category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Payload for the `admin_broadcast` event.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
 }
 
 /// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
@@ -415,11 +487,8 @@ impl CalloraSettlement {
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
-            env.storage()
-                .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
             env.storage().persistent().extend_ttl(
-                &StorageKey::DeveloperBalance(dev.clone()),
+                &balance_key,
                 50000,
                 50000,
             );
@@ -580,6 +649,9 @@ impl CalloraSettlement {
             return Err(SettlementError::AmountNotPositive);
         }
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let usdc = token::Client::new(&env, &usdc_address);
+
         let recipient = to.unwrap_or_else(|| developer.clone());
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
@@ -588,10 +660,11 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .get(&balance_key)
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
@@ -625,24 +698,14 @@ impl CalloraSettlement {
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
 
-        let usdc_address = Self::get_usdc_token(env.clone())?;
-        let usdc = token::Client::new(&env, &usdc_address);
-
         if usdc.balance(&contract_address) < amount {
             return Err(SettlementError::InsufficientContractBalance);
         }
 
         usdc.transfer(&contract_address, &recipient, &amount);
 
-        env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            &new_balance,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            50000,
-            50000,
-        );
+        env.storage().persistent().set(&balance_key, &new_balance);
+        env.storage().persistent().extend_ttl(&balance_key, 50000, 50000);
 
         let today = env.ledger().timestamp() / 86400;
         let mut daily = env
@@ -674,6 +737,7 @@ impl CalloraSettlement {
                 amount,
                 remaining_balance: new_balance,
                 to: recipient,
+                token: usdc_address,
             },
         );
 
@@ -901,15 +965,8 @@ impl CalloraSettlement {
             .checked_add(amount)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
 
-        env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            &new_balance,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
-            50000,
-            50000,
-        );
+        env.storage().persistent().set(&balance_key, &new_balance);
+        env.storage().persistent().extend_ttl(&balance_key, 50000, 50000);
 
         let mut index: Vec<Address> = env
             .storage()
@@ -933,6 +990,7 @@ impl CalloraSettlement {
                 amount,
                 reason,
                 new_balance,
+                token: token.clone(),
             },
         );
     }
@@ -1124,7 +1182,7 @@ impl CalloraSettlement {
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
 
-        pagination::get_page(&env, &index, cursor, limit)
+        pagination::get_page(&env, &index, cursor, limit, token)
     }
 
     /// Return the remaining TTL for each storage key category.
@@ -1164,131 +1222,33 @@ impl CalloraSettlement {
                 .unwrap_or_else(|| Vec::new(&env))
         };
 
-        for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address: address.clone(),
-                token: token.clone(),
-                balance,
-            });
-            last_address = Some(address.clone());
-
-            // Check DailyWithdrawCap (Persistent)
-            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
-            if env.storage().persistent().has(&cap_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&cap_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DailyWithdrawCap"),
-                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-        }
-
-        result
-    }
-
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
-        let mut result = Vec::new(&env);
-
-        // 1. Instance Storage
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                17_280 * 60
-            }
-        };
-        result.push_back(StorageEntryTtl {
-            category: String::from_str(&env, "Instance"),
-            key_desc: String::from_str(&env, "Instance"),
-            storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
-            threshold: 17_280 * 30,
-            bump_amount: 17_280 * 60,
-        });
-
-        // Determine which developer addresses to inspect
-        let devs = if developer_addresses.len() > 0 {
-            developer_addresses
-        } else {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DeveloperIndex)
-                .unwrap_or_else(|| Vec::new(&env))
-        };
+        // Read the USDC token address from storage for per-token balance keys.
+        let usdc_token: Option<Address> = env.storage().instance().get(&StorageKey::Usdc);
 
         for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
+            // Check DeveloperBalance (Persistent) — check per-token key if USDC is known
+            if let Some(ref usdc) = usdc_token {
+                let bal_key = StorageKey::DeveloperBalance(dev.clone(), usdc.clone());
+                if env.storage().persistent().has(&bal_key) {
+                    let ttl = {
+                        #[cfg(any(test, feature = "testutils"))]
+                        {
+                            env.storage().persistent().get_ttl(&bal_key)
+                        }
+                        #[cfg(not(any(test, feature = "testutils")))]
+                        {
+                            50000
+                        }
+                    };
+                    result.push_back(StorageEntryTtl {
+                        category: String::from_str(&env, "DeveloperBalance"),
+                        key_desc: String::from_str(&env, "DeveloperBalance"),
+                        storage_type: String::from_str(&env, "Persistent"),
+                        ttl,
+                        threshold: 50000,
+                        bump_amount: 50000,
+                    });
+                }
             }
 
             // Check WithdrawalToday (Persistent)
@@ -1705,8 +1665,12 @@ impl CalloraSettlement {
     }
 }
 
+mod admin;
 mod events;
+mod limits;
 pub mod migrate;
+mod pagination;
+mod timelock;
 
 #[cfg(test)]
 mod test;

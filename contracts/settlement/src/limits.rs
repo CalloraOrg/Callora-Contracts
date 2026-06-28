@@ -1,8 +1,7 @@
 //! Limits module for per-developer minimum balance.
 
 use soroban_sdk::{Env, Address, Symbol, contracterror, contracttype};
-use crate::errors::SettlementError;
-use crate::types::StorageKey;
+use crate::{SettlementError, StorageKey};
 
 /// Set the minimum balance for a developer.
 ///
@@ -14,7 +13,7 @@ use crate::types::StorageKey;
 pub fn set_developer_min_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
     // Auth check – admin only.
     caller.require_auth();
-    let admin = crate::lib::CalloraSettlement::get_admin(env.clone());
+    let admin = crate::CalloraSettlement::get_admin(env.clone());
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
