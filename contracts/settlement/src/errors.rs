@@ -30,6 +30,7 @@ use soroban_sdk::contracterror;
 /// | 20   | MigrationNotFound            | No migration is pending for the source                |
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
+/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -56,4 +57,6 @@ pub enum SettlementError {
     MigrationNotFound = 20,
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
+    /// Withdrawal amount exceeds the developer's current balance.
+    OverDraft = 23,
 }
