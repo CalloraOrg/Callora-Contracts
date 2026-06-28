@@ -43,6 +43,8 @@ pub enum StorageKey {
     /// Absent   → V1 (pre-migration, no version tracking).
     /// Value 2  → V2 (single-token → per-token migration complete).
     StorageVersion,
+    /// Claim window configuration per developer.
+    DeveloperClaimWindow(Address),
 }
 
 /// Severity levels for admin broadcast messages.
@@ -69,6 +71,28 @@ pub struct DeveloperBalance {
     pub address: Address,
     pub token: Address,
     pub balance: i128,
+}
+
+/// Timestamp range during which a developer may claim accrued balance.
+///
+/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
+/// inclusive on both ends: a withdrawal is allowed when
+/// `start_ts <= env.ledger().timestamp() <= end_ts`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindow {
+    pub start_ts: u64,
+    pub end_ts: u64,
+}
+
+/// Emitted when the admin sets or clears a developer claim window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindowChanged {
+    pub developer: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub enabled: bool,
 }
 
 /// Global pool balance tracking.

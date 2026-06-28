@@ -35,17 +35,14 @@ impl<K, V> Change<K, V> {
 ///
 /// # Ordering Guarantees
 /// The resulting change list is guaranteed to be sorted in a stable, deterministic order based
-/// on the `Ord` implementation of the key. This ensures consistent diff reports regardless of 
+/// on the `Ord` implementation of the key. This ensures consistent diff reports regardless of
 /// the input ordering of elements.
 ///
 /// # Efficiency
 /// The snapshots are loaded into `BTreeMap` structures in $O(N \log N + M \log M)$ time,
 /// and then compared in a single linear $O(N + M)$ pass. The final list of changes is
 /// sorted in $O(C \log C)$ where $C$ is the number of changes.
-pub fn diff_snapshots<K, V>(
-    before: &[(K, V)],
-    after: &[(K, V)],
-) -> Vec<Change<K, V>>
+pub fn diff_snapshots<K, V>(before: &[(K, V)], after: &[(K, V)]) -> Vec<Change<K, V>>
 where
     K: Ord + Clone,
     V: PartialEq + Clone,
@@ -117,9 +114,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use alloc::string::String;
     use alloc::string::ToString;
+    use alloc::vec;
 
     #[test]
     fn test_identical_snapshots() {
