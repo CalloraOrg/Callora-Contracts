@@ -1796,6 +1796,10 @@ impl CalloraVault {
 mod events;
 pub mod rate_limit;
 
+#[cfg(any(kani, test))]
+#[path = "../proofs/deduct.rs"]
+mod deduct_proofs;
+
 // ---------------------------------------------------------------------------
 // Test modules
 // ---------------------------------------------------------------------------
