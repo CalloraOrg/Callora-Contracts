@@ -907,6 +907,7 @@ impl RevenuePool {
         let instance_ttl = {
             #[cfg(any(test, feature = "testutils"))]
             {
+                use soroban_sdk::testutils::storage::Instance;
                 env.storage().instance().get_ttl()
             }
             #[cfg(not(any(test, feature = "testutils")))]
