@@ -38,7 +38,10 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
     let amount: i128 = env
         .storage()
         .persistent()
-        .get(&StorageKey::DeveloperBalance(from.clone(), usdc_token.clone()))
+        .get(&StorageKey::DeveloperBalance(
+            from.clone(),
+            usdc_token.clone(),
+        ))
         .unwrap_or(0);
     if amount <= 0 {
         env.panic_with_error(SettlementError::NoDeveloperBalance);
@@ -76,11 +79,7 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
     let source_key = StorageKey::DeveloperBalance(from.clone(), usdc_token.clone());
     let destination_key = StorageKey::DeveloperBalance(migration.to.clone(), usdc_token.clone());
 
-    let source_balance: i128 = env
-        .storage()
-        .persistent()
-        .get(&source_key)
-        .unwrap_or(0);
+    let source_balance: i128 = env.storage().persistent().get(&source_key).unwrap_or(0);
     let new_source_balance = source_balance
         .checked_sub(migration.amount)
         .filter(|b| *b >= 0)

@@ -45,6 +45,8 @@ pub enum StorageKey {
     StorageVersion,
     Checkpoint,
     CheckpointCounter,
+    /// Developer claim window `(developer)`.
+    DeveloperClaimWindow(Address),
 }
 
 /// Checkpoint snapshot for bounded storage growth.

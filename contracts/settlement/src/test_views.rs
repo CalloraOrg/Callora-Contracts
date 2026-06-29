@@ -149,7 +149,8 @@ fn test_pagination_exactly_limit() {
     assert!(next_cursor.is_some());
 
     // Page 2 using next_cursor
-    let (page2, next_cursor2) = client.get_developer_balances_cursor(&admin, &next_cursor, &10u32, &token);
+    let (page2, next_cursor2) =
+        client.get_developer_balances_cursor(&admin, &next_cursor, &10u32, &token);
     assert_eq!(page2.len(), 0);
     assert!(next_cursor2.is_none());
 }
@@ -196,15 +197,19 @@ fn test_pagination_stable_ordering() {
         client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
     }
 
-    let (p1_run1, cursor1_run1) = client.get_developer_balances_cursor(&admin, &None, &5u32, &token);
-    let (p1_run2, cursor1_run2) = client.get_developer_balances_cursor(&admin, &None, &5u32, &token);
+    let (p1_run1, cursor1_run1) =
+        client.get_developer_balances_cursor(&admin, &None, &5u32, &token);
+    let (p1_run2, cursor1_run2) =
+        client.get_developer_balances_cursor(&admin, &None, &5u32, &token);
 
     assert_eq!(p1_run1.len(), 5);
     assert_eq!(p1_run1, p1_run2);
     assert_eq!(cursor1_run1, cursor1_run2);
 
-    let (p2_run1, cursor2_run1) = client.get_developer_balances_cursor(&admin, &cursor1_run1, &5u32, &token);
-    let (p2_run2, cursor2_run2) = client.get_developer_balances_cursor(&admin, &cursor1_run2, &5u32, &token);
+    let (p2_run1, cursor2_run1) =
+        client.get_developer_balances_cursor(&admin, &cursor1_run1, &5u32, &token);
+    let (p2_run2, cursor2_run2) =
+        client.get_developer_balances_cursor(&admin, &cursor1_run2, &5u32, &token);
 
     assert_eq!(p2_run1.len(), 3);
     assert_eq!(p2_run1, p2_run2);
@@ -242,8 +247,8 @@ fn test_pagination_invalid_cursor() {
     }
 
     let invalid_cursor = Some(Address::generate(&env));
-    let (page, next_cursor) = client.get_developer_balances_cursor(&admin, &invalid_cursor, &10u32, &token);
+    let (page, next_cursor) =
+        client.get_developer_balances_cursor(&admin, &invalid_cursor, &10u32, &token);
     assert_eq!(page.len(), 0);
     assert!(next_cursor.is_none());
 }
-

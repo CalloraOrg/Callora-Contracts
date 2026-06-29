@@ -34,19 +34,25 @@ fn test_two_tokens_independent_balances() {
     client.init(&admin, &vault);
 
     // Credit token_a to developer
-    client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &token_a);
+    client.receive_payment(
+        &vault,
+        &1000i128,
+        &false,
+        &Some(developer.clone()),
+        &token_a,
+    );
     // Credit token_b to developer
-    client.receive_payment(&vault, &2000i128, &false, &Some(developer.clone()), &token_b);
+    client.receive_payment(
+        &vault,
+        &2000i128,
+        &false,
+        &Some(developer.clone()),
+        &token_b,
+    );
 
     // Balances are independent per token
-    assert_eq!(
-        client.get_developer_balance(&developer, &token_a),
-        1000i128
-    );
-    assert_eq!(
-        client.get_developer_balance(&developer, &token_b),
-        2000i128
-    );
+    assert_eq!(client.get_developer_balance(&developer, &token_a), 1000i128);
+    assert_eq!(client.get_developer_balance(&developer, &token_b), 2000i128);
 
     // get_all_developer_balances filters by token
     let all_a = client.get_all_developer_balances(&admin, &token_a);
@@ -236,17 +242,23 @@ fn test_migrate_developer_balance_idempotent() {
         env.storage()
             .persistent()
             .set(&StorageKey::DeveloperBalanceV1(developer.clone()), &555i128);
-        env.storage()
-            .persistent()
-            .extend_ttl(&StorageKey::DeveloperBalanceV1(developer.clone()), 50000, 50000);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::DeveloperBalanceV1(developer.clone()),
+            50000,
+            50000,
+        );
     });
 
     // First migration
-    assert!(client.try_migrate_developer_balance(&admin, &developer).is_ok());
+    assert!(client
+        .try_migrate_developer_balance(&admin, &developer)
+        .is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 
     // Second migration — idempotent, no error, balance unchanged
-    assert!(client.try_migrate_developer_balance(&admin, &developer).is_ok());
+    assert!(client
+        .try_migrate_developer_balance(&admin, &developer)
+        .is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 }
 
