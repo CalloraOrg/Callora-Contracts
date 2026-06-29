@@ -178,7 +178,11 @@ pub fn migrate_v1_to_v2_page(
         .unwrap_or_else(|| Vec::new(env));
 
     let total = index.len();
-    let effective = if batch_size == 0 { 1 } else { batch_size.min(MAX_BATCH_SIZE) };
+    let effective = if batch_size == 0 {
+        1
+    } else {
+        batch_size.min(MAX_BATCH_SIZE)
+    };
     let end = offset.saturating_add(effective).min(total);
 
     let mut i = 0u32;
@@ -226,11 +230,7 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
     let v1_balance: Option<i128> = env.storage().persistent().get(&v1_key);
     if let Some(v1) = v1_balance {
         let v2_key = StorageKey::DeveloperBalance(addr.clone(), usdc_token.clone());
-        let existing_v2: i128 = env
-            .storage()
-            .persistent()
-            .get(&v2_key)
-            .unwrap_or(0i128);
+        let existing_v2: i128 = env.storage().persistent().get(&v2_key).unwrap_or(0i128);
         let merged = v1
             .checked_add(existing_v2)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
