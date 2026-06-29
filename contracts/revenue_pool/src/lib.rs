@@ -10,6 +10,7 @@ pub enum DataKey {
 #[contract]
 pub struct CalloraRevenuePool;
 
+/// Contract implementation block for [`RevenuePool`].
 #[contractimpl]
 impl CalloraRevenuePool {
     pub fn init(env: Env, admin: Address) {

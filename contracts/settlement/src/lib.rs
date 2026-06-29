@@ -541,4 +541,13 @@ impl CalloraSettlement {
     ) -> Result<(), SettlementError> {
         migrate::migrate_single_developer(&env, &caller, &developer)
     }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_single_dev_v2(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 }
