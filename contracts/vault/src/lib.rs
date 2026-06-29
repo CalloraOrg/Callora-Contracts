@@ -184,6 +184,9 @@ pub enum StorageKey {
     /// Monotonic u64 nonce incremented on every successful `set_authorized_caller`
     /// rotation.  Defaults to `0` before the first rotation.
     AuthorizedCallerNonce,
+    /// Cumulative total of all successfully deducted amounts (i128).
+    /// Incremented on every successful `deduct` and `batch_deduct`.
+    TotalDeducted,
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -413,6 +416,22 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Paused)
             .unwrap_or(false)
+    }
+
+    /// Return the cumulative total of all successfully deducted amounts.
+    ///
+    /// Returns `0` before any deductions have been made.
+    /// Incremented on every successful `deduct` and `batch_deduct` using
+    /// overflow-safe `checked_add`.
+    ///
+    /// # Conservation invariant
+    /// `initial_balance - vault.balance() == get_total_deducted()` holds
+    /// assuming no `withdraw`/`withdraw_to` calls have been made.
+    pub fn get_total_deducted(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::TotalDeducted)
+            .unwrap_or(0i128)
     }
 
     /// Return the current authorized-caller rotation nonce.
@@ -846,6 +865,18 @@ impl CalloraVault {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        // Increment cumulative deducted total.
+        let prev_deducted: i128 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalDeducted)
+            .unwrap_or(0i128);
+        env.storage().instance().set(
+            &StorageKey::TotalDeducted,
+            &prev_deducted
+                .checked_add(amount)
+                .ok_or(VaultError::Overflow)?,
+        );
         // Mark request_id as processed after successful state update.
         if let Some(ref rid) = request_id {
             Self::mark_request_processed(&env, rid);
@@ -948,6 +979,18 @@ impl CalloraVault {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        // Increment cumulative deducted total by the batch sum.
+        let prev_deducted: i128 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalDeducted)
+            .unwrap_or(0i128);
+        env.storage().instance().set(
+            &StorageKey::TotalDeducted,
+            &prev_deducted
+                .checked_add(total)
+                .ok_or(VaultError::Overflow)?,
+        );
         // Mark all request_ids as processed after successful state update.
         for item in items.iter() {
             if let Some(ref rid) = item.request_id {
@@ -1719,3 +1762,6 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_limits;
+
+#[cfg(test)]
+mod test_cross_invariant;

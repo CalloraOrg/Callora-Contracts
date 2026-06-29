@@ -26,6 +26,8 @@ pub enum StorageKey {
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
     ContractVersion,
+    /// Cumulative total of all funds received via `receive_payment` / `batch_receive_payment`.
+    TotalReceived,
 }
 
 /// Developer balance record in settlement contract
@@ -287,6 +289,15 @@ impl CalloraSettlement {
                 },
             );
         }
+        // Increment cumulative received total regardless of routing (pool or developer).
+        let inst = env.storage().instance();
+        let prev: i128 = inst.get(&StorageKey::TotalReceived).unwrap_or(0i128);
+        inst.set(
+            &StorageKey::TotalReceived,
+            &prev
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow)),
+        );
     }
 
     /// Atomically credit multiple developer balances in a single call.
@@ -360,6 +371,18 @@ impl CalloraSettlement {
                 },
             );
         }
+        // Increment cumulative received total by the batch sum.
+        let batch_total: i128 = items.iter().map(|(_, a)| a).fold(0i128, |acc, a| {
+            acc.checked_add(a)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow))
+        });
+        let prev: i128 = inst.get(&StorageKey::TotalReceived).unwrap_or(0i128);
+        inst.set(
+            &StorageKey::TotalReceived,
+            &prev
+                .checked_add(batch_total)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow)),
+        );
     }
 
     /// Get current admin address
@@ -384,6 +407,23 @@ impl CalloraSettlement {
             .instance()
             .get(&StorageKey::GlobalPool)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+    }
+
+    /// Return the cumulative total of all funds received via `receive_payment`
+    /// and `batch_receive_payment`.
+    ///
+    /// Returns `0` before any payments are received. Uses overflow-safe arithmetic.
+    ///
+    /// # Conservation invariant
+    /// `get_total_received() == Σ developer_balance[i] + global_pool.total_balance + Σ withdrawn`
+    pub fn get_total_received(env: Env) -> i128 {
+        if !env.storage().instance().has(&StorageKey::Admin) {
+            env.panic_with_error(SettlementError::NotInitialized);
+        }
+        env.storage()
+            .instance()
+            .get(&StorageKey::TotalReceived)
+            .unwrap_or(0i128)
     }
 
     /// Get developer balance
