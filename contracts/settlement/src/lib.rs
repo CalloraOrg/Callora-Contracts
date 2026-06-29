@@ -615,4 +615,40 @@ impl CalloraSettlement {
     ) -> Result<(), SettlementError> {
         migrate::migrate_single_developer(&env, &caller, &developer)
     }
+
+    /// Batch-withdraw developer balances with a cursor for pagination.
+    ///
+    /// Processes up to `limit` (max: `MAX_BATCH_SIZE`) developers from the
+    /// provided `developers` list starting at `cursor` index.
+    ///
+    /// Each developer authorises its own withdrawal; callers that have not
+    /// called `require_auth` will cause the transaction to abort.
+    ///
+    /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
+    /// full list has been processed.
+    pub fn batch_withdraw_developer_balance_cursor(
+        env: Env,
+        developers: Vec<Address>,
+        amounts: Vec<i128>,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<(u32, bool), SettlementError> {
+        let count = developers.len();
+        if count != amounts.len() {
+            return Err(SettlementError::AmountNotPositive); // mismatched inputs
+        }
+        let safe_limit = limit.min(MAX_BATCH_SIZE);
+        let start = cursor as usize;
+        let end = (start + safe_limit as usize).min(count as usize);
+
+        for i in start..end {
+            let developer = developers.get(i as u32).ok_or(SettlementError::InsufficientDeveloperBalance)?;
+            let amount = amounts.get(i as u32).ok_or(SettlementError::AmountNotPositive)?;
+            Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
+        }
+
+        let next_cursor = end as u32;
+        let is_complete = next_cursor >= count;
+        Ok((next_cursor, is_complete))
+    }
 }
