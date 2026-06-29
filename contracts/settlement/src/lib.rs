@@ -342,7 +342,9 @@ impl CalloraSettlement {
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
-            env.storage().persistent().extend_ttl(&balance_key, 50000, 50000);
+            env.storage()
+                .persistent()
+                .extend_ttl(&balance_key, 50000, 50000);
             // Add to index in sorted order if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
@@ -512,7 +514,10 @@ impl CalloraSettlement {
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()))
+            .get(&StorageKey::DeveloperBalance(
+                developer.clone(),
+                usdc_address.clone(),
+            ))
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
