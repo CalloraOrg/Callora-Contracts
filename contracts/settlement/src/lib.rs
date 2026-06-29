@@ -1,4 +1,5 @@
 #![no_std]
+pub mod archive;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contracttype]
