@@ -1421,6 +1421,15 @@ impl CalloraSettlement {
     pub fn migration_storage_version(env: Env) -> u32 {
         migrate::storage_version(&env)
     }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 }
 
 mod events;
