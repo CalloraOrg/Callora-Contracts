@@ -97,6 +97,11 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - The on-ledger USDC decrease at the vault equals the internal balance decrease
   (both equal `amount`), because the deducted USDC is always transferred to the
   settlement address.
+- **Formal conservation proof**: `contracts/vault/proofs/deduct.rs` contains a
+  Kani harness for the successful `deduct` transition. It models the tracked
+  vault balance and settlement credit as one combined accounting total and
+  proves that `balance + settlement_credit` is unchanged when `amount` is moved
+  from the vault to settlement.
 
 ---
 

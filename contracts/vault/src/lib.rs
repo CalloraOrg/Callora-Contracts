@@ -438,6 +438,10 @@ pub mod capabilities;
 pub mod rate_limit;
 pub mod limits;
 
+#[cfg(any(kani, test))]
+#[path = "../proofs/deduct.rs"]
+mod deduct_proofs;
+
 // ---------------------------------------------------------------------------
 // Test modules
 // ---------------------------------------------------------------------------
