@@ -342,14 +342,7 @@ impl CalloraSettlement {
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
-            env.storage()
-                .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
-            env.storage().persistent().extend_ttl(
-                &StorageKey::DeveloperBalance(dev.clone()),
-                50000,
-                50000,
-            );
+            env.storage().persistent().extend_ttl(&balance_key, 50000, 50000);
             // Add to index in sorted order if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
@@ -520,10 +513,11 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .get(&StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()))
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
@@ -557,7 +551,6 @@ impl CalloraSettlement {
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
 
-        let usdc_address = Self::get_usdc_token(env.clone())?;
         let usdc = token::Client::new(&env, &usdc_address);
 
         if usdc.balance(&contract_address) < amount {
@@ -567,11 +560,11 @@ impl CalloraSettlement {
         usdc.transfer(&contract_address, &recipient, &amount);
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             50000,
             50000,
         );
@@ -834,11 +827,11 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             50000,
             50000,
         );
@@ -1056,7 +1049,7 @@ impl CalloraSettlement {
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
 
-        pagination::get_page(&env, &index, cursor, limit)
+        pagination::get_page(&env, &index, cursor, limit, &token)
     }
 
     /// Return the remaining TTL for each storage key category.
@@ -1302,7 +1295,7 @@ impl CalloraSettlement {
     /// Only the current admin may call. This will instruct the host to update
     /// the current contract WASM to `new_wasm_hash` and persist the version marker.
     /// Emits an `upgraded` event with the admin as topic and the new version as data.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
         if caller != admin {
