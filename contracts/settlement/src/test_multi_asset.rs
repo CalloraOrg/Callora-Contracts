@@ -201,7 +201,7 @@ fn test_migrate_developer_balance() {
     );
 
     // Run migration
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_single_dev_v2(&admin, &developer);
     assert!(result.is_ok(), "migration should succeed");
 
     // After migration, new per-token read returns the migrated value
@@ -283,7 +283,7 @@ fn test_migrate_developer_balance_unauthorized() {
 
     // Non-admin tries to migrate
     let attacker = Address::generate(&env);
-    let result = client.try_migrate_developer_balance(&attacker, &developer);
+    let result = client.try_migrate_single_dev_v2(&attacker, &developer);
     assert!(result.is_err());
 }
 
@@ -303,7 +303,7 @@ fn test_migrate_developer_balance_no_usdc() {
     client.init(&admin, &vault);
     // Do NOT set USDC token
 
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_single_dev_v2(&admin, &developer);
     assert!(result.is_err());
 }
 

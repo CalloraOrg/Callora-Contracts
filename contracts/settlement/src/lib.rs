@@ -352,6 +352,11 @@ impl CalloraSettlement {
             .get(&StorageKey::Admin)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
+    /// Returns the contract version from Cargo.toml
+    pub fn version(_env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
+    }
+
 
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
@@ -512,6 +517,15 @@ impl CalloraSettlement {
 
     /// Migrate a single developer's V1 balance to V2 (admin only).
     pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_single_dev_v2(
         env: Env,
         caller: Address,
         developer: Address,

@@ -1569,3 +1569,20 @@ fn deposit_yield_rejects_zero_amount() {
     client.init(&admin, &usdc_address);
     client.deposit_yield(&admin, &0, &Symbol::new(&env, "fees"));
 }
+
+// ---------------------------------------------------------------------------
+// version
+// ---------------------------------------------------------------------------
+
+#[test]
+fn version_returns_semver_string() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let usdc = env.register_stellar_asset_contract_v2(admin.clone());
+    let contract = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &contract);
+    env.mock_all_auths();
+    client.init(&admin, &usdc.address());
+    let v = client.version();
+    assert_eq!(v, String::from_str(&env, env!("CARGO_PKG_VERSION")));
+}
