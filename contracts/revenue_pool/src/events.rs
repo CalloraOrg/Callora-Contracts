@@ -118,6 +118,30 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for the `"emergency_drain_proposed"` event topic.
+///
+/// Emitted when the admin proposes a timelocked emergency drain via
+/// [`RevenuePool::propose_emergency_drain`].
+pub fn event_emergency_drain_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_proposed")
+}
+
+/// Returns the Symbol for the `"emergency_drain_executed"` event topic.
+///
+/// Emitted when the admin executes a pending emergency drain after the
+/// timelock has expired via [`RevenuePool::execute_emergency_drain`].
+pub fn event_emergency_drain_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_executed")
+}
+
+/// Returns the Symbol for the `"emergency_drain_cancelled"` event topic.
+///
+/// Emitted when the admin cancels a pending emergency drain via
+/// [`RevenuePool::cancel_emergency_drain`].
+pub fn event_emergency_drain_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_cancelled")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +270,35 @@ mod tests {
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
         assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
+    }
+
+    /// Snapshot: proves event_emergency_drain_proposed still maps to exactly the bytes for "emergency_drain_proposed".
+    #[test]
+    fn test_event_emergency_drain_proposed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_proposed(&env),
+            Symbol::new(&env, "emergency_drain_proposed")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_executed still maps to exactly the bytes for "emergency_drain_executed".
+    #[test]
+    fn test_event_emergency_drain_executed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_executed(&env),
+            Symbol::new(&env, "emergency_drain_executed")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_cancelled still maps to exactly the bytes for "emergency_drain_cancelled".
+    #[test]
+    fn test_event_emergency_drain_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_cancelled(&env),
+            Symbol::new(&env, "emergency_drain_cancelled")
+        );
     }
 }
