@@ -90,6 +90,7 @@ pub struct DeveloperWithdrawEvent {
     pub amount: i128,
     pub remaining_balance: i128,
     pub to: Address,
+    pub token: Address,
 }
 
 /// Emitted when the admin sets or changes a developer's daily withdrawal cap.
@@ -118,6 +119,46 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
+}
+
+/// Emitted when the admin proposes or executes a timelock'd developer balance migration.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminMigrationEvent {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub executed_at: u64,
+}
+
+/// Storage TTL entry for a given storage key category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Payload for the `admin_broadcast` event.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
 }
 
 /// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
@@ -509,6 +550,9 @@ impl CalloraSettlement {
         if amount <= 0 {
             return Err(SettlementError::AmountNotPositive);
         }
+
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let usdc = token::Client::new(&env, &usdc_address);
 
         let recipient = to.unwrap_or_else(|| developer.clone());
         let contract_address = env.current_contract_address();
