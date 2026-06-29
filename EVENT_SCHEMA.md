@@ -922,6 +922,47 @@ No tokens are moved; this is an out-of-band signaling channel for indexers and f
 
 > Indexers SHOULD alert on `severity = Crit`. The `message` field is capped at
 > 256 characters; longer strings are rejected before the event is emitted.
+
+---
+
+### `swept`
+
+Emitted when the vault owner sweeps surplus USDC to a sibling contract via
+`sweep_idle_balance()`. Tokens are moved and `meta.balance` is decremented
+atomically in the same transaction.
+
+| Index   | Location | Type               | Description                                         |
+|---------|----------|--------------------|-----------------------------------------------------|
+| topic 0 | topics   | Symbol             | `"swept"`                                           |
+| topic 1 | topics   | Address            | `owner` — vault owner who called `sweep_idle_balance` |
+| topic 2 | topics   | SweepDestination   | `Settlement` or `RevenuePool` variant               |
+| data    | data     | (i128, i128)       | `(amount, new_balance)` after sweep                 |
+
+```json
+{
+  "topics": ["swept", "GOWNER...", "Settlement"],
+  "data": [300000, 700000]
+}
+```
+
+**`SweepDestination` encoding:**
+- `Settlement` — USDC was forwarded to the address stored under `StorageKey::Settlement`.
+- `RevenuePool` — USDC was forwarded to the address stored under `StorageKey::RevenuePool`.
+
+**Preconditions (no event emitted if these fail):**
+- Vault must not be paused (`VaultError::Paused`).
+- Caller must be the vault owner (`VaultError::Unauthorized`).
+- `amount > 0` (`VaultError::AmountNotPositive`).
+- `amount ≤ meta.balance` (`VaultError::InsufficientBalance`).
+- For `Settlement`: `set_settlement` must have been called (`VaultError::SettlementNotSet`).
+- For `RevenuePool`: a revenue pool must be configured (`VaultError::NotInitialized`).
+
+**Indexer note:** After this event, `balance()` returns `new_balance`. The USDC
+has left the vault on-ledger; `sweep_idle_balance` does **not** call
+`settlement.receive_payment()` — it is a raw token transfer only.
+
+---
+
 ## Contract: `callora-settlement` (v0.1.0)
 
 Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
@@ -1167,6 +1208,7 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
+| `swept`                  | vault           | `sweep_idle_balance()`                   |
 | `init`                   | revenue-pool    | `init()`                                 |
 | `admin_changed`          | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
@@ -1201,3 +1243,4 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
+| 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |

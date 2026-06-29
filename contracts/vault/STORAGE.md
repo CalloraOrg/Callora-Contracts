@@ -170,6 +170,7 @@ Sets up the vault with initial state:
 | `batch_deduct(items)`           | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)? per item | MetaKey (balance -= total); ProcessedRequest(id) per Some item; transfers USDC | Owner or authorized_caller |
 | `withdraw(amount)`              | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to owner                           | Owner only                 |
 | `withdraw_to(to, amount)`       | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to `to`                            | Owner only                 |
+| `sweep_idle_balance(to, amount)`| MetaKey, UsdcToken, Settlement or RevenuePool                  | MetaKey (balance -= amount); transfers USDC to destination                     | Owner only                 |
 | `balance()`                     | MetaKey                                                        | —                                                                              | Public read                |
 | `transfer_ownership(new_owner)` | MetaKey                                                        | PendingOwner                                                                   | Owner only                 |
 

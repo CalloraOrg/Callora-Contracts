@@ -502,4 +502,12 @@ mod tests {
         let sym = event_admin_broadcast(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
     }
+
+    /// Snapshot: proves event_swept still maps to exactly the bytes for "swept".
+    #[test]
+    fn test_event_swept_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_swept(&env);
+        assert_eq!(sym, Symbol::new(&env, "swept"));
+    }
 }
