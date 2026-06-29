@@ -108,7 +108,9 @@ pub enum StorageKey {
 | `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
 | `DepositorList` | Instance | `Vec<Address>` | Allowed depositor addresses | `set_allowed_depositor()`, `get_allowed_depositors()` |
 | `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
-| `ProcessedRequest(Symbol)` | **Persistent** | `bool` | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
+| `ProcessedRequest(Symbol)` | **Persistent** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
+| `LifetimeDeposit(Address)` | **Persistent** | `i128`            | Cumulative USDC ever deposited by a given address; never decrements | Written by `deposit()`; read by `get_lifetime_deposit()` / `list_lifetime_deposits()` |
+| `LifetimeDepositorIndex`   | Instance       | `Vec<Address>`    | Ordered list of all addresses that have deposited at least once; used for paginated listing | Written by `deposit()` on first deposit per address |
 
 ## Data Structures
 
@@ -375,6 +377,7 @@ Monitor storage-related events:
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
 | 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| 1.3 | Added `StorageKey::LifetimeDeposit(Address)` (persistent, TTL ~1 year) and `StorageKey::LifetimeDepositorIndex` (instance) for per-depositor cumulative deposit tracking. Added `get_lifetime_deposit(addr)` and `list_lifetime_deposits(cursor, limit)` view functions. Page cap: 100. Overflow-protected via `checked_add`. |
 
 ## Canonical Storage Keys
 
