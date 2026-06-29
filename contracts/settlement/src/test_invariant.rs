@@ -221,7 +221,7 @@ fn setup_env() -> (
         token::StellarAssetClient::new(env, &usdc_addr);
 
     (
-        &(*env).clone(),
+        env,
         contract,
         client,
         admin,
@@ -388,7 +388,7 @@ fn run_trace(seed: u64) {
                 if current > 0 {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
                     let result =
-                        client.try_withdraw_developer_balance(&dev, &amount, &None, &usdc_addr);
+                        client.try_withdraw_developer_balance(&dev, &amount, &None);
                     if result.is_ok() {
                         expected_dev_total = expected_dev_total
                             .checked_sub(amount)
@@ -520,7 +520,7 @@ fn test_invariant_single_dev_full_withdraw() {
     assert_eq!(dev_sum, 3_500, "dev sum before withdraw");
 
     // Full withdraw.
-    client.withdraw_developer_balance(&dev, &3_500, &None, &usdc_addr);
+    client.withdraw_developer_balance(&dev, &3_500, &None);
 
     let dev_sum_after: i128 = client
         .get_all_developer_balances(&admin, &usdc_addr)

@@ -127,8 +127,7 @@ fn test_withdraw_asserts_token() {
     let result = client.try_withdraw_developer_balance(
         &developer,
         &200i128,
-        &Some(recipient.clone()),
-        &token_a,
+        &Some(recipient.clone())
     );
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_a), 300i128);
@@ -138,8 +137,7 @@ fn test_withdraw_asserts_token() {
     let result = client.try_withdraw_developer_balance(
         &developer,
         &100i128,
-        &Some(recipient.clone()),
-        &token_b,
+        &Some(recipient.clone())
     );
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_b), 200i128);
@@ -150,8 +148,7 @@ fn test_withdraw_asserts_token() {
     let result = client.try_withdraw_developer_balance(
         &developer,
         &300i128,
-        &Some(recipient.clone()),
-        &token_b,
+        &Some(recipient.clone())
     );
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_b
 
@@ -159,8 +156,7 @@ fn test_withdraw_asserts_token() {
     let result = client.try_withdraw_developer_balance(
         &developer,
         &301i128,
-        &Some(recipient.clone()),
-        &token_a,
+        &Some(recipient.clone())
     );
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_a
 }
