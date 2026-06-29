@@ -1552,7 +1552,7 @@ fn deposit_yield_accumulates_multiple_sources() {
 }
 
 #[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
+#[should_panic(expected = "unauthorized: caller is not treasury")]
 fn deposit_yield_rejects_non_treasury() {
     let env = Env::default();
     env.mock_all_auths();

@@ -830,6 +830,46 @@ the WASM swap and `ContractVersion` write were rolled back.
 > `previous_wasm`).
 ---
 
+
+### `treasury_transfer_started`
+
+Emitted when the admin nominates a new treasury via `set_treasury()`. The nominee
+must call `accept_treasury()` before it becomes authorized to call `deposit_yield()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_transfer_started"`                 |
+| topic 1 | topics   | Address | `caller` -- current admin that nominated the treasury |
+| data[0] | data     | Address | `old_treasury` -- currently active treasury   |
+| data[1] | data     | Address | `new_treasury` -- nominated treasury          |
+
+---
+
+### `treasury_transfer_completed`
+
+Emitted when the pending treasury accepts the nomination via `accept_treasury()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_transfer_completed"`               |
+| topic 1 | topics   | Address | `new_treasury` -- accepting treasury          |
+| data    | data     | Address | `old_treasury` -- previously active treasury  |
+
+---
+
+### `treasury_cancelled`
+
+Emitted when the admin cancels a pending treasury nomination via
+`cancel_treasury_transfer()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_cancelled"`                        |
+| topic 1 | topics   | Address | `caller` -- current admin that cancelled      |
+| data    | data     | Address | `pending_treasury` -- cancelled nominee       |
+
+---
+
 ### `yield_deposited`
 
 Emitted when the treasury deposits accumulated protocol yield into the revenue pool
@@ -838,7 +878,7 @@ via `deposit_yield()`. The cumulative tracker is updated atomically with the tra
 | Index   | Location | Type    | Description                                            |
 |---------|----------|---------|--------------------------------------------------------|
 | topic 0 | topics   | Symbol  | `"yield_deposited"`                                    |
-| topic 1 | topics   | Address | `treasury` -- current admin who called `deposit_yield`  |
+| topic 1 | topics   | Address | `treasury` -- configured treasury that called `deposit_yield` |
 | data[0] | data     | i128    | `amount` -- USDC deposited in this call (stroops)       |
 | data[1] | data     | Symbol  | `source` -- short label, e.g. `"fees"` or `"yield"`    |
 | data[2] | data     | i128    | `cumulative_yield_deposited` -- running total after deposit |
@@ -1138,6 +1178,9 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `pause_set`              | revenue-pool    | `pause()` / `unpause()`                  |
 | `admin_cancelled`        | revenue-pool    | `cancel_admin_transfer()`                |
 | `upgraded`               | revenue-pool    | `upgrade()`                              |
+| `treasury_transfer_started` | revenue-pool | `set_treasury()`                         |
+| `treasury_transfer_completed` | revenue-pool | `accept_treasury()`                      |
+| `treasury_cancelled`   | revenue-pool    | `cancel_treasury_transfer()`             |
 | `yield_deposited`        | revenue-pool    | `deposit_yield()`                        |
 | `admin_broadcast`        | revenue-pool    | `broadcast()`                            |
 | `payment_received`       | settlement      | `receive_payment()`                      |

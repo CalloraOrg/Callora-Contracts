@@ -82,6 +82,21 @@ pub fn event_yield_deposited(env: &Env) -> Symbol {
     Symbol::new(env, "yield_deposited")
 }
 
+/// Returns the Symbol for the `"treasury_transfer_started"` event topic.
+pub fn event_treasury_transfer_started(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_transfer_started")
+}
+
+/// Returns the Symbol for the `"treasury_transfer_completed"` event topic.
+pub fn event_treasury_transfer_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_transfer_completed")
+}
+
+/// Returns the Symbol for the `"treasury_cancelled"` event topic.
+pub fn event_treasury_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_cancelled")
+}
+
 /// Returns the Symbol for the `"set_max_distribute"` event topic.
 ///
 /// Emitted when the admin updates the per-leg maximum distribute cap.
@@ -204,6 +219,33 @@ mod tests {
         assert_eq!(
             event_receive_payment(&env),
             Symbol::new(&env, "receive_payment")
+        );
+    }
+
+    #[test]
+    fn test_event_treasury_transfer_started_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_treasury_transfer_started(&env),
+            Symbol::new(&env, "treasury_transfer_started")
+        );
+    }
+
+    #[test]
+    fn test_event_treasury_transfer_completed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_treasury_transfer_completed(&env),
+            Symbol::new(&env, "treasury_transfer_completed")
+        );
+    }
+
+    #[test]
+    fn test_event_treasury_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_treasury_cancelled(&env),
+            Symbol::new(&env, "treasury_cancelled")
         );
     }
 

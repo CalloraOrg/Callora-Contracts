@@ -297,6 +297,79 @@
       ]
     },
 
+
+    {
+      "name": "get_treasury",
+      "description": "Return the current treasury address authorized to call deposit_yield. Deployments without a dedicated treasury key fall back to the admin address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": ["\"revenue pool not initialized\" — called before init and no treasury fallback exists."],
+      "events": []
+    },
+
+    {
+      "name": "get_pending_treasury",
+      "description": "Return the pending treasury address, or null if no two-step treasury transfer is in progress.",
+      "access": "any",
+      "params": [],
+      "returns": "Address | null",
+      "panics": [],
+      "events": []
+    },
+
+    {
+      "name": "set_treasury",
+      "description": "Nominate a new treasury. The current admin must authorize, and the nominee must call accept_treasury before deposit_yield authority changes.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_treasury", "type": "Address", "optional": false, "description": "Address of the proposed treasury." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"new treasury is already current treasury\" — nominee is already active."
+      ],
+      "events": [
+        { "topics": ["\"treasury_transfer_started\"", "caller"], "data": "(old_treasury, new_treasury)" }
+      ]
+    },
+
+    {
+      "name": "accept_treasury",
+      "description": "Complete a pending treasury transfer. Must be called by the pending treasury.",
+      "access": "pending treasury (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the pending treasury; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"no pending treasury\" — set_treasury was not called first.",
+        "\"unauthorized: caller is not pending treasury\" — caller is not the pending treasury."
+      ],
+      "events": [
+        { "topics": ["\"treasury_transfer_completed\"", "new_treasury"], "data": "old_treasury (Address)" }
+      ]
+    },
+
+    {
+      "name": "cancel_treasury_transfer",
+      "description": "Cancel a pending treasury transfer. Only the current admin may call this.",
+      "access": "admin",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"no treasury transfer pending\" — no pending treasury is configured."
+      ],
+      "events": [
+        { "topics": ["\"treasury_cancelled\"", "caller"], "data": "pending_treasury (Address)" }
+      ]
+    },
+
     {
       "name": "claim_admin",
       "description": "Complete the admin transfer. Must be called by the pending admin set via set_admin.",
