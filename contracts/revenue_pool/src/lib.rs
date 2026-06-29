@@ -20,9 +20,11 @@ const PENDING_ADMIN_KEY: &str = "pending_admin";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const USDC_KEY: &str = "usdc";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+const MIN_DISTRIBUTE_KEY: &str = "min_distribute";
 const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield_deposited";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
+const ERR_AMOUNT_BELOW_MIN_DISTRIBUTE: &str = "amount below min_distribute threshold";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
 const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
@@ -535,6 +537,29 @@ impl RevenuePool {
 
     /// Get the current per-leg distribution cap.
     /// Defaults to `i128::MAX` when unset.
+    /// Get the minimum amount required for a single `distribute` call (default: 0 = no minimum).
+    pub fn get_min_distribute(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MIN_DISTRIBUTE_KEY))
+            .unwrap_or(0i128)
+    }
+
+    /// Set the minimum amount that must be distributed in a single `distribute`
+    /// call. Only the current admin may call this. `min_distribute` must be
+    /// non-negative and less than or equal to `max_distribute`.
+    pub fn set_min_distribute(env: Env, caller: Address, min_distribute: i128) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        assert!(min_distribute >= 0, "min_distribute must be non-negative");
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MIN_DISTRIBUTE_KEY), &min_distribute);
+    }
+
     pub fn get_max_distribute(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -599,6 +624,10 @@ impl RevenuePool {
         }
         if amount <= 0 {
             panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+        }
+        let min_distribute = Self::get_min_distribute(env.clone());
+        if amount < min_distribute {
+            panic!("{}", ERR_AMOUNT_BELOW_MIN_DISTRIBUTE);
         }
         let max_distribute = Self::get_max_distribute(env.clone());
         if amount > max_distribute {
