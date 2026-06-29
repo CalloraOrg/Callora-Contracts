@@ -14,7 +14,7 @@ use soroban_sdk::{contracterror, contracttype, Address, Env, Symbol};
 pub fn set_developer_min_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
     // Auth check – admin only.
     caller.require_auth();
-    let admin = crate::lib::CalloraSettlement::get_admin(env.clone());
+    let admin = crate::CalloraSettlement::get_admin(env.clone());
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
