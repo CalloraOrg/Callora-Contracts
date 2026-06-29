@@ -220,6 +220,14 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+/// Returns the Symbol for the `"swept"` event topic.
+///
+/// Emitted when the vault owner sweeps surplus USDC to a sibling contract
+/// (settlement or revenue pool) via `sweep_idle_balance`.
+pub fn event_swept(env: &Env) -> Symbol {
+    Symbol::new(env, "swept")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +443,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_broadcast(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
+    }
+
+    /// Snapshot: proves event_swept still maps to exactly the bytes for "swept".
+    #[test]
+    fn test_event_swept_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_swept(&env);
+        assert_eq!(sym, Symbol::new(&env, "swept"));
     }
 }

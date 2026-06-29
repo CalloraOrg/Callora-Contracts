@@ -168,6 +168,7 @@ Sets up the vault with initial state:
 | `batch_deduct(items)`           | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)? per item | MetaKey (balance -= total); ProcessedRequest(id) per Some item; transfers USDC | Owner or authorized_caller |
 | `withdraw(amount)`              | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to owner                           | Owner only                 |
 | `withdraw_to(to, amount)`       | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to `to`                            | Owner only                 |
+| `sweep_idle_balance(to, amount)`| MetaKey, UsdcToken, Settlement or RevenuePool                  | MetaKey (balance -= amount); transfers USDC to destination                     | Owner only                 |
 | `balance()`                     | MetaKey                                                        | —                                                                              | Public read                |
 | `transfer_ownership(new_owner)` | MetaKey                                                        | PendingOwner                                                                   | Owner only                 |
 
@@ -375,6 +376,7 @@ Monitor storage-related events:
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
 | 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| 1.3 | Added `SweepDestination` enum (`Settlement` / `RevenuePool`) and `sweep_idle_balance(owner, to, amount)` entrypoint (Issue #415). No new storage keys; bumps instance TTL. |
 
 ## Canonical Storage Keys
 

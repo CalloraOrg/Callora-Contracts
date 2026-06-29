@@ -164,6 +164,19 @@ pub enum Severity {
     Crit,
 }
 
+/// Routing destination for `sweep_idle_balance`.
+///
+/// - `Settlement` — transfer to the configured settlement contract address.
+/// - `RevenuePool` — transfer to the configured revenue pool address.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SweepDestination {
+    /// Transfer to the settlement contract (must be set via `set_settlement`).
+    Settlement,
+    /// Transfer to the revenue pool (must be set via `propose_revenue_pool` / `accept_revenue_pool`).
+    RevenuePool,
+}
+
 /// Event payload for admin broadcast messages.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1154,6 +1167,103 @@ impl CalloraVault {
             (events::event_withdraw_to(&env), meta.owner.clone(), to.clone()),
             (amount, meta.balance),
         );
+        Ok(meta.balance)
+    }
+
+    /// Sweep surplus USDC from the vault to a configured sibling contract (owner only).
+    ///
+    /// This is an operator-driven rebalancing primitive. It moves an explicit
+    /// `amount` out of the vault's tracked balance to either the **settlement**
+    /// contract or the **revenue pool**, without going through `deduct` (which
+    /// encodes per-call business logic such as settlement notifications and
+    /// rate-limiting).
+    ///
+    /// ## When to use
+    /// Use `sweep_idle_balance` when the vault has accumulated more USDC than is
+    /// needed for day-to-day operations and an operator wants to move that surplus
+    /// to a sibling contract for distribution or yield generation — without
+    /// triggering the full deduct pipeline.
+    ///
+    /// ## Pause Policy
+    /// This function is **BLOCKED when paused**.  Sweeping idle balance is a
+    /// routine treasury operation, not an emergency recovery action; pausing the
+    /// vault should also halt rebalancing flows.
+    ///
+    /// ## Checks-Effects-Interactions (CEI)
+    /// 1. **Checks** — pause guard, owner auth, amount validation, destination
+    ///    address resolved from storage (reverts if not configured).
+    /// 2. **Effects** — `meta.balance` decremented and persisted **before** the
+    ///    external token transfer.  Soroban atomically reverts all writes on panic.
+    /// 3. **Interaction** — token transfer to the resolved destination address.
+    ///
+    /// # Parameters
+    /// - `owner` — vault owner; must sign the transaction.
+    /// - `to`    — destination: `SweepDestination::Settlement` or
+    ///             `SweepDestination::RevenuePool`.
+    /// - `amount` — USDC amount to sweep (must be > 0 and ≤ tracked balance).
+    ///
+    /// # Errors
+    /// - `VaultError::Paused` — vault is currently paused.
+    /// - `VaultError::Unauthorized` — caller is not the vault owner.
+    /// - `VaultError::AmountNotPositive` — `amount <= 0`.
+    /// - `VaultError::InsufficientBalance` — `amount` exceeds tracked balance.
+    /// - `VaultError::SettlementNotSet` — destination is `Settlement` but no
+    ///   settlement address has been configured via `set_settlement`.
+    /// - `VaultError::RevenuePoolCannotBeVault` / `VaultError::NotInitialized` —
+    ///   destination is `RevenuePool` but no revenue pool address is configured.
+    pub fn sweep_idle_balance(
+        env: Env,
+        owner: Address,
+        to: SweepDestination,
+        amount: i128,
+    ) -> Result<i128, VaultError> {
+        // ── Checks ────────────────────────────────────────────────────────
+        Self::require_not_paused(env.clone())?;
+        owner.require_auth();
+        let mut meta = Self::get_meta(env.clone())?;
+        if owner != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        if amount <= 0 {
+            return Err(VaultError::AmountNotPositive);
+        }
+        if meta.balance < amount {
+            return Err(VaultError::InsufficientBalance);
+        }
+        // Resolve destination address — fail early if not configured.
+        let dest_addr: Address = match &to {
+            SweepDestination::Settlement => Self::require_settlement(&env)?,
+            SweepDestination::RevenuePool => env
+                .storage()
+                .instance()
+                .get(&StorageKey::RevenuePool)
+                .ok_or(VaultError::NotInitialized)?,
+        };
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+
+        // ── Effects ───────────────────────────────────────────────────────
+        meta.balance = meta
+            .balance
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_swept(&env), owner.clone(), to.clone()),
+            (amount, meta.balance),
+        );
+
+        // ── Interaction ───────────────────────────────────────────────────
+        // Transfer USDC from vault to destination. If this panics, Soroban
+        // atomically reverts the Effects above — no inconsistent state.
+        Self::transfer_funds(&env, &usdc_addr, &dest_addr, amount);
+
         Ok(meta.balance)
     }
 

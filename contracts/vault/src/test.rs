@@ -6351,3 +6351,245 @@ fn slippage_no_regression_existing_deductions() {
     assert_eq!(client.deduct(&owner, &200, &None, &u16::MAX, &Address::generate(&env)), 300);
     assert_eq!(client.deduct(&owner, &300, &None, &u16::MAX, &Address::generate(&env)), 0);
 }
+
+// ---------------------------------------------------------------------------
+// sweep_idle_balance tests
+// ---------------------------------------------------------------------------
+
+/// Helper: set up a funded vault with a settlement contract registered.
+/// Returns (owner, vault_client, settlement_address, usdc_client, vault_address).
+fn setup_sweep_vault<'a>(
+    env: &'a Env,
+    initial_balance: i128,
+) -> (
+    Address,
+    CalloraVaultClient<'a>,
+    Address,
+    token::Client<'a>,
+    Address,
+) {
+    let owner = Address::generate(env);
+    let (vault_address, vault_client) = create_vault(env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, initial_balance);
+    vault_client.init(&owner, &usdc, &Some(initial_balance), &None, &None, &None, &None);
+
+    let settlement_address = create_settlement(env, &owner, &vault_address);
+    vault_client.set_settlement(&owner, &settlement_address);
+
+    (owner, vault_client, settlement_address, usdc_client, vault_address)
+}
+
+/// Sweep to Settlement: balance decremented, USDC transferred, event emitted.
+#[test]
+fn sweep_to_settlement_succeeds() {
+    let env = Env::default();
+    let (owner, client, settlement_address, usdc_client, vault_address) =
+        setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    let new_balance = client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &300);
+    assert_eq!(new_balance, 700);
+    assert_eq!(client.balance(), 700);
+
+    // On-ledger: settlement received the tokens
+    assert_eq!(usdc_client.balance(&settlement_address), 300);
+    assert_eq!(usdc_client.balance(&vault_address), 700);
+}
+
+/// Sweep to RevenuePool: balance decremented, USDC transferred, event emitted.
+#[test]
+fn sweep_to_revenue_pool_succeeds() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    let revenue_pool = Address::generate(&env);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 1000);
+    client.init(&owner, &usdc, &Some(1000), &None, &None, &Some(revenue_pool.clone()), &None);
+
+    let new_balance =
+        client.sweep_idle_balance(&owner, &SweepDestination::RevenuePool, &400);
+    assert_eq!(new_balance, 600);
+    assert_eq!(client.balance(), 600);
+    assert_eq!(usdc_client.balance(&revenue_pool), 400);
+    assert_eq!(usdc_client.balance(&vault_address), 600);
+}
+
+/// Sweep emits the `swept` event with correct topics and (amount, new_balance) data.
+#[test]
+fn sweep_emits_swept_event() {
+    let env = Env::default();
+    let (owner, client, _, _, vault_address) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &250);
+
+    let events = env.events().all();
+    let swept_event = events
+        .iter()
+        .find(|e| {
+            if e.0 != vault_address {
+                return false;
+            }
+            if e.1.is_empty() {
+                return false;
+            }
+            let s: Symbol = e.1.get(0).unwrap().into_val(&env);
+            s == Symbol::new(&env, "swept")
+        })
+        .expect("expected swept event");
+
+    // Topics: [Symbol("swept"), owner, SweepDestination::Settlement]
+    assert_eq!(swept_event.1.len(), 3, "swept event must have 3 topics");
+    let topic0: Symbol = swept_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "swept"));
+
+    let (amount, new_balance): (i128, i128) = swept_event.2.into_val(&env);
+    assert_eq!(amount, 250);
+    assert_eq!(new_balance, 750);
+}
+
+/// Sweep fails when vault is paused.
+#[test]
+fn sweep_fails_when_paused() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    client.pause(&owner);
+    let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &100);
+    assert_eq!(result, Err(Ok(VaultError::Paused)));
+}
+
+/// Sweep fails when called by non-owner.
+#[test]
+fn sweep_fails_unauthorized() {
+    let env = Env::default();
+    let (_, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    let intruder = Address::generate(&env);
+    env.mock_all_auths();
+
+    let result =
+        client.try_sweep_idle_balance(&intruder, &SweepDestination::Settlement, &100);
+    assert_eq!(result, Err(Ok(VaultError::Unauthorized)));
+}
+
+/// Sweep fails when amount is zero.
+#[test]
+fn sweep_fails_zero_amount() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &0);
+    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive)));
+}
+
+/// Sweep fails when amount is negative.
+#[test]
+fn sweep_fails_negative_amount() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    let result =
+        client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &-1);
+    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive)));
+}
+
+/// Sweep fails when amount exceeds tracked balance.
+#[test]
+fn sweep_fails_insufficient_balance() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 500);
+    env.mock_all_auths();
+
+    let result =
+        client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &501);
+    assert_eq!(result, Err(Ok(VaultError::InsufficientBalance)));
+}
+
+/// Sweep of exactly the full balance leaves balance at zero.
+#[test]
+fn sweep_full_balance_succeeds() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    let new_balance =
+        client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &1000);
+    assert_eq!(new_balance, 0);
+    assert_eq!(client.balance(), 0);
+}
+
+/// Sweep to Settlement fails when settlement address is not configured.
+#[test]
+fn sweep_to_settlement_fails_when_not_configured() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    // Fund with 500 but do NOT call set_settlement
+    let (vault_address, client2) = create_vault(&env);
+    fund_vault(&usdc_admin, &vault_address, 500);
+    client2.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+
+    let result =
+        client2.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &100);
+    assert_eq!(result, Err(Ok(VaultError::SettlementNotSet)));
+}
+
+/// Sweep to RevenuePool fails when revenue pool address is not configured.
+#[test]
+fn sweep_to_revenue_pool_fails_when_not_configured() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 500);
+    // setup_sweep_vault does NOT configure a revenue pool
+    env.mock_all_auths();
+
+    let result =
+        client.try_sweep_idle_balance(&owner, &SweepDestination::RevenuePool, &100);
+    assert_eq!(result, Err(Ok(VaultError::NotInitialized)));
+}
+
+/// Partial sweep: balance decremented by exactly the swept amount.
+#[test]
+fn sweep_partial_amount_correct() {
+    let env = Env::default();
+    let (owner, client, _, usdc_client, vault_address) =
+        setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &100);
+    assert_eq!(client.balance(), 900);
+    assert_eq!(usdc_client.balance(&vault_address), 900);
+
+    client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &200);
+    assert_eq!(client.balance(), 700);
+    assert_eq!(usdc_client.balance(&vault_address), 700);
+}
+
+/// Balance is unchanged when sweep fails (idempotency of failed ops).
+#[test]
+fn sweep_balance_unchanged_on_failure() {
+    let env = Env::default();
+    let (owner, client, _, _, _) = setup_sweep_vault(&env, 1000);
+    env.mock_all_auths();
+
+    let balance_before = client.balance();
+
+    // Too large
+    let _ = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &1001);
+    assert_eq!(client.balance(), balance_before);
+
+    // Zero
+    let _ = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &0);
+    assert_eq!(client.balance(), balance_before);
+}
