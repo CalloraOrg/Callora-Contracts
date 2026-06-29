@@ -213,6 +213,55 @@ pub fn event_revenue_pool_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "revenue_pool_cancelled")
 }
 
+/// Returns the Symbol for the `"request_id_pruned"` event topic.
+///
+/// Emitted when an expired idempotency request ID is pruned from storage.
+pub fn event_request_id_pruned(env: &Env) -> Symbol {
+    Symbol::new(env, "request_id_pruned")
+}
+
+/// Returns the Symbol for the `"cold_storage_initialized"` event topic.
+///
+/// Emitted when the hot/cold split is first configured via `init_cold_storage`.
+pub fn event_cold_storage_initialized(env: &Env) -> Symbol {
+    Symbol::new(env, "cold_storage_initialized")
+}
+
+/// Returns the Symbol for the `"hot_cold_ratio_set"` event topic.
+///
+/// Emitted when the owner updates the target hot/cold ratio.
+pub fn event_hot_cold_ratio_set(env: &Env) -> Symbol {
+    Symbol::new(env, "hot_cold_ratio_set")
+}
+
+/// Returns the Symbol for the `"rebalanced"` event topic.
+///
+/// Emitted when a deposit triggers an automatic hot-to-cold rebalance.
+pub fn event_rebalanced(env: &Env) -> Symbol {
+    Symbol::new(env, "rebalanced")
+}
+
+/// Returns the Symbol for the `"cold_sweep_proposed"` event topic.
+///
+/// Emitted when a cold signer proposes a new multisig-gated cold sweep.
+pub fn event_cold_sweep_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "cold_sweep_proposed")
+}
+
+/// Returns the Symbol for the `"cold_sweep_approved"` event topic.
+///
+/// Emitted when a cold signer adds their approval to a pending cold sweep.
+pub fn event_cold_sweep_approved(env: &Env) -> Symbol {
+    Symbol::new(env, "cold_sweep_approved")
+}
+
+/// Returns the Symbol for the `"cold_sweep_executed"` event topic.
+///
+/// Emitted when a pending cold sweep crosses its approval threshold and executes.
+pub fn event_cold_sweep_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "cold_sweep_executed")
+}
+
 /// Returns the Symbol for the `"admin_broadcast"` event topic.
 ///
 /// Emitted when the admin broadcasts an emergency message.
@@ -427,6 +476,56 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_revenue_pool_cancelled(&env);
         assert_eq!(sym, Symbol::new(&env, "revenue_pool_cancelled"));
+    }
+
+    /// Snapshot: proves event_request_id_pruned still maps to exactly the bytes for "request_id_pruned".
+    #[test]
+    fn test_event_request_id_pruned_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_request_id_pruned(&env);
+        assert_eq!(sym, Symbol::new(&env, "request_id_pruned"));
+    }
+
+    #[test]
+    fn test_event_cold_storage_initialized_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_cold_storage_initialized(&env);
+        assert_eq!(sym, Symbol::new(&env, "cold_storage_initialized"));
+    }
+
+    #[test]
+    fn test_event_hot_cold_ratio_set_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_hot_cold_ratio_set(&env);
+        assert_eq!(sym, Symbol::new(&env, "hot_cold_ratio_set"));
+    }
+
+    #[test]
+    fn test_event_rebalanced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_rebalanced(&env);
+        assert_eq!(sym, Symbol::new(&env, "rebalanced"));
+    }
+
+    #[test]
+    fn test_event_cold_sweep_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_cold_sweep_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "cold_sweep_proposed"));
+    }
+
+    #[test]
+    fn test_event_cold_sweep_approved_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_cold_sweep_approved(&env);
+        assert_eq!(sym, Symbol::new(&env, "cold_sweep_approved"));
+    }
+
+    #[test]
+    fn test_event_cold_sweep_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_cold_sweep_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "cold_sweep_executed"));
     }
 
     /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".

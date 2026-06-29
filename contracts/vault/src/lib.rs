@@ -1,5 +1,5 @@
 #![no_std]
-/// # Callora Vault Contract — deposit/withdraw/deduct/distribute with pause circuit-breaker.
+/// # Callora Vault Contract â€” deposit/withdraw/deduct/distribute with pause circuit-breaker.
 ///
 /// ## Pause Circuit Breaker
 ///
@@ -34,6 +34,8 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
     Symbol, Vec,
 };
+
+use cold_storage::{ColdBalances, ColdConfig, PendingColdSweep};
 
 /// Typed error codes for the Callora Vault contract.
 ///
@@ -97,7 +99,7 @@ pub enum VaultError {
     OfferingIdTooLong = 26,
     /// Metadata exceeds maximum length (code 27).
     MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
+    /// Price parsing error or nonâ€‘positive price (code 28).
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
     DuplicateRequestId = 29,
@@ -113,6 +115,33 @@ pub enum VaultError {
     NoRevenuePoolTransferPending = 34,
     /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
     Slippage = 35,
+    /// Cold storage has already been initialized (code 36).
+    ColdStorageAlreadyInitialized = 36,
+    /// Cold storage has not been initialized (code 37).
+    ColdStorageNotInitialized = 37,
+    /// `hot_bps` must be in the range 1..=10_000 (code 38).
+    InvalidHotBps = 38,
+    /// `rebalance_threshold_bps` must be in the range 1..=10_000 (code 39).
+    InvalidRebalanceThreshold = 39,
+    /// Cold signer list must not be empty (code 40).
+    ColdSignersEmpty = 40,
+    /// Cold threshold must be in the range 1..=cold_signers.len() (code 41).
+    InvalidColdThreshold = 41,
+    /// Cold signer list contains a duplicate address (code 42).
+    DuplicateColdSigner = 42,
+    /// Caller is not a configured cold signer (code 43).
+    NotColdSigner = 43,
+    /// A cold sweep is already pending; only one may be pending at a time (code 44).
+    ColdSweepAlreadyPending = 44,
+    /// No cold sweep is currently pending (code 45).
+    NoColdSweepPending = 45,
+    /// Cold signer has already approved the pending sweep (code 46).
+    AlreadyApprovedColdSweep = 46,
+    /// Requested sweep amount exceeds the current cold pool balance (code 47).
+    InsufficientColdBalance = 47,
+    /// Hot pool balance is insufficient for the requested deduct, even though
+    /// total vault balance would otherwise cover it (code 48).
+    InsufficientHotBalance = 48,
 }
 
 #[contracttype]
@@ -174,6 +203,12 @@ pub enum StorageKey {
     PendingAdmin,
     PendingRevenuePool,
     DepositorList,
+    /// Hot/cold split configuration (ratio, signers, threshold).
+    ColdConfigKey,
+    /// Current hot/cold balance split. `hot + cold` must equal `VaultMeta.balance`.
+    ColdBalancesKey,
+    /// The single in-flight multisig-gated cold sweep request, if any.
+    PendingColdSweepKey,
     /// Contract version marker (WASM hash) set by `upgrade`.
     ContractVersion,
     /// Idempotency marker for a processed deduct request.
@@ -226,28 +261,28 @@ impl CalloraVault {
     /// Initialize the vault. Exactly-once; returns error if called again.
     ///
     /// # Parameters
-    /// - `owner` — vault owner; must sign the transaction.
-    /// - `usdc_token` — USDC token contract address; must not be the vault itself.
-    /// - `initial_balance` — optional starting balance (defaults to 0). The vault
+    /// - `owner` â€” vault owner; must sign the transaction.
+    /// - `usdc_token` â€” USDC token contract address; must not be the vault itself.
+    /// - `initial_balance` â€” optional starting balance (defaults to 0). The vault
     ///   must already hold at least this many USDC stroops on-ledger.
-    /// - `authorized_caller` — optional address permitted to call `deduct`/`batch_deduct`.
+    /// - `authorized_caller` â€” optional address permitted to call `deduct`/`batch_deduct`.
     ///   Must not be the vault address.
-    /// - `min_deposit` — minimum deposit amount (defaults to 1, must be > 0).
-    /// - `revenue_pool` — optional revenue pool address; informational only.
+    /// - `min_deposit` â€” minimum deposit amount (defaults to 1, must be > 0).
+    /// - `revenue_pool` â€” optional revenue pool address; informational only.
     ///   Must not be the vault address.
-    /// - `max_deduct` — maximum single deduction (defaults to `i128::MAX`, must be > 0).
+    /// - `max_deduct` â€” maximum single deduction (defaults to `i128::MAX`, must be > 0).
     ///   Must be >= `min_deposit`.
     ///
     /// # Errors
-    /// - `VaultError::AlreadyInitialized` — called more than once.
-    /// - `VaultError::UsdcTokenCannotBeVault` — self-referential token.
-    /// - `VaultError::RevenuePoolCannotBeVault` — self-referential pool.
-    /// - `VaultError::AuthorizedCallerCannotBeVault` — self-referential caller.
-    /// - `VaultError::InitialBalanceNegative` — negative initial balance.
-    /// - `VaultError::MinDepositNotPositive` — `min_deposit <= 0`.
-    /// - `VaultError::MaxDeductNotPositive` — `max_deduct <= 0`.
-    /// - `VaultError::MinDepositExceedsMaxDeduct` — constraint violation.
-    /// - `VaultError::InitialBalanceExceedsOnLedger` — vault underfunded.
+    /// - `VaultError::AlreadyInitialized` â€” called more than once.
+    /// - `VaultError::UsdcTokenCannotBeVault` â€” self-referential token.
+    /// - `VaultError::RevenuePoolCannotBeVault` â€” self-referential pool.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` â€” self-referential caller.
+    /// - `VaultError::InitialBalanceNegative` â€” negative initial balance.
+    /// - `VaultError::MinDepositNotPositive` â€” `min_deposit <= 0`.
+    /// - `VaultError::MaxDeductNotPositive` â€” `max_deduct <= 0`.
+    /// - `VaultError::MinDepositExceedsMaxDeduct` â€” constraint violation.
+    /// - `VaultError::InitialBalanceExceedsOnLedger` â€” vault underfunded.
     #[allow(clippy::too_many_arguments)]
     pub fn init(
         env: Env,
@@ -319,7 +354,7 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
-    // View functions — no TTL bump (read-only, zero write cost)
+    // View functions â€” no TTL bump (read-only, zero write cost)
     // -----------------------------------------------------------------------
 
     /// Return full vault state. Returns error if vault is not initialized.
@@ -391,7 +426,9 @@ impl CalloraVault {
 
     /// Return the pending revenue pool address, or `None` if no proposal is pending.
     pub fn get_pending_revenue_pool(env: Env) -> Option<Address> {
-        env.storage().instance().get(&StorageKey::PendingRevenuePool)
+        env.storage()
+            .instance()
+            .get(&StorageKey::PendingRevenuePool)
     }
 
     /// Return `(usdc_token, settlement, revenue_pool)` in one call.
@@ -460,7 +497,9 @@ impl CalloraVault {
         let mut list: Vec<String> = Self::get_offering_index(env);
         if !list.contains(offering_id) {
             list.push_back(offering_id.clone());
-            env.storage().instance().set(&StorageKey::OfferingIndex, &list);
+            env.storage()
+                .instance()
+                .set(&StorageKey::OfferingIndex, &list);
         }
     }
 
@@ -479,7 +518,9 @@ impl CalloraVault {
         if updated.len() == 0 {
             env.storage().instance().remove(&StorageKey::OfferingIndex);
         } else {
-            env.storage().instance().set(&StorageKey::OfferingIndex, &updated);
+            env.storage()
+                .instance()
+                .set(&StorageKey::OfferingIndex, &updated);
         }
     }
 
@@ -561,8 +602,8 @@ impl CalloraVault {
     /// indexers can detect gaps or replays.
     ///
     /// # Errors
-    /// - `VaultError::StaleNonce` — `expected_nonce` differs from the stored nonce.
-    /// - `VaultError::AuthorizedCallerCannotBeVault` — `new_caller` is the vault itself.
+    /// - `VaultError::StaleNonce` â€” `expected_nonce` differs from the stored nonce.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` â€” `new_caller` is the vault itself.
     pub fn set_authorized_caller(
         env: Env,
         new_caller: Option<Address>,
@@ -687,18 +728,18 @@ impl CalloraVault {
     /// Deposit USDC into the vault.
     ///
     /// Follows the **Checks-Effects-Interactions** pattern:
-    /// 1. **Checks** — pause guard, auth, amount validation, depositor allowlist, minimum.
-    /// 2. **Effects** — compute new balance, persist updated `MetaKey` to storage.
-    /// 3. **Interaction** — transfer USDC from caller to vault.
+    /// 1. **Checks** â€” pause guard, auth, amount validation, depositor allowlist, minimum.
+    /// 2. **Effects** â€” compute new balance, persist updated `MetaKey` to storage.
+    /// 3. **Interaction** â€” transfer USDC from caller to vault.
     ///
     /// # CEI Rationale
     /// State is updated **before** the external token call so that a malicious or
     /// reentrant token contract cannot observe stale internal accounting. If the
-    /// transfer panics, Soroban atomically reverts the entire transaction —
-    /// including the already-persisted state write — leaving no inconsistent
+    /// transfer panics, Soroban atomically reverts the entire transaction â€”
+    /// including the already-persisted state write â€” leaving no inconsistent
     /// on-ledger state.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError> {
-        // ── Checks ────────────────────────────────────────────────────────
+        // â”€â”€ Checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
         if amount <= 0 {
@@ -717,12 +758,44 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // ── Effects ───────────────────────────────────────────────────────
+        // â”€â”€ Effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         meta.balance = meta
             .balance
             .checked_add(amount)
             .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
+
+        // Hot/cold bookkeeping: new deposits land in hot first, then an
+        // auto-rebalance check may move surplus into cold. This is a no-op
+        // if cold storage has never been initialized for this vault.
+        if let Some(mut balances) = env
+            .storage()
+            .instance()
+            .get::<_, ColdBalances>(&StorageKey::ColdBalancesKey)
+        {
+            balances.hot = balances
+                .hot
+                .checked_add(amount)
+                .ok_or(VaultError::Overflow)?;
+
+            let config: ColdConfig = env
+                .storage()
+                .instance()
+                .get(&StorageKey::ColdConfigKey)
+                .ok_or(VaultError::ColdStorageNotInitialized)?;
+
+            let rebalanced = cold_storage::maybe_rebalance(&balances, &config)?;
+            if rebalanced != balances {
+                env.events().publish(
+                    (events::event_rebalanced(&env), caller.clone()),
+                    (rebalanced.hot, rebalanced.cold),
+                );
+            }
+            env.storage()
+                .instance()
+                .set(&StorageKey::ColdBalancesKey, &rebalanced);
+        }
+
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -731,9 +804,11 @@ impl CalloraVault {
             (amount, meta.balance),
         );
 
-        // ── Interaction ───────────────────────────────────────────────────
+        // â”€â”€ Interaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+        // â”€â”€ Interaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Transfer USDC from caller to vault. If this panics, the Soroban host
-        // reverts the entire transaction — the Effects above are atomically rolled
+        // reverts the entire transaction â€” the Effects above are atomically rolled
         // back, leaving no inconsistent state.
         token::Client::new(&env, &usdc_addr).transfer(
             &caller,
@@ -763,12 +838,12 @@ impl CalloraVault {
     /// `VaultError::Slippage` **before** any state is mutated.
     ///
     /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
-    /// unrestricted behaviour — this is the default for backward compatibility.
+    /// unrestricted behaviour â€” this is the default for backward compatibility.
     ///
     /// # Idempotency
     /// When `request_id` is `Some(id)`, the contract checks whether `id` has
     /// already been processed.  If so, `VaultError::DuplicateRequestId` is
-    /// returned immediately — no funds are moved.  On first success the marker
+    /// returned immediately â€” no funds are moved.  On first success the marker
     /// is persisted in persistent storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
     ///
     /// When `request_id` is `None`, no deduplication is performed.
@@ -794,7 +869,7 @@ impl CalloraVault {
         if amount > max_d {
             return Err(VaultError::ExceedsMaxDeduct);
         }
-        // Idempotency check — must happen before any state mutation.
+        // Idempotency check â€” must happen before any state mutation.
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
@@ -802,14 +877,24 @@ impl CalloraVault {
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
+        // If cold storage is configured, deducts may only draw from the hot
+        // pool â€” even if the total vault balance would otherwise cover the
+        // amount. This is the entire point of the split: a compromised
+        // authorized_caller or single key cannot drain cold reserves via
+        // deduct, only the (intentionally small) hot pool.
+        let cold_balances: Option<ColdBalances> =
+            env.storage().instance().get(&StorageKey::ColdBalancesKey);
+        if let Some(ref balances) = cold_balances {
+            if balances.hot < amount {
+                return Err(VaultError::InsufficientHotBalance);
+            }
+        }
         // Slippage guard: reject if the deducted amount exceeds max_fee_bps of the
         // current balance. Calculated before any state mutation or external call.
         // Uses u16::MAX as the sentinel for "no limit" (backward-compatible default).
         if max_fee_bps < u16::MAX && meta.balance > 0 {
-            let calculated_fee_bps = amount
-                .checked_mul(10_000)
-                .ok_or(VaultError::Overflow)?
-                / meta.balance;
+            let calculated_fee_bps =
+                amount.checked_mul(10_000).ok_or(VaultError::Overflow)? / meta.balance;
             if calculated_fee_bps > max_fee_bps as i128 {
                 return Err(VaultError::Slippage);
             }
@@ -844,6 +929,15 @@ impl CalloraVault {
             .checked_sub(amount)
             .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        if let Some(mut balances) = cold_balances {
+            balances.hot = balances
+                .hot
+                .checked_sub(amount)
+                .ok_or(VaultError::Overflow)?;
+            env.storage()
+                .instance()
+                .set(&StorageKey::ColdBalancesKey, &balances);
+        }
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -899,7 +993,7 @@ impl CalloraVault {
         let mut total: i128 = 0;
         // Collect ids seen within this batch to catch intra-batch duplicates.
         let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
-        // Full validation pass — no state writes yet.
+        // Full validation pass â€” no state writes yet.
         for item in items.iter() {
             if item.amount <= 0 {
                 return Err(VaultError::AmountNotPositive);
@@ -910,7 +1004,7 @@ impl CalloraVault {
             if running < item.amount {
                 return Err(VaultError::InsufficientBalance);
             }
-            // Idempotency check per item — before any state mutation.
+            // Idempotency check per item â€” before any state mutation.
             // Also catches intra-batch duplicates (two items with the same new id).
             if let Some(ref rid) = item.request_id {
                 Self::require_not_duplicate(&env, rid)?;
@@ -1042,6 +1136,280 @@ impl CalloraVault {
         Ok(meta.balance)
     }
 
+    // â”€â”€ Hot/Cold Balance Split â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    /// One-time setup of the hot/cold split. Only the vault owner may call
+    /// this, and only once â€” subsequent calls return
+    /// `ColdStorageAlreadyInitialized`. Use `set_hot_cold_ratio` to update
+    /// the ratio afterward.
+    ///
+    /// On success, the vault's entire current `balance` is partitioned into
+    /// hot/cold according to `hot_bps` (any rounding remainder stays cold).
+    pub fn init_cold_storage(
+        env: Env,
+        owner: Address,
+        hot_bps: u32,
+        rebalance_threshold_bps: u32,
+        cold_signers: Vec<Address>,
+        cold_threshold: u32,
+    ) -> Result<ColdBalances, VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        if owner != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        owner.require_auth();
+
+        if env.storage().instance().has(&StorageKey::ColdConfigKey) {
+            return Err(VaultError::ColdStorageAlreadyInitialized);
+        }
+
+        let config = ColdConfig {
+            hot_bps,
+            rebalance_threshold_bps,
+            cold_signers,
+            cold_threshold,
+        };
+        config.validate()?;
+
+        let hot = cold_storage::target_hot_pub(meta.balance, hot_bps)?;
+        let cold = meta.balance.checked_sub(hot).ok_or(VaultError::Overflow)?;
+        let balances = ColdBalances { hot, cold };
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::ColdConfigKey, &config);
+        env.storage()
+            .instance()
+            .set(&StorageKey::ColdBalancesKey, &balances);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (events::event_cold_storage_initialized(&env), owner),
+            (hot_bps, balances.hot, balances.cold),
+        );
+
+        Ok(balances)
+    }
+
+    /// Updates the target hot/cold ratio. Owner-only. Does not itself move
+    /// any funds â€” the new ratio takes effect on the next deposit-triggered
+    /// rebalance check.
+    pub fn set_hot_cold_ratio(env: Env, owner: Address, hot_bps: u32) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        if owner != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        owner.require_auth();
+
+        let mut config = Self::get_cold_config(env.clone())?;
+        config.hot_bps = hot_bps;
+        config.validate()?;
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::ColdConfigKey, &config);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events()
+            .publish((events::event_hot_cold_ratio_set(&env), owner), hot_bps);
+
+        Ok(())
+    }
+
+    /// Returns the current hot/cold balance split. Errors if cold storage
+    /// has not been initialized.
+    pub fn get_cold_balances(env: Env) -> Result<ColdBalances, VaultError> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::ColdBalancesKey)
+            .ok_or(VaultError::ColdStorageNotInitialized)
+    }
+
+    /// Returns the current hot/cold configuration. Errors if cold storage
+    /// has not been initialized.
+    pub fn get_cold_config(env: Env) -> Result<ColdConfig, VaultError> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::ColdConfigKey)
+            .ok_or(VaultError::ColdStorageNotInitialized)
+    }
+
+    /// Proposes a new multisig-gated cold sweep. Only a configured cold
+    /// signer may call this. Casts the proposer's own approval immediately.
+    /// Only one sweep may be pending at a time â€” fails with
+    /// `ColdSweepAlreadyPending` otherwise.
+    ///
+    /// If `cold_threshold == 1`, the sweep executes immediately on proposal.
+    pub fn propose_cold_sweep(
+        env: Env,
+        signer: Address,
+        amount: i128,
+        destination: Address,
+    ) -> Result<(), VaultError> {
+        signer.require_auth();
+        if amount <= 0 {
+            return Err(VaultError::AmountNotPositive);
+        }
+
+        let config = Self::get_cold_config(env.clone())?;
+        if !config.is_cold_signer(&signer) {
+            return Err(VaultError::NotColdSigner);
+        }
+
+        if env
+            .storage()
+            .instance()
+            .has(&StorageKey::PendingColdSweepKey)
+        {
+            return Err(VaultError::ColdSweepAlreadyPending);
+        }
+
+        let balances = Self::get_cold_balances(env.clone())?;
+        if balances.cold < amount {
+            return Err(VaultError::InsufficientColdBalance);
+        }
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(signer.clone());
+
+        let pending = PendingColdSweep {
+            amount,
+            destination: destination.clone(),
+            approvals,
+            proposed_at: env.ledger().timestamp(),
+        };
+
+        env.events().publish(
+            (events::event_cold_sweep_proposed(&env), signer.clone()),
+            (amount, destination.clone()),
+        );
+
+        if config.cold_threshold <= 1 {
+            return Self::execute_cold_sweep(env, pending, balances);
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingColdSweepKey, &pending);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        Ok(())
+    }
+
+    /// Adds the caller's approval to the pending cold sweep. Only a
+    /// configured cold signer who has not already approved may call this.
+    /// If this approval crosses `cold_threshold`, the sweep executes
+    /// immediately within this same call â€” there is no separate "execute"
+    /// step, which removes any window between the threshold-crossing
+    /// approval and execution.
+    pub fn approve_cold_sweep(env: Env, signer: Address) -> Result<(), VaultError> {
+        signer.require_auth();
+
+        let config = Self::get_cold_config(env.clone())?;
+        if !config.is_cold_signer(&signer) {
+            return Err(VaultError::NotColdSigner);
+        }
+
+        let mut pending: PendingColdSweep = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingColdSweepKey)
+            .ok_or(VaultError::NoColdSweepPending)?;
+
+        if pending.approvals.iter().any(|a| a == signer) {
+            return Err(VaultError::AlreadyApprovedColdSweep);
+        }
+
+        pending.approvals.push_back(signer.clone());
+
+        env.events().publish(
+            (events::event_cold_sweep_approved(&env), signer),
+            pending.amount,
+        );
+
+        if (pending.approvals.len() as u32) >= config.cold_threshold {
+            let balances = Self::get_cold_balances(env.clone())?;
+            return Self::execute_cold_sweep(env, pending, balances);
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingColdSweepKey, &pending);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        Ok(())
+    }
+
+    /// Internal: executes an approved cold sweep â€” moves `pending.amount`
+    /// from the cold pool, transfers it on-ledger to `pending.destination`,
+    /// and clears the pending request. Re-validates the cold balance is
+    /// still sufficient (it may have changed since the proposal if this
+    /// implementation is later extended to allow cold balance to decrease
+    /// via other paths).
+    fn execute_cold_sweep(
+        env: Env,
+        pending: PendingColdSweep,
+        mut balances: ColdBalances,
+    ) -> Result<(), VaultError> {
+        if balances.cold < pending.amount {
+            return Err(VaultError::InsufficientColdBalance);
+        }
+
+        let mut meta = Self::get_meta(env.clone())?;
+
+        balances.cold = balances
+            .cold
+            .checked_sub(pending.amount)
+            .ok_or(VaultError::Overflow)?;
+        meta.balance = meta
+            .balance
+            .checked_sub(pending.amount)
+            .ok_or(VaultError::Overflow)?;
+
+        let ua: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+
+        // SECURITY: external transfer happens after all balance bookkeeping
+        // is computed (so we fail closed on overflow before ever touching
+        // the token contract), but the storage writes themselves are
+        // committed after the transfer succeeds, consistent with the
+        // existing withdraw()/withdraw_to() pattern in this contract.
+        token::Client::new(&env, &ua).transfer(
+            &env.current_contract_address(),
+            &pending.destination,
+            &pending.amount,
+        );
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::ColdBalancesKey, &balances);
+        env.storage().instance().set(&StorageKey::MetaKey, &meta);
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingColdSweepKey);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        env.events().publish(
+            (events::event_cold_sweep_executed(&env), pending.destination),
+            (pending.amount, balances.cold),
+        );
+
+        Ok(())
+    }
+
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let mut meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
@@ -1066,7 +1434,11 @@ impl CalloraVault {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events().publish(
-            (events::event_withdraw_to(&env), meta.owner.clone(), to.clone()),
+            (
+                events::event_withdraw_to(&env),
+                meta.owner.clone(),
+                to.clone(),
+            ),
             (amount, meta.balance),
         );
         Ok(meta.balance)
@@ -1074,7 +1446,7 @@ impl CalloraVault {
 
     /// Distribute USDC from the vault to an arbitrary recipient (admin only).
     ///
-    /// This function moves **untracked on-ledger surplus** — it checks the actual
+    /// This function moves **untracked on-ledger surplus** â€” it checks the actual
     /// token balance, NOT `meta.balance`. Use this to recover funds that exist
     /// on-ledger but are not reflected in the vault's internal accounting.
     ///
@@ -1084,9 +1456,9 @@ impl CalloraVault {
     /// untracked surplus funds even during a circuit-breaker event.
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the admin.
-    /// - `VaultError::AmountNotPositive` — `amount <= 0`.
-    /// - `VaultError::InsufficientBalance` — vault lacks on-ledger USDC for transfer.
+    /// - `VaultError::Unauthorized` â€” caller is not the admin.
+    /// - `VaultError::AmountNotPositive` â€” `amount <= 0`.
+    /// - `VaultError::InsufficientBalance` â€” vault lacks on-ledger USDC for transfer.
     pub fn distribute(
         env: Env,
         caller: Address,
@@ -1124,13 +1496,10 @@ impl CalloraVault {
     /// If there is already a pending proposal, calling this function overwrites it.
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the owner.
-    /// - `VaultError::RevenuePoolCannotBeVault` — proposed address is the vault itself.
-    /// - `VaultError::NewRevenuePoolSameAsCurrent` — proposed address equals the current revenue pool.
-    pub fn propose_revenue_pool(
-        env: Env,
-        new_pool: Option<Address>,
-    ) -> Result<(), VaultError> {
+    /// - `VaultError::Unauthorized` â€” caller is not the owner.
+    /// - `VaultError::RevenuePoolCannotBeVault` â€” proposed address is the vault itself.
+    /// - `VaultError::NewRevenuePoolSameAsCurrent` â€” proposed address equals the current revenue pool.
+    pub fn propose_revenue_pool(env: Env, new_pool: Option<Address>) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
         if let Some(ref pool) = new_pool {
@@ -1146,7 +1515,11 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::PendingRevenuePool, &new_pool);
         env.events().publish(
-            (events::event_revenue_pool_proposed(&env), meta.owner, new_pool),
+            (
+                events::event_revenue_pool_proposed(&env),
+                meta.owner,
+                new_pool,
+            ),
             (),
         );
         Ok(())
@@ -1159,8 +1532,8 @@ impl CalloraVault {
     /// and the pending state is cleared.
     ///
     /// # Errors
-    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
-    /// - `VaultError::Unauthorized` — caller does not match the pending proposal.
+    /// - `VaultError::NoRevenuePoolTransferPending` â€” no proposal is pending.
+    /// - `VaultError::Unauthorized` â€” caller does not match the pending proposal.
     pub fn accept_revenue_pool(env: Env) -> Result<(), VaultError> {
         let pending: Option<Address> = env
             .storage()
@@ -1171,22 +1544,30 @@ impl CalloraVault {
             Some(addr) => {
                 addr.require_auth();
                 let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
-                env.storage().instance().set(&StorageKey::RevenuePool, &addr);
-                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
-                env.events().publish(
-                    (events::event_revenue_pool_accepted(&env), old, addr),
-                    (),
-                );
+                env.storage()
+                    .instance()
+                    .set(&StorageKey::RevenuePool, &addr);
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::PendingRevenuePool);
+                env.events()
+                    .publish((events::event_revenue_pool_accepted(&env), old, addr), ());
             }
             None => {
-                // Proposal to clear the revenue pool — no auth required beyond checking
+                // Proposal to clear the revenue pool â€” no auth required beyond checking
                 // that the pending is None (i.e., the owner proposed clearing it).
                 // The owner already authenticated when proposing.
                 let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
                 env.storage().instance().remove(&StorageKey::RevenuePool);
-                env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::PendingRevenuePool);
                 env.events().publish(
-                    (events::event_revenue_pool_accepted(&env), old, None::<Address>),
+                    (
+                        events::event_revenue_pool_accepted(&env),
+                        old,
+                        None::<Address>,
+                    ),
                     (),
                 );
             }
@@ -1199,8 +1580,8 @@ impl CalloraVault {
     /// Removes the pending proposal without applying it.
     ///
     /// # Errors
-    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
-    /// - `VaultError::Unauthorized` — caller is not the owner.
+    /// - `VaultError::NoRevenuePoolTransferPending` â€” no proposal is pending.
+    /// - `VaultError::Unauthorized` â€” caller is not the owner.
     pub fn cancel_revenue_pool(env: Env) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
@@ -1209,9 +1590,15 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::PendingRevenuePool)
             .ok_or(VaultError::NoRevenuePoolTransferPending)?;
-        env.storage().instance().remove(&StorageKey::PendingRevenuePool);
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingRevenuePool);
         env.events().publish(
-            (events::event_revenue_pool_cancelled(&env), meta.owner, pending),
+            (
+                events::event_revenue_pool_cancelled(&env),
+                meta.owner,
+                pending,
+            ),
             (),
         );
         Ok(())
@@ -1241,7 +1628,7 @@ impl CalloraVault {
     }
 
     /// Validate that a vault input string is non-empty, contains no control
-    /// characters (0x00–0x1F, 0x7F), and has no leading/trailing whitespace.
+    /// characters (0x00â€“0x1F, 0x7F), and has no leading/trailing whitespace.
     #[inline(never)]
     fn validate_vault_input(s: &String) -> Result<(), ()> {
         let len = s.len();
@@ -1362,9 +1749,10 @@ impl CalloraVault {
                 if let Some(price_str) = Self::get_price(env.clone(), offering_id.clone()) {
                     let mut buffer = [0u8; 64];
                     price_str.copy_into_slice(&mut buffer);
-                    if let Some(price_i128) = core::str::from_utf8(&buffer[..price_str.len() as usize])
-                        .ok()
-                        .and_then(|s| s.parse().ok())
+                    if let Some(price_i128) =
+                        core::str::from_utf8(&buffer[..price_str.len() as usize])
+                            .ok()
+                            .and_then(|s| s.parse().ok())
                     {
                         result.push_back((offering_id.clone(), price_i128));
                     }
@@ -1385,10 +1773,8 @@ impl CalloraVault {
             .instance()
             .remove(&StorageKey::Price(offering_id.clone()));
         Self::remove_offering_index(&env, &offering_id);
-        env.events().publish(
-            (events::event_price_removed(&env), caller, offering_id),
-            (),
-        );
+        env.events()
+            .publish((events::event_price_removed(&env), caller, offering_id), ());
         Ok(())
     }
 
@@ -1427,8 +1813,8 @@ impl CalloraVault {
     /// Silently succeeds if the key does not exist (idempotent).
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the vault owner.
-    /// - `VaultError::OfferingIdTooLong` — `offering_id` exceeds `MAX_OFFERING_ID_LEN`.
+    /// - `VaultError::Unauthorized` â€” caller is not the vault owner.
+    /// - `VaultError::OfferingIdTooLong` â€” `offering_id` exceeds `MAX_OFFERING_ID_LEN`.
     pub fn remove_metadata(
         env: Env,
         caller: Address,
@@ -1455,11 +1841,11 @@ impl CalloraVault {
     /// the current contract WASM to `new_wasm_hash` and persist the version marker.
     ///
     /// # Parameters
-    /// - `caller` — must be the vault admin; signature required.
-    /// - `new_wasm_hash` — 32-byte hash of the new WASM code to deploy.
+    /// - `caller` â€” must be the vault admin; signature required.
+    /// - `new_wasm_hash` â€” 32-byte hash of the new WASM code to deploy.
     ///
     /// # Panics
-    /// - `"unauthorized: caller is not admin"` — `caller` is not the admin.
+    /// - `"unauthorized: caller is not admin"` â€” `caller` is not the admin.
     ///
     /// # Events
     /// Emits an `upgraded` event with the admin as topic and the new WASM hash as data.
@@ -1468,7 +1854,12 @@ impl CalloraVault {
     /// After calling `upgrade`, you may need to invoke a separate `migrate` function
     /// (if implemented in the new WASM) to update storage schema or perform data migrations.
     /// See UPGRADE.md for the complete operational flow.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
+    pub fn broadcast(
+        env: Env,
+        caller: Address,
+        severity: Severity,
+        message: String,
+    ) -> Result<(), VaultError> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
@@ -1511,15 +1902,17 @@ impl CalloraVault {
     ///
     /// Returns `None` if no upgrade has been performed yet (initial deployment).
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::ContractVersion)
+        env.storage().instance().get(&StorageKey::ContractVersion)
     }
 
     /// Garbage-collect processed request markers from persistent storage.
     /// Only the owner can call this.
     /// Emits a `request_id_pruned` event for each removed ID.
-    pub fn prune_processed_requests(env: Env, caller: Address, ids: Vec<Symbol>) -> Result<(), VaultError> {
+    pub fn prune_processed_requests(
+        env: Env,
+        caller: Address,
+        ids: Vec<Symbol>,
+    ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
 
@@ -1527,8 +1920,10 @@ impl CalloraVault {
             let key = StorageKey::ProcessedRequest(id.clone());
             if env.storage().persistent().has(&key) {
                 env.storage().persistent().remove(&key);
-                env.events()
-                    .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
+                env.events().publish(
+                    (events::event_request_id_pruned(&env), caller.clone()),
+                    id.clone(),
+                );
             }
         }
 
@@ -1573,9 +1968,11 @@ impl CalloraVault {
     fn mark_request_processed(env: &Env, request_id: &Symbol) {
         let key = StorageKey::ProcessedRequest(request_id.clone());
         env.storage().persistent().set(&key, &true);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            REQUEST_ID_BUMP_THRESHOLD,
+            REQUEST_ID_BUMP_AMOUNT,
+        );
     }
 
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
@@ -1610,43 +2007,9 @@ impl CalloraVault {
         }
         Ok(())
     }
-
-    /// Broadcast an emergency message from the admin.
-    ///
-    /// Only the current admin may call this function.
-    /// The message length is capped at 256 characters.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin; must authorize.
-    /// * `severity` - Severity level of the broadcast (Info/Warn/Crit).
-    /// * `message` - The broadcast message, capped at 256 characters.
-    ///
-    /// # Errors
-    /// * `VaultError::Unauthorized` - If the caller is not the current admin.
-    /// * `VaultError::MetadataTooLong` - If the message length exceeds 256 characters.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) -> Result<(), VaultError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
-        if caller != admin {
-            return Err(VaultError::Unauthorized);
-        }
-        let len = message.len();
-        if len == 0 {
-            return Err(VaultError::MetadataTooLong); // Reusing existing error for message too long/empty
-        }
-        if len > MAX_MESSAGE_LEN {
-            return Err(VaultError::MetadataTooLong);
-        }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
-        Ok(())
-    }
 }
 
-// Allowlist aliases — convenience wrappers used by tests and external callers.
+// Allowlist aliases â€” convenience wrappers used by tests and external callers.
 #[contractimpl]
 impl CalloraVault {
     pub fn add_address(env: Env, caller: Address, depositor: Address) -> Result<(), VaultError> {
@@ -1687,6 +2050,7 @@ impl CalloraVault {
     }
 }
 
+mod cold_storage;
 mod events;
 
 // ---------------------------------------------------------------------------
