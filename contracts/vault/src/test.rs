@@ -872,6 +872,49 @@ fn pause_emits_event() {
     assert_eq!(admin_topic, owner);
 }
 
+#[test]
+fn nuclear_pause_requires_current_admin_and_sets_pause() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let intruder = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.set_admin(&owner, &admin);
+    client.accept_admin();
+    assert_eq!(client.get_admin(), admin);
+
+    let intruder_res = client.try_nuclear_pause(&intruder);
+    assert!(intruder_res.is_err(), "intruder cannot nuclear-pause");
+
+    let owner_res = client.try_nuclear_pause(&owner);
+    assert!(
+        owner_res.is_err(),
+        "owner fallback is not accepted for the admin/multisig nuclear pause"
+    );
+
+    client.nuclear_pause(&admin);
+    assert!(client.is_paused());
+}
+
+#[test]
+fn nuclear_pause_rejects_already_paused() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.nuclear_pause(&owner);
+
+    let res = client.try_nuclear_pause(&owner);
+    assert!(res.is_err(), "nuclear_pause must be idempotency-safe");
+}
+
 // ---------------------------------------------------------------------------
 // Deduct tests
 // ---------------------------------------------------------------------------
