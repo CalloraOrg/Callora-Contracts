@@ -11,6 +11,7 @@ members = [
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/helpers",
+    "contracts/revenue_pool/fuzz",
 ]
 default-members = [
     "contracts/vault",

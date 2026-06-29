@@ -1,0 +1,20 @@
+[package]
+name = "callora-revenue-pool-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "weighted_distribute"
+path = "targets/weighted_distribute.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+callora-revenue-pool = { path = ".." }
+soroban-sdk = { version = "22", features = ["testutils"] }
+
+[profile.release]
+panic = "abort"
+overflow-checks = true
