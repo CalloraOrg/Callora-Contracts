@@ -2,16 +2,21 @@ extern crate std;
 
 use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::token as token_mod;
+use soroban_sdk::{Address, Env, Symbol};
 
 fn create_token<'a>(
     env: &'a Env,
     admin: &Address,
-) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
+) -> (
+    Address,
+    token_mod::Client<'a>,
+    token_mod::StellarAssetClient<'a>,
+) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     let address = contract_address.address();
-    let client = token::Client::new(env, &address);
-    let admin_client = token::StellarAssetClient::new(env, &address);
+    let client = token_mod::Client::new(env, &address);
+    let admin_client = token_mod::StellarAssetClient::new(env, &address);
     (address, client, admin_client)
 }
 

@@ -37,7 +37,8 @@ use std::boxed::Box;
 
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env, Vec};
+use soroban_sdk::token as token_mod;
+use soroban_sdk::{Address, Env, Vec};
 
 use crate::{CalloraSettlement, CalloraSettlementClient};
 
@@ -181,12 +182,16 @@ fn make_usdc<'a>(
     env: &'a Env,
     mint_to: &Address,
     amount: i128,
-) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
+) -> (
+    Address,
+    token_mod::Client<'a>,
+    token_mod::StellarAssetClient<'a>,
+) {
     let admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
     let addr = ca.address();
-    let client = token::Client::new(env, &addr);
-    let sac = token::StellarAssetClient::new(env, &addr);
+    let client = token_mod::Client::new(env, &addr);
+    let sac = token_mod::StellarAssetClient::new(env, &addr);
     // Pre-fund the settlement contract so withdrawals can succeed.
     sac.mint(mint_to, &amount);
     (addr, client, sac)
@@ -196,10 +201,10 @@ fn setup_env() -> (
     &'static Env,
     Address, // contract address
     CalloraSettlementClient<'static>,
-    Address,                            // admin
-    Address,                            // vault
-    Address,                            // usdc token
-    token::StellarAssetClient<'static>, // usdc SAC (for minting)
+    Address,                                // admin
+    Address,                                // vault
+    Address,                                // usdc token
+    token_mod::StellarAssetClient<'static>, // usdc SAC (for minting)
 ) {
     // SAFETY: We immediately tie the 'static lifetime to `env` via Box::leak.
     // The Env is leaked so the client can borrow it for the duration of the test.
@@ -217,8 +222,8 @@ fn setup_env() -> (
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &usdc_addr);
 
-    let usdc_sac_static: token::StellarAssetClient<'static> =
-        token::StellarAssetClient::new(env, &usdc_addr);
+    let usdc_sac_static: token_mod::StellarAssetClient<'static> =
+        token_mod::StellarAssetClient::new(env, &usdc_addr);
 
     (
         &(*env).clone(),
@@ -308,7 +313,7 @@ fn run_trace(seed: u64) {
     let usdc_admin = Address::generate(env);
     let usdc_ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = usdc_ca.address();
-    let usdc_sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let usdc_sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     usdc_sac.mint(
         &contract,
         &(AMOUNT_CAP * TRACE_LENGTH as i128 * MAX_BATCH as i128 * 2),
@@ -458,7 +463,7 @@ fn test_invariant_pool_only() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
@@ -498,7 +503,7 @@ fn test_invariant_single_dev_full_withdraw() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &10_000);
 
     client.init(&admin, &vault);
@@ -550,7 +555,7 @@ fn test_invariant_batch_duplicate_dev() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
@@ -590,7 +595,7 @@ fn test_invariant_interleaved_dev_and_pool() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
