@@ -9,9 +9,6 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-extern crate alloc;
-
-use alloc::string::String;
 
 mod admin;
 mod errors;
