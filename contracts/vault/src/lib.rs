@@ -364,7 +364,7 @@ impl CalloraVault {
             if env.storage().persistent().has(&key) {
                 env.storage().persistent().remove(&key);
                 env.events()
-                    .publish((Symbol::new(&env, "request_id_pruned"), caller.clone()), id.clone());
+                    .publish((events::event_request_id_pruned(&env), caller.clone()), id.clone());
             }
         }
 
