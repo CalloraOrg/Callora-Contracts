@@ -4,7 +4,6 @@
   "description": "Advanced settlement contract with per-developer balance tracking. Receives USDC forwarded by the vault and credits either a shared global pool or an individual developer's balance.",
   "crate": "callora-settlement",
   "source": "contracts/settlement/src/lib.rs",
-
   "errors": {
     "description": "Typed error codes emitted via env.panic_with_error(). Callers and indexers match on the u32 code rather than parsing raw strings.",
     "variants": [
@@ -27,7 +26,6 @@
       { "code": 17, "name": "ClaimWindowClosed",            "when": "A developer attempts to claim outside their configured claim window." }
     ]
   },
-
   "types": {
     "DeveloperBalance": {
       "description": "Snapshot of a single developer's tracked balance.",
@@ -102,7 +100,10 @@
           "type": "Address",
           "description": "Developer address that was credited."
         },
-        "amount": { "type": "i128", "description": "Amount credited." },
+        "amount": {
+          "type": "i128",
+          "description": "Amount credited."
+        },
         "new_balance": {
           "type": "i128",
           "description": "Developer's balance after crediting."
@@ -126,7 +127,6 @@
       }
     }
   },
-
   "functions": [
     {
       "name": "init",
@@ -156,7 +156,6 @@
       ],
       "events": []
     },
-
     {
       "name": "receive_payment",
       "description": "Receive a payment from the vault and credit the global pool or a specific developer. The caller must be the registered vault or the admin.",
@@ -194,7 +193,11 @@
           "name": "Unauthorized",
           "when": "Caller is neither the vault nor the admin."
         },
-        { "code": 4, "name": "AmountNotPositive", "when": "amount <= 0." },
+        {
+          "code": 4,
+          "name": "AmountNotPositive",
+          "when": "amount <= 0."
+        },
         {
           "code": 5,
           "name": "DeveloperRequired",
@@ -219,17 +222,22 @@
       "events": [
         {
           "always": true,
-          "topics": ["\"payment_received\"", "caller"],
+          "topics": [
+            "\"payment_received\"",
+            "caller"
+          ],
           "data": "PaymentReceivedEvent"
         },
         {
           "condition": "to_pool=false",
-          "topics": ["\"balance_credited\"", "developer"],
+          "topics": [
+            "\"balance_credited\"",
+            "developer"
+          ],
           "data": "BalanceCreditedEvent"
         }
       ]
     },
-
     {
       "name": "get_developer_balance",
       "description": "Return the tracked USDC balance for a developer. Returns 0 if the developer has never received a payment.",
@@ -244,11 +252,14 @@
       ],
       "returns": "i128",
       "errors": [
-        { "code": 1, "name": "NotInitialized", "when": "Called before init." }
+        {
+          "code": 1,
+          "name": "NotInitialized",
+          "when": "Called before init."
+        }
       ],
       "events": []
     },
-
     {
       "name": "withdraw_developer_balance",
       "description": "Developer-authorized claim of accrued balance. If a claim window is configured for the developer, the current ledger timestamp must be within the inclusive [start_ts, end_ts] range.",
@@ -324,7 +335,7 @@
 
     {
       "name": "get_all_developer_balances",
-      "description": "Return a list of all developer balances. Admin only. Rejects the call with GasExhaustionRisk when the developer index exceeds 100 entries — use get_developer_balances_cursor for larger sets. The index is maintained in deterministic ascending order by address bytes.",
+      "description": "Return a list of all developer balances. Admin only. Rejects the call with GasExhaustionRisk when the developer index exceeds 100 entries \u2014 use get_developer_balances_cursor for larger sets. The index is maintained in deterministic ascending order by address bytes.",
       "access": "admin",
       "params": [
         {
@@ -342,7 +353,6 @@
       ],
       "events": []
     },
-
     {
       "name": "get_developer_balances_cursor",
       "description": "Cursor-based paginated developer balances (admin only). Returns up to `limit` DeveloperBalance records starting after the supplied `cursor` address (exclusive), or from the beginning of the sorted index when `cursor` is null. The DeveloperIndex is maintained in deterministic ascending order by address bytes, so pages are stable across interleaved receive_payment calls for developers that sort after the cursor. The limit is capped at 100 (MAX_DEVELOPER_BALANCES_PAGE_SIZE).",
@@ -372,7 +382,11 @@
         "description": "A tuple of (page, next_cursor). `page` contains up to `limit` DeveloperBalance records. `next_cursor` is the address of the last record on the page when more records may exist, or null when this is the final page."
       },
       "errors": [
-        { "code": 1, "name": "NotInitialized", "when": "Called before init." },
+        {
+          "code": 1,
+          "name": "NotInitialized",
+          "when": "Called before init."
+        },
         {
           "code": 3,
           "name": "Unauthorized",
@@ -387,7 +401,6 @@
         "A cursor pointing past the last entry returns an empty page and null next_cursor."
       ]
     },
-
     {
       "name": "get_global_pool",
       "description": "Return the global pool state (total balance and timestamp of last update).",
@@ -395,11 +408,14 @@
       "params": [],
       "returns": "GlobalPool",
       "errors": [
-        { "code": 1, "name": "NotInitialized", "when": "Called before init." }
+        {
+          "code": 1,
+          "name": "NotInitialized",
+          "when": "Called before init."
+        }
       ],
       "events": []
     },
-
     {
       "name": "get_admin",
       "description": "Return the current admin address.",
@@ -407,11 +423,14 @@
       "params": [],
       "returns": "Address",
       "errors": [
-        { "code": 1, "name": "NotInitialized", "when": "Called before init." }
+        {
+          "code": 1,
+          "name": "NotInitialized",
+          "when": "Called before init."
+        }
       ],
       "events": []
     },
-
     {
       "name": "get_pending_admin",
       "description": "Return the pending admin address, or null if no two-step transfer is in progress. Integrators can poll this to detect an in-flight admin handover before accept_admin is called.",
@@ -421,7 +440,6 @@
       "panics": [],
       "events": []
     },
-
     {
       "name": "get_vault",
       "description": "Return the registered vault contract address.",
@@ -429,11 +447,14 @@
       "params": [],
       "returns": "Address",
       "errors": [
-        { "code": 1, "name": "NotInitialized", "when": "Called before init." }
+        {
+          "code": 1,
+          "name": "NotInitialized",
+          "when": "Called before init."
+        }
       ],
       "events": []
     },
-
     {
       "name": "set_admin",
       "description": "Nominate a new admin. The nominee must call accept_admin to finalize.",
@@ -462,12 +483,15 @@
       ],
       "events": [
         {
-          "topics": ["\"admin_nominated\"", "current_admin", "new_admin"],
+          "topics": [
+            "\"admin_nominated\"",
+            "current_admin",
+            "new_admin"
+          ],
           "data": "void"
         }
       ]
     },
-
     {
       "name": "accept_admin",
       "description": "Finalize the admin transfer. Must be called by the pending admin.",
@@ -475,16 +499,19 @@
       "params": [],
       "returns": "void",
       "panics": [
-        "\"no admin transfer pending\" — set_admin was not called first."
+        "\"no admin transfer pending\" \u2014 set_admin was not called first."
       ],
       "events": [
         {
-          "topics": ["\"admin_accepted\"", "old_admin", "new_admin"],
+          "topics": [
+            "\"admin_accepted\"",
+            "old_admin",
+            "new_admin"
+          ],
           "data": "void"
         }
       ]
     },
-
     {
       "name": "propose_balance_migration",
       "description": "Snapshot a developer balance and begin the fixed 24-hour migration timelock. Re-proposal replaces the prior target and restarts the delay.",
@@ -542,6 +569,14 @@
           "when": "Caller is not the current admin."
         }
       ],
+      "events": []
+    },
+    {
+      "name": "get_total_received",
+      "description": "Return the cumulative total of all funds received via receive_payment and batch_receive_payment. Returns 0 before any payments. Incremented using overflow-safe checked_add.",
+      "access": "any",
+      "params": [],
+      "returns": "i128 \u2014 cumulative received total",
       "events": []
     }
   ]

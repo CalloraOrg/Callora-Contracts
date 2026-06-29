@@ -260,6 +260,15 @@ impl CalloraSettlement {
                 },
             );
         }
+        // Increment cumulative received total regardless of routing (pool or developer).
+        let inst = env.storage().instance();
+        let prev: i128 = inst.get(&StorageKey::TotalReceived).unwrap_or(0i128);
+        inst.set(
+            &StorageKey::TotalReceived,
+            &prev
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow)),
+        );
     }
 
     /// Atomically credit multiple developer balances in a single call.
@@ -343,6 +352,18 @@ impl CalloraSettlement {
                 },
             );
         }
+        // Increment cumulative received total by the batch sum.
+        let batch_total: i128 = items.iter().map(|(_, a)| a).fold(0i128, |acc, a| {
+            acc.checked_add(a)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow))
+        });
+        let prev: i128 = inst.get(&StorageKey::TotalReceived).unwrap_or(0i128);
+        inst.set(
+            &StorageKey::TotalReceived,
+            &prev
+                .checked_add(batch_total)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow)),
+        );
     }
 
     /// Get current admin address
