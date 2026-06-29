@@ -385,11 +385,54 @@ mod test {
     fn test_cei_order_preservation() {
         assert_eq!(1 + 1, 2);
     }
+
+    /// Set or update the reserve cap for a token (owner only).
+    ///
+    /// The reserve cap is the maximum total balance the vault may hold for
+    /// `token`.  Any `deposit` call that would push the balance beyond `cap`
+    /// is rejected with [`VaultError::ExceedsReserveCap`].
+    ///
+    /// Pass `i128::MAX` to remove the effective cap (restore unlimited deposits).
+    ///
+    /// # Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `token` — token contract address the cap applies to.
+    /// - `cap` — maximum balance in token stroops; must be > 0.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the owner.
+    /// - [`VaultError::AmountNotPositive`] — `cap <= 0`.
+    pub fn set_reserve_cap(
+        env: Env,
+        caller: Address,
+        token: Address,
+        cap: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if cap <= 0 {
+            return Err(VaultError::AmountNotPositive);
+        }
+        let prev = limits::set(&env, &token, cap);
+        env.events().publish(
+            (events::event_reserve_cap_set(&env), caller, token),
+            (prev, cap),
+        );
+        Ok(())
+    }
+
+    /// Return the reserve cap for `token`.
+    ///
+    /// Returns `i128::MAX` when no cap has been configured (effectively unlimited).
+    pub fn get_reserve_cap(env: Env, token: Address) -> i128 {
+        limits::get(&env, &token)
+    }
 }
 
 mod events;
 pub mod capabilities;
 pub mod rate_limit;
+pub mod limits;
 
 // ---------------------------------------------------------------------------
 // Test modules
