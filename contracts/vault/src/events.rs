@@ -285,6 +285,13 @@ mod tests {
     }
 
     #[test]
+    fn test_event_rescue_funds_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_rescue_funds(&env);
+        assert_eq!(sym, Symbol::new(&env, "rescue_funds"));
+    }
+
+    #[test]
     fn test_event_admin_cancelled_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_cancelled(&env);
