@@ -118,4 +118,6 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Invalid argument supplied (e.g. fee_bps > 10_000) (code 37).
+    InvalidArgument = 37,
 }

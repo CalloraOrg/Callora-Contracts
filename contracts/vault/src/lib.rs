@@ -204,6 +204,9 @@ pub enum StorageKey {
     DeveloperConfig(Address),
     /// Current rate limit state for a developer.
     DeveloperState(Address),
+    /// Per-token deposit fee in basis points (1 bps = 0.01%).
+    /// Key is the token contract address; value is `u16`.
+    TokenDepositFeeBps(Address),
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -758,6 +761,37 @@ impl CalloraVault {
         env.events()
             .publish((events::event_vault_unpaused(&env), caller), ());
         Ok(())
+    }
+
+    /// Set a per-token deposit fee in basis points for a given token.
+    /// Only the owner may call this. Fee must be <= 10_000 (100%).
+    pub fn set_token_deposit_fee_bps(
+        env: Env,
+        caller: Address,
+        token: Address,
+        fee_bps: u16,
+    ) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        if caller != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        caller.require_auth();
+        if fee_bps > 10_000 {
+            return Err(VaultError::InvalidArgument);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::TokenDepositFeeBps(token), &fee_bps);
+        Ok(())
+    }
+
+    /// Get the per-token deposit fee in basis points for a given token.
+    /// Returns 0 if no fee has been set for the token.
+    pub fn get_token_deposit_fee_bps(env: Env, token: Address) -> u16 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::TokenDepositFeeBps(token))
+            .unwrap_or(0u16)
     }
 
     /// Deposit USDC into the vault.
