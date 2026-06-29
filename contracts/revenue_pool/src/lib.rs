@@ -1,8 +1,5 @@
 #![no_std]
-<<<<<<< Updated upstream
-=======
 #![warn(missing_docs)]
->>>>>>> Stashed changes
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
