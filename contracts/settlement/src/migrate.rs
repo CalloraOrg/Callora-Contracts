@@ -242,6 +242,21 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
     }
 }
 
+/// Migrate a single developer's V1 balance to V2 (admin only).
+pub fn migrate_single_developer(
+    env: &Env,
+    caller: &Address,
+    developer: &Address,
+) -> Result<(), crate::SettlementError> {
+    require_admin(env, caller);
+    let inst = env.storage().instance();
+    let usdc_token: Address = inst
+        .get(&crate::StorageKey::Usdc)
+        .ok_or(crate::SettlementError::UsdcTokenNotConfigured)?;
+    migrate_developer_slot(env, developer, &usdc_token);
+    Ok(())
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

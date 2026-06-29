@@ -2,16 +2,17 @@ extern crate std;
 
 use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::token as token_mod;
 
 fn create_token<'a>(
     env: &'a Env,
     admin: &Address,
-) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
+) -> (Address, token_mod::Client<'a>, token_mod::StellarAssetClient<'a>) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     let address = contract_address.address();
-    let client = token::Client::new(env, &address);
-    let admin_client = token::StellarAssetClient::new(env, &address);
+    let client = token_mod::Client::new(env, &address);
+    let admin_client = token_mod::StellarAssetClient::new(env, &address);
     (address, client, admin_client)
 }
 
@@ -128,8 +129,7 @@ fn test_withdraw_asserts_token() {
         &developer,
         &200i128,
         &Some(recipient.clone()),
-        &token_a,
-    );
+            );
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_a), 300i128);
     assert_eq!(token_b_client.balance(&recipient), 0i128); // token_b not touched
@@ -139,8 +139,7 @@ fn test_withdraw_asserts_token() {
         &developer,
         &100i128,
         &Some(recipient.clone()),
-        &token_b,
-    );
+            );
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_b), 200i128);
 
@@ -151,8 +150,7 @@ fn test_withdraw_asserts_token() {
         &developer,
         &300i128,
         &Some(recipient.clone()),
-        &token_b,
-    );
+            );
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_b
 
     // Cannot withdraw token_b balance when passing token_a (301 > token_a's 300 balance)
@@ -160,8 +158,7 @@ fn test_withdraw_asserts_token() {
         &developer,
         &301i128,
         &Some(recipient.clone()),
-        &token_a,
-    );
+            );
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_a
 }
 
@@ -200,7 +197,7 @@ fn test_migrate_developer_balance() {
     );
 
     // Run migration
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_single_dev_v2(&admin, &developer);
     assert!(result.is_ok(), "migration should succeed");
 
     // After migration, new per-token read returns the migrated value
@@ -251,13 +248,13 @@ fn test_migrate_developer_balance_idempotent() {
 
     // First migration
     assert!(client
-        .try_migrate_developer_balance(&admin, &developer)
+        .try_migrate_single_dev_v2(&admin, &developer)
         .is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 
     // Second migration — idempotent, no error, balance unchanged
     assert!(client
-        .try_migrate_developer_balance(&admin, &developer)
+        .try_migrate_single_dev_v2(&admin, &developer)
         .is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 }
@@ -282,7 +279,7 @@ fn test_migrate_developer_balance_unauthorized() {
 
     // Non-admin tries to migrate
     let attacker = Address::generate(&env);
-    let result = client.try_migrate_developer_balance(&attacker, &developer);
+    let result = client.try_migrate_single_dev_v2(&attacker, &developer);
     assert!(result.is_err());
 }
 
@@ -302,7 +299,7 @@ fn test_migrate_developer_balance_no_usdc() {
     client.init(&admin, &vault);
     // Do NOT set USDC token
 
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_single_dev_v2(&admin, &developer);
     assert!(result.is_err());
 }
 
