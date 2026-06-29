@@ -101,7 +101,10 @@ use soroban_sdk::{vec, Env, Symbol};
 /// every checkpoint computes the conservation invariant identically.
 fn settlement_total(h: &Harness, devs: &[soroban_sdk::Address]) -> i128 {
     let pool = h.settlement.get_global_pool().total_balance;
-    let dev_sum: i128 = devs.iter().map(|d| h.settlement.get_developer_balance(d, &h.usdc_id)).sum();
+    let dev_sum: i128 = devs
+        .iter()
+        .map(|d| h.settlement.get_developer_balance(d, &h.usdc_id))
+        .sum();
     pool + dev_sum
 }
 
@@ -112,7 +115,11 @@ fn settlement_total(h: &Harness, devs: &[soroban_sdk::Address]) -> i128 {
 /// `extra_wallets` should list every address (besides `owner`) that might
 /// hold USDC at the time of the check — e.g. developer wallets after a
 /// withdraw or distribute.
-fn assert_conserved(h: &Harness, devs: &[soroban_sdk::Address], extra_wallets: &[soroban_sdk::Address]) {
+fn assert_conserved(
+    h: &Harness,
+    devs: &[soroban_sdk::Address],
+    extra_wallets: &[soroban_sdk::Address],
+) {
     let vault_bal = h.vault.balance();
     let settlement_bal = settlement_total(h, devs);
     let revenue_pool_bal = h.revenue_pool.balance();
@@ -219,10 +226,18 @@ fn e2e_full_cycle() {
     // permits (caller may be "the registered vault OR admin").
     // ------------------------------------------------------------------
     let dev_a_credit: i128 = 4_000_000;
-    h.settlement
-        .receive_payment(&h.owner, &dev_a_credit, &false, &Some(h.dev_a.clone()), &h.usdc_id);
+    h.settlement.receive_payment(
+        &h.owner,
+        &dev_a_credit,
+        &false,
+        &Some(h.dev_a.clone()),
+        &h.usdc_id,
+    );
 
-    assert_eq!(h.settlement.get_developer_balance(&h.dev_a, &h.usdc_id), dev_a_credit);
+    assert_eq!(
+        h.settlement.get_developer_balance(&h.dev_a, &h.usdc_id),
+        dev_a_credit
+    );
     assert_eq!(
         h.settlement.get_global_pool().total_balance,
         total_deducted,
@@ -259,17 +274,16 @@ fn e2e_full_cycle() {
     h.usdc.transfer(&h.owner, &h.vault_id, &surplus);
 
     let sweep_amount: i128 = 3_000_000;
-    h.vault.distribute(&h.owner, &h.revenue_pool_id, &sweep_amount);
+    h.vault
+        .distribute(&h.owner, &h.revenue_pool_id, &sweep_amount);
 
     assert_eq!(h.revenue_pool.balance(), sweep_amount);
     assert_conserved(&h, &devs, &[h.dev_a.clone(), h.dev_b.clone()]);
 
     // Admin pays dev_b out of the revenue pool via batch_distribute.
     let dev_b_payment: i128 = 2_000_000;
-    h.revenue_pool.batch_distribute(
-        &h.owner,
-        &vec![&env, (h.dev_b.clone(), dev_b_payment)],
-    );
+    h.revenue_pool
+        .batch_distribute(&h.owner, &vec![&env, (h.dev_b.clone(), dev_b_payment)]);
 
     assert_eq!(h.usdc.balance(&h.dev_b), dev_b_payment);
     assert_eq!(h.revenue_pool.balance(), sweep_amount - dev_b_payment);
@@ -286,10 +300,16 @@ fn e2e_full_cycle() {
     assert!(h.vault.is_paused());
 
     let blocked_deposit = h.vault.try_deposit(&h.owner, &1_000);
-    assert!(blocked_deposit.is_err(), "deposit must be blocked while paused");
+    assert!(
+        blocked_deposit.is_err(),
+        "deposit must be blocked while paused"
+    );
 
-    let blocked_deduct = h.vault.try_deduct(&h.backend, &1_000,  &None, &u16::MAX);
-    assert!(blocked_deduct.is_err(), "deduct must be blocked while paused");
+    let blocked_deduct = h.vault.try_deduct(&h.backend, &1_000, &None, &u16::MAX);
+    assert!(
+        blocked_deduct.is_err(),
+        "deduct must be blocked while paused"
+    );
 
     // Owner withdraw is explicitly allowed while paused (emergency recovery).
     let pre_pause_vault_balance = h.vault.balance();
@@ -338,7 +358,9 @@ fn e2e_full_cycle() {
         (h.dev_a.clone(), pre_failure_pool_balance), // alone would succeed
         (h.dev_b.clone(), pre_failure_pool_balance), // pushes total over balance
     ];
-    let failure = h.revenue_pool.try_batch_distribute(&h.owner, &oversized_batch);
+    let failure = h
+        .revenue_pool
+        .try_batch_distribute(&h.owner, &oversized_batch);
     assert!(
         failure.is_err(),
         "batch_distribute must reject a batch whose total exceeds the pool's balance"
