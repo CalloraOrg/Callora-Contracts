@@ -1,5 +1,5 @@
-#![no_std]
-/// # Callora Vault Contract — deposit/withdraw/deduct/distribute with pause circuit-breaker.
+﻿#![no_std]
+/// # Callora Vault Contract â€” deposit/withdraw/deduct/distribute with pause circuit-breaker.
 ///
 /// ## Pause Circuit Breaker
 ///
@@ -97,7 +97,7 @@ pub enum VaultError {
     OfferingIdTooLong = 26,
     /// Metadata exceeds maximum length (code 27).
     MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
+    /// Price parsing error or nonâ€‘positive price (code 28).
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
     DuplicateRequestId = 29,
@@ -166,8 +166,8 @@ pub enum Severity {
 
 /// Routing destination for `sweep_idle_balance`.
 ///
-/// - `Settlement` — transfer to the configured settlement contract address.
-/// - `RevenuePool` — transfer to the configured revenue pool address.
+/// - `Settlement` â€” transfer to the configured settlement contract address.
+/// - `RevenuePool` â€” transfer to the configured revenue pool address.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SweepDestination {
@@ -260,28 +260,28 @@ impl CalloraVault {
     /// Initialize the vault. Exactly-once; returns error if called again.
     ///
     /// # Parameters
-    /// - `owner` — vault owner; must sign the transaction.
-    /// - `usdc_token` — USDC token contract address; must not be the vault itself.
-    /// - `initial_balance` — optional starting balance (defaults to 0). The vault
+    /// - `owner` â€” vault owner; must sign the transaction.
+    /// - `usdc_token` â€” USDC token contract address; must not be the vault itself.
+    /// - `initial_balance` â€” optional starting balance (defaults to 0). The vault
     ///   must already hold at least this many USDC stroops on-ledger.
-    /// - `authorized_caller` — optional address permitted to call `deduct`/`batch_deduct`.
+    /// - `authorized_caller` â€” optional address permitted to call `deduct`/`batch_deduct`.
     ///   Must not be the vault address.
-    /// - `min_deposit` — minimum deposit amount (defaults to 1, must be > 0).
-    /// - `revenue_pool` — optional revenue pool address; informational only.
+    /// - `min_deposit` â€” minimum deposit amount (defaults to 1, must be > 0).
+    /// - `revenue_pool` â€” optional revenue pool address; informational only.
     ///   Must not be the vault address.
-    /// - `max_deduct` — maximum single deduction (defaults to `i128::MAX`, must be > 0).
+    /// - `max_deduct` â€” maximum single deduction (defaults to `i128::MAX`, must be > 0).
     ///   Must be >= `min_deposit`.
     ///
     /// # Errors
-    /// - `VaultError::AlreadyInitialized` — called more than once.
-    /// - `VaultError::UsdcTokenCannotBeVault` — self-referential token.
-    /// - `VaultError::RevenuePoolCannotBeVault` — self-referential pool.
-    /// - `VaultError::AuthorizedCallerCannotBeVault` — self-referential caller.
-    /// - `VaultError::InitialBalanceNegative` — negative initial balance.
-    /// - `VaultError::MinDepositNotPositive` — `min_deposit <= 0`.
-    /// - `VaultError::MaxDeductNotPositive` — `max_deduct <= 0`.
-    /// - `VaultError::MinDepositExceedsMaxDeduct` — constraint violation.
-    /// - `VaultError::InitialBalanceExceedsOnLedger` — vault underfunded.
+    /// - `VaultError::AlreadyInitialized` â€” called more than once.
+    /// - `VaultError::UsdcTokenCannotBeVault` â€” self-referential token.
+    /// - `VaultError::RevenuePoolCannotBeVault` â€” self-referential pool.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` â€” self-referential caller.
+    /// - `VaultError::InitialBalanceNegative` â€” negative initial balance.
+    /// - `VaultError::MinDepositNotPositive` â€” `min_deposit <= 0`.
+    /// - `VaultError::MaxDeductNotPositive` â€” `max_deduct <= 0`.
+    /// - `VaultError::MinDepositExceedsMaxDeduct` â€” constraint violation.
+    /// - `VaultError::InitialBalanceExceedsOnLedger` â€” vault underfunded.
     #[allow(clippy::too_many_arguments)]
     pub fn init(
         env: Env,
@@ -353,7 +353,7 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
-    // View functions — no TTL bump (read-only, zero write cost)
+    // View functions â€” no TTL bump (read-only, zero write cost)
     // -----------------------------------------------------------------------
 
     /// Return full vault state. Returns error if vault is not initialized.
@@ -528,7 +528,7 @@ impl CalloraVault {
     /// Return the remaining TTL for each storage key category.
     ///
     /// # Parameters
-    /// - `request_ids` — a list of processed request IDs to check.
+    /// - `request_ids` â€” a list of processed request IDs to check.
     pub fn get_storage_ttl(env: Env, request_ids: Vec<Symbol>) -> Vec<StorageEntryTtl> {
         let mut result = Vec::new(&env);
 
@@ -650,8 +650,8 @@ impl CalloraVault {
     /// indexers can detect gaps or replays.
     ///
     /// # Errors
-    /// - `VaultError::StaleNonce` — `expected_nonce` differs from the stored nonce.
-    /// - `VaultError::AuthorizedCallerCannotBeVault` — `new_caller` is the vault itself.
+    /// - `VaultError::StaleNonce` â€” `expected_nonce` differs from the stored nonce.
+    /// - `VaultError::AuthorizedCallerCannotBeVault` â€” `new_caller` is the vault itself.
     pub fn set_authorized_caller(
         env: Env,
         new_caller: Option<Address>,
@@ -776,18 +776,18 @@ impl CalloraVault {
     /// Deposit USDC into the vault.
     ///
     /// Follows the **Checks-Effects-Interactions** pattern:
-    /// 1. **Checks** — pause guard, auth, amount validation, depositor allowlist, minimum.
-    /// 2. **Effects** — compute new balance, persist updated `MetaKey` to storage.
-    /// 3. **Interaction** — transfer USDC from caller to vault.
+    /// 1. **Checks** â€” pause guard, auth, amount validation, depositor allowlist, minimum.
+    /// 2. **Effects** â€” compute new balance, persist updated `MetaKey` to storage.
+    /// 3. **Interaction** â€” transfer USDC from caller to vault.
     ///
     /// # CEI Rationale
     /// State is updated **before** the external token call so that a malicious or
     /// reentrant token contract cannot observe stale internal accounting. If the
-    /// transfer panics, Soroban atomically reverts the entire transaction —
-    /// including the already-persisted state write — leaving no inconsistent
+    /// transfer panics, Soroban atomically reverts the entire transaction â€”
+    /// including the already-persisted state write â€” leaving no inconsistent
     /// on-ledger state.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<i128, VaultError> {
-        // ── Checks ────────────────────────────────────────────────────────
+        // â”€â”€ Checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         Self::require_not_paused(env.clone())?;
         caller.require_auth();
         if amount <= 0 {
@@ -806,7 +806,7 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // ── Effects ───────────────────────────────────────────────────────
+        // â”€â”€ Effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         meta.balance = meta
             .balance
             .checked_add(amount)
@@ -820,9 +820,9 @@ impl CalloraVault {
             (amount, meta.balance),
         );
 
-        // ── Interaction ───────────────────────────────────────────────────
+        // â”€â”€ Interaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Transfer USDC from caller to vault. If this panics, the Soroban host
-        // reverts the entire transaction — the Effects above are atomically rolled
+        // reverts the entire transaction â€” the Effects above are atomically rolled
         // back, leaving no inconsistent state.
         token::Client::new(&env, &usdc_addr).transfer(
             &caller,
@@ -852,12 +852,12 @@ impl CalloraVault {
     /// `VaultError::Slippage` **before** any state is mutated.
     ///
     /// Pass `u16::MAX` (65535) to disable the guard and preserve the existing
-    /// unrestricted behaviour — this is the default for backward compatibility.
+    /// unrestricted behaviour â€” this is the default for backward compatibility.
     ///
     /// # Idempotency
     /// When `request_id` is `Some(id)`, the contract checks whether `id` has
     /// already been processed.  If so, `VaultError::DuplicateRequestId` is
-    /// returned immediately — no funds are moved.  On first success the marker
+    /// returned immediately â€” no funds are moved.  On first success the marker
     /// is persisted in persistent storage for `REQUEST_ID_BUMP_AMOUNT` ledgers.
     ///
     /// When `request_id` is `None`, no deduplication is performed.
@@ -884,7 +884,7 @@ impl CalloraVault {
         if amount > max_d {
             return Err(VaultError::ExceedsMaxDeduct);
         }
-        // Idempotency check — must happen before any state mutation.
+        // Idempotency check â€” must happen before any state mutation.
         if let Some(ref rid) = request_id {
             Self::require_not_duplicate(&env, rid)?;
         }
@@ -993,7 +993,7 @@ impl CalloraVault {
         let mut total: i128 = 0;
         // Collect ids seen within this batch to catch intra-batch duplicates.
         let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
-        // Full validation pass — no state writes yet.
+        // Full validation pass â€” no state writes yet.
         for item in items.iter() {
             if item.amount <= 0 {
                 return Err(VaultError::AmountNotPositive);
@@ -1004,7 +1004,7 @@ impl CalloraVault {
             if running < item.amount {
                 return Err(VaultError::InsufficientBalance);
             }
-            // Idempotency check per item — before any state mutation.
+            // Idempotency check per item â€” before any state mutation.
             // Also catches intra-batch duplicates (two items with the same new id).
             if let Some(ref rid) = item.request_id {
                 Self::require_not_duplicate(&env, rid)?;
@@ -1181,7 +1181,7 @@ impl CalloraVault {
     /// ## When to use
     /// Use `sweep_idle_balance` when the vault has accumulated more USDC than is
     /// needed for day-to-day operations and an operator wants to move that surplus
-    /// to a sibling contract for distribution or yield generation — without
+    /// to a sibling contract for distribution or yield generation â€” without
     /// triggering the full deduct pipeline.
     ///
     /// ## Pause Policy
@@ -1190,26 +1190,26 @@ impl CalloraVault {
     /// vault should also halt rebalancing flows.
     ///
     /// ## Checks-Effects-Interactions (CEI)
-    /// 1. **Checks** — pause guard, owner auth, amount validation, destination
+    /// 1. **Checks** â€” pause guard, owner auth, amount validation, destination
     ///    address resolved from storage (reverts if not configured).
-    /// 2. **Effects** — `meta.balance` decremented and persisted **before** the
+    /// 2. **Effects** â€” `meta.balance` decremented and persisted **before** the
     ///    external token transfer.  Soroban atomically reverts all writes on panic.
-    /// 3. **Interaction** — token transfer to the resolved destination address.
+    /// 3. **Interaction** â€” token transfer to the resolved destination address.
     ///
     /// # Parameters
-    /// - `owner` — vault owner; must sign the transaction.
-    /// - `to`    — destination: `SweepDestination::Settlement` or
+    /// - `owner` â€” vault owner; must sign the transaction.
+    /// - `to`    â€” destination: `SweepDestination::Settlement` or
     ///             `SweepDestination::RevenuePool`.
-    /// - `amount` — USDC amount to sweep (must be > 0 and ≤ tracked balance).
+    /// - `amount` â€” USDC amount to sweep (must be > 0 and â‰¤ tracked balance).
     ///
     /// # Errors
-    /// - `VaultError::Paused` — vault is currently paused.
-    /// - `VaultError::Unauthorized` — caller is not the vault owner.
-    /// - `VaultError::AmountNotPositive` — `amount <= 0`.
-    /// - `VaultError::InsufficientBalance` — `amount` exceeds tracked balance.
-    /// - `VaultError::SettlementNotSet` — destination is `Settlement` but no
+    /// - `VaultError::Paused` â€” vault is currently paused.
+    /// - `VaultError::Unauthorized` â€” caller is not the vault owner.
+    /// - `VaultError::AmountNotPositive` â€” `amount <= 0`.
+    /// - `VaultError::InsufficientBalance` â€” `amount` exceeds tracked balance.
+    /// - `VaultError::SettlementNotSet` â€” destination is `Settlement` but no
     ///   settlement address has been configured via `set_settlement`.
-    /// - `VaultError::RevenuePoolCannotBeVault` / `VaultError::NotInitialized` —
+    /// - `VaultError::RevenuePoolCannotBeVault` / `VaultError::NotInitialized` â€”
     ///   destination is `RevenuePool` but no revenue pool address is configured.
     pub fn sweep_idle_balance(
         env: Env,
@@ -1217,7 +1217,7 @@ impl CalloraVault {
         to: SweepDestination,
         amount: i128,
     ) -> Result<i128, VaultError> {
-        // ── Checks ────────────────────────────────────────────────────────
+        // â”€â”€ Checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         Self::require_not_paused(env.clone())?;
         owner.require_auth();
         let mut meta = Self::get_meta(env.clone())?;
@@ -1230,7 +1230,7 @@ impl CalloraVault {
         if meta.balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
-        // Resolve destination address — fail early if not configured.
+        // Resolve destination address â€” fail early if not configured.
         let dest_addr: Address = match &to {
             SweepDestination::Settlement => Self::require_settlement(&env)?,
             SweepDestination::RevenuePool => env
@@ -1245,7 +1245,7 @@ impl CalloraVault {
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // ── Effects ───────────────────────────────────────────────────────
+        // â”€â”€ Effects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         meta.balance = meta
             .balance
             .checked_sub(amount)
@@ -1259,9 +1259,9 @@ impl CalloraVault {
             (amount, meta.balance),
         );
 
-        // ── Interaction ───────────────────────────────────────────────────
+        // â”€â”€ Interaction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         // Transfer USDC from vault to destination. If this panics, Soroban
-        // atomically reverts the Effects above — no inconsistent state.
+        // atomically reverts the Effects above â€” no inconsistent state.
         Self::transfer_funds(&env, &usdc_addr, &dest_addr, amount);
 
         Ok(meta.balance)
@@ -1269,7 +1269,7 @@ impl CalloraVault {
 
     /// Distribute USDC from the vault to an arbitrary recipient (admin only).
     ///
-    /// This function moves **untracked on-ledger surplus** — it checks the actual
+    /// This function moves **untracked on-ledger surplus** â€” it checks the actual
     /// token balance, NOT `meta.balance`. Use this to recover funds that exist
     /// on-ledger but are not reflected in the vault's internal accounting.
     ///
@@ -1279,9 +1279,9 @@ impl CalloraVault {
     /// untracked surplus funds even during a circuit-breaker event.
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the admin.
-    /// - `VaultError::AmountNotPositive` — `amount <= 0`.
-    /// - `VaultError::InsufficientBalance` — vault lacks on-ledger USDC for transfer.
+    /// - `VaultError::Unauthorized` â€” caller is not the admin.
+    /// - `VaultError::AmountNotPositive` â€” `amount <= 0`.
+    /// - `VaultError::InsufficientBalance` â€” vault lacks on-ledger USDC for transfer.
     pub fn distribute(
         env: Env,
         caller: Address,
@@ -1319,9 +1319,9 @@ impl CalloraVault {
     /// If there is already a pending proposal, calling this function overwrites it.
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the owner.
-    /// - `VaultError::RevenuePoolCannotBeVault` — proposed address is the vault itself.
-    /// - `VaultError::NewRevenuePoolSameAsCurrent` — proposed address equals the current revenue pool.
+    /// - `VaultError::Unauthorized` â€” caller is not the owner.
+    /// - `VaultError::RevenuePoolCannotBeVault` â€” proposed address is the vault itself.
+    /// - `VaultError::NewRevenuePoolSameAsCurrent` â€” proposed address equals the current revenue pool.
     pub fn propose_revenue_pool(
         env: Env,
         new_pool: Option<Address>,
@@ -1354,8 +1354,8 @@ impl CalloraVault {
     /// and the pending state is cleared.
     ///
     /// # Errors
-    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
-    /// - `VaultError::Unauthorized` — caller does not match the pending proposal.
+    /// - `VaultError::NoRevenuePoolTransferPending` â€” no proposal is pending.
+    /// - `VaultError::Unauthorized` â€” caller does not match the pending proposal.
     pub fn accept_revenue_pool(env: Env) -> Result<(), VaultError> {
         let pending: Option<Address> = env
             .storage()
@@ -1374,7 +1374,7 @@ impl CalloraVault {
                 );
             }
             None => {
-                // Proposal to clear the revenue pool — no auth required beyond checking
+                // Proposal to clear the revenue pool â€” no auth required beyond checking
                 // that the pending is None (i.e., the owner proposed clearing it).
                 // The owner already authenticated when proposing.
                 let old: Option<Address> = env.storage().instance().get(&StorageKey::RevenuePool);
@@ -1394,8 +1394,8 @@ impl CalloraVault {
     /// Removes the pending proposal without applying it.
     ///
     /// # Errors
-    /// - `VaultError::NoRevenuePoolTransferPending` — no proposal is pending.
-    /// - `VaultError::Unauthorized` — caller is not the owner.
+    /// - `VaultError::NoRevenuePoolTransferPending` â€” no proposal is pending.
+    /// - `VaultError::Unauthorized` â€” caller is not the owner.
     pub fn cancel_revenue_pool(env: Env) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
         meta.owner.require_auth();
@@ -1625,8 +1625,8 @@ impl CalloraVault {
     /// Silently succeeds if the key does not exist (idempotent).
     ///
     /// # Errors
-    /// - `VaultError::Unauthorized` — caller is not the vault owner.
-    /// - `VaultError::OfferingIdTooLong` — `offering_id` exceeds `MAX_OFFERING_ID_LEN`.
+    /// - `VaultError::Unauthorized` â€” caller is not the vault owner.
+    /// - `VaultError::OfferingIdTooLong` â€” `offering_id` exceeds `MAX_OFFERING_ID_LEN`.
     pub fn remove_metadata(
         env: Env,
         caller: Address,
@@ -1653,11 +1653,11 @@ impl CalloraVault {
     /// the current contract WASM to `new_wasm_hash` and persist the version marker.
     ///
     /// # Parameters
-    /// - `caller` — must be the vault admin; signature required.
-    /// - `new_wasm_hash` — 32-byte hash of the new WASM code to deploy.
+    /// - `caller` â€” must be the vault admin; signature required.
+    /// - `new_wasm_hash` â€” 32-byte hash of the new WASM code to deploy.
     ///
     /// # Panics
-    /// - `"unauthorized: caller is not admin"` — `caller` is not the admin.
+    /// - `"unauthorized: caller is not admin"` â€” `caller` is not the admin.
     ///
     /// # Events
     /// Emits an `upgraded` event with the admin as topic and the new WASM hash as data.
@@ -1844,7 +1844,7 @@ impl CalloraVault {
     }
 }
 
-// Allowlist aliases — convenience wrappers used by tests and external callers.
+// Allowlist aliases â€” convenience wrappers used by tests and external callers.
 #[contractimpl]
 impl CalloraVault {
     pub fn add_address(env: Env, caller: Address, depositor: Address) -> Result<(), VaultError> {
@@ -1939,3 +1939,4 @@ mod test_balance_property;
 
 #[cfg(test)]
 mod test_rate_limit;
+
