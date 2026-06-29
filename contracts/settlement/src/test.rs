@@ -2323,7 +2323,8 @@ mod settlement_tests {
         usdc_admin_client.mint(&addr, &1000i128);
 
         // First withdrawal of 300 should succeed (under 500 cap)
-        let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
+        let result =
+            client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(result.is_ok());
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
@@ -2331,7 +2332,8 @@ mod settlement_tests {
         );
 
         // Second withdrawal of 300 would push total to 600 (over 500 cap)
-        let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
+        let result =
+            client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
@@ -2384,7 +2386,8 @@ mod settlement_tests {
         );
 
         // Fourth withdrawal of 1 would exceed cap
-        let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
+        let result =
+            client.try_withdraw_developer_balance(&developer, &1i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
     }
 
@@ -2488,7 +2491,8 @@ mod settlement_tests {
         );
 
         // Another 200 would exceed the 500 cap
-        let result = client.try_withdraw_developer_balance(&developer, &200i128, &None);
+        let result =
+            client.try_withdraw_developer_balance(&developer, &200i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
 
         // Advance to day 1

@@ -68,6 +68,7 @@ pub fn get_page(
             address: address.clone(),
             token: usdc_token.clone(),
             balance,
+            token: token.clone(),
         });
         last_address = Some(address.clone());
 
