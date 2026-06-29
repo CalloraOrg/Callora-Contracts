@@ -80,6 +80,7 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let client = CalloraSettlementClient::new(&env, &addr);
 
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     let balance = client.get_developer_balance(&dev, &token);
     assert_eq!(balance, 0);
@@ -112,6 +113,7 @@ fn test_pagination_fewer_than_limit() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     // 5 developers
     for _ in 0..5 {
@@ -134,6 +136,7 @@ fn test_pagination_exactly_limit() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     // 10 developers
     let mut devs = soroban_sdk::Vec::new(&env);
@@ -163,6 +166,7 @@ fn test_pagination_more_than_limit() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     // 15 developers
     for _ in 0..15 {
@@ -190,6 +194,7 @@ fn test_pagination_stable_ordering() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     for _ in 0..8 {
         let dev = Address::generate(&env);
@@ -220,6 +225,7 @@ fn test_pagination_empty() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     let (page, next_cursor) = client.get_developer_balances_cursor(&admin, &None, &10u32, &token);
     assert_eq!(page.len(), 0);
@@ -235,6 +241,7 @@ fn test_pagination_invalid_cursor() {
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
+    let token = Address::generate(&env);
 
     for _ in 0..5 {
         let dev = Address::generate(&env);
