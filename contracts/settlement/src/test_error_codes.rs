@@ -28,7 +28,9 @@ fn settlement_error_codes_are_stable_and_unique() {
         (20, SettlementError::MigrationNotFound),
         (21, SettlementError::TimelockNotExpired),
         (22, SettlementError::MigrationBalanceChanged),
-        (23, SettlementError::OverDraft),
+        (23, SettlementError::MinimumBalanceRequired),
+        (24, SettlementError::InvalidClaimWindow),
+        (25, SettlementError::ClaimWindowClosed),
     ];
 
     let mut seen = BTreeSet::new();
@@ -40,7 +42,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 23);
+    assert_eq!(seen.len(), 25);
 }
 
 #[test]

@@ -30,7 +30,9 @@ use soroban_sdk::contracterror;
 /// | 20   | MigrationNotFound            | No migration is pending for the source                |
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
-/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
+/// | 23   | MinimumBalanceRequired       | Developer balance is below configured claim minimum   |
+/// | 24   | InvalidClaimWindow           | Claim window end is before start                     |
+/// | 25   | ClaimWindowClosed            | Claim attempted outside developer's claim window     |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -58,4 +60,6 @@ pub enum SettlementError {
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
     MinimumBalanceRequired = 23,
+    InvalidClaimWindow = 24,
+    ClaimWindowClosed = 25,
 }

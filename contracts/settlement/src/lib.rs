@@ -1,208 +1,27 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec, String,
 };
 
-/// Maximum number of items allowed in a single `batch_receive_payment` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
+mod admin;
+mod errors;
+mod events;
+mod limits;
+pub mod migrate;
+mod pagination;
+mod timelock;
+mod types;
 
-/// Maximum number of developer balances returned per page in paginated queries.
-pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-
-/// Typed errors for the settlement contract.
-///
-/// Using `#[contracterror]` encodes each variant as a stable `u32` code.
-/// Callers and indexers can match on the code rather than parsing raw panic strings,
-/// and the WASM binary shrinks because no error string literals are embedded.
-///
-/// | Code | Variant                      | When                                              |
-/// |------|------------------------------|---------------------------------------------------|
-/// | 1    | NotInitialized               | A function is called before `init`                |
-/// | 2    | AlreadyInitialized           | `init` is called more than once                   |
-/// | 3    | Unauthorized                 | Caller is not the vault or admin                  |
-/// | 4    | AmountNotPositive            | `amount` is zero or negative                      |
-/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied |
-/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given  |
-/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow        |
-/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow  |
-/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals |
-/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
-/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
-/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
-/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded|
-/// | 14   | GasExhaustionRisk            | Index too large for safe full scan; use pagination|
-/// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
-/// | 16   | InvalidClaimWindow           | Claim window end is before start                  |
-/// | 17   | ClaimWindowClosed            | Claim attempted outside developer's claim window  |
-/// | 23   | MinimumBalanceRequired       | Developer balance is below configured claim minimum |
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum SettlementError {
-    NotInitialized = 1,
-    AlreadyInitialized = 2,
-    Unauthorized = 3,
-    AmountNotPositive = 4,
-    DeveloperRequired = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow = 7,
-    DeveloperOverflow = 8,
-    UsdcTokenNotConfigured = 9,
-    InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow = 11,
-    InsufficientContractBalance = 12,
-    DailyWithdrawCapExceeded = 13,
-    GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
-    InvalidClaimWindow = 16,
-    ClaimWindowClosed = 17,
-    MinimumBalanceRequired = 23,
-}
-
-/// Persistent storage keys for settlement contract
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum StorageKey {
-    Admin,
-    Vault,
-    PendingAdmin,
-    PendingVault,
-    DeveloperIndex,
-    DeveloperBalance(Address),
-    DeveloperMinBalance(Address),
-    GlobalPool,
-    Usdc,
-    DailyWithdrawCap(Address),
-    WithdrawalToday(Address),
-    DeveloperClaimWindow(Address),
-    ContractVersion,
-}
-
-/// Developer balance record in settlement contract
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperBalance {
-    pub address: Address,
-    pub balance: i128,
-}
-
-/// Global pool balance tracking.
-///
-/// `last_updated` is set to `env.ledger().timestamp()` on every
-/// `receive_payment` call that credits the pool (`to_pool = true`).
-/// It is also set at `init` time. It is **not** updated when payments
-/// are routed to individual developer balances.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct GlobalPool {
-    pub total_balance: i128,
-    /// Ledger timestamp of the last pool credit. Useful for analytics
-    /// and staleness checks.
-    pub last_updated: u64,
-}
-
-/// Tracks a developer's cumulative withdrawal amount for a given epoch day.
-///
-/// `day` is `timestamp / 86400` (UTC epoch day). When the current call's day
-/// differs from the stored day the accumulator is silently reset.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DailyWithdrawState {
-    pub day: u64,
-    pub amount: i128,
-}
-
-/// Timestamp range during which a developer may claim accrued balance.
-///
-/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
-/// inclusive on both ends: a withdrawal is allowed when
-/// `start_ts <= env.ledger().timestamp() <= end_ts`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperClaimWindow {
-    pub start_ts: u64,
-    pub end_ts: u64,
-}
-
-/// Payment received event
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct PaymentReceivedEvent {
-    pub from_vault: Address,
-    pub amount: i128,
-    pub to_pool: bool, // true if credited to global pool, false if to specific developer
-    pub developer: Option<Address>, // developer address if credited to specific developer
-}
-
-/// Balance credited event
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct BalanceCreditedEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub new_balance: i128,
-}
-
-/// Emitted when a new vault address is proposed via `propose_vault()`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultProposedEvent {
-    pub current_vault: Address,
-    pub proposed_vault: Address,
-}
-
-/// Emitted when the proposed vault is accepted via `accept_vault()`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultAcceptedEvent {
-    pub old_vault: Address,
-    pub new_vault: Address,
-    pub accepted_by: Address,
-}
-
-/// Emitted when a developer withdraws their balance.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperWithdrawEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub to: Address,
-}
-
-/// Emitted when the admin sets or changes a developer's daily withdrawal cap.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DailyWithdrawCapChanged {
-    pub developer: Address,
-    pub new_cap: i128,
-}
-
-/// Emitted when the admin sets or clears a developer claim window.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperClaimWindowChanged {
-    pub developer: Address,
-    pub start_ts: u64,
-    pub end_ts: u64,
-    pub enabled: bool,
-}
-
-/// Emitted when an admin force-credits a developer balance (escape hatch).
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperForceCreditedEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub reason: Symbol,
-    pub new_balance: i128,
-}
-
-/// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
-/// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
-/// this constant is used for explicit defense-in-depth validation.
-pub const MAX_REASON_LENGTH: u32 = 32;
+pub use crate::errors::SettlementError;
+pub use crate::types::{
+    AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
+    DailyWithdrawState, DeveloperBalance, DeveloperClaimWindow, DeveloperClaimWindowChanged,
+    DeveloperForceCreditedEvent, DeveloperWithdrawEvent, GlobalPool, PaymentReceivedEvent,
+    Severity, StorageEntryTtl, StorageKey, VaultAcceptedEvent, VaultProposedEvent, MAX_BATCH_SIZE,
+    MAX_DEVELOPER_BALANCES_PAGE_SIZE, MAX_MESSAGE_LEN,
+};
+pub use crate::timelock::PendingDeveloperMigration;
 
 #[contract]
 pub struct CalloraSettlement;
@@ -418,20 +237,19 @@ impl CalloraSettlement {
                 .checked_add(amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
+
+            // Extend TTL for the developer's balance entry
             env.storage()
                 .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
-            env.storage().persistent().extend_ttl(
-                &StorageKey::DeveloperBalance(dev.clone()),
-                50000,
-                50000,
-            );
+                .extend_ttl(&balance_key, 50000, 50000);
+
             // Add to index in sorted order if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
             Self::sorted_insert(&env, &mut index, dev.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
+
             env.events().publish(
                 (events::event_balance_credited(&env), dev.clone()),
                 BalanceCreditedEvent {
@@ -544,12 +362,6 @@ impl CalloraSettlement {
             .set(&StorageKey::Usdc, &usdc_address);
     }
 
-    fn get_usdc_token(env: Env) -> Result<Address, SettlementError> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Usdc)
-            .ok_or(SettlementError::UsdcTokenNotConfigured)
-    }
 
     /// Withdraw developer balance as USDC to a designated recipient.
     ///
@@ -561,6 +373,7 @@ impl CalloraSettlement {
     /// * `developer` - Address of the developer withdrawing their balance.
     /// * `amount` - Amount to withdraw in USDC micro-units.
     /// * `to` - Optional recipient address; if `None`, defaults to `developer`.
+    /// * `token` - The token contract address for this withdrawal.
     ///
     /// # Errors
     /// - `AmountNotPositive` if amount is <= 0.
@@ -577,6 +390,7 @@ impl CalloraSettlement {
         developer: Address,
         amount: i128,
         to: Option<Address>,
+        token: Address,
     ) -> Result<(), SettlementError> {
         developer.require_auth();
         if amount <= 0 {
@@ -594,7 +408,7 @@ impl CalloraSettlement {
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .get(&StorageKey::DeveloperBalance(developer.clone(), token.clone()))
             .unwrap_or(0);
         limits::require_developer_min_balance(&env, &developer, current_balance)?;
         if amount > current_balance {
@@ -629,21 +443,20 @@ impl CalloraSettlement {
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
 
-        let usdc_address = Self::get_usdc_token(env.clone())?;
-        let usdc = token::Client::new(&env, &usdc_address);
+        let usdc_client = token::Client::new(&env, &token);
 
-        if usdc.balance(&contract_address) < amount {
+        if usdc_client.balance(&contract_address) < amount {
             return Err(SettlementError::InsufficientContractBalance);
         }
 
-        usdc.transfer(&contract_address, &recipient, &amount);
+        usdc_client.transfer(&contract_address, &recipient, &amount);
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             50000,
             50000,
         );
@@ -678,6 +491,7 @@ impl CalloraSettlement {
                 amount,
                 remaining_balance: new_balance,
                 to: recipient,
+                token,
             },
         );
 
@@ -729,7 +543,7 @@ impl CalloraSettlement {
                 events::event_developer_claim_window_changed(&env),
                 developer.clone(),
             ),
-            DeveloperClaimWindowChanged {
+            crate::types::DeveloperClaimWindowChanged {
                 developer,
                 start_ts,
                 end_ts,
@@ -767,7 +581,7 @@ impl CalloraSettlement {
                 events::event_developer_claim_window_changed(&env),
                 developer.clone(),
             ),
-            DeveloperClaimWindowChanged {
+            crate::types::DeveloperClaimWindowChanged {
                 developer,
                 start_ts: 0,
                 end_ts: 0,
@@ -914,11 +728,11 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &balance_key,
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &balance_key,
             50000,
             50000,
         );
@@ -945,46 +759,12 @@ impl CalloraSettlement {
                 amount,
                 reason,
                 new_balance,
+                token,
             },
         );
     }
 
     /// Get all developer balances for a specific token (admin only).
-    ///
-    /// **CRITICAL**: Uses developer index for iteration; order is based on index insertion order.
-    /// Use this function only for administrative queries or reporting purposes.
-    /// For production integrations with many developers (>100), implement off-chain indexing
-    /// by listening to `BalanceCreditedEvent` and maintaining a local database.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be the current admin address.
-    /// * `token` - Token contract address to query balances for.
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Iteration Behavior
-    /// - Uses developer index Vec for iteration; order is based on credit insertion order
-    /// - **Small index (< 100 entries)**: Safe to iterate; yields current state
-    /// - **Large index (> 100 entries)**: Consider off-chain indexing to avoid excessive gas costs
-    /// - **Order guarantees**: Based on insertion order (first credit = first in index)
-    ///
-    /// # Returns
-    /// Result containing a Vec of DeveloperBalance records or a gas exhaustion error.
-    /// Iteration order is based on index insertion order.
-    ///
-    /// # Use Cases
-    /// ✅ Administrative dashboards and reporting
-    /// ✅ Audit compliance queries
-    /// ✅ Contract state verification
-    /// ⚠️  Automatic routing based on iteration order (order is insertion-order stable but may not match business logic)
-    /// ❌ Deterministic selection of developers
-    ///
-    /// # Performance
-    /// Gas cost scales with number of developers:
-    /// - 50 developers: ~500 gas
-    /// - 100 developers: ~1,000 gas
-    /// - 500 developers: ~5,000 gas (consider off-chain indexing)
     pub fn get_all_developer_balances(
         env: Env,
         caller: Address,
@@ -1026,16 +806,6 @@ impl CalloraSettlement {
     }
 
     /// Get a paginated slice of developer balances for a token (admin only).
-    ///
-    /// This method avoids expensive full-index iteration by returning
-    /// a bounded window of developer balance records. Use it for
-    /// admin dashboards and off-chain pagination.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be the current admin address.
-    /// * `start` - Zero-based start index.
-    /// * `limit` - Maximum records to return; capped at 100.
-    /// * `token` - Token contract address to query balances for.
     pub fn get_developer_balances_page(
         env: Env,
         caller: Address,
@@ -1088,36 +858,6 @@ impl CalloraSettlement {
     }
 
     /// Cursor-based paginated developer balances for a specific token (admin only).
-    ///
-    /// Returns up to `limit` developer balance records starting **after** the
-    /// supplied `cursor` address (exclusive), or from the beginning of the
-    /// sorted index when `cursor` is `None`.  The index is maintained in
-    /// deterministic ascending order by address bytes, so pages are stable
-    /// across interleaved `receive_payment` calls for developers that sort
-    /// **after** the cursor.
-    ///
-    /// # Arguments
-    /// * `caller`  – Must be the current admin; must authorize.
-    /// * `cursor`  – Exclusive start position.  Pass `None` for the first page;
-    ///               pass the `next_cursor` returned by the previous call for
-    ///               subsequent pages.
-    /// * `limit`   – Maximum records to return; capped at
-    ///               [`MAX_DEVELOPER_BALANCES_PAGE_SIZE`] (100).
-    /// * `token`   – Token contract address to query balances for.
-    ///
-    /// # Returns
-    /// `(page, next_cursor)` where:
-    /// * `page`         – Vec of [`DeveloperBalance`] for this page (may be empty).
-    /// * `next_cursor`  – `Some(address)` of the last record returned, which can be
-    ///                    passed as `cursor` on the next call; `None` when this is the
-    ///                    last page.
-    ///
-    /// # Access Control
-    /// Admin only.
-    ///
-    /// # Errors
-    /// * [`SettlementError::NotInitialized`] – contract not yet initialised.
-    /// * [`SettlementError::Unauthorized`]   – caller is not the admin.
     pub fn get_developer_balances_cursor(
         env: Env,
         caller: Address,
@@ -1136,14 +876,14 @@ impl CalloraSettlement {
             .get(&StorageKey::DeveloperIndex)
             .unwrap_or_else(|| Vec::new(&env));
 
-        pagination::get_page(&env, &index, cursor, limit)
+        pagination::get_page(&env, &index, cursor, limit, token)
     }
 
     /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
     pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
+        #[cfg(any(test, feature = "testutils"))]
+        use soroban_sdk::testutils::storage::{Instance, Persistent};
+
         let mut result = Vec::new(&env);
 
         // 1. Instance Storage
@@ -1177,13 +917,13 @@ impl CalloraSettlement {
         };
 
         for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
+            // Check DeveloperMinBalance (Persistent)
+            let min_bal_key = StorageKey::DeveloperMinBalance(dev.clone());
+            if env.storage().persistent().has(&min_bal_key) {
                 let ttl = {
                     #[cfg(any(test, feature = "testutils"))]
                     {
-                        env.storage().persistent().get_ttl(&bal_key)
+                        env.storage().persistent().get_ttl(&min_bal_key)
                     }
                     #[cfg(not(any(test, feature = "testutils")))]
                     {
@@ -1191,134 +931,8 @@ impl CalloraSettlement {
                     }
                 };
                 result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address: address.clone(),
-                token: token.clone(),
-                balance,
-            });
-            last_address = Some(address.clone());
-
-            // Check DailyWithdrawCap (Persistent)
-            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
-            if env.storage().persistent().has(&cap_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&cap_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DailyWithdrawCap"),
-                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-        }
-
-        result
-    }
-
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
-        let mut result = Vec::new(&env);
-
-        // 1. Instance Storage
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                17_280 * 60
-            }
-        };
-        result.push_back(StorageEntryTtl {
-            category: String::from_str(&env, "Instance"),
-            key_desc: String::from_str(&env, "Instance"),
-            storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
-            threshold: 17_280 * 30,
-            bump_amount: 17_280 * 60,
-        });
-
-        // Determine which developer addresses to inspect
-        let devs = if developer_addresses.len() > 0 {
-            developer_addresses
-        } else {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DeveloperIndex)
-                .unwrap_or_else(|| Vec::new(&env))
-        };
-
-        for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            // Check WithdrawalToday (Persistent)
-            let today_key = StorageKey::WithdrawalToday(dev.clone());
-            if env.storage().persistent().has(&today_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&today_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "WithdrawalToday"),
-                    key_desc: String::from_str(&env, "WithdrawalToday"),
+                    category: String::from_str(&env, "DeveloperMinBalance"),
+                    key_desc: String::from_str(&env, "DeveloperMinBalance"),
                     storage_type: String::from_str(&env, "Persistent"),
                     ttl,
                     threshold: 50000,
@@ -1354,38 +968,11 @@ impl CalloraSettlement {
     }
 
     /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
-    ///
-    /// Integrators can poll this to detect an in-flight admin handover
-    /// before `accept_admin` is called.
-    ///
-    /// # Returns
-    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
     /// Nominate a new admin (admin only).
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    /// * `new_admin` - Address to nominate as new admin
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Security
-    /// This implements a two-step admin transfer process:
-    /// 1. Current admin calls `set_admin()` to nominate new admin
-    /// 2. Nominated admin must call `accept_admin()` to complete transfer
-    ///
-    /// This prevents accidental admin loss and ensures the new admin
-    /// has control of their private keys before gaining privileges.
-    ///
-    /// # Events
-    /// Emits `admin_nominated` event with current and new admin addresses.
-    ///
-    /// # Panics
-    /// Panics if caller is not the current admin.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());
@@ -1407,21 +994,6 @@ impl CalloraSettlement {
     }
 
     /// Accept the admin role (pending admin only).
-    ///
-    /// # Access Control
-    /// Only the nominated pending admin can call this function.
-    ///
-    /// # Security
-    /// This is the second step of the two-step admin transfer process.
-    /// The nominated admin must explicitly accept, proving control of
-    /// their private keys before gaining admin privileges.
-    ///
-    /// # Events
-    /// Emits `admin_accepted` event with old and new admin addresses.
-    ///
-    /// # Panics
-    /// Panics if there is no pending admin transfer (i.e., `set_admin()`
-    /// was not called first).
     pub fn accept_admin(env: Env) {
         let inst = env.storage().instance();
         let pending: Address = inst
@@ -1438,13 +1010,6 @@ impl CalloraSettlement {
     }
 
     /// Cancel a pending admin transfer. Only the current admin may call this.
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    ///
-    /// # Panics
-    /// * Panics if caller is not the current admin.
-    /// * Panics if no admin transfer is pending.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
         let current = Self::get_admin(env.clone());
@@ -1463,34 +1028,12 @@ impl CalloraSettlement {
     }
 
     /// Propose a new vault address (admin only).
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    /// * `new_vault` - New vault contract address to register
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
     pub fn set_vault(env: Env, caller: Address, new_vault: Address) {
         // Backwards-compatible alias: `set_vault` now behaves like `propose_vault`.
         Self::propose_vault(env, caller, new_vault);
     }
 
     /// Propose a new vault address (admin only).
-    ///
-    /// This is the first step of a two-step vault rotation:
-    /// 1. Admin calls `propose_vault()` to set `PendingVault`
-    /// 2. Proposed vault (or admin) calls `accept_vault()` to activate it
-    ///
-    /// # Security
-    /// This prevents a typo from instantly routing settlement credits to the wrong contract.
-    ///
-    /// # Events
-    /// Emits `vault_proposed` with current and proposed vault addresses.
-    ///
-    /// # Panics
-    /// - `"unauthorized: caller is not admin"` if caller is not admin
-    /// - `"invalid config: vault cannot be the contract itself"` if proposed vault is this contract
     pub fn propose_vault(env: Env, caller: Address, new_vault: Address) {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone());
@@ -1515,16 +1058,6 @@ impl CalloraSettlement {
     }
 
     /// Accept the proposed vault and activate it.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be either the proposed vault address or the admin.
-    ///
-    /// # Events
-    /// Emits `vault_accepted` with old vault, new vault, and acceptor.
-    ///
-    /// # Panics
-    /// - `"no vault rotation pending"` if no `propose_vault()` was called
-    /// - `"unauthorized: caller must be pending vault or admin"` if caller is neither
     pub fn accept_vault(env: Env, caller: Address) {
         caller.require_auth();
 
@@ -1583,11 +1116,6 @@ impl CalloraSettlement {
         Ok(())
     }
 
-    /// Admin-gated contract upgrade.
-    ///
-    /// Only the current admin may call. This will instruct the host to update
-    /// the current contract WASM to `new_wasm_hash` and persist the version marker.
-    /// Emits an `upgraded` event with the admin as topic and the new version as data.
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
@@ -1629,20 +1157,11 @@ impl CalloraSettlement {
     }
 
     /// Read the stored contract version (WASM hash) as last set by `upgrade`.
-    ///
-    /// Returns `None` if no upgrade has been performed yet (initial deployment).
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
         env.storage().instance().get(&StorageKey::ContractVersion)
     }
 
     /// Insert `addr` into `index` in sorted order (ascending by raw bytes).
-    ///
-    /// Soroban's `Vec` does not expose a binary-search API, so we do a linear
-    /// scan to find the insertion point.  The index is expected to be small
-    /// (≤ `MAX_DEVELOPER_BALANCES_PAGE_SIZE`), so the O(n) cost is acceptable
-    /// and the result is a deterministic, stable ordering that cursors can rely on.
-    ///
-    /// If `addr` is already present the index is left unchanged.
     pub(crate) fn sorted_insert(env: &Env, index: &mut Vec<Address>, addr: Address) {
         // Check for duplicates and find insertion position in one pass.
         let mut insert_pos: Option<u32> = None;
@@ -1664,41 +1183,11 @@ impl CalloraSettlement {
     }
 
     /// One-shot V1 -> V2 storage migration (admin only).
-    ///
-    /// Converts all `DeveloperBalanceV1(addr)` persistent slots to per-token
-    /// `DeveloperBalance(addr, usdc_token)` slots in a single transaction.
-    /// For deployments with more than [`MAX_BATCH_SIZE`] developers use
-    /// [`migrate_v1_to_v2_page`] to spread the work across multiple ledgers.
-    ///
-    /// # Access Control
-    /// Only the current admin may call this function.
-    ///
-    /// # Idempotency
-    /// Safe to call multiple times; re-running after `StorageVersion == 2`
-    /// returns immediately without modifying any state.
-    ///
-    /// # Panics
-    /// - [`SettlementError::NotInitialized`] if the contract is not initialised.
-    /// - [`SettlementError::Unauthorized`] if the caller is not the admin.
-    /// - [`SettlementError::UsdcTokenNotConfigured`] if USDC is not configured.
     pub fn migrate_v1_to_v2(env: Env, caller: Address) {
         migrate::migrate_v1_to_v2(&env, &caller);
     }
 
     /// Paginated V1 -> V2 storage migration (admin only).
-    ///
-    /// Processes up to `batch_size` (capped at [`MAX_BATCH_SIZE`]) developer
-    /// accounts per call, starting from index position `offset`.
-    ///
-    /// # Returns
-    /// `(next_offset, is_complete)`. When `is_complete` is `true` all developer
-    /// slots have been converted and `StorageVersion` is set to `2`.
-    ///
-    /// # Access Control
-    /// Only the current admin may call this function.
-    ///
-    /// # Idempotency
-    /// Returns `(0, true)` immediately when migration is already complete.
     pub fn migrate_v1_to_v2_page(
         env: Env,
         caller: Address,
@@ -1709,20 +1198,10 @@ impl CalloraSettlement {
     }
 
     /// Return the current storage-layout version.
-    ///
-    /// `1` = V1 layout (pre-migration or key absent).
-    /// `2` = V2 per-token layout (migration complete).
     pub fn migration_storage_version(env: Env) -> u32 {
         migrate::storage_version(&env)
     }
 }
-
-mod events;
-mod limits;
-pub mod migrate;
-
-#[cfg(test)]
-mod test;
 
 #[cfg(test)]
 mod test_views;
@@ -1735,3 +1214,6 @@ mod test_error_codes;
 
 #[cfg(test)]
 mod test_multi_asset;
+
+#[cfg(test)]
+mod test_admin_migration;

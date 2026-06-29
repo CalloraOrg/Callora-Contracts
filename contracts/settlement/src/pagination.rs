@@ -33,6 +33,7 @@ pub fn get_page(
     index: &Vec<Address>,
     cursor: Option<Address>,
     limit: u32,
+    token: Address,
 ) -> (Vec<DeveloperBalance>, Option<Address>) {
     let effective_limit = if limit == 0 {
         return (Vec::new(env), None);
@@ -57,11 +58,12 @@ pub fn get_page(
         let balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(address.clone()))
+            .get(&StorageKey::DeveloperBalance(address.clone(), token.clone()))
             .unwrap_or(0);
 
         result.push_back(DeveloperBalance {
             address: address.clone(),
+            token: token.clone(),
             balance,
         });
         last_address = Some(address.clone());
