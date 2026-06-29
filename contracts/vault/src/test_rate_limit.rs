@@ -30,7 +30,7 @@ fn rate_limit_bucket_enforcement() {
     client.set_developer_rate_limit(&owner, &developer, &100, &10);
     
     // Try to deduct more than capacity -> fails
-    let res = client.try_deduct(&caller, &150, &None, &u16::MAX, &developer);
+    let res = client.try_deduct(&caller, &150, &None, &u32::MAX, &developer);
     assert_eq!(res.unwrap_err().unwrap(), VaultError::RateLimited);
     
     // We cannot deduct immediately if we don't have balance in vault, but since usdc isn't mocked properly,
