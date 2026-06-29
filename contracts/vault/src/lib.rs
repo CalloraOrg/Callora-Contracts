@@ -204,6 +204,12 @@ pub enum StorageKey {
     DeveloperConfig(Address),
     /// Current rate limit state for a developer.
     DeveloperState(Address),
+    /// Per-token deposit fee in basis points (1 bps = 0.01%).
+    /// Key is the token contract address; value is `u16`.
+    TokenDepositFeeBps(Address),
+    /// Whitelist of tokens allowed for deposit. Stored as a `Vec<Address>`.
+    /// When empty (not set), no token whitelist is enforced.
+    DepositTokenWhitelist,
 }
 
 /// Settlement contract client for crediting the global pool.
@@ -760,6 +766,70 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Add a token address to the deposit whitelist.
+    /// Only the owner may call this. When at least one token is in the whitelist,
+    /// `deposit` rejects deposits from tokens not in the list.
+    pub fn add_deposit_token_whitelist(
+        env: Env,
+        caller: Address,
+        token: Address,
+    ) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        if caller != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        caller.require_auth();
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DepositTokenWhitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !list.contains(&token) {
+            list.push_back(token);
+            env.storage()
+                .instance()
+                .set(&StorageKey::DepositTokenWhitelist, &list);
+        }
+        Ok(())
+    }
+
+    /// Remove a token address from the deposit whitelist.
+    /// Only the owner may call this.
+    pub fn remove_deposit_token_whitelist(
+        env: Env,
+        caller: Address,
+        token: Address,
+    ) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        if caller != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        caller.require_auth();
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DepositTokenWhitelist)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut updated = Vec::new(&env);
+        for addr in list.iter() {
+            if addr != token {
+                updated.push_back(addr);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::DepositTokenWhitelist, &updated);
+        Ok(())
+    }
+
+    /// Return the current deposit token whitelist. Empty means no restriction.
+    pub fn get_deposit_token_whitelist(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::DepositTokenWhitelist)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     /// Deposit USDC into the vault.
     ///
     /// Follows the **Checks-Effects-Interactions** pattern:
@@ -787,11 +857,22 @@ impl CalloraVault {
         if amount < meta.min_deposit {
             return Err(VaultError::BelowMinDeposit);
         }
+        // ── Per-token whitelist check ─────────────────────────────────────
         let usdc_addr: Address = env
             .storage()
             .instance()
             .get(&StorageKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
+        {
+            let whitelist: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&StorageKey::DepositTokenWhitelist)
+                .unwrap_or_else(|| Vec::new(&env));
+            if !whitelist.is_empty() && !whitelist.contains(&usdc_addr) {
+                return Err(VaultError::Unauthorized);
+            }
+        }
 
         // ── Effects ───────────────────────────────────────────────────────
         meta.balance = meta
