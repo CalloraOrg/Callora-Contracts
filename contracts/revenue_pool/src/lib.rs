@@ -1,36 +1,52 @@
 #![no_std]
-#![warn(missing_docs)]
+
+//! Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
+//!
+//! Flow: vault deduct → vault transfers USDC to this contract → admin calls distribute(to, amount).
+//!
+//! # Security Assumptions
+//! - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
+//! - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
+//! - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
+//!   increase balance without breaking logic.
+//!
+//! For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
 
-/// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
-///
-/// Flow: vault deduct → vault transfers USDC to this contract → admin calls distribute(to, amount).
-///
-/// # Security Assumptions
-/// - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
-/// - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
-/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
-///   increase balance without breaking logic.
-///
-/// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
+/// Storage key for the admin address.
 const ADMIN_KEY: &str = "admin";
+/// Storage key for the pending admin address during admin transfer.
 const PENDING_ADMIN_KEY: &str = "pending_admin";
+/// Storage key for the pause guardian address.
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
+/// Storage key for the USDC token contract address.
 const USDC_KEY: &str = "usdc";
+/// Storage key for the maximum distribute amount limit.
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+/// Storage key for tracking cumulative yield deposited.
 const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield_deposited";
+/// Error message: distribution amount must be positive.
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+/// Error message: distribution amount exceeds the configured max_distribute limit.
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
+/// Error message: caller is not the admin.
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+/// Error message: caller is not admin or pause guardian.
 const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
+/// Error message: contract USDC balance is insufficient for the requested operation.
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+/// Error message: revenue pool has not been initialized.
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+/// Error message: duplicate recipient address in batch distribute.
 const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
+/// Storage key for the paused state flag.
 const PAUSED_KEY: &str = "paused";
+/// Error message: operation rejected because the contract is paused.
 const ERR_PAUSED: &str = "revenue pool paused";
+/// Storage key for the current contract version hash.
 const VERSION_KEY: &str = "version";
 
 /// Typed contract errors for the revenue pool.
@@ -49,20 +65,25 @@ pub enum RevenuePoolError {
     BatchTooLarge = 2,
 }
 
+/// Default maximum distribute amount per call (unlimited).
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
 /// Maximum number of payments allowed in a single `batch_distribute` call.
 /// Caps CPU/memory usage well within Soroban resource limits and aligns with
 /// the vault's `MAX_BATCH_SIZE` for `batch_deduct`.
 pub const MAX_BATCH_SIZE: u32 = 50;
+/// Maximum allowed length (in bytes) for admin broadcast messages.
 pub const MAX_MESSAGE_LEN: u32 = 256;
 
 /// Severity levels for admin broadcast messages.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Severity {
+    /// Informational message — no action required.
     Info,
+    /// Warning message — potential issue detected.
     Warn,
+    /// Critical message — immediate attention required.
     Crit,
 }
 
@@ -70,7 +91,9 @@ pub enum Severity {
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct AdminBroadcast {
+    /// Severity level of the broadcast.
     pub severity: Severity,
+    /// Broadcast message content.
     pub message: String,
 }
 
@@ -78,11 +101,17 @@ pub struct AdminBroadcast {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
+    /// Storage category name (e.g. "Instance", "Persistent", "Temporary").
     pub category: String,
+    /// Human-readable description of the storage key.
     pub key_desc: String,
+    /// Type of storage (e.g. "Instance", "Persistent").
     pub storage_type: String,
+    /// Current remaining TTL in ledgers.
     pub ttl: u32,
+    /// Threshold below which TTL bumping triggers.
     pub threshold: u32,
+    /// Amount to extend TTL by when bumping.
     pub bump_amount: u32,
 }
 
@@ -95,11 +124,14 @@ pub struct StorageEntryTtl {
 /// - `BUMP_AMOUNT`: Number of ledgers to extend TTL by (10000 ledgers ≈ 16 days)
 /// - `LIFETIME_THRESHOLD`: Minimum TTL before triggering a bump (1000 ledgers ≈ 1.5 days)
 pub const BUMP_AMOUNT: u32 = 10000;
+/// Lifetime threshold (in ledgers) below which TTL bumping triggers (~1.5 days).
 pub const LIFETIME_THRESHOLD: u32 = 1000;
 
+/// The Revenue Pool contract implementation.
 #[contract]
 pub struct RevenuePool;
 
+/// Contract implementation block for [`RevenuePool`].
 #[contractimpl]
 impl RevenuePool {
     /// Initialize the revenue pool with an admin and the USDC token address.
