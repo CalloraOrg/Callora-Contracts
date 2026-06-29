@@ -433,6 +433,7 @@ mod test {
     }
 }
 
+mod cold_storage;
 mod events;
 pub mod capabilities;
 pub mod rate_limit;
