@@ -560,11 +560,11 @@ impl CalloraSettlement {
         usdc.transfer(&contract_address, &recipient, &amount);
 
         env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             &new_balance,
         );
         env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone()),
+            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
             50000,
             50000,
         );
