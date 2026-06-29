@@ -2,7 +2,7 @@ extern crate std;
 
 use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::{token, Address, Env};
 
 fn create_token<'a>(
     env: &'a Env,
@@ -184,6 +184,11 @@ fn test_migrate_developer_balance() {
         env.storage()
             .persistent()
             .extend_ttl(&legacy_key, 50000, 50000);
+
+        // Also need to add to index for migrate_v1_to_v2 to find it
+        let mut idx: soroban_sdk::Vec<Address> = env.storage().instance().get(&StorageKey::DeveloperIndex).unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        idx.push_back(developer.clone());
+        env.storage().instance().set(&StorageKey::DeveloperIndex, &idx);
     });
 
     // Before migration, new per-token read returns 0
@@ -194,7 +199,7 @@ fn test_migrate_developer_balance() {
     );
 
     // Run migration
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_v1_to_v2(&admin);
     assert!(result.is_ok(), "migration should succeed");
 
     // After migration, new per-token read returns the migrated value
@@ -239,14 +244,18 @@ fn test_migrate_developer_balance_idempotent() {
         env.storage()
             .persistent()
             .extend_ttl(&StorageKey::DeveloperBalanceV1(developer.clone()), 50000, 50000);
+
+        let mut idx: soroban_sdk::Vec<Address> = env.storage().instance().get(&StorageKey::DeveloperIndex).unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        idx.push_back(developer.clone());
+        env.storage().instance().set(&StorageKey::DeveloperIndex, &idx);
     });
 
     // First migration
-    assert!(client.try_migrate_developer_balance(&admin, &developer).is_ok());
+    assert!(client.try_migrate_v1_to_v2(&admin).is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 
     // Second migration — idempotent, no error, balance unchanged
-    assert!(client.try_migrate_developer_balance(&admin, &developer).is_ok());
+    assert!(client.try_migrate_v1_to_v2(&admin).is_ok());
     assert_eq!(client.get_developer_balance(&developer, &usdc), 555i128);
 }
 
@@ -270,7 +279,7 @@ fn test_migrate_developer_balance_unauthorized() {
 
     // Non-admin tries to migrate
     let attacker = Address::generate(&env);
-    let result = client.try_migrate_developer_balance(&attacker, &developer);
+    let result = client.try_migrate_v1_to_v2(&attacker);
     assert!(result.is_err());
 }
 
@@ -290,7 +299,7 @@ fn test_migrate_developer_balance_no_usdc() {
     client.init(&admin, &vault);
     // Do NOT set USDC token
 
-    let result = client.try_migrate_developer_balance(&admin, &developer);
+    let result = client.try_migrate_v1_to_v2(&admin);
     assert!(result.is_err());
 }
 

@@ -43,6 +43,31 @@ pub enum StorageKey {
     /// Absent   → V1 (pre-migration, no version tracking).
     /// Value 2  → V2 (single-token → per-token migration complete).
     StorageVersion,
+    DeveloperClaimWindow(Address),
+}
+
+/// Timestamp range during which a developer may claim accrued balance.
+///
+/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
+/// inclusive on both ends: a withdrawal is allowed when
+/// `start_ts <= env.ledger().timestamp() <= end_ts`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindow {
+    pub start_ts: u64,
+    pub end_ts: u64,
+}
+
+/// Return the remaining TTL for each storage key category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -154,12 +179,23 @@ pub struct DailyWithdrawCapChanged {
     pub new_cap: i128,
 }
 
+/// Emitted when the admin sets or clears a developer claim window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindowChanged {
+    pub developer: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub enabled: bool,
+}
+
 /// Emitted when an admin force-credits a developer balance (escape hatch).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeveloperForceCreditedEvent {
     pub developer: Address,
     pub amount: i128,
+    pub token: Address,
     pub reason: Symbol,
     pub new_balance: i128,
 }
