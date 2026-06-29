@@ -100,6 +100,13 @@ pub fn event_admin_migration(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration")
 }
 
+/// Returns the Symbol for the `"deposit"` event topic.
+///
+/// Emitted when a deposit is made for a developer.
+pub fn event_deposit(env: &Env) -> Symbol {
+    Symbol::new(env, "deposit")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +229,15 @@ mod tests {
         assert_eq!(
             event_admin_migration(&env),
             Symbol::new(&env, "admin_migration")
+        );
+    }
+
+    #[test]
+    fn test_event_deposit_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_deposit(&env),
+            Symbol::new(&env, "deposit")
         );
     }
 }

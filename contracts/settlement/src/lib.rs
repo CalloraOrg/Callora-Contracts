@@ -141,6 +141,15 @@ pub struct BalanceCreditedEvent {
     pub new_balance: i128,
 }
 
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
 /// Emitted when a new vault address is proposed via `propose_vault()`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -352,10 +361,18 @@ impl CalloraSettlement {
             env.events().publish(
                 (events::event_balance_credited(&env), dev_address.clone()),
                 BalanceCreditedEvent {
-                    developer: dev_address,
+                    developer: dev_address.clone(),
                     amount,
                     new_balance,
+                    token: token.clone(),
+                },
+            );
+            env.events().publish(
+                (events::event_deposit(&env), dev_address.clone()),
+                DepositEvent {
+                    developer: dev_address,
                     token,
+                    amount,
                 },
             );
         }
@@ -436,6 +453,14 @@ impl CalloraSettlement {
                     amount,
                     new_balance,
                     token: token.clone(),
+                },
+            );
+            env.events().publish(
+                (events::event_deposit(&env), dev.clone()),
+                DepositEvent {
+                    developer: dev.clone(),
+                    token: token.clone(),
+                    amount,
                 },
             );
         }

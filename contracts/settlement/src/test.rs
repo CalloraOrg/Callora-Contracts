@@ -165,6 +165,40 @@ mod settlement_tests {
     }
 
     #[test]
+    fn test_receive_payment_emits_deposit_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+        let token = Address::generate(&env);
+
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "deposit")
+                }
+            })
+            .expect("expected deposit event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let data: crate::DepositEvent = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.token, token);
+        assert_eq!(data.amount, 500i128);
+    }
+
+    #[test]
     fn test_receive_multiple_payments_accumulate() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1765,6 +1799,49 @@ mod settlement_tests {
 
         assert_eq!(client.get_developer_balance(&dev1, &token), 100i128);
         assert_eq!(client.get_developer_balance(&dev2, &token), 200i128);
+    }
+
+    #[test]
+    fn test_batch_receive_payment_emits_deposit_events() {
+        let (env, addr, _admin, vault, _third_party, token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+
+        let mut items = soroban_sdk::Vec::new(&env);
+        items.push_back((dev1.clone(), 100i128));
+        items.push_back((dev2.clone(), 200i128));
+
+        client.batch_receive_payment(&vault, &items, &token);
+
+        let events = env.events().all();
+        let deposit_events: std::vec::Vec<_> = events
+            .iter()
+            .filter(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "deposit")
+                }
+            })
+            .collect();
+
+        assert_eq!(deposit_events.len(), 2);
+
+        let ev1 = deposit_events.get(0).unwrap();
+        let topic1_dev1: Address = ev1.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1_dev1, dev1);
+        let data1: crate::DepositEvent = ev1.2.into_val(&env);
+        assert_eq!(data1.developer, dev1);
+        assert_eq!(data1.token, token);
+        assert_eq!(data1.amount, 100i128);
+
+        let ev2 = deposit_events.get(1).unwrap();
+        let topic1_dev2: Address = ev2.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1_dev2, dev2);
+        let data2: crate::DepositEvent = ev2.2.into_val(&env);
+        assert_eq!(data2.developer, dev2);
+        assert_eq!(data2.token, token);
+        assert_eq!(data2.amount, 200i128);
     }
 
     #[test]
