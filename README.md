@@ -34,13 +34,13 @@ cargo build --target wasm32-unknown-unknown --release -p callora-settlement
 # 4. Or build all contracts and verify WASM size limits in one step
 ./scripts/check-wasm-size.sh
 
-# 5. Line-coverage check (must stay â‰¥ 95%)
+# 5. Line-coverage check (must stay ≥ 95%)
 ./scripts/coverage.sh
 ```
 
-Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` â€” pass the one you want via `-p`.
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
 
-## Whatâ€™s included
+## What’s included
 
 ### 1. `callora-vault`
 
