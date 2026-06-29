@@ -355,7 +355,11 @@ impl CalloraVault {
     /// Garbage-collect processed request markers from persistent storage.
     /// Only the owner can call this.
     /// Emits a `request_id_pruned` event for each removed ID.
-    pub fn prune_processed_requests(env: Env, caller: Address, ids: Vec<Symbol>) -> Result<(), VaultError> {
+    pub fn prune_processed_requests(
+        env: Env,
+        caller: Address,
+        ids: Vec<Symbol>,
+    ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller.clone())?;
 
