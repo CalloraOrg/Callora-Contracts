@@ -8,28 +8,9 @@ pub enum DataKey {
     TotalSettled,
 }
 
-/// Developer balance record in settlement contract
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperBalance {
-    pub address: Address,
-    pub balance: i128,
-}
-
-/// Global pool balance tracking.
-///
-/// `last_updated` is set to `env.ledger().timestamp()` on every
-/// `receive_payment` call that credits the pool (`to_pool = true`).
-/// It is also set at `init` time. It is **not** updated when payments
-/// are routed to individual developer balances.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct GlobalPool {
-    pub total_balance: i128,
-    /// Ledger timestamp of the last pool credit. Useful for analytics
-    /// and staleness checks.
-    pub last_updated: u64,
-}
+pub use errors::SettlementError;
+pub use timelock::PendingDeveloperMigration;
+pub use types::*;
 
 /// Tracks a developer's cumulative withdrawal amount for a given epoch day.
 ///
@@ -62,6 +43,7 @@ pub struct PaymentReceivedEvent {
     pub amount: i128,
     pub to_pool: bool, // true if credited to global pool, false if to specific developer
     pub developer: Option<Address>, // developer address if credited to specific developer
+    pub token: Address,
 }
 
 /// Balance credited event
@@ -71,6 +53,7 @@ pub struct BalanceCreditedEvent {
     pub developer: Address,
     pub amount: i128,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when a deposit is made for a developer.
@@ -335,12 +318,7 @@ impl CalloraSettlement {
             env.storage().persistent().set(&balance_key, &new_balance);
             env.storage()
                 .persistent()
-                .set(&StorageKey::DeveloperBalance(dev.clone()), &new_balance);
-            env.storage().persistent().extend_ttl(
-                &StorageKey::DeveloperBalance(dev.clone()),
-                50000,
-                50000,
-            );
+                .extend_ttl(&balance_key, 50000, 50000);
             // Add to index in sorted order if not already present
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
@@ -514,6 +492,7 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
         let current_balance: i128 = env
             .storage()
             .instance()
@@ -529,5 +508,14 @@ impl CalloraSettlement {
         env.storage()
             .instance()
             .set(&DataKey::TotalSettled, &new_total);
+    }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
     }
 }

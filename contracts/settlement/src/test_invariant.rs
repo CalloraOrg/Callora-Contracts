@@ -37,7 +37,8 @@ use std::boxed::Box;
 
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env, Vec};
+use soroban_sdk::token as token_mod;
+use soroban_sdk::{Address, Env, Vec};
 
 use crate::{CalloraSettlement, CalloraSettlementClient};
 
@@ -163,7 +164,9 @@ impl Trace {
         for s in &self.steps {
             msg.push_str(&std::format!(
                 "  [{:>3}] {:30} {}\n",
-                s.index, s.op, s.detail
+                s.index,
+                s.op,
+                s.detail
             ));
         }
         msg.push_str("==========================\n");
@@ -179,12 +182,16 @@ fn make_usdc<'a>(
     env: &'a Env,
     mint_to: &Address,
     amount: i128,
-) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
+) -> (
+    Address,
+    token_mod::Client<'a>,
+    token_mod::StellarAssetClient<'a>,
+) {
     let admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
     let addr = ca.address();
-    let client = token::Client::new(env, &addr);
-    let sac = token::StellarAssetClient::new(env, &addr);
+    let client = token_mod::Client::new(env, &addr);
+    let sac = token_mod::StellarAssetClient::new(env, &addr);
     // Pre-fund the settlement contract so withdrawals can succeed.
     sac.mint(mint_to, &amount);
     (addr, client, sac)
@@ -192,12 +199,12 @@ fn make_usdc<'a>(
 
 fn setup_env() -> (
     &'static Env,
-    Address,          // contract address
+    Address, // contract address
     CalloraSettlementClient<'static>,
-    Address,          // admin
-    Address,          // vault
-    Address,          // usdc token
-    token::StellarAssetClient<'static>, // usdc SAC (for minting)
+    Address,                                // admin
+    Address,                                // vault
+    Address,                                // usdc token
+    token_mod::StellarAssetClient<'static>, // usdc SAC (for minting)
 ) {
     // SAFETY: We immediately tie the 'static lifetime to `env` via Box::leak.
     // The Env is leaked so the client can borrow it for the duration of the test.
@@ -215,11 +222,11 @@ fn setup_env() -> (
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &usdc_addr);
 
-    let usdc_sac_static: token::StellarAssetClient<'static> =
-        token::StellarAssetClient::new(env, &usdc_addr);
+    let usdc_sac_static: token_mod::StellarAssetClient<'static> =
+        token_mod::StellarAssetClient::new(env, &usdc_addr);
 
     (
-        (*env).clone(),
+        env,
         contract,
         client,
         admin,
@@ -254,7 +261,12 @@ fn check_invariant(
 
     // Developer balance sum must equal our running tally.
     if dev_sum != expected_dev_total || pool != expected_pool_total {
-        trace.panic_invariant(step, expected_dev_total + expected_pool_total, dev_sum, pool);
+        trace.panic_invariant(
+            step,
+            expected_dev_total + expected_pool_total,
+            dev_sum,
+            pool,
+        );
     }
 }
 
@@ -301,16 +313,17 @@ fn run_trace(seed: u64) {
     let usdc_admin = Address::generate(env);
     let usdc_ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = usdc_ca.address();
-    let usdc_sac = token::StellarAssetClient::new(env, &usdc_addr);
-    usdc_sac.mint(&contract, &(AMOUNT_CAP * TRACE_LENGTH as i128 * MAX_BATCH as i128 * 2));
+    let usdc_sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
+    usdc_sac.mint(
+        &contract,
+        &(AMOUNT_CAP * TRACE_LENGTH as i128 * MAX_BATCH as i128 * 2),
+    );
 
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &usdc_addr);
 
     // Pre-generate a small pool of developer addresses to encourage balance accumulation.
-    let devs: std::vec::Vec<Address> = (0..DEV_POOL_SIZE)
-        .map(|_| Address::generate(env))
-        .collect();
+    let devs: std::vec::Vec<Address> = (0..DEV_POOL_SIZE).map(|_| Address::generate(env)).collect();
 
     // Running tallies — our "expected" state that must match contract storage.
     let mut expected_dev_total: i128 = 0;
@@ -343,7 +356,11 @@ fn run_trace(seed: u64) {
                 expected_pool_total = expected_pool_total
                     .checked_add(amount)
                     .expect("test tally overflow");
-                trace.push(step, "receive_payment(pool)", std::format!("amount={amount}"));
+                trace.push(
+                    step,
+                    "receive_payment(pool)",
+                    std::format!("amount={amount}"),
+                );
             }
 
             x if x == Op::BatchReceiveDev as u8 => {
@@ -354,7 +371,9 @@ fn run_trace(seed: u64) {
                     let dev = devs[rng.gen_usize(0, DEV_POOL_SIZE - 1)].clone();
                     let amount = rng.gen_i128(1, AMOUNT_CAP);
                     items.push_back((dev, amount));
-                    batch_total = batch_total.checked_add(amount).expect("batch tally overflow");
+                    batch_total = batch_total
+                        .checked_add(amount)
+                        .expect("batch tally overflow");
                 }
                 client.batch_receive_payment(&vault, &items, &usdc_addr);
                 expected_dev_total = expected_dev_total
@@ -373,7 +392,8 @@ fn run_trace(seed: u64) {
                 let current: i128 = client.get_developer_balance(&dev, &usdc_addr);
                 if current > 0 {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
-                    let result = client.try_withdraw_developer_balance(&dev, &amount, &None, &usdc_addr);
+                    let result =
+                        client.try_withdraw_developer_balance(&dev, &amount, &None);
                     if result.is_ok() {
                         expected_dev_total = expected_dev_total
                             .checked_sub(amount)
@@ -381,7 +401,10 @@ fn run_trace(seed: u64) {
                         trace.push(
                             step,
                             "withdraw(ok)",
-                            std::format!("dev={dev:?} amount={amount} remaining={}", current - amount),
+                            std::format!(
+                                "dev={dev:?} amount={amount} remaining={}",
+                                current - amount
+                            ),
                         );
                     } else {
                         trace.push(
@@ -391,11 +414,7 @@ fn run_trace(seed: u64) {
                         );
                     }
                 } else {
-                    trace.push(
-                        step,
-                        "withdraw(skip-zero)",
-                        std::format!("dev={dev:?}"),
-                    );
+                    trace.push(step, "withdraw(skip-zero)", std::format!("dev={dev:?}"));
                 }
             }
 
@@ -444,7 +463,7 @@ fn test_invariant_pool_only() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
@@ -460,7 +479,11 @@ fn test_invariant_pool_only() {
             pool, expected_pool,
             "pool invariant failed at step {i}: expected {expected_pool}, got {pool}"
         );
-        let dev_sum: i128 = client.get_all_developer_balances(&admin, &usdc_addr).iter().map(|b| b.balance).sum();
+        let dev_sum: i128 = client
+            .get_all_developer_balances(&admin, &usdc_addr)
+            .iter()
+            .map(|b| b.balance)
+            .sum();
         assert_eq!(dev_sum, 0, "no developer should have a balance (step {i})");
     }
 }
@@ -480,7 +503,7 @@ fn test_invariant_single_dev_full_withdraw() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &10_000);
 
     client.init(&admin, &vault);
@@ -494,11 +517,15 @@ fn test_invariant_single_dev_full_withdraw() {
     let balance = client.get_developer_balance(&dev, &usdc_addr);
     assert_eq!(balance, 3_500);
 
-    let dev_sum: i128 = client.get_all_developer_balances(&admin, &usdc_addr).iter().map(|b| b.balance).sum();
+    let dev_sum: i128 = client
+        .get_all_developer_balances(&admin, &usdc_addr)
+        .iter()
+        .map(|b| b.balance)
+        .sum();
     assert_eq!(dev_sum, 3_500, "dev sum before withdraw");
 
     // Full withdraw.
-    client.withdraw_developer_balance(&dev, &3_500, &None, &usdc_addr);
+    client.withdraw_developer_balance(&dev, &3_500, &None);
 
     let dev_sum_after: i128 = client
         .get_all_developer_balances(&admin, &usdc_addr)
@@ -506,7 +533,11 @@ fn test_invariant_single_dev_full_withdraw() {
         .map(|b| b.balance)
         .sum();
     assert_eq!(dev_sum_after, 0, "dev sum must be 0 after full withdraw");
-    assert_eq!(client.get_global_pool().total_balance, 0, "pool must stay 0");
+    assert_eq!(
+        client.get_global_pool().total_balance,
+        0,
+        "pool must stay 0"
+    );
 }
 
 /// Edge case: batch payments with duplicated developer in same batch accumulate correctly.
@@ -524,7 +555,7 @@ fn test_invariant_batch_duplicate_dev() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
@@ -536,8 +567,15 @@ fn test_invariant_batch_duplicate_dev() {
     items.push_back((dev.clone(), 200));
     client.batch_receive_payment(&vault, &items, &usdc_addr);
 
-    let dev_sum: i128 = client.get_all_developer_balances(&admin, &usdc_addr).iter().map(|b| b.balance).sum();
-    assert_eq!(dev_sum, 300, "batch duplicate dev: expected 300, got {dev_sum}");
+    let dev_sum: i128 = client
+        .get_all_developer_balances(&admin, &usdc_addr)
+        .iter()
+        .map(|b| b.balance)
+        .sum();
+    assert_eq!(
+        dev_sum, 300,
+        "batch duplicate dev: expected 300, got {dev_sum}"
+    );
     assert_eq!(client.get_developer_balance(&dev, &usdc_addr), 300);
 }
 
@@ -557,7 +595,7 @@ fn test_invariant_interleaved_dev_and_pool() {
     let usdc_admin = Address::generate(env);
     let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_addr = ca.address();
-    let sac = token::StellarAssetClient::new(env, &usdc_addr);
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
     sac.mint(&contract, &1_000_000);
 
     client.init(&admin, &vault);
@@ -584,7 +622,11 @@ fn test_invariant_interleaved_dev_and_pool() {
             client.receive_payment(&vault, &amount, &false, &Some(dev), &usdc_addr);
             exp_dev += amount;
         }
-        let dev_sum: i128 = client.get_all_developer_balances(&admin, &usdc_addr).iter().map(|b| b.balance).sum();
+        let dev_sum: i128 = client
+            .get_all_developer_balances(&admin, &usdc_addr)
+            .iter()
+            .map(|b| b.balance)
+            .sum();
         let pool = client.get_global_pool().total_balance;
         assert_eq!(dev_sum, exp_dev, "dev sum mismatch");
         assert_eq!(pool, exp_pool, "pool mismatch");

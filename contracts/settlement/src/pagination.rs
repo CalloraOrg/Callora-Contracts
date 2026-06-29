@@ -15,7 +15,7 @@ use soroban_sdk::{Address, Env, Vec};
 ///
 /// # Ordering Guarantees
 /// The index is maintained in deterministic sorted ascending order by address bytes, guaranteeing
-/// stable, deterministic pagination across repeated calls. The output is sorted, meaning pages 
+/// stable, deterministic pagination across repeated calls. The output is sorted, meaning pages
 /// are stable even if interleaved credits happen for developers that sort after the cursor.
 ///
 /// # Page-size Configuration
@@ -23,7 +23,7 @@ use soroban_sdk::{Address, Env, Vec};
 /// and prevent transaction size limits from being exceeded.
 ///
 /// # Intended Use
-/// This function is designed for batch reconciliation, indexing, and reporting dashboards 
+/// This function is designed for batch reconciliation, indexing, and reporting dashboards
 /// where developer balances must be safely and incrementally sync'd.
 ///
 /// # State Mutation
@@ -33,6 +33,7 @@ pub fn get_page(
     index: &Vec<Address>,
     cursor: Option<Address>,
     limit: u32,
+    usdc_token: &Address,
 ) -> (Vec<DeveloperBalance>, Option<Address>) {
     let effective_limit = if limit == 0 {
         return (Vec::new(env), None);
@@ -57,11 +58,15 @@ pub fn get_page(
         let balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(address.clone()))
+            .get(&StorageKey::DeveloperBalance(
+                address.clone(),
+                usdc_token.clone(),
+            ))
             .unwrap_or(0);
 
         result.push_back(DeveloperBalance {
             address: address.clone(),
+            token: usdc_token.clone(),
             balance,
         });
         last_address = Some(address.clone());

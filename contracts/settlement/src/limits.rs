@@ -1,8 +1,7 @@
 //! Limits module for per-developer minimum balance.
 
-use soroban_sdk::{Env, Address, Symbol, contracterror, contracttype};
-use crate::errors::SettlementError;
-use crate::types::StorageKey;
+use crate::{SettlementError, StorageKey};
+use soroban_sdk::{Address, Env, Symbol};
 
 /// Set the minimum balance for a developer.
 ///
@@ -14,7 +13,7 @@ use crate::types::StorageKey;
 pub fn set_developer_min_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
     // Auth check – admin only.
     caller.require_auth();
-    let admin = crate::lib::CalloraSettlement::get_admin(env.clone());
+    let admin = crate::CalloraSettlement::get_admin(env.clone());
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
@@ -22,9 +21,16 @@ pub fn set_developer_min_balance(env: Env, caller: Address, developer: Address, 
         panic!("minimum balance must be non‑negative");
     }
     // Store the value.
-    env.storage().persistent().set(&StorageKey::DeveloperMinBalance(developer.clone()), &min_balance);
+    env.storage().persistent().set(
+        &StorageKey::DeveloperMinBalance(developer.clone()),
+        &min_balance,
+    );
     // Optional TTL similar to other persistent entries.
-    env.storage().persistent().extend_ttl(&StorageKey::DeveloperMinBalance(developer), 50000, 50000);
+    env.storage().persistent().extend_ttl(
+        &StorageKey::DeveloperMinBalance(developer),
+        50000,
+        50000,
+    );
 }
 
 /// Retrieve the minimum balance for a developer. Returns `0` if not set.
