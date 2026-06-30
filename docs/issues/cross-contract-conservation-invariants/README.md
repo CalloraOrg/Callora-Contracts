@@ -11,7 +11,7 @@
 Each contract has its own per-contract invariant tests, but no test verifies that
 funds are conserved **across** the full vault → settlement → revenue-pool pipeline.
 A bug in the routing logic (e.g. double-credit, missing transfer, misrouted amount)
-could pass all three individual test suites while violating conservation end-to-end.
+
 
 ---
 
