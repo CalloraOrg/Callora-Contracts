@@ -4,11 +4,13 @@ members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/tests",
 ]
 default-members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/tests",
 ]
 
 [workspace.dependencies]
