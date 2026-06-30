@@ -34,13 +34,13 @@ cargo build --target wasm32-unknown-unknown --release -p callora-settlement
 # 4. Or build all contracts and verify WASM size limits in one step
 ./scripts/check-wasm-size.sh
 
-# 5. Line-coverage check (must stay â‰¥ 95%)
+# 5. Line-coverage check (must stay ≥ 95%)
 ./scripts/coverage.sh
 ```
 
-Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` â€” pass the one you want via `-p`.
+Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. The workspace crate names are `callora-vault`, `callora-revenue-pool`, and `callora-settlement` — pass the one you want via `-p`.
 
-## Whatâ€™s included
+## What’s included
 
 ### 1. `callora-vault`
 
@@ -53,6 +53,7 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
 - `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
 - `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
+- `nuclear_pause(caller)` — Admin-only emergency pause path. If admin is a Stellar multisig account, native account thresholds and signer weights are enforced by `require_auth`.
 - `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
 - `is_paused()` — View; returns current pause state.
 - `get_meta()` — View; returns `VaultMeta` (owner, balance, authorized_caller, min_deposit). Panics if uninitialized.
@@ -65,6 +66,7 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
 - `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.
 - `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
+- `dry_run_sweep_idle_balance()` — View; returns a `SweepPreview` describing the untracked on-ledger USDC surplus (`on_ledger_balance - tracked_balance`, saturating at 0). Use this to inspect what `distribute(_, _, idle_balance)` would move without committing the transfer. Read-only, no auth, no TTL bump. Returns `NotInitialized` before `init`.
 
 ## Architecture & Flow
 
@@ -189,4 +191,3 @@ See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit r
 ---
 
 Part of [Callora](https://github.com/CalloraOrg).
-

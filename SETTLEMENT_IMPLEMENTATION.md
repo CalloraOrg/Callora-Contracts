@@ -4,6 +4,18 @@
 
 This document describes the implementation of revenue settlement functionality that allows the vault contract to automatically transfer USDC to a settlement contract when deductions occur. The settlement contract then credits either a global pool or specific developer balances.
 
+## Reconciliation Contract (Vault ↔ Settlement)
+
+The integration between the vault and settlement contracts ensures that tracked balances stay in sync across both systems. Here's how it works:
+
+1. **Atomic Operations**: All operations (validation → token transfer → settlement contract call → state update) happen atomically. If any step fails, the entire transaction reverts with no partial state changes.
+2. **Reconciliation Flow**:
+   - The vault contract first validates the deduct/batch-deduct request
+   - It transfers USDC tokens to the settlement contract
+   - It calls `settlement_client.receive_payment(..., to_pool=true, developer=None)` to notify the settlement contract to credit the global pool
+   - Only after the cross‑contract call succeeds does the vault update its own internal balance
+3. **`to_pool` Semantics**: For all vault‑originated deducts and batch deducts, the deducted amount is always credited to the **global pool** in the settlement contract.
+
 ## Architecture
 
 ### Components
@@ -12,6 +24,7 @@ This document describes the implementation of revenue settlement functionality t
    - Enhanced with settlement contract integration
    - Automatically transfers USDC to settlement on `deduct()` and `batch_deduct()`
    - Maintains settlement contract address configuration
+   - Uses cross‑contract calls to `settlement_client.receive_payment()` to ensure reconciliation
 
 2. **Settlement Contract (`callora-settlement`)**
    - Receives USDC payments from vault
@@ -29,13 +42,13 @@ sequenceDiagram
     
     API->>Vault: deduct(env, caller, amount, request_id)
     Vault->>Vault: Validate Auth & Balance
-    Vault->>Vault: Update internal balance
     Vault->>USDC: transfer(vault, settlement, amount)
     USDC-->>Vault: Transfer complete
-    Vault->>Settlement: receive_payment(env, vault, amount, ...)
+    Vault->>Settlement: receive_payment(vault, amount, to_pool=true, developer=None)
     Settlement->>Settlement: Validate caller (vault)
-    Settlement->>Settlement: Update Global Pool or Dev Balance
+    Settlement->>Settlement: Update Global Pool
     Settlement-->>Vault: Payment successful
+    Vault->>Vault: Update internal balance & mark request processed
     Vault-->>API: Return new balance
 ```
 
@@ -139,7 +152,13 @@ pub struct BalanceCreditedEvent {
    - Creates empty developer balances and global pool
    - Panic: "settlement contract already initialized"
 
-2. **`receive_payment(env, caller, amount, to_pool, developer)`**
+4. **`set_usdc_token(env, caller, usdc_address)`**
+   - Configures the USDC token contract address for withdrawals
+   - Authorization: Current admin only
+   - Validation: Token address cannot be the contract itself
+   - Panic: "unauthorized: caller is not admin" or "invalid config: usdc_token cannot be the contract itself"
+
+5. **`receive_payment(env, caller, amount, to_pool, developer)`**
    - **Access Control**: Only vault or admin can call
    - **Validation**: Amount must be positive
    - **Pool Credit**: If `to_pool=true`, credits global pool
@@ -148,10 +167,19 @@ pub struct BalanceCreditedEvent {
      - `PaymentReceivedEvent` for all payments
      - `BalanceCreditedEvent` for developer credits
 
+6. **`withdraw_developer_balance(env, developer, amount)`**
+   - **Access Control**: Only the developer may call
+   - **Validation**: Amount must be positive and cannot exceed tracked balance
+   - **Token Flow**: Transfers USDC from the settlement contract to the developer
+   - **State Update**: Deducts the withdrawn amount from the tracked balance using checked arithmetic
+   - **Events**:
+     - `DeveloperWithdrawEvent` after transfer succeeds
+
 3. **Query Functions**
    - `get_admin()`, `get_vault()`, `get_global_pool()`
    - `get_developer_balance(developer)`
-   - `get_all_developer_balances()` (admin only)
+   - `get_all_developer_balances()` (admin only, safe only for <=100 developers)
+   - `get_developer_balances_page(start, limit)` (admin only, paginated)
 
 4. **Admin Functions**
    - `set_admin()` (admin only)
@@ -255,6 +283,20 @@ CalloraSettlement::receive_payment(
     amount,
     false, // credit to developer, not pool
     Some(developer_address), // specify developer
+);
+```
+
+### Developer Withdrawal
+
+```rust
+// Configure USDC if not already configured by admin
+CalloraSettlement::set_usdc_token(env, admin_address, usdc_contract_address);
+
+// Developer withdraws their available tracked balance
+CalloraSettlement::withdraw_developer_balance(
+    env,
+    developer_address,
+    withdrawal_amount,
 );
 ```
 
@@ -673,6 +715,9 @@ result
 let index: Vec<Address> = inst
     .get(&StorageKey::DeveloperIndex)
     .unwrap_or_else(|| Vec::new(&env));
+if index.len() > 100 {
+    return Err(SettlementError::GasExhaustionRisk);
+}
 let mut result = Vec::new(&env);
 for address in index.iter() {
     let balance = env
@@ -685,7 +730,46 @@ for address in index.iter() {
         balance,
     });
 }
-result
+Ok(result)
+```
+
+#### New paginated query `get_developer_balances_page`
+
+```rust
+pub fn get_developer_balances_page(
+    env: Env,
+    caller: Address,
+    start: u32,
+    limit: u32,
+) -> Result<Vec<DeveloperBalance>, SettlementError> {
+    let inst = env.storage().instance();
+    let index: Vec<Address> = inst
+        .get(&StorageKey::DeveloperIndex)
+        .unwrap_or_else(|| Vec::new(&env));
+    let end = start
+        .saturating_add(limit.min(50))
+        .min(index.len());
+    let mut result = Vec::new(&env);
+    let mut cursor = 0;
+    for address in index.iter() {
+        if cursor >= start && cursor < end {
+            let balance = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::DeveloperBalance(address.clone()))
+                .unwrap_or(0);
+            result.push_back(DeveloperBalance {
+                address: address.clone(),
+                balance,
+            });
+        }
+        if cursor >= end {
+            break;
+        }
+        cursor += 1;
+    }
+    Ok(result)
+}
 ```
 
 #### Changes to `init`
@@ -707,7 +791,8 @@ inst.set(&StorageKey::DeveloperIndex, &empty_index);
 #### Breaking Changes
 - **Contract Upgrade Required**: This is a storage-level migration that requires a contract upgrade
 - **Data Migration**: Existing developer balances in the old `Map<Address, i128>` format need to be migrated to the new persistent storage format
-- **API Compatibility**: Public API remains unchanged (`receive_payment`, `get_developer_balance`, `get_all_developer_balances`)
+- **API Compatibility**: `receive_payment` and `get_developer_balance` remain unchanged; `get_all_developer_balances` now returns an explicit `Result` and rejects full iteration once the developer index exceeds 100 entries
+- **New Safe Query**: `get_developer_balances_page(start, limit)` is added for paginated admin reads and is capped at 50 records per call
 
 #### Performance Improvements
 - **Developer Credit**: O(1) point read/write instead of O(n) map operations

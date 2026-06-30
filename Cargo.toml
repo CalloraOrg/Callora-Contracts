@@ -1,20 +1,34 @@
+[package]
+name = "callora-contracts-e2e"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
 [workspace]
 resolver = "2"
 members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
-    "contracts/tests",
+    "contracts/helpers",
+    "contracts/revenue_pool/fuzz",
 ]
 default-members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
-    "contracts/tests",
+    "contracts/helpers",
 ]
+
 
 [workspace.dependencies]
 soroban-sdk = "22"
+
+[dev-dependencies]
+callora-vault = { path = "contracts/vault" }
+callora-settlement = { path = "contracts/settlement" }
+callora-revenue-pool = { path = "contracts/revenue_pool" }
+soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
 overflow-checks = true

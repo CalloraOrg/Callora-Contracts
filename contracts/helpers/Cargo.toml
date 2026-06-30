@@ -1,0 +1,9 @@
+[package]
+name = "callora-helpers"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# No external dependencies required by the generic snapshot diff implementation.
+# Using standard and alloc collections.

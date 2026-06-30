@@ -1,279 +1,64 @@
 #![no_std]
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol, Vec, BytesN};
-
-/// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
-///
-/// Flow: vault deduct → vault transfers USDC to this contract → admin calls distribute(to, amount).
-///
-/// # Security Assumptions
-/// - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
-/// - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
-/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
-///   increase balance without breaking logic.
-///
-/// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
-const ADMIN_KEY: &str = "admin";
-const PENDING_ADMIN_KEY: &str = "pending_admin";
-const USDC_KEY: &str = "usdc";
-const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
-const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
-const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
-const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
-const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
-const VERSION_KEY: &str = "version";
-
-pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
-
-/// Maximum number of payments allowed in a single `batch_distribute` call.
-/// Caps CPU/memory usage well within Soroban resource limits and aligns with
-/// the vault's `MAX_BATCH_SIZE` for `batch_deduct`.
-pub const MAX_BATCH_SIZE: u32 = 50;
-
-/// TTL bump constants for instance storage archival risk mitigation.
-/// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
-/// Bumping TTL ensures state remains accessible for critical operations.
-/// 
-/// # Constants
-/// - `BUMP_AMOUNT`: Number of ledgers to extend TTL by (10000 ledgers ≈ 16 days)
-/// - `LIFETIME_THRESHOLD`: Minimum TTL before triggering a bump (1000 ledgers ≈ 1.5 days)
-pub const BUMP_AMOUNT: u32 = 10000;
-pub const LIFETIME_THRESHOLD: u32 = 1000;
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+}
 
 #[contract]
-pub struct RevenuePool;
+pub struct CalloraRevenuePool;
 
+/// Contract implementation block for [`RevenuePool`].
 #[contractimpl]
-impl RevenuePool {
-    /// Initialize the revenue pool with an admin and the USDC token address.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `admin` - Address that may call `distribute`. Typically backend or multisig.
-    /// * `usdc_token` - Stellar USDC (or wrapped USDC) token contract address.
-    ///
-    /// # Panics
-    /// * If the revenue pool is already initialized.
-    ///
-    /// # Events
-    /// Emits an `init` event with the `admin` address as a topic and `usdc_token` address as data.
-    pub fn init(env: Env, admin: Address, usdc_token: Address) {
-        admin.require_auth();
-        if usdc_token == env.current_contract_address() {
-            panic!("invalid config: usdc_token cannot be the contract itself");
+impl CalloraRevenuePool {
+    pub fn init(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("Already initialized");
         }
-        if usdc_token == admin {
-            panic!("invalid config: usdc_token cannot be the admin address");
-        }
-        let inst = env.storage().instance();
-        if inst.has(&Symbol::new(&env, ADMIN_KEY)) {
-            panic!("revenue pool already initialized");
-        }
-        inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
-        inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
-
-        // Extend TTL on initialization to prevent archival
-        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-
-        env.events()
-            .publish((Symbol::new(&env, "init"), admin), usdc_token);
-    }
-
-    /// Return the current admin address.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    ///
-    /// # Returns
-    /// The `Address` of the current admin.
-    ///
-    /// # Panics
-    /// * If the revenue pool has not been initialized.
-    pub fn get_admin(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, ADMIN_KEY))
-            .expect("revenue pool not initialized")
-    }
-
-    /// Initiate replacement of the current admin. Only the existing admin may call this.
-    /// The new admin must call `claim_admin` to complete the transfer.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
-    /// * `new_admin` - Address of the proposed new admin.
-    ///
-    /// # Panics
-    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
-    ///
-    /// # Events
-    /// Emits an `admin_changed` event with the `current_admin` as a topic and
-    /// `(current_admin, new_admin)` as data, followed by `admin_transfer_started`
-    /// with the `current_admin` as a topic and `new_admin` as data.
-    /// Return the USDC token address configured for this pool.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    ///
-    /// # Returns
-    /// The `Address` of the USDC token contract.
-    ///
-    /// # Panics
-    /// * If the revenue pool has not been initialized.
-    pub fn get_usdc_token(env: Env) -> Address {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
-            .expect("revenue pool not initialized")
+        env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
-        let current = Self::get_admin(env.clone());
-        if caller != current {
-            panic!("unauthorized: caller is not admin");
-        }
-        let inst = env.storage().instance();
-        inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
-        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-
-        // Emit explicit before/after admin intent for indexers and audit trails.
-        env.events().publish(
-            (Symbol::new(&env, "admin_changed"), current.clone()),
-            (current.clone(), new_admin.clone()),
-        );
-
-        env.events().publish(
-            (Symbol::new(&env, "admin_transfer_started"), current),
-            new_admin,
-        );
-    }
-
-    /// Complete the admin transfer. Only the pending admin may call this.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the pending admin set via `set_admin`.
-    ///
-    /// # Panics
-    /// * If no pending admin is set (`"no pending admin"`).
-    /// * If the caller is not the pending admin (`"unauthorized: caller is not pending admin"`).
-    ///
-    /// # Events
-    /// Emits an `admin_transfer_completed` event with the `new_admin` as a topic.
-    pub fn claim_admin(env: Env, caller: Address) {
-        caller.require_auth();
-        let inst = env.storage().instance();
-        let pending: Address = inst
-            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
-            .expect("no pending admin");
-
-        if caller != pending {
-            panic!("unauthorized: caller is not pending admin");
-        }
-
-        inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
-        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
-        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-
-        env.events()
-            .publish((Symbol::new(&env, "admin_transfer_completed"), pending), ());
-    }
-
-    /// **Note**: This function is an **event-only helper**. It is **not** a substitute
-    /// for real token settlement and does **not** move any tokens. It exists purely
-    /// for event emission / indexer alignment when configured.
-    /// In practice, USDC is received when the vault (or any address) transfers tokens
-    /// to this contract's address; no separate "receive_payment" call is required
-    /// for the transfer to succeed.
-    ///
-    /// This function can be used to emit an event for indexers when the backend
-    /// wants to log that a payment was credited from the vault.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
-    /// * `amount` - Amount received (for event logging).
-    /// * `from_vault` - Optional; true if the source was the vault.
-    ///
-    /// # Panics
-    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
-    ///
-    /// # Events
-    /// Emits a `receive_payment` event with `caller` as a topic, and a tuple of
-    /// `(amount, from_vault)` as data.
-    pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("unauthorized: caller is not admin");
-        }
-        env.events().publish(
-            (Symbol::new(&env, "receive_payment"), caller),
-            (amount, from_vault),
-        );
-    }
-
-    /// Get the current per-leg distribution cap.
-    /// Defaults to `i128::MAX` when unset.
-    pub fn get_max_distribute(env: Env) -> i128 {
-        env.storage()
+        let current_admin = env
+            .storage()
             .instance()
-            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
-            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
-    }
-
-    /// Set the maximum amount that may be distributed in a single `distribute`
-    /// call or as an individual payment leg in `batch_distribute`.
-    ///
-    /// Only the current admin may call this. `max_distribute` must be positive.
-    /// Emits `set_max_distribute` with `(old_max, new_max)`.
-    pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("unauthorized: caller is not admin");
+            .get::<_, Address>(&DataKey::Admin)
+            .unwrap();
+        if caller != current_admin {
+            panic!("Not admin");
         }
-        assert!(max_distribute > 0, "max_distribute must be positive");
-        let old_max = Self::get_max_distribute(env.clone());
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
         env.events().publish(
-            (Symbol::new(&env, "set_max_distribute"), admin),
-            (old_max, max_distribute),
+            (symbol_short!("admin"), symbol_short!("changed")),
+            (current_admin, new_admin.clone()),
         );
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
 
-    fn validate_recipient(recipient: &Address, contract_self: &Address) {
-        // Rule 1 — no self-distributions (the contract sending to itself is almost
-        // certainly a logic bug; if you want to "reclaim" funds use a dedicated fn).
-        if recipient == contract_self {
-            panic!("invalid recipient: cannot distribute to the contract itself");
-        }
-    }
-
-    /// Distribute USDC from this contract to a developer wallet.
+    /// Propose an emergency drain of USDC from the revenue pool to a designated address.
     ///
-    /// Only the admin may call. Transfers USDC from this contract to `to`.
+    /// Only the current admin may call this function. The drain is subject to a
+    /// 24-hour timelock before it can be executed via [`Self::execute_emergency_drain`].
+    /// If a previous drain proposal exists, it is replaced.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
-    /// * `to` - Developer address to receive USDC.
-    /// * `amount` - Amount in token base units (e.g. USDC stroops).
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `to` - Address that will receive the drained USDC (typically the treasury).
+    /// * `amount` - Amount of USDC in base units to drain. Must be positive.
     ///
     /// # Panics
-    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
-    /// * If the amount is zero or negative (`"amount must be positive"`).
+    /// * If the caller is not the current admin.
+    /// * If `amount` is zero or negative.
+    /// * If `to` is the contract itself.
     /// * If the revenue pool has not been initialized.
-    /// * If the revenue pool holds less than the requested amount (`"insufficient USDC balance"`).
     ///
     /// # Events
-    /// Emits a `distribute` event with `to` as a topic and `amount` as data.
-    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
+    /// Emits `emergency_drain_proposed` with `admin` as topic and a
+    /// [`PendingEmergencyDrain`] as data.
+    pub fn propose_emergency_drain(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
         if caller != admin {
@@ -282,207 +67,145 @@ impl RevenuePool {
         if amount <= 0 {
             panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
         }
-        let max_distribute = Self::get_max_distribute(env.clone());
-        if amount > max_distribute {
-            panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
-        }
-
-        let usdc_address: Address = env
-            .storage()
+        // Validate initialization by reading USDC address.
+        env.storage()
             .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
+            .get::<_, Address>(&Symbol::new(&env, USDC_KEY))
             .expect(ERR_NOT_INITIALIZED);
-        let usdc = token::Client::new(&env, &usdc_address);
-
-        let contract_address = env.current_contract_address();
-        Self::validate_recipient(&to, &contract_address);
-
-        let _ = usdc.try_balance(&to).unwrap_or_else(|_| {
-            panic!(
-                "invalid recipient: account does not exist \
-                                      or has no USDC trustline"
-            )
-        });
-
-        if usdc.balance(&contract_address) < amount {
-            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+        if to == env.current_contract_address() {
+            panic!("invalid recipient: cannot drain to the contract itself");
         }
 
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        let proposed_at = env.ledger().timestamp();
+        let execute_after = proposed_at
+            .checked_add(emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS)
+            .expect("timelock overflow");
 
-        usdc.transfer(&contract_address, &to, &amount);
-        env.events()
-            .publish((Symbol::new(&env, "distribute"), to), amount);
+        let drain = emergency::PendingEmergencyDrain {
+            to: to.clone(),
+            amount,
+            proposed_at,
+            execute_after,
+        };
+
+        let inst = env.storage().instance();
+        inst.set(
+            &Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY),
+            &drain,
+        );
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        env.events().publish(
+            (events::event_emergency_drain_proposed(&env), admin),
+            drain,
+        );
     }
 
-    /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.
+    /// Execute a previously proposed emergency drain after the timelock has expired.
     ///
-    /// This function implements a three-phase atomic batch transfer:
-    /// 1. **Precomputation & Validation**: Validates all amounts are positive and calculates total.
-    /// 2. **Balance Check**: Ensures contract has sufficient USDC before any transfers.
-    /// 3. **Execution**: Performs all transfers and emits events for each leg.
-    ///
-    /// The implementation guarantees atomicity: either all transfers succeed or none do.
-    /// No partial transfers occur if a later leg would fail.
+    /// Only the current admin may call this function. Transfers the proposed
+    /// USDC amount from this contract to the destination address specified in the
+    /// pending proposal. The proposal is consumed on success to prevent replay.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
-    /// * `caller` - Must be the current admin.
-    /// * `payments` - A vector of `(Address, i128)` tuples representing destinations and amounts.
-    ///   Must contain between 1 and [`MAX_BATCH_SIZE`] entries (inclusive).
+    /// * `caller` - Must be the current admin; must authorize.
     ///
     /// # Panics
-    /// * If `payments` is empty (`"batch_distribute requires at least one payment"`).
-    /// * If `payments` exceeds [`MAX_BATCH_SIZE`] entries (`"batch too large"`).
-    /// * If the caller is not the current admin (`"unauthorized: caller is not admin"`).
-    /// * If any individual amount is zero or negative (`"amount must be positive"`).
-    /// * If the revenue pool has not been initialized (`"revenue pool not initialized"`).
-    /// * If the total amount exceeds the contract's available balance (`"insufficient USDC balance"`).
-    /// * If the payments vector is empty (`"payments vector cannot be empty"`).
+    /// * If the caller is not the current admin.
+    /// * If no emergency drain proposal is pending.
+    /// * If the 24-hour timelock has not yet expired.
+    /// * If the contract's USDC balance is less than the proposed amount.
+    /// * If the revenue pool has not been initialized.
     ///
     /// # Events
-    /// Emits a `batch_distribute` event for each payment with `to` as a topic and `amount` as data.
-    ///
-    /// # Atomicity Guarantee
-    /// All validation is performed before any external calls to the USDC token contract.
-    /// This ensures that if any validation fails, no state changes or transfers occur.
-    ///
-    /// # Vector Size Policy
-    /// The maximum number of payments in a single batch is limited by Soroban's
-    /// transaction budget and footprint limits. Recommended maximum: 100 payments per batch.
-    /// For larger distributions, split into multiple transactions.
-    ///
-    /// # Examples
-    /// ```ignore
-    /// let payments = vec![
-    ///     (developer1, 1000),
-    ///     (developer2, 2000),
-    ///     (developer3, 1500),
-    /// ];
-    /// pool.batch_distribute(&admin, &payments);
-    /// ```
-    pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
-        // Phase 0: Authorization
+    /// Emits `emergency_drain_executed` with `admin` as topic and
+    /// `(to, amount, proposed_at, executed_at)` as data.
+    pub fn execute_emergency_drain(env: Env, caller: Address) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             panic!("{}", ERR_UNAUTHORIZED);
         }
 
-        let n = payments.len();
-        if n == 0 {
-            panic!("batch_distribute requires at least one payment");
-        }
-        if n > MAX_BATCH_SIZE {
-            panic!("batch too large");
-        }
+        let inst = env.storage().instance();
+        let drain: emergency::PendingEmergencyDrain = inst
+            .get(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY))
+            .expect("no pending emergency drain");
 
-        let max_distribute = Self::get_max_distribute(env.clone());
-        let mut total_amount: i128 = 0;
-        for payment in payments.iter() {
-            let (_, amount) = payment;
-
-            // Validate each amount is strictly positive
-            if amount <= 0 {
-                panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
-            }
-            if *amount > max_distribute {
-                panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
-            }
-            total_amount = total_amount
-                .checked_add(amount)
-                .unwrap_or_else(|| panic!("total overflow"));
+        let executed_at = env.ledger().timestamp();
+        if executed_at < drain.execute_after {
+            panic!("emergency drain timelock has not expired");
         }
 
-        // Phase 2: Balance Check
-        // Query the USDC token contract for current balance
-        let usdc_address: Address = env
-            .storage()
-            .instance()
+        let usdc_address: Address = inst
             .get(&Symbol::new(&env, USDC_KEY))
             .expect(ERR_NOT_INITIALIZED);
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
 
-        if usdc.balance(&contract_address) < total_amount {
+        if usdc.balance(&contract_address) < drain.amount {
             panic!("{}", ERR_INSUFFICIENT_BALANCE);
         }
 
-        // Extend TTL before executing transfers
-        env.storage().instance().extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        // Consume the proposal before transferring to prevent replay.
+        inst.remove(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        // Phase 3: Execution
-        // All validation passed - now perform the transfers
-        // Each transfer is atomic; if any fails, the entire transaction reverts
-        for payment in payments.iter() {
-            let (to, amount) = payment;
-            Self::validate_recipient(&to, &contract_address);
-            usdc.transfer(&contract_address, &to, &amount);
+        usdc.transfer(&contract_address, &drain.to, &drain.amount);
 
-            // Emit event for this leg of the batch
-            env.events()
-                .publish((Symbol::new(&env, "batch_distribute"), to), amount);
-        }
+        env.events().publish(
+            (events::event_emergency_drain_executed(&env), admin),
+            (drain.to, drain.amount, drain.proposed_at, executed_at),
+        );
     }
 
-    /// Return this contract's USDC balance (for testing and dashboards).
+    /// Cancel a pending emergency drain proposal.
+    ///
+    /// Only the current admin may call this function.
+    ///
+    /// # Arguments
+    /// * `env` - The environment running the contract.
+    /// * `caller` - Must be the current admin; must authorize.
+    ///
+    /// # Panics
+    /// * If the caller is not the current admin.
+    /// * If no emergency drain proposal is pending.
+    ///
+    /// # Events
+    /// Emits `emergency_drain_cancelled` with `admin` as topic and the cancelled
+    /// [`PendingEmergencyDrain`] as data.
+    pub fn cancel_emergency_drain(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+
+        let inst = env.storage().instance();
+        let drain: emergency::PendingEmergencyDrain = inst
+            .get(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY))
+            .expect("no pending emergency drain");
+
+        inst.remove(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        env.events().publish(
+            (events::event_emergency_drain_cancelled(&env), admin),
+            drain,
+        );
+    }
+
+    /// Return the pending emergency drain proposal, or `None` if none is pending.
     ///
     /// # Arguments
     /// * `env` - The environment running the contract.
     ///
     /// # Returns
-    /// The balance of the contract in USDC base units.
-    ///
-    /// # Panics
-    /// * If the revenue pool has not been initialized.
-    pub fn balance(env: Env) -> i128 {
-        let usdc_address: Address = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, USDC_KEY))
-            .expect("revenue pool not initialized");
-        let usdc = token::Client::new(&env, &usdc_address);
-        usdc.balance(&env.current_contract_address())
-    }
-
-    /// Admin-gated contract upgrade.
-    ///
-    /// Only the current admin may call. This will instruct the host to update
-    /// the current contract WASM to `new_wasm_hash` and persist the version.
-    /// Emits an `upgraded` event with the admin as topic and the new version as data.
-    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("{}", ERR_UNAUTHORIZED);
-        }
-
-        // Perform the on-chain upgrade via the deployer interface.
-        // This is a host operation and may only succeed in the live environment.
-        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
-
-        // Persist the version marker for on-chain queries.
+    /// `Some(PendingEmergencyDrain)` with the proposal details, or `None`.
+    pub fn get_pending_emergency_drain(env: Env) -> Option<emergency::PendingEmergencyDrain> {
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
-
-        // Emit an event for indexers / audit logs.
-        env.events().publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
-    }
-
-    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
-    ///
-    /// Panics if no version has been stored yet.
-    pub fn version(env: Env) -> BytesN<32> {
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, VERSION_KEY))
-            .expect("version not set")
+            .get(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY))
     }
 }
-
-#[cfg(test)]
-mod test;
-
-#[cfg(test)]
-mod test_balance;

@@ -1,0 +1,20 @@
+[package]
+name = "callora-vault-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-vault = { path = ".." }
+
+[[bin]]
+name = "set_auth"
+path = "targets/set_auth.rs"
+test = false
+doc = false

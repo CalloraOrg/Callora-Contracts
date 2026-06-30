@@ -1,0 +1,42 @@
+name: WASM Size Budget
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop, "feature/**", "chore/**", "ci/**"]
+  workflow_dispatch:
+
+jobs:
+  wasm-size:
+    name: Contract WASM size check
+    runs-on: ubuntu-latest
+    env:
+      WASM_SIZE_LIMIT_BYTES: "102400"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-size-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-size-
+            ${{ runner.os }}-cargo-
+
+      - name: Check per-contract WASM size
+        shell: bash
+        run: |
+          chmod +x scripts/check-wasm-size.sh
+          ./scripts/check-wasm-size.sh

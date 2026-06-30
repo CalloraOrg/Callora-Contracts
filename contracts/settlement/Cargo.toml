@@ -13,6 +13,7 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { version = "1", default-features = false, features = ["std", "alloc"] }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
