@@ -209,3 +209,27 @@ impl CalloraRevenuePool {
             .get(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Companion modules
+// ---------------------------------------------------------------------------
+
+/// Emergency-drain types and 24-hour timelock constants used by the
+/// admin-only drain entrypoints above.
+///
+/// `pub` (rather than private) so cross-crate integration tests
+/// (e.g. [`tests::event_schema_audit`](../../../tests/event_schema_audit.rs))
+/// can decode `PendingEmergencyDrain` directly from event data without
+/// needing a separate accessor.
+pub mod emergency;
+
+/// Centralized catalog of event-topic `Symbol` constructors. See
+/// [`events`] for the full list of topics and their byte-identity
+/// snapshot tests.
+pub mod events;
+
+#[cfg(test)]
+mod test_emergency;
+
+#[cfg(test)]
+mod test_reentrancy;

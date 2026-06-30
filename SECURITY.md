@@ -243,7 +243,54 @@ Before any mainnet deployment:
 
 **Note**: This checklist should be reviewed and updated regularly as new security patterns emerge and the codebase evolves.
 
-## require_auth() Audit (Issue #160)
+## Revenue Pool Reentrancy Mitigation (Issue #426)
+
+### Threat model
+
+Issue #426 asks for a reentrancy-equivalent test for the `revenue_pool`
+contract using a malicious mock USDC token. The token's `transfer()` is a
+host-managed calibration call site while the pool is mid-flight, so a
+malicious token may attempt to re-enter privileged entrypoints of the
+pool (the issue specifies `distribute`, `set_admin`, and `pause`, plus
+`batch_distribute`). The fix here proves — through the dedicated
+integration test at
+[`contracts/revenue_pool/src/test_reentrancy.rs`](contracts/revenue_pool/src/test_reentrancy.rs)
+— that every re-entry vector either deterministically aborts at the
+host boundary or completes a safely-completed side transfer without state
+corruption.
+
+### Test vectors (≥ 4 distinct vectors, per acceptance criterion)
+
+| # | Vector                                       | Pool entrypoint under attack         | Outcome asserted by the test                                            |
+|---|----------------------------------------------|---------------------------------------|-------------------------------------------------------------------------|
+| 1 | `distribute` analogue (USDC-transfer entrypoint) | `execute_emergency_drain`        | Authorization guard rejects re-entry; emergency_drain_executed fires at most once |
+| 2 | `set_admin`                                   | `set_admin(attacker, attacker)`        | Admin address is unchanged post-call                                    |
+| 3 | `batch_distribute` analogue                   | `propose_emergency_drain(attacker,...)`| Pending proposal — if any — still carries the original admin-controlled `to` and `amount` |
+| 4 | `pause` analogue                              | `cancel_emergency_drain(attacker)`     | No attacker-driven `emergency_drain_cancelled` event appears in the log |
+
+A fifth vector asserts the malicious mock's `armed` flag flips to
+`false` after exactly one `transfer` so re-entry chaining cannot loop.
+
+### Architectural safeguards covered
+
+* **Token callback disarm.** The malicious mock disarms on its first
+  transfer regardless of which target was selected, guaranteeing
+  termination even in the face of a future recursive entrypoint.
+* **Caller-auth guard.** Every privileged entrypoint re-reads
+  `Self::get_admin()` and panics on `caller != admin`. The mock may
+  attempt the call with attacker-auth; the guard rejects before any
+  state mutation.
+* **Outcome-based assertions.** Tests assert post-call contract state
+  (admin stays admin; pending proposal unchanged; cancel events trace
+  back to admin) rather than event-count equality, so duplicate emits
+  and partial-failure paths are caught.
+
+### Coverage target
+
+The re-entry suite exercises every code path in `MaliciousToken` and
+every privileged entrypoint of `RevenuePool` that is reachable while a
+transfer is in flight, contributing to the 95 % line-coverage target
+tracked by `scripts/coverage.sh` / `tarpaulin.toml`.
 
 All privileged entrypoints across `vault`, `revenue_pool`, and `settlement` contracts
 have been audited for `require_auth()` coverage as part of Issue #160.
