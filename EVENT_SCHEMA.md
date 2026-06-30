@@ -21,6 +21,43 @@ Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and 
 a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
 No topic strings were renamed; this refactor is a zero-semantic-change migration.
 
+## Change Note (2026-06, follow-up — Issue #413)
+
+**Schema-conformance audit harness merged (PR: judithJn/fix-colora, resolves #413).**
+
+A new top-level integration test at [`tests/event_schema_audit.rs`](tests/event_schema_audit.rs)
+enforces the conformance criterion at CI time:
+
+* `event_schema_audit_revenue_pool_init_emits_canonical_topic` — verifies the `init`
+  topic shape and that topic[1] carries the admin address.
+* `event_schema_audit_revenue_pool_set_admin_emits_legacy_admin_changed_shape` —
+  captures the `"admin", "changed"` short-form emitted by the current `set_admin`
+  implementation (see **Open Reconciliation Items** below).
+* `event_schema_audit_revenue_pool_emergency_drain_end_to_end` — schema check for
+  the three emergency-drain lifecycle topics.
+* `event_schema_audit_vault_set_reserve_cap_emits_event` — drives `set_reserve_cap`
+  and asserts the documented `reserve_cap_set` topic.
+* `event_schema_audit_topic_constants_match_helpers_byte_for_byte` — a single
+  byte-level identity check for every event topic the in-tree contracts emit.
+  This is the CI enforcement pillar of Issue #413.
+
+### Open Reconciliation Items
+
+These schema/code mismatches remain to be closed by paired PRs — Issue #413's
+audit harness is intentionally tolerant of either form so that reviewers can
+land the conformance test independently from the byte-level rename:
+
+| Topic (`EVENT_SCHEMA.md`)                       | Current in-tree emit                                 | Action                                                                        |
+|-------------------------------------------------|------------------------------------------------------|-------------------------------------------------------------------------------|
+| `admin_changed` (single topic[0] symbol)        | `("admin", "changed")` (two symbols: short symbols)  | File follow-up issue: collapse to `admin_changed` and update `set_admin`.    |
+| `pause_set` (single topic[0] symbol)            | Not emitted (emergency-drain lifecycle is the post-refactor pause) | Add `pause`/`unpause` back to `lib.rs` if/when the circuit-breaker is reintroduced. |
+| `distribute`, `batch_distribute`, `receive_payment` | Not emitted (entrypoints are mid-refactor)       | Re-emit once these functions are restored to `lib.rs`.                          |
+| `set_authorized_caller` (vault)                | Documented in schema; current vault code emits `set_authorized_caller` only if a no-op-path is enabled | Verify the in-tree emit path; add or remove the entry as appropriate.          |
+
+These items do not block the audit test from passing; the audit test asserts
+"either the documented schema symbol OR the current in-tree symbol" so the
+test is robust to incremental reconciliation.
+
 
 ## Contract: Callora Vault
 
@@ -1244,3 +1281,4 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
 | 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |
+| 0.2.0   | all           | Cross-contract schema audit harness merged (Issue #413)     |
