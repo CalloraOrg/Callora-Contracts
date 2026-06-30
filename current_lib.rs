@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec, token, Symbol, String};
+pub mod archive;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contracttype]
 #[derive(Clone)]
@@ -7,16 +8,6 @@ pub enum DataKey {
     Vault,
     TotalSettled,
 }
-
-pub mod admin;
-pub mod batch;
-pub mod errors;
-pub mod types;
-pub mod timelock;
-pub mod events;
-pub mod migrate;
-pub mod archive;
-pub mod pagination;
 
 pub use errors::SettlementError;
 pub use timelock::PendingDeveloperMigration;
@@ -442,7 +433,7 @@ impl CalloraSettlement {
     pub fn get_global_pool(env: Env) -> GlobalPool {
         env.storage()
             .instance()
-            .get::<_, GlobalPool>(&StorageKey::GlobalPool)
+            .get(&StorageKey::GlobalPool)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
@@ -572,30 +563,49 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
-        let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
-        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
-        
-        if current_balance < amount {
-            return Err(SettlementError::InsufficientDeveloperBalance);
-        }
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let current_balance: i128 = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Vault)
+            .unwrap();
+        vault.require_auth();
+        let total = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::TotalSettled)
+            .unwrap_or(0);
+        let new_total = total.checked_add(amount).unwrap();
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalSettled, &new_total);
+    }
 
-        let new_balance = current_balance.checked_sub(amount).ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-        env.storage().persistent().set(&balance_key, &new_balance);
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 
-        usdc.transfer(&contract_address, &recipient, &amount);
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_single_dev_v2(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 
-        env.events().publish(
-            (events::event_developer_withdraw(&env), developer.clone()),
-            DeveloperWithdrawEvent {
-                developer: developer.clone(),
-                amount,
-                remaining_balance: new_balance,
-                to: recipient,
-                token: usdc_address.clone(),
-            },
-        );
-
-        Ok(())
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
     }
 
     /// Migrate a single developer's V1 balance to V2 (admin only).
@@ -617,7 +627,7 @@ impl CalloraSettlement {
     ///
     /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
     /// full list has been processed.
-    pub fn batch_withdraw_cursor(
+    pub fn batch_withdraw_developer_balance_cursor(
         env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
@@ -641,30 +651,5 @@ impl CalloraSettlement {
         let next_cursor = end as u32;
         let is_complete = next_cursor >= count;
         Ok((next_cursor, is_complete))
-    }
-
-    fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
-        if caller != vault && caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-    }
-
-    fn sorted_insert(env: &Env, index: &mut soroban_sdk::Vec<Address>, address: Address) {
-        if !index.contains(&address) {
-            index.push_back(address);
-        }
-    }
-
-    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<crate::types::DeveloperClaimWindow> = env.storage().persistent().get(&StorageKey::DeveloperClaimWindow(developer.clone()));
-        if let Some(w) = window {
-            let now = env.ledger().timestamp();
-            if now < w.start_ts || now > w.end_ts {
-                return Err(SettlementError::ClaimWindowClosed);
-            }
-        }
-        Ok(())
     }
 }

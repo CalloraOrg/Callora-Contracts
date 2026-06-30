@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec, Symbol};
 
 #[contracttype]
 #[derive(Clone)]
@@ -26,6 +26,21 @@ pub mod settlement {
         file = "../../target/wasm32-unknown-unknown/release/callora_settlement.wasm"
     );
 }
+
+pub mod errors;
+pub use errors::VaultError;
+
+#[contracttype]
+#[derive(Clone)]
+pub enum StorageKey {
+    ReserveCap(Address),
+    DeveloperConfig(Address),
+    DeveloperState(Address),
+    ProcessedRequest(soroban_sdk::Symbol),
+}
+
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 30; // ~30 days
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 7; // ~7 days
 
 #[contract]
 pub struct CalloraVault;
@@ -286,11 +301,19 @@ impl CalloraVault {
             .get::<_, i128>(&DataKey::Balance)
             .unwrap()
     }
-    pub fn get_admin(env: Env) -> Address {
+    pub fn get_owner(env: Env) -> Address {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
             .unwrap()
+    }
+
+    pub(crate) fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
+        let owner = Self::get_owner(env);
+        if caller != owner {
+            return Err(VaultError::Unauthorized);
+        }
+        Ok(())
     }
     pub fn get_usdc_token(env: Env) -> Address {
         env.storage()
