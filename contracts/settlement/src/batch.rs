@@ -64,3 +64,31 @@ pub fn batch_settle(
     
     outcomes
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
+    
+    #[test]
+    fn test_batch_settle_cap_enforced() {
+        let env = Env::default();
+        let mut settlements = Vec::new(&env);
+        
+        // Push 65 items (exceeding cap of 64)
+        for _ in 0..65 {
+            settlements.push_back(SettleInput {
+                developer: Address::generate(&env),
+                amount: 100,
+                to: None,
+            });
+        }
+        
+        let outcomes = batch_settle(&env, settlements);
+        
+        assert_eq!(outcomes.len(), 65);
+        for i in 0..65 {
+            assert_eq!(outcomes.get(i).unwrap(), SettleOutcome::OtherError);
+        }
+    }
+}

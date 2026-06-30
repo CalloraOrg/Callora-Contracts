@@ -184,6 +184,7 @@ pub struct DailyWithdrawCapChanged {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeveloperForceCreditedEvent {
     pub developer: Address,
+    pub token: Address,
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
@@ -199,3 +200,26 @@ pub struct AdminMigrationEvent {
     pub amount: i128,
     pub executed_at: u64,
 }
+
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Storage TTL entry for a given storage key category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+pub const MAX_REASON_LENGTH: u32 = 32;
