@@ -1,4 +1,4 @@
-﻿# Event Schema
+# Event Schema
 
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
@@ -960,6 +960,63 @@ atomically in the same transaction.
 **Indexer note:** After this event, `balance()` returns `new_balance`. The USDC
 has left the vault on-ledger; `sweep_idle_balance` does **not** call
 `settlement.receive_payment()` — it is a raw token transfer only.
+
+---
+
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes an emergency drain to a destination address.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_proposed"`          |
+| topic 1 | topics   | Address | `admin` — caller who proposed         |
+| data    | data     | Address | `destination` — where funds will go   |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": "GDESTINATION..."
+}
+```
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a previously proposed emergency drain.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_executed"`          |
+| topic 1 | topics   | Address | `admin` — caller who executed         |
+| data    | data     | i128    | `amount` — amount drained in stroops  |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": 1000000
+}
+```
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a previously proposed emergency drain.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_cancelled"`         |
+| topic 1 | topics   | Address | `admin` — caller who cancelled        |
+| data    | data     | ()      | empty                                 |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": null
+}
+```
 
 ---
 

@@ -123,4 +123,10 @@ pub enum VaultError {
     RateLimited = 36,
     /// Operation is rejected because the vault is paused (code 37).
     PausedState = 37,
+    ExceedsReserveCap = 38,
+    InvalidHotBps = 39,
+    InvalidRebalanceThreshold = 40,
+    ColdSignersEmpty = 41,
+    InvalidColdThreshold = 42,
+    DuplicateColdSigner = 43,
 }

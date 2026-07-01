@@ -1,6 +1,18 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
+pub mod emergency;
+pub mod events;
+
+const LIFETIME_THRESHOLD: u32 = 17_280 * 7;
+const BUMP_AMOUNT: u32 = 17_280 * 30;
+const ERR_UNAUTHORIZED: &str = "Not admin";
+const ERR_AMOUNT_NOT_POSITIVE: &str = "Amount must be positive";
+const USDC_KEY: &str = "usdc";
+const ERR_NOT_INITIALIZED: &str = "Not initialized";
+const ERR_INSUFFICIENT_BALANCE: &str = "Insufficient balance";
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -35,6 +47,10 @@ impl CalloraRevenuePool {
             (current_admin, new_admin.clone()),
         );
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    pub fn get_admin(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Admin).unwrap()
     }
 
     /// Propose an emergency drain of USDC from the revenue pool to a designated address.
@@ -89,16 +105,11 @@ impl CalloraRevenuePool {
         };
 
         let inst = env.storage().instance();
-        inst.set(
-            &Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY),
-            &drain,
-        );
+        inst.set(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY), &drain);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        env.events().publish(
-            (events::event_emergency_drain_proposed(&env), admin),
-            drain,
-        );
+        env.events()
+            .publish((events::event_emergency_drain_proposed(&env), admin), drain);
     }
 
     /// Execute a previously proposed emergency drain after the timelock has expired.

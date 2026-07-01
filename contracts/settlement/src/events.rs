@@ -270,9 +270,6 @@ mod tests {
     #[test]
     fn test_event_deposit_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_deposit(&env),
-            Symbol::new(&env, "deposit")
-        );
+        assert_eq!(event_deposit(&env), Symbol::new(&env, "deposit"));
     }
 }
