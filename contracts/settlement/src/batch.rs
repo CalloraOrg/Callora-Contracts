@@ -1,5 +1,5 @@
-use soroban_sdk::{contracttype, Address, Env, Vec};
 use crate::{CalloraSettlement, SettlementError, StorageKey};
+use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -34,12 +34,9 @@ impl From<SettlementError> for SettleOutcome {
     }
 }
 
-pub fn batch_settle(
-    env: &Env,
-    settlements: Vec<SettleInput>,
-) -> Vec<SettleOutcome> {
+pub fn batch_settle(env: &Env, settlements: Vec<SettleInput>) -> Vec<SettleOutcome> {
     let mut outcomes = Vec::new(env);
-    
+
     if settlements.len() > 64 {
         for _ in 0..settlements.len() {
             outcomes.push_back(SettleOutcome::OtherError);
@@ -61,7 +58,7 @@ pub fn batch_settle(
             Err(e) => outcomes.push_back(e.into()),
         }
     }
-    
+
     outcomes
 }
 
@@ -69,12 +66,12 @@ pub fn batch_settle(
 mod test {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
-    
+
     #[test]
     fn test_batch_settle_cap_enforced() {
         let env = Env::default();
         let mut settlements = Vec::new(&env);
-        
+
         // Push 65 items (exceeding cap of 64)
         for _ in 0..65 {
             settlements.push_back(SettleInput {
@@ -83,9 +80,9 @@ mod test {
                 to: None,
             });
         }
-        
+
         let outcomes = batch_settle(&env, settlements);
-        
+
         assert_eq!(outcomes.len(), 65);
         for i in 0..65 {
             assert_eq!(outcomes.get(i).unwrap(), SettleOutcome::OtherError);

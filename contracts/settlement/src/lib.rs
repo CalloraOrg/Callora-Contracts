@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec, token, Symbol, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
 #[contracttype]
 #[derive(Clone)]
@@ -9,20 +9,18 @@ pub enum DataKey {
 }
 
 pub mod admin;
+pub mod archive;
 pub mod batch;
 pub mod errors;
-pub mod types;
-pub mod timelock;
 pub mod events;
 pub mod migrate;
-pub mod archive;
 pub mod pagination;
+pub mod timelock;
+pub mod types;
 
 pub use errors::SettlementError;
 pub use timelock::PendingDeveloperMigration;
 pub use types::*;
-
-
 
 #[contract]
 pub struct CalloraSettlement;
@@ -291,7 +289,6 @@ impl CalloraSettlement {
         soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
     }
 
-
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
         env.storage()
@@ -436,12 +433,14 @@ impl CalloraSettlement {
 
         let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
-        
+
         if current_balance < amount {
             return Err(SettlementError::InsufficientDeveloperBalance);
         }
 
-        let new_balance = current_balance.checked_sub(amount).ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
         env.storage().persistent().set(&balance_key, &new_balance);
 
         usdc.transfer(&contract_address, &recipient, &amount);
@@ -495,8 +494,12 @@ impl CalloraSettlement {
         let end = (start + safe_limit as usize).min(count as usize);
 
         for i in start..end {
-            let developer = developers.get(i as u32).ok_or(SettlementError::InsufficientDeveloperBalance)?;
-            let amount = amounts.get(i as u32).ok_or(SettlementError::AmountNotPositive)?;
+            let developer = developers
+                .get(i as u32)
+                .ok_or(SettlementError::InsufficientDeveloperBalance)?;
+            let amount = amounts
+                .get(i as u32)
+                .ok_or(SettlementError::AmountNotPositive)?;
             Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
         }
 
@@ -520,7 +523,10 @@ impl CalloraSettlement {
     }
 
     fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<crate::types::DeveloperClaimWindow> = env.storage().persistent().get(&StorageKey::DeveloperClaimWindow(developer.clone()));
+        let window: Option<crate::types::DeveloperClaimWindow> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
         if let Some(w) = window {
             let now = env.ledger().timestamp();
             if now < w.start_ts || now > w.end_ts {

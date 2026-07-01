@@ -36,7 +36,7 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
     developer.require_auth();
 
     let cursor_key = ArchiveDataKey::Cursor(developer.clone());
-    
+
     // Retrieve cursor or initialize a default instance. No unwraps permitted.
     let mut cursor: Cursor = match env.storage().persistent().get(&cursor_key) {
         Some(c) => c,
@@ -69,7 +69,7 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
             Some(val) => val,
             None => break,
         };
-        
+
         archived_count = match archived_count.checked_add(1) {
             Some(val) => val,
             None => break,
@@ -78,11 +78,9 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 
     if archived_count > 0 {
         env.storage().persistent().set(&cursor_key, &cursor);
-        env.storage().persistent().extend_ttl(
-            &cursor_key,
-            MIN_TTL_LEDGERS,
-            ARCHIVE_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&cursor_key, MIN_TTL_LEDGERS, ARCHIVE_TTL_LEDGERS);
     }
 
     archived_count
@@ -124,7 +122,7 @@ mod tests {
         for i in 0..3 {
             let archive_key = ArchiveDataKey::ArchivedEvent(developer.clone(), i);
             let active_key = ArchiveDataKey::ActiveEvent(developer.clone(), i);
-            
+
             assert!(env.storage().temporary().has(&archive_key));
             assert!(!env.storage().persistent().has(&active_key));
         }

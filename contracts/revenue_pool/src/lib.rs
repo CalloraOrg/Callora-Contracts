@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol, token};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 pub mod emergency;
 pub mod events;
@@ -103,16 +105,11 @@ impl CalloraRevenuePool {
         };
 
         let inst = env.storage().instance();
-        inst.set(
-            &Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY),
-            &drain,
-        );
+        inst.set(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY), &drain);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        env.events().publish(
-            (events::event_emergency_drain_proposed(&env), admin),
-            drain,
-        );
+        env.events()
+            .publish((events::event_emergency_drain_proposed(&env), admin), drain);
     }
 
     /// Execute a previously proposed emergency drain after the timelock has expired.

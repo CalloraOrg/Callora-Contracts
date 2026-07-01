@@ -97,14 +97,12 @@ check_wasm() {
 discover_contract_packages
 
 echo "Building publishable contracts for wasm32-unknown-unknown (release)..."
-cargo_args=(build --target wasm32-unknown-unknown --release)
-for crate in "${contract_packages[@]}"; do
-  cargo_args+=(-p "$crate")
-done
 if [ "${SKIP_WASM_BUILD:-0}" = "1" ]; then
   echo "Skipping cargo build because SKIP_WASM_BUILD=1"
 else
-  "$CARGO_BIN" "${cargo_args[@]}"
+  for crate in "${contract_packages[@]}"; do
+    "$CARGO_BIN" build --target wasm32-unknown-unknown --release -p "$crate"
+  done
 fi
 
 echo ""
