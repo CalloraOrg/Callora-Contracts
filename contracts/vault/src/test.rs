@@ -306,6 +306,7 @@ fn cross_contract_conservation_fuzz() {
     let mut total_deductions: i128 = 0;
     let mut total_withdraws: i128 = 0;
 
+    let mut ledger_seq = 0u32;
     for i in 0..steps {
         let choice: u8 = rng.gen_range(0..100);
         if choice < 40 {
@@ -332,11 +333,12 @@ fn cross_contract_conservation_fuzz() {
                 expected_onchain_vault = expected_onchain_vault.checked_sub(amt).unwrap();
 
                 // Simulate the settlement crediting the amount (to pool or to developer)
+                ledger_seq += 1;
                 let to_pool = rng.gen_bool(0.5);
                 if to_pool {
-                    settlement_client.receive_payment(&vault_address, &amt, &true, &None);
+                    settlement_client.receive_payment(&vault_address, &amt, &true, &None, &ledger_seq);
                 } else {
-                    settlement_client.receive_payment(&vault_address, &amt, &false, &Some(developer.clone()));
+                    settlement_client.receive_payment(&vault_address, &amt, &false, &Some(developer.clone()), &ledger_seq);
                 }
             }
         } else if choice < 90 {

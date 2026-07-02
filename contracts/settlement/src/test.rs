@@ -145,7 +145,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &1000i128, &true, &None, &token);
+        client.receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
 
         let global_pool = client.get_global_pool();
         assert_eq!(global_pool.total_balance, 1000i128);
@@ -163,7 +163,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&developer, &token), 500i128);
         assert_eq!(client.get_global_pool().total_balance, 0);
@@ -181,7 +181,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token, &1u32);
 
         let events = env.events().all();
         let ev = events
@@ -215,8 +215,8 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &token);
-        client.receive_payment(&vault, &150i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &token, &1u32);
+        client.receive_payment(&vault, &150i128, &false, &Some(developer.clone()), &token, &2u32);
 
         assert_eq!(client.get_developer_balance(&developer, &token), 250i128);
     }
@@ -263,7 +263,7 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         client.init(&admin, &vault);
         let token = Address::generate(&env);
-        client.receive_payment(&admin, &100i128, &true, &None, &token);
+        client.receive_payment(&admin, &100i128, &true, &None, &token, &1u32);
     }
 
     #[test]
@@ -279,7 +279,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&admin, &200i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&admin, &200i128, &false, &Some(developer.clone()), &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&developer, &token), 200i128);
     }
@@ -295,8 +295,8 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &400i128, &true, &None, &token);
-        client.receive_payment(&vault, &600i128, &true, &None, &token);
+        client.receive_payment(&vault, &400i128, &true, &None, &token, &1u32);
+        client.receive_payment(&vault, &600i128, &true, &None, &token, &2u32);
 
         assert_eq!(client.get_global_pool().total_balance, 1000i128);
     }
@@ -335,6 +335,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -373,6 +374,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -427,6 +429,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &200i128);
 
@@ -474,6 +477,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &150i128);
 
@@ -516,6 +520,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &200i128);
 
@@ -560,6 +565,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -579,9 +585,9 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &300i128, &false, &Some(dev1.clone()), &token);
-        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token);
-        client.receive_payment(&vault, &150i128, &false, &Some(dev1.clone()), &token);
+        client.receive_payment(&vault, &300i128, &false, &Some(dev1.clone()), &token, &1u32);
+        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token, &1u32);
+        client.receive_payment(&vault, &150i128, &false, &Some(dev1.clone()), &token, &2u32);
 
         let all = client.get_all_developer_balances(&admin, &token);
         assert_eq!(all.len(), 2);
@@ -626,9 +632,9 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token);
-        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token);
-        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()), &token);
+        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token, &1u32);
+        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token, &1u32);
+        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()), &token, &1u32);
 
         let page = client.get_developer_balances_page(&admin, &1u32, &2u32, &token);
         assert_eq!(page.len(), 2);
@@ -649,7 +655,7 @@ mod settlement_tests {
 
         for _ in 0..105 {
             let developer = Address::generate(&env);
-            client.receive_payment(&vault, &1i128, &false, &Some(developer), &token);
+            client.receive_payment(&vault, &1i128, &false, &Some(developer), &token, &1u32);
         }
 
         // limit higher than MAX should be capped at MAX_DEVELOPER_BALANCES_PAGE_SIZE (100)
@@ -670,7 +676,7 @@ mod settlement_tests {
 
         for _ in 0..101 {
             let developer = Address::generate(&env);
-            client.receive_payment(&vault, &1i128, &false, &Some(developer), &token);
+            client.receive_payment(&vault, &1i128, &false, &Some(developer), &token, &1u32);
         }
 
         let all = client.get_all_developer_balances(&admin, &token);
@@ -1051,7 +1057,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         // Add some balance
-        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &1000i128, &false, &Some(developer.clone()), &token, &1u32);
         let dev_balance_before = client.get_developer_balance(&developer, &token);
         let pool_before = client.get_global_pool();
 
@@ -1168,7 +1174,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let result = client.try_receive_payment(&vault, &0i128, &true, &None, &token);
+        let result = client.try_receive_payment(&vault, &0i128, &true, &None, &token, &1u32);
         assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
@@ -1183,7 +1189,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let result = client.try_receive_payment(&vault, &-1i128, &true, &None, &token);
+        let result = client.try_receive_payment(&vault, &-1i128, &true, &None, &token, &1u32);
         assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
@@ -1207,7 +1213,7 @@ mod settlement_tests {
             inst.set(&crate::StorageKey::GlobalPool, &pool);
         });
 
-        let result = client.try_receive_payment(&vault, &1i128, &true, &None, &token);
+        let result = client.try_receive_payment(&vault, &1i128, &true, &None, &token, &1u32);
         assert!(is_error(result, SettlementError::PoolOverflow));
     }
 
@@ -1230,7 +1236,7 @@ mod settlement_tests {
             );
         });
 
-        let result = client.try_receive_payment(&vault, &1i128, &false, &Some(developer), &token);
+        let result = client.try_receive_payment(&vault, &1i128, &false, &Some(developer), &token, &1u32);
         assert!(is_error(result, SettlementError::DeveloperOverflow));
     }
 
@@ -1245,7 +1251,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let result = client.try_receive_payment(&vault, &100i128, &false, &None, &token);
+        let result = client.try_receive_payment(&vault, &100i128, &false, &None, &token, &1u32);
         assert!(is_error(result, SettlementError::DeveloperRequired));
     }
 
@@ -1261,7 +1267,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        let result = client.try_receive_payment(&vault, &100i128, &true, &Some(developer), &token);
+        let result = client.try_receive_payment(&vault, &100i128, &true, &Some(developer), &token, &1u32);
         assert!(is_error(result, SettlementError::DeveloperMustBeNone));
     }
 
@@ -1306,7 +1312,7 @@ mod settlement_tests {
                 CallerRole::ThirdParty => third_party,
             };
 
-            let result = client.try_receive_payment(&caller, &100i128, &true, &None, &token);
+            let result = client.try_receive_payment(&caller, &100i128, &true, &None, &token, &1u32);
 
             if case.should_succeed {
                 assert!(result.is_ok(), "expected success for case: {}", case.name);
@@ -1337,7 +1343,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &1000i128, &true, &None, &token);
+        client.receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
 
         let events = env.events().all();
         let ev = events
@@ -1378,7 +1384,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &750i128, &true, &None, &token);
+        client.receive_payment(&vault, &750i128, &true, &None, &token, &1u32);
 
         let events = env.events().all();
         let ev = events
@@ -1421,7 +1427,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &321i128, &false, &Some(developer.clone()), &token, &1u32);
 
         let events = env.events().all();
         let ev = events
@@ -1462,7 +1468,7 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token, &1u32);
 
         let events = env.events().all();
         let pr_ev = events
@@ -1513,8 +1519,8 @@ mod settlement_tests {
         client.init(&admin, &vault);
         let token = Address::generate(&env);
 
-        client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()), &token);
-        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()), &token, &1u32);
+        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &token, &2u32);
 
         // grab the last balance_credited event
         let events = env.events().all();
@@ -1553,7 +1559,7 @@ mod settlement_tests {
         client.accept_admin();
 
         // Vault can still send payments
-        client.receive_payment(&vault, &1000i128, &true, &None, &token);
+        client.receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
         assert_eq!(client.get_global_pool().total_balance, 1000i128);
     }
 
@@ -1575,11 +1581,11 @@ mod settlement_tests {
         client.accept_vault(&new_vault);
 
         // Old vault cannot send payments
-        let result = client.try_receive_payment(&vault, &1000i128, &true, &None, &token);
+        let result = client.try_receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
         assert!(is_error(result, SettlementError::Unauthorized));
 
         // New vault can send payments
-        client.receive_payment(&new_vault, &1000i128, &true, &None, &token);
+        client.receive_payment(&new_vault, &1000i128, &true, &None, &token, &1u32);
         assert_eq!(client.get_global_pool().total_balance, 1000i128);
     }
 
@@ -1598,7 +1604,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         // Credit developer
-        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token, &1u32);
 
         // Rotate admin
         client.set_admin(&admin, &new_admin);
@@ -1628,7 +1634,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         // Some payments from old vault
-        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &token, &1u32);
 
         // Update vault
         client.propose_vault(&admin, &new_vault);
@@ -1641,6 +1647,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &token,
+            &2u32,
         );
         client.receive_payment(
             &new_vault,
@@ -1648,6 +1655,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &token,
+            &3u32,
         );
 
         // Total should accumulate correctly
@@ -1670,7 +1678,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         // Initial payment
-        client.receive_payment(&vault, &1000i128, &true, &None, &token);
+        client.receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
         let pool_before = client.get_global_pool();
         assert_eq!(pool_before.last_updated, 1_700_000_000);
 
@@ -1680,7 +1688,7 @@ mod settlement_tests {
         env.ledger().set_timestamp(1_700_000_100);
 
         // New payment updates timestamp
-        client.receive_payment(&vault, &500i128, &true, &None, &token);
+        client.receive_payment(&vault, &500i128, &true, &None, &token, &2u32);
         let pool_after = client.get_global_pool();
         assert_eq!(pool_after.last_updated, 1_700_000_100);
         assert_eq!(pool_after.total_balance, 1500i128);
@@ -1705,14 +1713,14 @@ mod settlement_tests {
 
         // Advance time and credit pool ï¿½ last_updated must change
         env.ledger().set_timestamp(2_000);
-        client.receive_payment(&vault, &100i128, &true, &None, &token);
+        client.receive_payment(&vault, &100i128, &true, &None, &token, &1u32);
         let pool = client.get_global_pool();
         assert_eq!(pool.last_updated, 2_000);
         assert_eq!(pool.total_balance, 100i128);
 
         // Advance again ï¿½ each credit stamps the new time
         env.ledger().set_timestamp(3_000);
-        client.receive_payment(&vault, &50i128, &true, &None, &token);
+        client.receive_payment(&vault, &50i128, &true, &None, &token, &2u32);
         let pool2 = client.get_global_pool();
         assert_eq!(pool2.last_updated, 3_000);
         assert_eq!(pool2.total_balance, 150i128);
@@ -1736,7 +1744,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         env.ledger().set_timestamp(5_000);
-        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &token);
+        client.receive_payment(&vault, &200i128, &false, &Some(developer.clone()), &token, &1u32);
 
         // Pool timestamp must still be the init timestamp
         assert_eq!(client.get_global_pool().last_updated, 1_000);
@@ -1865,7 +1873,7 @@ mod settlement_tests {
         items.push_back((dev1.clone(), 100i128));
         items.push_back((dev2.clone(), 200i128));
 
-        client.batch_receive_payment(&vault, &items, &token);
+        client.batch_receive_payment(&vault, &items, &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&dev1, &token), 100i128);
         assert_eq!(client.get_developer_balance(&dev2, &token), 200i128);
@@ -1882,7 +1890,7 @@ mod settlement_tests {
         items.push_back((dev1.clone(), 100i128));
         items.push_back((dev2.clone(), 200i128));
 
-        client.batch_receive_payment(&vault, &items, &token);
+        client.batch_receive_payment(&vault, &items, &token, &1u32);
 
         let events = env.events().all();
         let deposit_events: std::vec::Vec<_> = events
@@ -1920,11 +1928,11 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let dev = Address::generate(&env);
 
-        client.receive_payment(&vault, &50i128, &false, &Some(dev.clone()), &token);
+        client.receive_payment(&vault, &50i128, &false, &Some(dev.clone()), &token, &1u32);
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 75i128));
-        client.batch_receive_payment(&vault, &items, &token);
+        client.batch_receive_payment(&vault, &items, &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&dev, &token), 125i128);
     }
@@ -1937,7 +1945,7 @@ mod settlement_tests {
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 300i128));
-        client.batch_receive_payment(&admin, &items, &token);
+        client.batch_receive_payment(&admin, &items, &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&dev, &token), 300i128);
     }
@@ -1948,7 +1956,7 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(&env, &addr);
 
         let items: soroban_sdk::Vec<(Address, i128)> = soroban_sdk::Vec::new(&env);
-        let result = client.try_batch_receive_payment(&vault, &items, &token);
+        let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
         assert!(result.is_err());
     }
 
@@ -1963,7 +1971,7 @@ mod settlement_tests {
         for _ in 0..=MAX_BATCH_SIZE {
             items.push_back((dev.clone(), 1i128));
         }
-        let result = client.try_batch_receive_payment(&vault, &items, &token);
+        let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
         assert!(result.is_err());
     }
 
@@ -1975,7 +1983,7 @@ mod settlement_tests {
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 0i128));
-        let result = client.try_batch_receive_payment(&vault, &items, &token);
+        let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
         assert!(result.is_err());
     }
 
@@ -1987,7 +1995,7 @@ mod settlement_tests {
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), -1i128));
-        let result = client.try_batch_receive_payment(&vault, &items, &token);
+        let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
         assert!(result.is_err());
     }
 
@@ -1999,7 +2007,7 @@ mod settlement_tests {
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 100i128));
-        let result = client.try_batch_receive_payment(&third_party, &items, &token);
+        let result = client.try_batch_receive_payment(&third_party, &items, &token, &1u32);
         assert!(is_error(result, SettlementError::Unauthorized));
     }
 
@@ -2011,7 +2019,7 @@ mod settlement_tests {
 
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 999i128));
-        client.batch_receive_payment(&vault, &items, &token);
+        client.batch_receive_payment(&vault, &items, &token, &1u32);
 
         assert_eq!(client.get_developer_balance(&dev, &token), 999i128);
     }
@@ -2029,7 +2037,7 @@ mod settlement_tests {
             devs.push(dev.clone());
             items.push_back((dev, 1i128));
         }
-        client.batch_receive_payment(&vault, &items, &token);
+        client.batch_receive_payment(&vault, &items, &token, &1u32);
 
         for dev in &devs {
             assert_eq!(client.get_developer_balance(dev, &token), 1i128);
@@ -2208,6 +2216,7 @@ mod settlement_tests {
         }
 
         let mut total_credited: i128 = 0;
+        let mut ledger_seq: u32 = 0;
 
         // Simple deterministic pseudo-random generator
         let mut seed: u128 = 42;
@@ -2221,8 +2230,9 @@ mod settlement_tests {
             let to_pool = (next_rand() % 2) == 0;
             let amount = (next_rand() % 1_000_000) as i128 + 1;
 
+            ledger_seq += 1;
             if to_pool {
-                client.receive_payment(&vault, &amount, &true, &None, &token);
+                client.receive_payment(&vault, &amount, &true, &None, &token, &ledger_seq);
             } else {
                 let dev_idx = (next_rand() % 10) as usize;
                 if let Some(developer) = developers.get(dev_idx) {
@@ -2232,6 +2242,7 @@ mod settlement_tests {
                         &false,
                         &Some(developer.clone()),
                         &token,
+                        &ledger_seq,
                     );
                 }
             }
@@ -2247,17 +2258,20 @@ mod settlement_tests {
             let half_remaining = remaining / 2;
 
             // Large credit to pool
-            client.receive_payment(&vault, &half_remaining, &true, &None, &token);
+            ledger_seq += 1;
+            client.receive_payment(&vault, &half_remaining, &true, &None, &token, &ledger_seq);
             total_credited += half_remaining;
 
             // Large credit to a developer
             if let Some(developer) = developers.get(0) {
+                ledger_seq += 1;
                 client.receive_payment(
                     &vault,
                     &half_remaining,
                     &false,
                     &Some(developer.clone()),
                     &token,
+                    &ledger_seq,
                 );
                 total_credited += half_remaining;
             }
@@ -2319,6 +2333,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2361,6 +2376,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2412,6 +2428,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2444,6 +2461,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2478,6 +2496,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2600,6 +2619,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &1u32,
         );
         usdc_admin_client.mint(&addr, &1000i128);
 
@@ -2635,8 +2655,9 @@ mod settlement_tests {
             &false,
             &Some(dev1.clone()),
             &usdc_address,
+            &1u32,
         );
-        client.receive_payment(&vault, &500i128, &false, &Some(dev2.clone()), &usdc_address);
+        client.receive_payment(&vault, &500i128, &false, &Some(dev2.clone()), &usdc_address, &1u32);
         usdc_admin_client.mint(&addr, &1500i128);
 
         // dev1 hits cap at 500
@@ -2672,9 +2693,9 @@ mod settlement_tests {
         let dev1 = Address::generate(&env);
         let dev2 = Address::generate(&env);
         let dev3 = Address::generate(&env);
-        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token);
-        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token);
-        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()), &token);
+        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token, &1u32);
+        client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token, &1u32);
+        client.receive_payment(&vault, &300i128, &false, &Some(dev3.clone()), &token, &1u32);
 
         let (page, next) = client.get_developer_balances_cursor(&admin, &None, &2u32, &token);
 
@@ -2704,9 +2725,9 @@ mod settlement_tests {
         let dev1 = Address::generate(&env);
         let dev2 = Address::generate(&env);
         let dev3 = Address::generate(&env);
-        client.receive_payment(&vault, &10i128, &false, &Some(dev1.clone()), &token);
-        client.receive_payment(&vault, &20i128, &false, &Some(dev2.clone()), &token);
-        client.receive_payment(&vault, &30i128, &false, &Some(dev3.clone()), &token);
+        client.receive_payment(&vault, &10i128, &false, &Some(dev1.clone()), &token, &1u32);
+        client.receive_payment(&vault, &20i128, &false, &Some(dev2.clone()), &token, &1u32);
+        client.receive_payment(&vault, &30i128, &false, &Some(dev3.clone()), &token, &1u32);
 
         // Page 1
         let (page1, next1) = client.get_developer_balances_cursor(&admin, &None, &2u32, &token);
@@ -2747,8 +2768,8 @@ mod settlement_tests {
 
         let dev1 = Address::generate(&env);
         let dev2 = Address::generate(&env);
-        client.receive_payment(&vault, &1i128, &false, &Some(dev1.clone()), &token);
-        client.receive_payment(&vault, &2i128, &false, &Some(dev2.clone()), &token);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev1.clone()), &token, &1u32);
+        client.receive_payment(&vault, &2i128, &false, &Some(dev2.clone()), &token, &1u32);
 
         // Exhaust the index with a large limit to find the last cursor.
         let (full_page, last_cursor) =
@@ -2781,9 +2802,9 @@ mod settlement_tests {
         let dev_a = Address::generate(&env);
         let dev_b = Address::generate(&env);
         let dev_c = Address::generate(&env);
-        client.receive_payment(&vault, &1i128, &false, &Some(dev_a.clone()), &token);
-        client.receive_payment(&vault, &1i128, &false, &Some(dev_b.clone()), &token);
-        client.receive_payment(&vault, &1i128, &false, &Some(dev_c.clone()), &token);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_a.clone()), &token, &1u32);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_b.clone()), &token, &1u32);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev_c.clone()), &token, &1u32);
 
         // Fetch first page (limit=1) to get the cursor.
         let (page1, cursor_after_first) =
@@ -2792,7 +2813,7 @@ mod settlement_tests {
         let first_addr = page1.get(0).unwrap().address.clone();
 
         // Credit the first developer again — this must NOT shift remaining pages.
-        client.receive_payment(&vault, &999i128, &false, &Some(first_addr.clone()), &token);
+        client.receive_payment(&vault, &999i128, &false, &Some(first_addr.clone()), &token, &2u32);
 
         // Continue pagination from the saved cursor.
         let (page2, _) =
@@ -2825,7 +2846,7 @@ mod settlement_tests {
         // Insert more developers than MAX_DEVELOPER_BALANCES_PAGE_SIZE.
         for _ in 0..(MAX_DEVELOPER_BALANCES_PAGE_SIZE + 10) {
             let dev = Address::generate(&env);
-            client.receive_payment(&vault, &1i128, &false, &Some(dev), &token);
+            client.receive_payment(&vault, &1i128, &false, &Some(dev), &token, &1u32);
         }
 
         // Request more than the cap.
@@ -2855,7 +2876,7 @@ mod settlement_tests {
         let token = Address::generate(&env);
 
         let dev = Address::generate(&env);
-        client.receive_payment(&vault, &1i128, &false, &Some(dev), &token);
+        client.receive_payment(&vault, &1i128, &false, &Some(dev), &token, &1u32);
 
         let (page, next) = client.get_developer_balances_cursor(&admin, &None, &0u32, &token);
         assert_eq!(page.len(), 0);
@@ -2914,7 +2935,7 @@ mod settlement_tests {
         // Generate addresses in arbitrary order and credit them.
         let mut devs: std::vec::Vec<Address> = (0..5).map(|_| Address::generate(&env)).collect();
         for dev in &devs {
-            client.receive_payment(&vault, &1i128, &false, &Some(dev.clone()), &token);
+            client.receive_payment(&vault, &1i128, &false, &Some(dev.clone()), &token, &1u32);
         }
 
         // Collect all balances via cursor pagination.
