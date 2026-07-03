@@ -1,5 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
+pub mod archive;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contracttype]
 #[derive(Clone)]
@@ -8,19 +9,163 @@ pub enum DataKey {
     TotalSettled,
 }
 
-pub mod admin;
-pub mod archive;
-pub mod batch;
-pub mod errors;
-pub mod events;
-pub mod migrate;
-pub mod pagination;
-pub mod timelock;
-pub mod types;
-
 pub use errors::SettlementError;
 pub use timelock::PendingDeveloperMigration;
 pub use types::*;
+
+/// Tracks a developer's cumulative withdrawal amount for a given epoch day.
+///
+/// `day` is `timestamp / 86400` (UTC epoch day). When the current call's day
+/// differs from the stored day the accumulator is silently reset.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawState {
+    pub day: u64,
+    pub amount: i128,
+}
+
+/// Timestamp range during which a developer may claim accrued balance.
+///
+/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
+/// inclusive on both ends: a withdrawal is allowed when
+/// `start_ts <= env.ledger().timestamp() <= end_ts`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindow {
+    pub start_ts: u64,
+    pub end_ts: u64,
+}
+
+/// Payment received event
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaymentReceivedEvent {
+    pub from_vault: Address,
+    pub amount: i128,
+    pub to_pool: bool, // true if credited to global pool, false if to specific developer
+    pub developer: Option<Address>, // developer address if credited to specific developer
+    pub token: Address,
+}
+
+/// Balance credited event
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BalanceCreditedEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+    pub token: Address,
+}
+
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
+/// Emitted when a new vault address is proposed via `propose_vault()`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultProposedEvent {
+    pub current_vault: Address,
+    pub proposed_vault: Address,
+}
+
+/// Emitted when the proposed vault is accepted via `accept_vault()`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultAcceptedEvent {
+    pub old_vault: Address,
+    pub new_vault: Address,
+    pub accepted_by: Address,
+}
+
+/// Emitted when a developer withdraws their balance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperWithdrawEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
+    pub to: Address,
+    pub token: Address,
+}
+
+/// Emitted when the admin sets or changes a developer's daily withdrawal cap.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawCapChanged {
+    pub developer: Address,
+    pub new_cap: i128,
+}
+
+/// Emitted when the admin sets or clears a developer claim window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindowChanged {
+    pub developer: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub enabled: bool,
+}
+
+/// Emitted when an admin force-credits a developer balance (escape hatch).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperForceCreditedEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub reason: Symbol,
+    pub new_balance: i128,
+    pub token: Address,
+}
+
+/// Emitted when the admin proposes or executes a timelock'd developer balance migration.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminMigrationEvent {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+    pub executed_at: u64,
+}
+
+/// Storage TTL entry for a given storage key category.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: String,
+    pub key_desc: String,
+    pub storage_type: String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
+}
+
+/// Severity levels for admin broadcast messages.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum Severity {
+    Info,
+    Warn,
+    Crit,
+}
+
+/// Payload for the `admin_broadcast` event.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminBroadcast {
+    pub severity: Severity,
+    pub message: String,
+}
+
+/// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
+/// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
+/// this constant is used for explicit defense-in-depth validation.
+pub const MAX_REASON_LENGTH: u32 = 32;
 
 #[contract]
 pub struct CalloraSettlement;
@@ -33,20 +178,6 @@ impl CalloraSettlement {
         }
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::TotalSettled, &0i128);
-    }
-
-    pub fn record_deduction(env: Env, amount: i128, _request_id: u64) {
-        let vault = Self::get_vault(env.clone());
-        vault.require_auth();
-        let total = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::TotalSettled)
-            .unwrap_or(0);
-        let new_total = total.checked_add(amount).unwrap();
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalSettled, &new_total);
     }
 
     /// Receive payment from vault and credit to pool or developer balance.
@@ -289,6 +420,7 @@ impl CalloraSettlement {
         soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
     }
 
+
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
         env.storage()
@@ -301,7 +433,7 @@ impl CalloraSettlement {
     pub fn get_global_pool(env: Env) -> GlobalPool {
         env.storage()
             .instance()
-            .get::<_, GlobalPool>(&StorageKey::GlobalPool)
+            .get(&StorageKey::GlobalPool)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
@@ -431,32 +563,49 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
-        let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
-        let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let current_balance: i128 = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Vault)
+            .unwrap();
+        vault.require_auth();
+        let total = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::TotalSettled)
+            .unwrap_or(0);
+        let new_total = total.checked_add(amount).unwrap();
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalSettled, &new_total);
+    }
 
-        if current_balance < amount {
-            return Err(SettlementError::InsufficientDeveloperBalance);
-        }
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 
-        let new_balance = current_balance
-            .checked_sub(amount)
-            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-        env.storage().persistent().set(&balance_key, &new_balance);
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_single_dev_v2(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
 
-        usdc.transfer(&contract_address, &recipient, &amount);
-
-        env.events().publish(
-            (events::event_developer_withdraw(&env), developer.clone()),
-            DeveloperWithdrawEvent {
-                developer: developer.clone(),
-                amount,
-                remaining_balance: new_balance,
-                to: recipient,
-                token: usdc_address.clone(),
-            },
-        );
-
-        Ok(())
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        migrate::migrate_single_developer(&env, &caller, &developer)
     }
 
     /// Migrate a single developer's V1 balance to V2 (admin only).
@@ -478,7 +627,7 @@ impl CalloraSettlement {
     ///
     /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
     /// full list has been processed.
-    pub fn batch_withdraw_cursor(
+    pub fn batch_withdraw_developer_balance_cursor(
         env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
@@ -494,52 +643,13 @@ impl CalloraSettlement {
         let end = (start + safe_limit as usize).min(count as usize);
 
         for i in start..end {
-            let developer = developers
-                .get(i as u32)
-                .ok_or(SettlementError::InsufficientDeveloperBalance)?;
-            let amount = amounts
-                .get(i as u32)
-                .ok_or(SettlementError::AmountNotPositive)?;
+            let developer = developers.get(i as u32).ok_or(SettlementError::InsufficientDeveloperBalance)?;
+            let amount = amounts.get(i as u32).ok_or(SettlementError::AmountNotPositive)?;
             Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
         }
 
         let next_cursor = end as u32;
         let is_complete = next_cursor >= count;
         Ok((next_cursor, is_complete))
-    }
-
-    fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
-        if caller != vault && caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-    }
-
-    fn sorted_insert(env: &Env, index: &mut soroban_sdk::Vec<Address>, address: Address) {
-        if !index.contains(&address) {
-            index.push_back(address);
-        }
-    }
-
-    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<crate::types::DeveloperClaimWindow> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
-        if let Some(w) = window {
-            let now = env.ledger().timestamp();
-            if now < w.start_ts || now > w.end_ts {
-                return Err(SettlementError::ClaimWindowClosed);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn batch_settle(
-        env: Env,
-        settlements: soroban_sdk::Vec<batch::SettleInput>,
-    ) -> soroban_sdk::Vec<batch::SettleOutcome> {
-        batch::batch_settle(&env, settlements)
     }
 }
