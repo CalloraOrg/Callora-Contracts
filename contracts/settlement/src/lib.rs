@@ -1,7 +1,6 @@
 #![no_std]
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
-
 pub mod admin;
 pub mod archive;
 pub mod batch;
