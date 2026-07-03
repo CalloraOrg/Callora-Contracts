@@ -809,7 +809,7 @@ the WASM swap and `ContractVersion` write were rolled back.
 }
 ```
 
-#### `upgraded` (legacy)
+### `upgraded` (legacy)
 
 | Index   | Location | Type       | Description                                       |
 |---------|----------|------------|---------------------------------------------------|

@@ -45,6 +45,7 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    TotalReceived,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -140,6 +141,15 @@ pub struct BalanceCreditedEvent {
     pub amount: i128,
     pub new_balance: i128,
     pub token: Address,
+}
+
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
 }
 
 /// Emitted when a new vault address is proposed via `propose_vault()`.
