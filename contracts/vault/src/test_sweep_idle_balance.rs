@@ -74,11 +74,11 @@ fn sweep_rejects_non_owner() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let intruder = Address::generate(&env);
     env.mock_all_auths_allowing_non_root_auth();
     let result = client.try_sweep_idle_balance(&intruder, &SweepDestination::Settlement, &500);
-    assert_eq!(result, Err(Ok(VaultError::Unauthorized)));
+    assert_eq!(result, Err(Ok(VaultError::Unauthorized);
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn sweep_requires_owner_auth() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     // No auth mock for the sweep call -> should panic
     client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &500);
 }
@@ -103,10 +103,10 @@ fn sweep_blocked_when_paused() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     client.pause(&owner);
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &500);
-    assert_eq!(result, Err(Ok(VaultError::Paused)));
+    assert_eq!(result, Err(Ok(VaultError::Paused);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,7 @@ fn sweep_settlement_not_configured() {
     let (_vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     env.mock_all_auths();
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &500);
-    assert_eq!(result, Err(Ok(VaultError::DestinationNotConfigured)));
+    assert_eq!(result, Err(Ok(VaultError::DestinationNotConfigured);
 }
 
 #[test]
@@ -128,7 +128,7 @@ fn sweep_revenue_pool_not_configured() {
     let (_vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     env.mock_all_auths();
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::RevenuePool, &500);
-    assert_eq!(result, Err(Ok(VaultError::DestinationNotConfigured)));
+    assert_eq!(result, Err(Ok(VaultError::DestinationNotConfigured);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,9 +141,9 @@ fn sweep_zero_amount_rejected() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &0);
-    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive)));
+    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive);
 }
 
 #[test]
@@ -152,9 +152,9 @@ fn sweep_negative_amount_rejected() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &-1);
-    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive)));
+    assert_eq!(result, Err(Ok(VaultError::AmountNotPositive);
 }
 
 #[test]
@@ -163,9 +163,9 @@ fn sweep_exceeds_balance_rejected() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let result = client.try_sweep_idle_balance(&owner, &SweepDestination::Settlement, &10_001);
-    assert_eq!(result, Err(Ok(VaultError::InsufficientBalance)));
+    assert_eq!(result, Err(Ok(VaultError::InsufficientBalance);
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +178,7 @@ fn sweep_partial_to_settlement() {
     let (vault_address, client, owner, _usdc, usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let new_balance = client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &3_000);
     assert_eq!(new_balance, 7_000);
     assert_eq!(client.balance(), 7_000);
@@ -192,7 +192,7 @@ fn sweep_partial_to_revenue_pool() {
     let (vault_address, client, owner, _usdc, usdc_client, _usdc_admin) = setup_vault(&env);
     let revenue_pool = Address::generate(&env);
     env.mock_all_auths();
-    client.propose_revenue_pool(&Some(revenue_pool.clone()));
+    client.propose_revenue_pool(&Some(revenue_pool.clone();
     client.accept_revenue_pool();
     let new_balance = client.sweep_idle_balance(&owner, &SweepDestination::RevenuePool, &2_500);
     assert_eq!(new_balance, 7_500);
@@ -207,7 +207,7 @@ fn sweep_full_balance_drain() {
     let (vault_address, client, owner, _usdc, usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     let new_balance = client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &10_000);
     assert_eq!(new_balance, 0);
     assert_eq!(client.balance(), 0);
@@ -223,7 +223,7 @@ fn sweep_emits_event() {
     let (vault_address, client, owner, _usdc, _usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &1_000);
     let events = env.events().all();
     let swept_event = events
@@ -251,7 +251,7 @@ fn sweep_balance_consistency_after_multiple_sweeps() {
     let (vault_address, client, owner, _usdc, usdc_client, _usdc_admin) = setup_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     env.mock_all_auths();
-    client.set_settlement(&owner, &settlement);
+
     client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &2_000);
     client.sweep_idle_balance(&owner, &SweepDestination::Settlement, &3_000);
     assert_eq!(client.balance(), 5_000);

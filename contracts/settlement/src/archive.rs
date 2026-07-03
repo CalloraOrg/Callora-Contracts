@@ -96,44 +96,47 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let developer = Address::generate(&env);
+        let contract_id = env.register(crate::CalloraSettlement, ());
 
-        let cursor_key = DataKey::Cursor(developer.clone());
-        let cursor = Cursor { tail: 0, head: 5 };
-        env.storage().persistent().set(&cursor_key, &cursor);
+        env.as_contract(&contract_id, || {
+            let cursor_key = DataKey::Cursor(developer.clone());
+            let cursor = Cursor { tail: 0, head: 5 };
+            env.storage().persistent().set(&cursor_key, &cursor);
 
-        // Seed 5 active events
-        for i in 0..5 {
-            let active_key = DataKey::ActiveEvent(developer.clone(), i);
-            env.storage()
-                .persistent()
-                .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
-        }
+            // Seed 5 active events
+            for i in 0..5 {
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
+            }
 
-        // Execute batch constraint test
-        let archived_first_pass = archive_events(&env, developer.clone(), 3);
-        assert_eq!(archived_first_pass, 3);
+            // Execute batch constraint test
+            let archived_first_pass = archive_events(&env, developer.clone(), 3);
+            assert_eq!(archived_first_pass, 3);
 
-        // Verify cursor state
-        let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(updated_cursor.tail, 3);
-        assert_eq!(updated_cursor.head, 5);
+            // Verify cursor state
+            let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(updated_cursor.tail, 3);
+            assert_eq!(updated_cursor.head, 5);
 
-        // Verify isolation and data movement
-        for i in 0..3 {
-            let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
-            let active_key = DataKey::ActiveEvent(developer.clone(), i);
+            // Verify isolation and data movement
+            for i in 0..3 {
+                let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
 
-            assert!(env.storage().temporary().has(&archive_key));
-            assert!(!env.storage().persistent().has(&active_key));
-        }
+                assert!(env.storage().temporary().has(&archive_key));
+                assert!(!env.storage().persistent().has(&active_key));
+            }
 
-        // Exhaust remaining events
-        let archived_second_pass = archive_events(&env, developer.clone(), 10);
-        assert_eq!(archived_second_pass, 2);
+            // Exhaust remaining events
+            let archived_second_pass = archive_events(&env, developer.clone(), 10);
+            assert_eq!(archived_second_pass, 2);
 
-        let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(final_cursor.tail, 5);
-        assert_eq!(final_cursor.head, 5);
+            let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(final_cursor.tail, 5);
+            assert_eq!(final_cursor.head, 5);
+        });
     }
 
     #[test]

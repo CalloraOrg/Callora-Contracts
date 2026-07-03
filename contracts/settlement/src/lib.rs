@@ -20,7 +20,8 @@ pub struct CalloraSettlement;
 
 #[contractimpl]
 impl CalloraSettlement {
-    pub fn init(env: Env, vault: Address) {
+    pub fn init(env: Env, admin: Address, vault: Address) {
+        env.storage().instance().set(&StorageKey::Admin, &admin);
         if env.storage().instance().has(&StorageKey::Vault) {
             panic!("Already initialized");
         }
@@ -533,5 +534,23 @@ impl CalloraSettlement {
         settlements: soroban_sdk::Vec<batch::SettleInput>,
     ) -> soroban_sdk::Vec<batch::SettleOutcome> {
         batch::batch_settle(&env, settlements)
+    }
+
+
+    pub fn migrate_v1_to_v2(env: Env, caller: Address) {
+        migrate::migrate_v1_to_v2(&env, &caller);
+    }
+
+    pub fn migrate_v1_to_v2_page(
+        env: Env,
+        caller: Address,
+        offset: u32,
+        limit: u32,
+    ) -> (u32, bool) {
+        migrate::migrate_v1_to_v2_page(&env, &caller, offset, limit)
+    }
+
+    pub fn migration_storage_version(env: Env) -> u32 {
+        migrate::storage_version(&env)
     }
 }

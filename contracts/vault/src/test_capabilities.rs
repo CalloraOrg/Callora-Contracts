@@ -24,7 +24,7 @@ fn setup(env: &Env) -> CalloraVaultClient<'_> {
     let client = CalloraVaultClient::new(env, &vault_addr);
     let usdc = create_usdc(env, &owner);
     env.mock_all_auths();
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &0, &owner, &1, &None, &10000000000, &soroban_sdk::Address::generate(&env));
     client
 }
 

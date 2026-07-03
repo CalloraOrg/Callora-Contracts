@@ -123,7 +123,7 @@ fn setup_vault(env: &Env, balance: i128) -> (Address, CalloraVaultClient<'_>, Ad
     usdc_admin.mint(&vault_addr, &balance);
     client.init(&owner, &usdc, &Some(balance), &None, &None, &None, &None);
     let settlement = create_settlement(env, &owner, &vault_addr);
-    client.set_settlement(&owner, &settlement);
+
     (vault_addr, client, settlement, owner)
 }
 
