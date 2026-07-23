@@ -45,6 +45,8 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    /// Cumulative total received from vault deducts.
+    TotalReceived,
 }
 
 /// Severity levels for admin broadcast messages.

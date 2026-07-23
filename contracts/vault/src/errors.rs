@@ -123,4 +123,16 @@ pub enum VaultError {
     RateLimited = 36,
     /// Operation is rejected because the vault is paused (code 37).
     PausedState = 37,
+    /// Hot BPS must be between 1 and 10000 (code 38).
+    InvalidHotBps = 38,
+    /// Rebalance threshold must be between 1 and 10000 (code 39).
+    InvalidRebalanceThreshold = 39,
+    /// Cold signer set cannot be empty (code 40).
+    ColdSignersEmpty = 40,
+    /// Cold threshold must be between 1 and signer count (code 41).
+    InvalidColdThreshold = 41,
+    /// Duplicate address found in cold signer set (code 42).
+    DuplicateColdSigner = 42,
+    /// Deposit would exceed the configured reserve cap (code 43).
+    ExceedsReserveCap = 43,
 }

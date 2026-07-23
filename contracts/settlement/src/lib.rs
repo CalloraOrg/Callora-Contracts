@@ -1,6 +1,15 @@
 #![no_std]
 pub mod archive;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+mod errors;
+mod timelock;
+mod types;
+mod events;
+mod admin;
+mod migrate;
+pub mod limits;
+pub mod pagination;
+
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
 #[contracttype]
 #[derive(Clone)]
@@ -172,10 +181,13 @@ pub struct CalloraSettlement;
 
 #[contractimpl]
 impl CalloraSettlement {
-    pub fn init(env: Env, vault: Address) {
+    pub fn init(env: Env, admin: Address, vault: Address) {
         if env.storage().instance().has(&DataKey::Vault) {
             panic!("Already initialized");
         }
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Vault, &vault);
         env.storage().instance().set(&DataKey::TotalSettled, &0i128);
     }
@@ -271,7 +283,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::sorted_insert(&env, &mut index, dev_address.clone());
+            Self::insert_if_absent(&env, &mut index, dev_address.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
 
             env.events().publish(
@@ -374,7 +386,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::sorted_insert(&env, &mut index, dev.clone());
+            Self::insert_if_absent(&env, &mut index, dev.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
             env.events().publish(
                 (events::event_balance_credited(&env), dev.clone()),
@@ -523,24 +535,8 @@ impl CalloraSettlement {
     /// Withdraw developer balance as USDC to a designated recipient.
     ///
     /// Requires the developer to authorize the request, the amount to be
-    /// positive, the developer's optional claim window to be open, and the
-    /// requested amount to be covered by the tracked developer balance.
-    ///
-    /// # Arguments
-    /// * `developer` - Address of the developer withdrawing their balance.
-    /// * `amount` - Amount to withdraw in USDC micro-units.
-    /// * `to` - Optional recipient address; if `None`, defaults to `developer`.
-    ///
-    /// # Errors
-    /// - `AmountNotPositive` if amount is <= 0.
-    /// - `ClaimWindowClosed` if a developer claim window exists and the current
-    ///   ledger timestamp is outside that inclusive window.
-    /// - `InsufficientDeveloperBalance` if developer balance < amount.
-    /// - `DailyWithdrawCapExceeded` if daily cap is exceeded.
-    /// - `DeveloperBalanceUnderflow` if subtraction underflows.
-    /// - `UsdcTokenNotConfigured` if USDC token not set.
-    /// - `InsufficientContractBalance` if contract has insufficient USDC.
-    /// - Panics if `to` is the contract's own address.
+    /// positive, and the requested amount to be covered by the tracked
+    /// developer balance and on-ledger USDC holdings.
     pub fn withdraw_developer_balance(
         env: Env,
         developer: Address,
@@ -561,55 +557,41 @@ impl CalloraSettlement {
             panic!("invalid recipient: cannot withdraw to contract itself");
         }
 
-        Self::require_claim_window_open(&env, &developer)?;
-
-        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let current_balance: i128 = env
             .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Vault)
-            .unwrap();
-        vault.require_auth();
-        let total = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::TotalSettled)
+            .persistent()
+            .get(&balance_key)
             .unwrap_or(0);
-        let new_total = total.checked_add(amount).unwrap();
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalSettled, &new_total);
+        if current_balance < amount {
+            return Err(SettlementError::InsufficientDeveloperBalance);
+        }
+
+        if usdc.balance(&contract_address) < amount {
+            return Err(SettlementError::InsufficientContractBalance);
+        }
+
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
+        usdc.transfer(&contract_address, &recipient, &amount);
+
+        env.events().publish(
+            (events::event_developer_withdraw(&env), developer.clone()),
+            DeveloperWithdrawEvent {
+                developer: developer.clone(),
+                amount,
+                remaining_balance: new_balance,
+                to: recipient,
+                token: usdc_address,
+            },
+        );
+        Ok(())
     }
 
     /// Migrate a single developer's V1 balance to V2 (admin only).
     pub fn migrate_developer_balance(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        migrate::migrate_single_developer(&env, &caller, &developer)
-    }
-
-    /// Migrate a single developer's V1 balance to V2 (admin only).
-    pub fn migrate_single_dev_v2(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        migrate::migrate_single_developer(&env, &caller, &developer)
-    }
-
-    /// Migrate a single developer's V1 balance to V2 (admin only).
-    pub fn migrate_developer_balance(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        migrate::migrate_single_developer(&env, &caller, &developer)
-    }
-
-    /// Migrate a single developer's V1 balance to V2 (admin only).
-    pub fn migrate_single_dev_v2(
         env: Env,
         caller: Address,
         developer: Address,
@@ -627,7 +609,7 @@ impl CalloraSettlement {
     ///
     /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
     /// full list has been processed.
-    pub fn batch_withdraw_developer_balance_cursor(
+    pub fn batch_withdraw_devs(
         env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
@@ -636,7 +618,7 @@ impl CalloraSettlement {
     ) -> Result<(u32, bool), SettlementError> {
         let count = developers.len();
         if count != amounts.len() {
-            return Err(SettlementError::AmountNotPositive); // mismatched inputs
+            return Err(SettlementError::AmountNotPositive);
         }
         let safe_limit = limit.min(MAX_BATCH_SIZE);
         let start = cursor as usize;
@@ -651,5 +633,38 @@ impl CalloraSettlement {
         let next_cursor = end as u32;
         let is_complete = next_cursor >= count;
         Ok((next_cursor, is_complete))
+    }
+
+    // ── Internal helpers ────────────────────────────────────────────────
+
+    fn require_authorized_caller(env: Env, caller: Address) {
+        let vault = Self::get_vault(env.clone());
+        let admin = Self::get_admin(env.clone());
+        if caller != vault && caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+    }
+
+    fn insert_if_absent(_env: &Env, index: &mut Vec<Address>, addr: Address) {
+        for i in 0..index.len() {
+            if index.get(i).unwrap() == addr {
+                return;
+            }
+        }
+        index.push_back(addr);
+    }
+
+    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
+        let window: Option<DeveloperClaimWindow> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
+        if let Some(w) = window {
+            let now = env.ledger().timestamp();
+            if now < w.start_ts || now > w.end_ts {
+                return Err(SettlementError::ClaimWindowClosed);
+            }
+        }
+        Ok(())
     }
 }
