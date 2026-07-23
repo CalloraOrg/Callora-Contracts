@@ -377,7 +377,12 @@ mod settlement_tests {
         usdc_admin_client.mint(&addr, &100i128);
 
         let result = client.try_withdraw_developer_balance(&developer, &101i128, &None);
-        assert!(result.is_err());
+        // Must return the typed OverDraft error (code 23), not a generic failure.
+        assert!(
+            is_error(result, SettlementError::OverDraft),
+            "expected OverDraft (code 23) when withdrawal exceeds balance"
+        );
+        // Balance must be unchanged after a rejected overdraft.
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
             100i128

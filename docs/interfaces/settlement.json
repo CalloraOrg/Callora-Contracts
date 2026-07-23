@@ -16,14 +16,22 @@
       { "code": 7,  "name": "PoolOverflow",                 "when": "Global pool i128 addition would overflow." },
       { "code": 8,  "name": "DeveloperOverflow",            "when": "Developer balance i128 addition would overflow." },
       { "code": 9,  "name": "UsdcTokenNotConfigured",       "when": "USDC token address not configured for withdrawals." },
-      { "code": 10, "name": "InsufficientDeveloperBalance", "when": "Developer balance is less than withdrawal amount." },
+      { "code": 10, "name": "InsufficientDeveloperBalance", "when": "Developer balance is less than withdrawal amount (legacy; see OverDraft)." },
       { "code": 11, "name": "DeveloperBalanceUnderflow",    "when": "Developer balance subtraction would overflow." },
       { "code": 12, "name": "InsufficientContractBalance",  "when": "Settlement contract lacks on-ledger USDC." },
       { "code": 13, "name": "DailyWithdrawCapExceeded",     "when": "Developer's daily withdrawal cap would be exceeded." },
       { "code": 14, "name": "GasExhaustionRisk",            "when": "Index exceeds 100 entries; use get_developer_balances_cursor instead of get_all_developer_balances." },
       { "code": 15, "name": "ReasonTooLong",                "when": "Reason Symbol exceeds maximum allowed length." },
-      { "code": 16, "name": "InvalidClaimWindow",           "when": "Claim window end timestamp is before the start timestamp." },
-      { "code": 17, "name": "ClaimWindowClosed",            "when": "A developer attempts to claim outside their configured claim window." }
+      { "code": 16, "name": "MigrationSameAddress",         "when": "Migration source and target addresses are identical." },
+      { "code": 17, "name": "InvalidMigrationTarget",       "when": "Migration target is the settlement contract itself." },
+      { "code": 18, "name": "NoDeveloperBalance",           "when": "Migration source has no positive balance to migrate." },
+      { "code": 19, "name": "TimelockOverflow",             "when": "Timelock execution timestamp addition overflowed." },
+      { "code": 20, "name": "MigrationNotFound",            "when": "No pending migration exists for the source address." },
+      { "code": 21, "name": "TimelockNotExpired",           "when": "Migration timelock delay has not yet elapsed." },
+      { "code": 22, "name": "MigrationBalanceChanged",      "when": "Source balance changed since migration was approved." },
+      { "code": 23, "name": "OverDraft",                    "when": "Withdrawal amount exceeds the developer's tracked balance. Returned by withdraw_developer_balance when amount > current_balance." },
+      { "code": 24, "name": "InvalidClaimWindow",           "when": "Claim window end_ts is before start_ts." },
+      { "code": 25, "name": "ClaimWindowClosed",            "when": "A developer attempts to claim outside their configured claim window." }
     ]
   },
   "types": {
@@ -273,11 +281,11 @@
       "errors": [
         { "code": 4,  "name": "AmountNotPositive",            "when": "amount <= 0." },
         { "code": 9,  "name": "UsdcTokenNotConfigured",       "when": "USDC token address is not configured." },
-        { "code": 10, "name": "InsufficientDeveloperBalance", "when": "Developer tracked balance is below amount." },
         { "code": 11, "name": "DeveloperBalanceUnderflow",    "when": "Balance subtraction would underflow." },
         { "code": 12, "name": "InsufficientContractBalance",  "when": "Settlement contract lacks on-ledger USDC." },
         { "code": 13, "name": "DailyWithdrawCapExceeded",     "when": "Withdrawal would exceed the developer's daily cap." },
-        { "code": 17, "name": "ClaimWindowClosed",            "when": "Current ledger timestamp is outside the developer's configured claim window." }
+        { "code": 23, "name": "OverDraft",                    "when": "Requested amount exceeds the developer's tracked balance." },
+        { "code": 25, "name": "ClaimWindowClosed",            "when": "Current ledger timestamp is outside the developer's configured claim window." }
       ],
       "events": [
         { "topics": ["\"developer_withdraw\"", "developer"], "data": "DeveloperWithdrawEvent" }
@@ -297,7 +305,7 @@
       "returns": "Result<void, SettlementError>",
       "errors": [
         { "code": 3,  "name": "Unauthorized",       "when": "Caller is not the current admin." },
-        { "code": 16, "name": "InvalidClaimWindow", "when": "end_ts < start_ts." }
+        { "code": 24, "name": "InvalidClaimWindow", "when": "end_ts < start_ts." }
       ],
       "events": [
         { "topics": ["\"claim_window_changed\"", "developer"], "data": "DeveloperClaimWindowChanged { enabled: true }" }
