@@ -36,7 +36,7 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
     developer.require_auth();
 
     let cursor_key = DataKey::Cursor(developer.clone());
-    
+
     // Retrieve cursor or initialize a default instance. No unwraps permitted.
     let mut cursor: Cursor = match env.storage().persistent().get(&cursor_key) {
         Some(c) => c,
@@ -69,7 +69,7 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
             Some(val) => val,
             None => break,
         };
-        
+
         archived_count = match archived_count.checked_add(1) {
             Some(val) => val,
             None => break,
@@ -78,11 +78,9 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 
     if archived_count > 0 {
         env.storage().persistent().set(&cursor_key, &cursor);
-        env.storage().persistent().extend_ttl(
-            &cursor_key,
-            MIN_TTL_LEDGERS,
-            ARCHIVE_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&cursor_key, MIN_TTL_LEDGERS, ARCHIVE_TTL_LEDGERS);
     }
 
     archived_count
@@ -91,51 +89,70 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Bytes, Env};
+
+    #[contract]
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {
+        pub fn run_archive(env: Env, developer: Address, batch_size: u32) -> u32 {
+            archive_events(&env, developer, batch_size)
+        }
+    }
 
     #[test]
     fn test_fifo_archival_batching_and_ttl() {
         let env = Env::default();
         env.mock_all_auths();
         let developer = Address::generate(&env);
+        let contract_id = env.register(TestContract, ());
+        let client = TestContractClient::new(&env, &contract_id);
 
         let cursor_key = DataKey::Cursor(developer.clone());
         let cursor = Cursor { tail: 0, head: 5 };
-        env.storage().persistent().set(&cursor_key, &cursor);
 
-        // Seed 5 active events
-        for i in 0..5 {
-            let active_key = DataKey::ActiveEvent(developer.clone(), i);
-            env.storage()
-                .persistent()
-                .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
-        }
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(&cursor_key, &cursor);
+
+            // Seed 5 active events
+            for i in 0..5 {
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
+            }
+        });
 
         // Execute batch constraint test
-        let archived_first_pass = archive_events(&env, developer.clone(), 3);
+        let archived_first_pass = client.run_archive(&developer, &3);
         assert_eq!(archived_first_pass, 3);
 
-        // Verify cursor state
-        let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(updated_cursor.tail, 3);
-        assert_eq!(updated_cursor.head, 5);
+        env.as_contract(&contract_id, || {
+            // Verify cursor state
+            let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(updated_cursor.tail, 3);
+            assert_eq!(updated_cursor.head, 5);
 
-        // Verify isolation and data movement
-        for i in 0..3 {
-            let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
-            let active_key = DataKey::ActiveEvent(developer.clone(), i);
-            
-            assert!(env.storage().temporary().has(&archive_key));
-            assert!(!env.storage().persistent().has(&active_key));
-        }
+            // Verify isolation and data movement
+            for i in 0..3 {
+                let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+
+                assert!(env.storage().temporary().has(&archive_key));
+                assert!(!env.storage().persistent().has(&active_key));
+            }
+        });
 
         // Exhaust remaining events
-        let archived_second_pass = archive_events(&env, developer.clone(), 10);
+        let archived_second_pass = client.run_archive(&developer, &10);
         assert_eq!(archived_second_pass, 2);
 
-        let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(final_cursor.tail, 5);
-        assert_eq!(final_cursor.head, 5);
+        env.as_contract(&contract_id, || {
+            let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(final_cursor.tail, 5);
+            assert_eq!(final_cursor.head, 5);
+        });
     }
 
     #[test]
@@ -143,7 +160,9 @@ mod tests {
     fn test_require_auth_enforcement() {
         let env = Env::default();
         let developer = Address::generate(&env);
+        let contract_id = env.register(TestContract, ());
+        let client = TestContractClient::new(&env, &contract_id);
         // Will panic as auth is not mocked
-        archive_events(&env, developer, 1);
+        client.run_archive(&developer, &1);
     }
 }
