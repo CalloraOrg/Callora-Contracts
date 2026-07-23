@@ -277,13 +277,38 @@
     },
 
     {
+      "name": "simulate_deduct",
+      "description": "Simulates a vault deduction without altering on-chain state. Performs validation checks identical to `deduct` and returns the predicted balance after the specified `amount` is deducted.",
+      "access": "owner OR authorized_caller",
+      "params": [
+        { "name": "caller",     "type": "Address",      "optional": false, "description": "Must be the owner or the authorized_caller; must authorize." },
+        { "name": "amount",     "type": "i128",         "optional": false, "description": "Amount to deduct; must be > 0 and <= max_deduct." },
+        { "name": "request_id", "type": "Symbol | null", "optional": true,  "description": "Optional tracking key to check for duplicates." }
+      ],
+      "returns": "i128 (predicted new balance)",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "simulate_batch_deduct",
+      "description": "Simulates a batch vault deduction without altering on-chain state. Performs validation checks identical to `batch_deduct` and returns the predicted balance after all specified deductions are applied.",
+      "access": "owner OR authorized_caller",
+      "params": [
+        { "name": "caller", "type": "Address",        "optional": false, "description": "Must be the owner or the authorized_caller; must authorize." },
+        { "name": "items",  "type": "Vec<DeductItem>", "optional": false, "description": "Ordered list of deductions. Must be non-empty and within MAX_BATCH_SIZE." }
+      ],
+      "returns": "i128 (predicted final balance after all deductions)",
+      "panics": [],
+      "events": []
+    },
+    {
       "name": "balance",
       "description": "Return the current tracked USDC balance.",
       "access": "any",
       "params": [],
       "returns": "i128",
       "panics": [
-        "\"vault not initialized\" â€” called before init."
+        "\"vault not initialized\" — called before init."
       ],
       "events": []
     },

@@ -377,3 +377,128 @@ fn remove_price_removes_index_entry() {
     assert_eq!(client.get_price(&offer), None);
     assert_eq!(client.list_prices(&0, &10).len(), 0);
 }
+
+#[test]
+fn simulate_deduct_works() {
+    let env = Env::default();
+    let (owner, client, usdc) = setup(&env);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
+
+    // Deposit 1000
+    let (_, usdc_client) = create_usdc(&env, &owner);
+    usdc_client.mint(&owner, &owner, &1000);
+    client.deposit(&owner, &1000);
+    assert_eq!(client.balance(), 1000);
+
+    // Simulate deduct 500
+    let result = client.simulate_deduct(&owner, &500, &None);
+    assert_eq!(result.unwrap(), 500);
+    // Balance should not have changed
+    assert_eq!(client.balance(), 1000);
+}
+
+#[test]
+fn simulate_deduct_errors() {
+    let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    let stranger = Address::generate(&env);
+
+    // No settlement set
+    let result = client.simulate_deduct(&owner, &100, &None);
+    assert!(result.is_err());
+
+    // Set settlement
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
+
+    // Paused
+    client.pause(&owner);
+    let result = client.simulate_deduct(&owner, &100, &None);
+    assert!(matches!(result, Err(VaultError::Paused)));
+    client.unpause(&owner);
+
+    // Amount not positive
+    let result = client.simulate_deduct(&owner, &0, &None);
+    assert!(matches!(result, Err(VaultError::AmountNotPositive)));
+
+    // Unauthorized
+    let result = client.simulate_deduct(&stranger, &100, &None);
+    assert!(matches!(result, Err(VaultError::Unauthorized)));
+
+    // Exceeds max deduct
+    client.set_max_deduct(&500);
+    let result = client.simulate_deduct(&owner, &600, &None);
+    assert!(matches!(result, Err(VaultError::ExceedsMaxDeduct)));
+
+    // Insufficient balance
+    let result = client.simulate_deduct(&owner, &100, &None);
+    assert!(matches!(result, Err(VaultError::InsufficientBalance)));
+}
+
+#[test]
+fn simulate_batch_deduct_works() {
+    let env = Env::default();
+    let (owner, client, usdc) = setup(&env);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
+
+    // Deposit 1000
+    let (_, usdc_client) = create_usdc(&env, &owner);
+    usdc_client.mint(&owner, &owner, &1000);
+    client.deposit(&owner, &1000);
+
+    // Simulate batch deduct 300 + 200
+    let item1 = DeductItem {
+        amount: 300,
+        request_id: None,
+    };
+    let item2 = DeductItem {
+        amount: 200,
+        request_id: None,
+    };
+    let items = Vec::from_array(&env, [item1, item2]);
+    let result = client.simulate_batch_deduct(&owner, &items);
+    assert_eq!(result.unwrap(), 500);
+    // Balance should not have changed
+    assert_eq!(client.balance(), 1000);
+}
+
+#[test]
+fn simulate_batch_deduct_errors() {
+    let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    let settlement = Address::generate(&env);
+    client.set_settlement(&owner, &settlement);
+    let stranger = Address::generate(&env);
+
+    // Deposit 1000 first
+    let (_, usdc_client) = create_usdc(&env, &owner);
+    usdc_client.mint(&owner, &owner, &1000);
+    client.deposit(&owner, &1000);
+
+    // Empty batch
+    let empty = Vec::new(&env);
+    let result = client.simulate_batch_deduct(&owner, &empty);
+    assert!(matches!(result, Err(VaultError::BatchEmpty)));
+
+    // Too large batch
+    let mut large = Vec::new(&env);
+    for _ in 0..MAX_BATCH_SIZE + 1 {
+        large.push_back(DeductItem {
+            amount: 1,
+            request_id: None,
+        });
+    }
+    let result = client.simulate_batch_deduct(&owner, &large);
+    assert!(matches!(result, Err(VaultError::BatchTooLarge)));
+
+    // Unauthorized
+    let item = DeductItem {
+        amount: 100,
+        request_id: None,
+    };
+    let items = Vec::from_array(&env, [item]);
+    let result = client.simulate_batch_deduct(&stranger, &items);
+    assert!(matches!(result, Err(VaultError::Unauthorized)));
+}
