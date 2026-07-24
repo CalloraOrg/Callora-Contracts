@@ -127,15 +127,14 @@ mod tests {
             assert_eq!(updated_cursor.tail, 3);
             assert_eq!(updated_cursor.head, 5);
 
-            // Verify isolation and data movement
-            for i in 0..3 {
-                let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
-                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+        // Verify isolation and data movement
+        for i in 0..3 {
+            let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
+            let active_key = DataKey::ActiveEvent(developer.clone(), i);
 
-                assert!(env.storage().temporary().has(&archive_key));
-                assert!(!env.storage().persistent().has(&active_key));
-            }
-        });
+            assert!(env.storage().temporary().has(&archive_key));
+            assert!(!env.storage().persistent().has(&active_key));
+        }
 
         // Exhaust remaining events
         let archived_second_pass =

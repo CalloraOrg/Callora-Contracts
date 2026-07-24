@@ -122,6 +122,15 @@ pub fn event_deposit(env: &Env) -> Symbol {
     Symbol::new(env, "deposit")
 }
 
+/// Returns the Symbol for the `"developer_min_balance_changed"` event topic.
+///
+/// Emitted when the admin sets or updates a developer's minimum balance
+/// threshold. A withdrawal that would leave the developer's balance below
+/// this threshold is rejected.
+pub fn event_developer_min_balance_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "developer_min_balance_changed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +280,16 @@ mod tests {
     fn test_event_deposit_bytes() {
         let env = Env::default();
         assert_eq!(event_deposit(&env), Symbol::new(&env, "deposit"));
+    }
+
+    /// Snapshot: proves event_developer_min_balance_changed maps to exactly "developer_min_balance_changed".
+    #[test]
+    fn test_event_developer_min_balance_changed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_developer_min_balance_changed(&env),
+            Symbol::new(&env, "developer_min_balance_changed")
+        );
     }
 }
 
