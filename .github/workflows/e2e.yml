@@ -16,6 +16,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -33,6 +34,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build settlement WASM for tests
+        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       - name: Run tests including E2E
         run: cargo test --workspace

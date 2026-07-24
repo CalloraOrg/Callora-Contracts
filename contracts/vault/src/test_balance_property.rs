@@ -128,7 +128,12 @@ impl Trace {
             self.seed
         );
         for s in &self.steps {
-            msg.push_str(&std::format!("  [{}] {} — {}\n", s.index, s.label, s.detail));
+            msg.push_str(&std::format!(
+                "  [{}] {} — {}\n",
+                s.index,
+                s.label,
+                s.detail
+            ));
         }
         panic!("{msg}");
     }
@@ -244,7 +249,7 @@ fn run_property_trace(seed: u64) {
         &Some(AMOUNT_CAP),
     );
     let settlement = create_settlement(&env, &owner, &vault_addr);
-    client.set_settlement(&owner, &settlement);
+
 
     // Fund depositors and approve the vault for pulls.
     let reserve: i128 = INITIAL_BALANCE * 10;
@@ -288,7 +293,10 @@ fn run_property_trace(seed: u64) {
                     trace.push(
                         step,
                         "deposit",
-                        std::format!("caller={} amount={amount}", if use_alt { "alt" } else { "owner" }),
+                        std::format!(
+                            "caller={} amount={amount}",
+                            if use_alt { "alt" } else { "owner" }
+                        ),
                     );
                 }
             }
@@ -422,11 +430,7 @@ fn run_property_trace(seed: u64) {
                 }
                 // Distribute the full surplus so meta.balance stays equal to on-ledger USDC.
                 client.distribute(&owner, &recipient, &surplus);
-                trace.push(
-                    step,
-                    "distribute",
-                    std::format!("amount={surplus}"),
-                );
+                trace.push(step, "distribute", std::format!("amount={surplus}"));
             }
 
             x if x == OpKind::PauseToggle as u8 => {
@@ -447,7 +451,7 @@ fn run_property_trace(seed: u64) {
                     depositor_allowed = false;
                     trace.push(step, "clear_allowed_depositors", "");
                 } else {
-                    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+                    client.set_allowed_depositor(&owner, &Some(depositor.clone();
                     depositor_allowed = true;
                     trace.push(
                         step,
@@ -460,12 +464,18 @@ fn run_property_trace(seed: u64) {
             x if x == OpKind::RequestIdRetry as u8 => {
                 if used_request_ids.is_empty() {
                     // No prior id — perform a fresh deduct with id, then retry.
-                    let amount = rng.gen_range_i128(1, AMOUNT_CAP.min(balance_before.max(1)));
+                    let amount = rng.gen_range_i128(1, AMOUNT_CAP.min(balance_before.max(1);
                     if !paused && balance_before >= amount {
                         let rid = make_request_id(&env, rid_counter);
                         rid_counter += 1;
-                        client.deduct(&owner, &amount, &Some(rid.clone(), &Address::generate(&env)), &u32::MAX);
-                        let retry = client.try_deduct(&owner, &amount, &Some(rid.clone()), &u32::MAX);
+                        client.deduct(
+                            &owner,
+                            &amount,
+                            &Some(rid.clone(), &Address::generate(&env)),
+                            &u32::MAX,
+                        );
+                        let retry =
+                            client.try_deduct(&owner, &amount, &Some(rid.clone()), &u32::MAX);
                         trace.push(
                             step,
                             "request_id_reuse",
@@ -535,7 +545,7 @@ fn test_balance_property_pause_mid_sequence() {
         &Some(AMOUNT_CAP),
     );
     let settlement = create_settlement(&env, &owner, &vault_addr);
-    client.set_settlement(&owner, &settlement);
+
     usdc_admin.mint(&owner, &INITIAL_BALANCE);
     usdc_client.approve(&owner, &vault_addr, &i128::MAX, &999_999);
 
@@ -584,7 +594,7 @@ fn test_balance_property_depositor_flips() {
     usdc_client.approve(&depositor, &vault_addr, &i128::MAX, &999_999);
     usdc_client.approve(&owner, &vault_addr, &i128::MAX, &999_999);
 
-    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+    client.set_allowed_depositor(&owner, &Some(depositor.clone();
     client.deposit(&depositor, &500);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(7), 1);
 
@@ -617,10 +627,15 @@ fn test_balance_property_request_id_reuse() {
         &Some(AMOUNT_CAP),
     );
     let settlement = create_settlement(&env, &owner, &vault_addr);
-    client.set_settlement(&owner, &settlement);
+
 
     let rid = Symbol::new(&env, "reuse_test_id");
-    client.deduct(&owner, &100, &Some(rid.clone(), &Address::generate(&env)), &u32::MAX);
+    client.deduct(
+        &owner,
+        &100,
+        &Some(rid.clone(), &Address::generate(&env)),
+        &u32::MAX,
+    );
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 1);
 
     let retry = client.try_deduct(&owner, &50, &Some(rid.clone()), &u32::MAX);

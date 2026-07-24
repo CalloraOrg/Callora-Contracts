@@ -97,7 +97,10 @@ struct Trace {
 
 impl Trace {
     fn new(seed: u64) -> Self {
-        Self { seed, steps: std::vec::Vec::new() }
+        Self {
+            seed,
+            steps: std::vec::Vec::new(),
+        }
     }
     fn push(&mut self, step: u32, msg: std::string::String) {
         self.steps.push(std::format!("[{step:>3}] {msg}"));
@@ -157,7 +160,10 @@ fn run_trace(seed: u64) {
             + devs.iter().map(|d| h.usdc.balance(d)).sum::<i128>()
     };
     // Sanity: reference must equal INITIAL_MINT (all USDC was minted to owner).
-    assert_eq!(reference, INITIAL_MINT, "setup invariant broken before trace");
+    assert_eq!(
+        reference, INITIAL_MINT,
+        "setup invariant broken before trace"
+    );
 
     let mut rng = Lcg::new(seed);
     let mut trace = Trace::new(seed);
@@ -184,8 +190,14 @@ fn run_trace(seed: u64) {
                 let a2 = rng.amount(AMOUNT_CAP / 2);
                 let items = soroban_sdk::vec![
                     &env,
-                    callora_vault::DeductItem { amount: a1, request_id: None },
-                    callora_vault::DeductItem { amount: a2, request_id: None },
+                    callora_vault::DeductItem {
+                        amount: a1,
+                        request_id: None
+                    },
+                    callora_vault::DeductItem {
+                        amount: a2,
+                        request_id: None
+                    },
                 ];
                 let _ = h.vault.try_batch_deduct(&h.backend, &items);
                 trace.push(step, std::format!("batch_deduct [{a1}, {a2}]"));
@@ -195,9 +207,7 @@ fn run_trace(seed: u64) {
                 let bal = h.settlement.get_developer_balance(&dev);
                 if bal > 0 {
                     let w = amount.min(bal);
-                    let _ =
-                        h.settlement
-                            .try_withdraw_developer_balance(&dev, &w, &None);
+                    let _ = h.settlement.try_withdraw_developer_balance(&dev, &w, &None);
                     trace.push(step, std::format!("dev_withdraw {w}"));
                 } else {
                     trace.push(step, "dev_withdraw skipped (no balance)".into());
