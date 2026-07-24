@@ -1,6 +1,16 @@
 #![no_std]
 #![allow(dead_code, unused_imports)]
 pub mod archive;
+mod errors;
+mod timelock;
+mod types;
+mod events;
+mod admin;
+mod migrate;
+pub mod limits;
+pub mod pagination;
+
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
@@ -210,43 +220,15 @@ pub struct CalloraSettlement;
 
 #[contractimpl]
 impl CalloraSettlement {
-    /// Initialize the settlement contract with admin and vault address.
-    ///
-    /// Persists admin + registered vault, initializes an empty developer index,
-    /// and stores a timestamped global pool.
-    ///
-    /// Storage keys written:
-    /// - `StorageKey::Admin`
-    /// - `StorageKey::Vault`
-    /// - `StorageKey::GlobalPool`
-    ///
-    /// # Panics
-    /// Panics if the contract is already initialized.
-    /// Panics if admin and vault_address are the same.
-    /// Panics if admin is the contract's own address.
-    /// Panics if vault_address is the contract's own address.
-    pub fn init(env: Env, admin: Address, vault_address: Address) {
-        admin.require_auth();
-        let inst = env.storage().instance();
-        if inst.has(&StorageKey::Admin) {
-            env.panic_with_error(SettlementError::AlreadyInitialized);
+    pub fn init(env: Env, admin: Address, vault: Address) {
+        if env.storage().instance().has(&DataKey::Vault) {
+            panic!("Already initialized");
         }
-        if admin == vault_address {
-            panic!("invalid config: admin and vault_address must be distinct");
-        }
-        if admin == env.current_contract_address() {
-            panic!("invalid config: admin cannot be the contract itself");
-        }
-        if vault_address == env.current_contract_address() {
-            panic!("invalid config: vault_address cannot be the contract itself");
-        }
-        inst.set(&StorageKey::Admin, &admin);
-        inst.set(&StorageKey::Vault, &vault_address);
-        let global_pool = GlobalPool {
-            total_balance: 0,
-            last_updated: env.ledger().timestamp(),
-        };
-        inst.set(&StorageKey::GlobalPool, &global_pool);
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Vault, &vault);
+        env.storage().instance().set(&DataKey::TotalSettled, &0i128);
     }
 
     /// Receive payment from vault and credit to pool or developer balance.
@@ -354,7 +336,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::sorted_insert(&env, &mut index, dev_address.clone());
+            Self::insert_if_absent(&env, &mut index, dev_address.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
 
             env.events().publish(
@@ -454,7 +436,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::sorted_insert(&env, &mut index, dev.clone());
+            Self::insert_if_absent(&env, &mut index, dev.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
             env.events().publish(
                 (events::event_balance_credited(&env), dev.clone()),
@@ -580,27 +562,8 @@ impl CalloraSettlement {
     /// Withdraw developer balance as USDC to a designated recipient.
     ///
     /// Requires the developer to authorize the request, the amount to be
-    /// positive, the developer's optional claim window to be open, and the
-    /// requested amount to be covered by the tracked developer balance.
-    ///
-    /// # Arguments
-    /// * `developer` - Address of the developer withdrawing their balance.
-    /// * `amount` - Amount to withdraw in USDC micro-units.
-    /// * `to` - Optional recipient address; if `None`, defaults to `developer`.
-    ///
-    /// # Errors
-    /// - `AmountNotPositive` if amount is <= 0.
-    /// - `ClaimWindowClosed` if a developer claim window exists and the current
-    ///   ledger timestamp is outside that inclusive window.
-    /// - `OverDraft` (code 23) if the requested withdrawal amount exceeds the
-    ///   developer's tracked balance. This is a specific overdraft guard: callers
-    ///   that attempt to withdraw more than they have accrued will receive this
-    ///   typed error rather than a generic balance failure.
-    /// - `DailyWithdrawCapExceeded` if daily cap is exceeded.
-    /// - `DeveloperBalanceUnderflow` if subtraction underflows.
-    /// - `UsdcTokenNotConfigured` if USDC token not set.
-    /// - `InsufficientContractBalance` if contract has insufficient USDC.
-    /// - Panics if `to` is the contract's own address.
+    /// positive, and the requested amount to be covered by the tracked
+    /// developer balance and on-ledger USDC holdings.
     pub fn withdraw_developer_balance(
         env: Env,
         developer: Address,
@@ -618,937 +581,45 @@ impl CalloraSettlement {
             panic!("invalid recipient: cannot withdraw to contract itself");
         }
 
-        Self::require_claim_window_open(&env, &developer)?;
-
-        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(
-                developer.clone(),
-                usdc_address.clone(),
-            ))
+            .get(&balance_key)
             .unwrap_or(0);
-        if amount > current_balance {
+        if current_balance < amount {
             return Err(SettlementError::InsufficientDeveloperBalance);
         }
-
-        let cap: i128 = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
-            .unwrap_or(0);
-        if cap > 0 {
-            let today = env.ledger().timestamp() / 86400;
-            let mut daily = env
-                .storage()
-                .persistent()
-                .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-                .unwrap_or(DailyWithdrawState {
-                    day: today,
-                    amount: 0,
-                });
-            if daily.day != today {
-                daily.day = today;
-                daily.amount = 0;
-            }
-            if daily.amount.checked_add(amount).is_none_or(|sum| sum > cap) {
-                return Err(SettlementError::DailyWithdrawCapExceeded);
-            }
-        }
-
-        let new_balance = current_balance
-            .checked_sub(amount)
-            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-        let usdc = token::Client::new(&env, &usdc_address);
 
         if usdc.balance(&contract_address) < amount {
             return Err(SettlementError::InsufficientContractBalance);
         }
 
+        let new_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        env.storage().persistent().set(&balance_key, &new_balance);
         usdc.transfer(&contract_address, &recipient, &amount);
-
-        env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
-            &new_balance,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone()),
-            50000,
-            50000,
-        );
-
-        let today = env.ledger().timestamp() / 86400;
-        let mut daily = env
-            .storage()
-            .persistent()
-            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-            .unwrap_or(DailyWithdrawState {
-                day: today,
-                amount: 0,
-            });
-        if daily.day != today {
-            daily.day = today;
-            daily.amount = 0;
-        }
-        daily.amount = daily.amount.saturating_add(amount);
-        env.storage()
-            .persistent()
-            .set(&StorageKey::WithdrawalToday(developer.clone()), &daily);
-        env.storage().persistent().extend_ttl(
-            &StorageKey::WithdrawalToday(developer.clone()),
-            50000,
-            50000,
-        );
 
         env.events().publish(
             (events::event_developer_withdraw(&env), developer.clone()),
             DeveloperWithdrawEvent {
-                developer,
+                developer: developer.clone(),
                 amount,
                 remaining_balance: new_balance,
                 to: recipient,
+                token: usdc_address,
             },
         );
-
         Ok(())
     }
 
-    /// Configure the inclusive claim window for a developer.
-    ///
-    /// A configured window restricts `withdraw_developer_balance` so the
-    /// developer can claim only when the current ledger timestamp is between
-    /// `start_ts` and `end_ts`, inclusive. Developers with no configured
-    /// window remain claimable at any time.
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Errors
-    /// - `Unauthorized` if caller is not the current admin.
-    /// - `InvalidClaimWindow` if `end_ts < start_ts`.
-    ///
-    /// # Events
-    /// Emits `developer_claim_window_changed` with `enabled = true`.
-    pub fn set_developer_claim_window(
-        env: Env,
-        caller: Address,
-        developer: Address,
-        start_ts: u64,
-        end_ts: u64,
-    ) -> Result<(), SettlementError> {
-        caller.require_auth();
-        Self::require_admin(env.clone(), caller)?;
-        if end_ts < start_ts {
-            return Err(SettlementError::InvalidClaimWindow);
-        }
-
-        let window = DeveloperClaimWindow { start_ts, end_ts };
-        env.storage().persistent().set(
-            &StorageKey::DeveloperClaimWindow(developer.clone()),
-            &window,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperClaimWindow(developer.clone()),
-            50000,
-            50000,
-        );
-
-        env.events().publish(
-            (
-                events::event_developer_claim_window_changed(&env),
-                developer.clone(),
-            ),
-            DeveloperClaimWindowChanged {
-                developer,
-                start_ts,
-                end_ts,
-                enabled: true,
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Clear a developer's claim window and restore unrestricted claiming.
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Errors
-    /// - `Unauthorized` if caller is not the current admin.
-    ///
-    /// # Events
-    /// Emits `developer_claim_window_changed` with `enabled = false`.
-    pub fn clear_developer_claim_window(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        caller.require_auth();
-        Self::require_admin(env.clone(), caller)?;
-
-        env.storage()
-            .persistent()
-            .remove(&StorageKey::DeveloperClaimWindow(developer.clone()));
-
-        env.events().publish(
-            (
-                events::event_developer_claim_window_changed(&env),
-                developer.clone(),
-            ),
-            DeveloperClaimWindowChanged {
-                developer,
-                start_ts: 0,
-                end_ts: 0,
-                enabled: false,
-            },
-        );
-
-        Ok(())
-    }
-
-    /// Return the configured claim window for a developer, if one exists.
-    pub fn get_developer_claim_window(
-        env: Env,
-        developer: Address,
-    ) -> Option<DeveloperClaimWindow> {
-        env.storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer))
-    }
-
-    /// Set the daily withdrawal cap for a developer (admin only).
-    ///
-    /// A cap of `0` means unlimited (no daily limit enforced).
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Events
-    /// Emits `daily_withdraw_cap_changed` with the developer and new cap.
-    pub fn set_daily_withdraw_cap(env: Env, caller: Address, developer: Address, cap: i128) {
-        caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
-        if caller != current_admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        env.storage()
-            .persistent()
-            .set(&StorageKey::DailyWithdrawCap(developer.clone()), &cap);
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DailyWithdrawCap(developer.clone()),
-            50000,
-            50000,
-        );
-
-        env.events().publish(
-            (events::event_daily_withdraw_cap_changed(&env), caller),
-            DailyWithdrawCapChanged {
-                developer,
-                new_cap: cap,
-            },
-        );
-    }
-
-    /// Set the minimum balance for a developer (admin only).
-    ///
-    /// This entrypoint allows the admin to enforce a per‑developer minimum balance.
-    /// It delegates to the limits module for storage and auth checks.
-    pub fn set_minimum_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
-        limits::set_developer_min_balance(env, caller, developer, min_balance);
-    }
-
-    /// Get the daily withdrawal cap for a developer.
-    ///
-    /// Returns `0` if no cap has been set (meaning unlimited).
-    pub fn get_daily_withdraw_cap(env: Env, developer: Address) -> i128 {
-        env.storage()
-            .persistent()
-            .get(&StorageKey::DailyWithdrawCap(developer))
-            .unwrap_or(0)
-    }
-
-    /// Get the amount a developer has already withdrawn today.
-    ///
-    /// Returns `0` if no withdrawal has been made today.
-    pub fn get_withdrawal_today(env: Env, developer: Address) -> i128 {
-        let state: Option<DailyWithdrawState> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::WithdrawalToday(developer));
-        match state {
-            Some(s) if s.day == env.ledger().timestamp() / 86400 => s.amount,
-            _ => 0,
-        }
-    }
-
-    /// Admin-only escape hatch to manually credit a developer balance for a
-    /// specific token.
-    ///
-    /// This function is designed for operational edge cases where a developer
-    /// must be credited outside the normal `receive_payment` flow (e.g.,
-    /// off-chain payment reconciliation, dispute resolution). It does **not**
-    /// move on-ledger tokens and is treated as an audited administrative inflow.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be the current admin address.
-    /// * `developer` - Address of the developer to credit.
-    /// * `amount` - Amount in token micro-units; must be `> 0`.
-    /// * `token` - The token contract address for this credit.
-    /// * `reason` - On-chain reason code (Symbol); used for auditability.
-    ///   The Soroban SDK enforces a 32-byte maximum on Symbol values at
-    ///   construction, so a reason Symbol received here is always ≤ 32 bytes.
-    ///
-    /// # Panics
-    /// * `SettlementError::Unauthorized` — caller is not admin.
-    /// * `SettlementError::AmountNotPositive` — amount is zero or negative.
-    /// * `SettlementError::DeveloperOverflow` — i128 overflow on developer balance.
-    ///
-    /// # Events
-    /// Emits `developer_force_credited` with
-    /// `(developer, amount, token, reason, new_balance)`.
-    pub fn force_credit_developer(
-        env: Env,
-        caller: Address,
-        developer: Address,
-        amount: i128,
-        token: Address,
-        reason: Symbol,
-    ) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        if amount <= 0 {
-            env.panic_with_error(SettlementError::AmountNotPositive);
-        }
-
-        let balance_key = StorageKey::DeveloperBalance(developer.clone(), token.clone());
-        let current_balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&balance_key)
-            .unwrap_or(0i128);
-        let new_balance = current_balance
-            .checked_add(amount)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
-
-        env.storage().persistent().set(
-            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
-            &new_balance,
-        );
-        env.storage().persistent().extend_ttl(
-            &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
-            50000,
-            50000,
-        );
-
-        let mut index: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or_else(|| Vec::new(&env));
-        if !index.iter().any(|addr| addr == developer) {
-            index.push_back(developer.clone());
-            env.storage()
-                .instance()
-                .set(&StorageKey::DeveloperIndex, &index);
-        }
-
-        env.events().publish(
-            (
-                Symbol::new(&env, "developer_force_credited"),
-                developer.clone(),
-            ),
-            DeveloperForceCreditedEvent {
-                developer,
-                amount,
-                reason,
-                new_balance,
-            },
-        );
-    }
-
-    /// Get all developer balances for a specific token (admin only).
-    ///
-    /// **CRITICAL**: Uses developer index for iteration; order is based on index insertion order.
-    /// Use this function only for administrative queries or reporting purposes.
-    /// For production integrations with many developers (>100), implement off-chain indexing
-    /// by listening to `BalanceCreditedEvent` and maintaining a local database.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be the current admin address.
-    /// * `token` - Token contract address to query balances for.
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Iteration Behavior
-    /// - Uses developer index Vec for iteration; order is based on credit insertion order
-    /// - **Small index (< 100 entries)**: Safe to iterate; yields current state
-    /// - **Large index (> 100 entries)**: Consider off-chain indexing to avoid excessive gas costs
-    /// - **Order guarantees**: Based on insertion order (first credit = first in index)
-    ///
-    /// # Returns
-    /// Result containing a Vec of DeveloperBalance records or a gas exhaustion error.
-    /// Iteration order is based on index insertion order.
-    ///
-    /// # Use Cases
-    /// ✅ Administrative dashboards and reporting
-    /// ✅ Audit compliance queries
-    /// ✅ Contract state verification
-    /// ⚠️  Automatic routing based on iteration order (order is insertion-order stable but may not match business logic)
-    /// ❌ Deterministic selection of developers
-    ///
-    /// # Performance
-    /// Gas cost scales with number of developers:
-    /// - 50 developers: ~500 gas
-    /// - 100 developers: ~1,000 gas
-    /// - 500 developers: ~5,000 gas (consider off-chain indexing)
-    pub fn get_all_developer_balances(
-        env: Env,
-        caller: Address,
-        token: Address,
-    ) -> Result<Vec<DeveloperBalance>, SettlementError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        let inst = env.storage().instance();
-        let index: Vec<Address> = inst
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        // Guard against unbounded iteration on large indexes.
-        // Callers with > 100 developers must use `get_developer_balances_page` instead.
-        if index.len() > MAX_DEVELOPER_BALANCES_PAGE_SIZE {
-            return Err(SettlementError::GasExhaustionRisk);
-        }
-
-        let mut result = Vec::new(&env);
-        for address in index.iter() {
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address: address.clone(),
-                token: token.clone(),
-                balance,
-            });
-        }
-        Ok(result)
-    }
-
-    /// Get a paginated slice of developer balances for a token (admin only).
-    ///
-    /// This method avoids expensive full-index iteration by returning
-    /// a bounded window of developer balance records. Use it for
-    /// admin dashboards and off-chain pagination.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be the current admin address.
-    /// * `start` - Zero-based start index.
-    /// * `limit` - Maximum records to return; capped at 100.
-    /// * `token` - Token contract address to query balances for.
-    pub fn get_developer_balances_page(
-        env: Env,
-        caller: Address,
-        start: u32,
-        limit: u32,
-        token: Address,
-    ) -> Result<Vec<DeveloperBalance>, SettlementError> {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            panic!("unauthorized: caller is not admin");
-        }
-
-        let inst = env.storage().instance();
-        let index: Vec<Address> = inst
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        if limit == 0 || start >= index.len() {
-            return Ok(Vec::new(&env));
-        }
-
-        let end = start
-            .saturating_add(limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE))
-            .min(index.len());
-        let mut result = Vec::new(&env);
-        for (cursor, address) in index.iter().enumerate() {
-            let cursor = cursor as u32;
-            if cursor >= start && cursor < end {
-                let balance = env
-                    .storage()
-                    .persistent()
-                    .get(&StorageKey::DeveloperBalance(
-                        address.clone(),
-                        token.clone(),
-                    ))
-                    .unwrap_or(0);
-                result.push_back(DeveloperBalance {
-                    address: address.clone(),
-                    token: token.clone(),
-                    balance,
-                });
-            }
-            if cursor >= end {
-                break;
-            }
-        }
-        Ok(result)
-    }
-
-    /// Cursor-based paginated developer balances for a specific token (admin only).
-    ///
-    /// Returns up to `limit` developer balance records starting **after** the
-    /// supplied `cursor` address (exclusive), or from the beginning of the
-    /// sorted index when `cursor` is `None`.  The index is maintained in
-    /// deterministic ascending order by address bytes, so pages are stable
-    /// across interleaved `receive_payment` calls for developers that sort
-    /// **after** the cursor.
-    ///
-    /// # Arguments
-    /// * `caller`  – Must be the current admin; must authorize.
-    /// * `cursor`  – Exclusive start position.  Pass `None` for the first page;
-    ///               pass the `next_cursor` returned by the previous call for
-    ///               subsequent pages.
-    /// * `limit`   – Maximum records to return; capped at
-    ///               [`MAX_DEVELOPER_BALANCES_PAGE_SIZE`] (100).
-    /// * `token`   – Token contract address to query balances for.
-    ///
-    /// # Returns
-    /// `(page, next_cursor)` where:
-    /// * `page`         – Vec of [`DeveloperBalance`] for this page (may be empty).
-    /// * `next_cursor`  – `Some(address)` of the last record returned, which can be
-    ///                    passed as `cursor` on the next call; `None` when this is the
-    ///                    last page.
-    ///
-    /// # Access Control
-    /// Admin only.
-    ///
-    /// # Errors
-    /// * [`SettlementError::NotInitialized`] – contract not yet initialised.
-    /// * [`SettlementError::Unauthorized`]   – caller is not the admin.
-    pub fn get_developer_balances_cursor(
-        env: Env,
-        caller: Address,
-        cursor: Option<Address>,
-        limit: u32,
-        token: Address,
-    ) -> (Vec<DeveloperBalance>, Option<Address>) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-
-        let inst = env.storage().instance();
-        let index: Vec<Address> = inst
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        pagination::get_page(&env, &index, cursor, limit, &token)
-    }
-
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    /// Return the remaining TTL for each storage key category.
-    ///
-    /// # Parameters
-    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
-    ///
-    /// Integrators can poll this to detect an in-flight admin handover
-    /// before `accept_admin` is called.
-    ///
-    /// # Returns
-    /// `Some(Address)` of the nominated admin, or `None` when no transfer is pending.
-    pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().instance().get(&StorageKey::PendingAdmin)
-    }
-
-    /// Nominate a new admin (admin only).
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    /// * `new_admin` - Address to nominate as new admin
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    /// # Security
-    /// This implements a two-step admin transfer process:
-    /// 1. Current admin calls `set_admin()` to nominate new admin
-    /// 2. Nominated admin must call `accept_admin()` to complete transfer
-    ///
-    /// This prevents accidental admin loss and ensures the new admin
-    /// has control of their private keys before gaining privileges.
-    ///
-    /// # Events
-    /// Emits `admin_nominated` event with current and new admin addresses.
-    ///
-    /// # Panics
-    /// Panics if caller is not the current admin.
-    pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
-        caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
-        if caller != current_admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        env.storage()
-            .instance()
-            .set(&StorageKey::PendingAdmin, &new_admin);
-
-        env.events().publish(
-            (
-                events::event_admin_nominated(&env),
-                current_admin,
-                new_admin,
-            ),
-            (),
-        );
-    }
-
-    /// Accept the admin role (pending admin only).
-    ///
-    /// # Access Control
-    /// Only the nominated pending admin can call this function.
-    ///
-    /// # Security
-    /// This is the second step of the two-step admin transfer process.
-    /// The nominated admin must explicitly accept, proving control of
-    /// their private keys before gaining admin privileges.
-    ///
-    /// # Events
-    /// Emits `admin_accepted` event with old and new admin addresses.
-    ///
-    /// # Panics
-    /// Panics if there is no pending admin transfer (i.e., `set_admin()`
-    /// was not called first).
-    pub fn accept_admin(env: Env) {
-        let inst = env.storage().instance();
-        let pending: Address = inst
-            .get(&StorageKey::PendingAdmin)
-            .expect("no admin transfer pending");
-        pending.require_auth();
-
-        let current = Self::get_admin(env.clone());
-        inst.set(&StorageKey::Admin, &pending);
-        inst.remove(&StorageKey::PendingAdmin);
-
-        env.events()
-            .publish((events::event_admin_accepted(&env), current, pending), ());
-    }
-
-    /// Cancel a pending admin transfer. Only the current admin may call this.
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    ///
-    /// # Panics
-    /// * Panics if caller is not the current admin.
-    /// * Panics if no admin transfer is pending.
-    pub fn cancel_admin_transfer(env: Env, caller: Address) {
-        caller.require_auth();
-        let current = Self::get_admin(env.clone());
-        if caller != current {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        let inst = env.storage().instance();
-        let pending: Address = inst
-            .get(&StorageKey::PendingAdmin)
-            .expect("no admin transfer pending");
-
-        inst.remove(&StorageKey::PendingAdmin);
-
-        env.events()
-            .publish((events::event_admin_cancelled(&env), current, pending), ());
-    }
-
-    /// Propose a new vault address (admin only).
-    ///
-    /// # Arguments
-    /// * `caller` - Current admin address; must match stored admin
-    /// * `new_vault` - New vault contract address to register
-    ///
-    /// # Access Control
-    /// Only the current admin can call this function.
-    ///
-    pub fn set_vault(env: Env, caller: Address, new_vault: Address) {
-        // Backwards-compatible alias: `set_vault` now behaves like `propose_vault`.
-        Self::propose_vault(env, caller, new_vault);
-    }
-
-    /// Propose a new vault address (admin only).
-    ///
-    /// This is the first step of a two-step vault rotation:
-    /// 1. Admin calls `propose_vault()` to set `PendingVault`
-    /// 2. Proposed vault (or admin) calls `accept_vault()` to activate it
-    ///
-    /// # Security
-    /// This prevents a typo from instantly routing settlement credits to the wrong contract.
-    ///
-    /// # Events
-    /// Emits `vault_proposed` with current and proposed vault addresses.
-    ///
-    /// # Panics
-    /// - `"unauthorized: caller is not admin"` if caller is not admin
-    /// - `"invalid config: vault cannot be the contract itself"` if proposed vault is this contract
-    pub fn propose_vault(env: Env, caller: Address, new_vault: Address) {
-        caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
-        if caller != current_admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        if new_vault == env.current_contract_address() {
-            panic!("invalid config: vault cannot be the contract itself");
-        }
-
-        let inst = env.storage().instance();
-        let old_vault = Self::get_vault(env.clone());
-        inst.set(&StorageKey::PendingVault, &new_vault);
-
-        env.events().publish(
-            (events::event_vault_proposed(&env), caller),
-            VaultProposedEvent {
-                current_vault: old_vault,
-                proposed_vault: new_vault,
-            },
-        );
-    }
-
-    /// Accept the proposed vault and activate it.
-    ///
-    /// # Arguments
-    /// * `caller` - Must be either the proposed vault address or the admin.
-    ///
-    /// # Events
-    /// Emits `vault_accepted` with old vault, new vault, and acceptor.
-    ///
-    /// # Panics
-    /// - `"no vault rotation pending"` if no `propose_vault()` was called
-    /// - `"unauthorized: caller must be pending vault or admin"` if caller is neither
-    pub fn accept_vault(env: Env, caller: Address) {
-        caller.require_auth();
-
-        let inst = env.storage().instance();
-        let pending: Address = inst
-            .get(&StorageKey::PendingVault)
-            .unwrap_or_else(|| panic!("no vault rotation pending"));
-
-        let admin = Self::get_admin(env.clone());
-        if caller != pending && caller != admin {
-            panic!("unauthorized: caller must be pending vault or admin");
-        }
-
-        let old_vault = Self::get_vault(env.clone());
-        inst.set(&StorageKey::Vault, &pending);
-        inst.remove(&StorageKey::PendingVault);
-
-        env.events().publish(
-            (events::event_vault_accepted(&env), caller.clone()),
-            VaultAcceptedEvent {
-                old_vault,
-                new_vault: pending,
-                accepted_by: caller,
-            },
-        );
-    }
-
-    /// Internal function to require authorized caller (vault or admin)
-    fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
-        if caller != vault && caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-    }
-
-    fn require_admin(env: Env, caller: Address) -> Result<(), SettlementError> {
-        let admin = Self::get_admin(env);
-        if caller != admin {
-            return Err(SettlementError::Unauthorized);
-        }
-        Ok(())
-    }
-
-    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<DeveloperClaimWindow> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
-        if let Some(window) = window {
-            let now = env.ledger().timestamp();
-            if now < window.start_ts || now > window.end_ts {
-                return Err(SettlementError::ClaimWindowClosed);
-            }
-        }
-        Ok(())
-    }
-
-    /// Admin-gated contract upgrade.
-    ///
-    /// Only the current admin may call. This will instruct the host to update
-    /// the current contract WASM to `new_wasm_hash` and persist the version marker.
-    /// Emits an `upgraded` event with the admin as topic and the new version as data.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-        let len = message.len() as usize;
-        if len == 0 {
-            panic!("message cannot be empty");
-        }
-        if len > MAX_MESSAGE_LEN as usize {
-            panic!("message length exceeds maximum of 256 characters");
-        }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
-    }
-
-    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
-        caller.require_auth();
-        let admin = Self::get_admin(env.clone());
-        if caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
-        }
-
-        // Perform the on-chain upgrade via the deployer interface.
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash.clone());
-
-        // Persist the version marker for on-chain queries.
-        env.storage()
-            .instance()
-            .set(&StorageKey::ContractVersion, &new_wasm_hash);
-
-        // Emit an event for indexers / audit logs.
-        env.events()
-            .publish((Symbol::new(&env, "upgraded"), admin), new_wasm_hash);
-    }
-
-    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
-    ///
-    /// Returns `None` if no upgrade has been performed yet (initial deployment).
-    pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage().instance().get(&StorageKey::ContractVersion)
-    }
-
-    /// Insert `addr` into `index` in sorted order (ascending by raw bytes).
-    ///
-    /// Soroban's `Vec` does not expose a binary-search API, so we do a linear
-    /// scan to find the insertion point.  The index is expected to be small
-    /// (≤ `MAX_DEVELOPER_BALANCES_PAGE_SIZE`), so the O(n) cost is acceptable
-    /// and the result is a deterministic, stable ordering that cursors can rely on.
-    ///
-    /// If `addr` is already present the index is left unchanged.
-    pub(crate) fn sorted_insert(env: &Env, index: &mut Vec<Address>, addr: Address) {
-        // Check for duplicates and find insertion position in one pass.
-        let mut insert_pos: Option<u32> = None;
-        for (i, existing) in index.iter().enumerate() {
-            if existing == addr {
-                // Already in index – nothing to do.
-                return;
-            }
-            if insert_pos.is_none() && addr < existing {
-                insert_pos = Some(i as u32);
-            }
-        }
-
-        match insert_pos {
-            Some(pos) => index.insert(pos, addr),
-            None => index.push_back(addr),
-        }
-        let _ = env; // env available for future use
-    }
-
-    /// One-shot V1 -> V2 storage migration (admin only).
-    ///
-    /// Converts all `DeveloperBalanceV1(addr)` persistent slots to per-token
-    /// `DeveloperBalance(addr, usdc_token)` slots in a single transaction.
-    /// For deployments with more than [`MAX_BATCH_SIZE`] developers use
-    /// [`migrate_v1_to_v2_page`] to spread the work across multiple ledgers.
-    ///
-    /// # Access Control
-    /// Only the current admin may call this function.
-    ///
-    /// # Idempotency
-    /// Safe to call multiple times; re-running after `StorageVersion == 2`
-    /// returns immediately without modifying any state.
-    ///
-    /// # Panics
-    /// - [`SettlementError::NotInitialized`] if the contract is not initialised.
-    /// - [`SettlementError::Unauthorized`] if the caller is not the admin.
-    /// - [`SettlementError::UsdcTokenNotConfigured`] if USDC is not configured.
-    pub fn migrate_v1_to_v2(env: Env, caller: Address) {
-        migrate::migrate_v1_to_v2(&env, &caller);
-    }
-
-    /// Paginated V1 -> V2 storage migration (admin only).
-    ///
-    /// Processes up to `batch_size` (capped at [`MAX_BATCH_SIZE`]) developer
-    /// accounts per call, starting from index position `offset`.
-    ///
-    /// # Returns
-    /// `(next_offset, is_complete)`. When `is_complete` is `true` all developer
-    /// slots have been converted and `StorageVersion` is set to `2`.
-    ///
-    /// # Access Control
-    /// Only the current admin may call this function.
-    ///
-    /// # Idempotency
-    /// Returns `(0, true)` immediately when migration is already complete.
-    pub fn migrate_v1_to_v2_page(
-        env: Env,
-        caller: Address,
-        offset: u32,
-        batch_size: u32,
-    ) -> (u32, bool) {
-        migrate::migrate_v1_to_v2_page(&env, &caller, offset, batch_size)
-    }
-
-    /// Return the current storage-layout version.
-    ///
-    /// `1` = V1 layout (pre-migration or key absent).
-    /// `2` = V2 per-token layout (migration complete).
-    pub fn migration_storage_version(env: Env) -> u32 {
-        migrate::storage_version(&env)
-    }
-
-    /// Migrate a single developer's V1 balance to V2 (admin only).
     /// Migrate a single developer's V1 balance to V2 (admin only).
     pub fn migrate_developer_balance(
         env: Env,
         caller: Address,
         developer: Address,
     ) -> Result<(), SettlementError> {
-        caller.require_auth();
-        migrate::migrate_single_developer(&env, &caller, &developer)
-    }
-
-    /// Migrate a single developer's V1 balance to V2 (admin only).
-    pub fn migrate_single_dev_v2(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        caller.require_auth();
         migrate::migrate_single_developer(&env, &caller, &developer)
     }
 
@@ -1564,84 +635,16 @@ impl CalloraSettlement {
     ///
     /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
     /// full list has been processed.
-    pub fn batch_withdraw_dev_cursor(
+    pub fn batch_withdraw_devs(
         env: Env,
-        caller: Address,
-        offset: u32,
-        batch_size: u32,
-    ) -> (u32, bool) {
-        migrate::migrate_v1_to_v2_page(&env, &caller, offset, batch_size)
-    }
-
-    /// Return the current storage-layout version.
-    ///
-    /// `1` = V1 layout (pre-migration or key absent).
-    /// `2` = V2 per-token layout (migration complete).
-    pub fn migration_storage_version(env: Env) -> u32 {
-        migrate::storage_version(&env)
-    }
-
-    /// Create a checkpoint snapshot of the current global pool balance and developer index.
-    ///
-    /// Admin-only entrypoint that records a timestamped snapshot for bounded storage growth.
-    /// Each call increments a monotonic checkpoint ID.
-    pub fn checkpoint(env: Env, caller: Address) -> Checkpoint {
-        caller.require_auth();
-        Self::require_admin(env.clone(), caller).unwrap();
-
-        let pool = env
-            .storage()
-            .instance()
-            .get::<_, GlobalPool>(&StorageKey::GlobalPool)
-            .unwrap_or(GlobalPool {
-                total_balance: 0i128,
-                last_updated: 0u64,
-            });
-
-        let counter: u64 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::CheckpointCounter)
-            .unwrap_or(0u64);
-        let new_id = counter + 1;
-        env.storage()
-            .instance()
-            .set(&StorageKey::CheckpointCounter, &new_id);
-
-        let dev_index: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&StorageKey::DeveloperIndex)
-            .unwrap_or(Vec::new(&env));
-
-        let cp = Checkpoint {
-            checkpoint_id: new_id,
-            total_pool_balance: pool.total_balance,
-            developer_count: dev_index.len(),
-            ledger_timestamp: env.ledger().timestamp(),
-            timestamp: env.ledger().timestamp(),
-        };
-
-        env.storage().persistent().set(&StorageKey::Checkpoint, &cp);
-
-        env.events().publish(
-            (Symbol::new(&env, "checkpoint"),),
-            (new_id, cp.total_pool_balance, cp.developer_count),
-        );
-
-        cp
-    }
-
-    /// Return the latest checkpoint snapshot, or `None` if no checkpoints exist.
-    pub fn current_checkpoint(env: Env) -> Option<Checkpoint> {
-        env.storage().persistent().get(&StorageKey::Checkpoint)
-    }
-
-    fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
-        if caller != vault && caller != admin {
-            env.panic_with_error(SettlementError::Unauthorized);
+        developers: Vec<Address>,
+        amounts: Vec<i128>,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<(u32, bool), SettlementError> {
+        let count = developers.len();
+        if count != amounts.len() {
+            return Err(SettlementError::AmountNotPositive);
         }
     }
 
@@ -1699,6 +702,39 @@ impl CalloraSettlement {
         let next_cursor = end as u32;
         let is_complete = next_cursor >= count;
         Ok((next_cursor, is_complete))
+    }
+
+    // ── Internal helpers ────────────────────────────────────────────────
+
+    fn require_authorized_caller(env: Env, caller: Address) {
+        let vault = Self::get_vault(env.clone());
+        let admin = Self::get_admin(env.clone());
+        if caller != vault && caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+    }
+
+    fn insert_if_absent(_env: &Env, index: &mut Vec<Address>, addr: Address) {
+        for i in 0..index.len() {
+            if index.get(i).unwrap() == addr {
+                return;
+            }
+        }
+        index.push_back(addr);
+    }
+
+    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
+        let window: Option<DeveloperClaimWindow> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
+        if let Some(w) = window {
+            let now = env.ledger().timestamp();
+            if now < w.start_ts || now > w.end_ts {
+                return Err(SettlementError::ClaimWindowClosed);
+            }
+        }
+        Ok(())
     }
 }
 

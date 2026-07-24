@@ -1,51 +1,23 @@
-﻿#![no_std]
+#![no_std]
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec};
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
-};
+mod emergency;
+mod events;
 
-/// Revenue settlement contract: receives USDC from vault deducts and distributes to developers.
-///
-/// Flow: vault deduct ΓåÆ vault transfers USDC to this contract ΓåÆ admin calls distribute(to, amount).
-///
-/// # Security Assumptions
-/// - **Admin Key**: The admin has full control over fund distribution. Must be a secure multisig.
-/// - **USDC Asset**: The token address is permanently set on initialization. Must be carefully verified.
-/// - **Balances / Griefing**: The contract does not rely on strict balance invariants. External transfers
-///   increase balance without breaking logic.
-///
-/// For detailed threat models and mitigations, see [`SECURITY.md`](../../SECURITY.md).
-const ADMIN_KEY: &str = "admin";
-const PENDING_ADMIN_KEY: &str = "pending_admin";
-const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const USDC_KEY: &str = "usdc";
-const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
-const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield_deposited";
-const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
-const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
-const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
-const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
-const PAUSED_KEY: &str = "paused";
-const ERR_PAUSED: &str = "revenue pool paused";
-const VERSION_KEY: &str = "version";
+const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+const LIFETIME_THRESHOLD: u32 = 50000;
+const BUMP_AMOUNT: u32 = 50000;
 
-/// Typed contract errors for the revenue pool.
-///
-/// Returned (instead of string panics) for batch-size violations so backend
-/// integrators can branch on a stable numeric code rather than parsing panic
-/// strings. See [`chunk_iter`] for pre-chunking large payout lists to avoid
-/// [`RevenuePoolError::BatchTooLarge`] entirely.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum RevenuePoolError {
-    /// `batch_distribute` was called with an empty `payments` vector (code 1).
-    BatchEmpty = 1,
-    /// `batch_distribute` received more than [`MAX_BATCH_SIZE`] payment legs (code 2).
-    BatchTooLarge = 2,
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    UsdcToken,
+    Paused,
 }
 
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
@@ -100,39 +72,14 @@ pub const LIFETIME_THRESHOLD: u32 = 1000;
 pub struct RevenuePool;
 
 #[contractimpl]
-impl RevenuePool {
-    /// Initialize the revenue pool with an admin and the USDC token address.
-    ///
-    /// # Arguments
-    /// * `env` - The environment running the contract.
-    /// * `admin` - Address that may call `distribute`. Typically backend or multisig.
-    /// * `usdc_token` - Stellar USDC (or wrapped USDC) token contract address.
-    ///
-    /// # Panics
-    /// * If the revenue pool is already initialized.
-    ///
-    /// # Events
-    /// Emits an `init` event with the `admin` address as a topic and `usdc_token` address as data.
+impl CalloraRevenuePool {
     pub fn init(env: Env, admin: Address, usdc_token: Address) {
-        admin.require_auth();
-        if usdc_token == env.current_contract_address() {
-            panic!("invalid config: usdc_token cannot be the contract itself");
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("Already initialized");
         }
-        if usdc_token == admin {
-            panic!("invalid config: usdc_token cannot be the admin address");
-        }
-        let inst = env.storage().instance();
-        if inst.has(&Symbol::new(&env, ADMIN_KEY)) {
-            panic!("revenue pool already initialized");
-        }
-        inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
-        inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
-
-        // Extend TTL on initialization to prevent archival
-        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-
-        env.events()
-            .publish((events::event_init(&env), admin), usdc_token);
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::UsdcToken, &usdc_token);
+        env.storage().instance().set(&DataKey::Paused, &false);
     }
 
     /// Return the current admin address.
@@ -919,6 +866,119 @@ impl RevenuePool {
 
     pub fn version(env: Env) -> soroban_sdk::String {
         soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
+
+    /// Return the current admin address.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Admin)
+            .expect("revenue pool not initialized")
+    }
+
+    /// Return the configured USDC token address.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .expect(ERR_NOT_INITIALIZED)
+    }
+
+    /// Return this contract's on-ledger USDC balance.
+    pub fn balance(env: Env) -> i128 {
+        let usdc_addr = Self::get_usdc_token(env.clone());
+        let usdc = token::Client::new(&env, &usdc_addr);
+        usdc.balance(&env.current_contract_address())
+    }
+
+    /// Pause the revenue pool, blocking distributions.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        env.storage().instance().set(&DataKey::Paused, &true);
+    }
+
+    /// Unpause the revenue pool.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    /// Check if the revenue pool is paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Distribute USDC from this contract to a developer wallet.
+    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        if Self::is_paused(env.clone()) {
+            panic!("revenue pool is paused");
+        }
+        if amount <= 0 {
+            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+        }
+        if to == env.current_contract_address() {
+            panic!("invalid recipient: cannot distribute to the contract itself");
+        }
+        let usdc_addr = Self::get_usdc_token(env.clone());
+        let usdc = token::Client::new(&env, &usdc_addr);
+        let contract_addr = env.current_contract_address();
+        if usdc.balance(&contract_addr) < amount {
+            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+        }
+        usdc.transfer(&contract_addr, &to, &amount);
+    }
+
+    /// Distribute USDC from this contract to multiple developer wallets atomically.
+    pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        if Self::is_paused(env.clone()) {
+            panic!("revenue pool is paused");
+        }
+        let n = payments.len();
+        if n == 0 {
+            panic!("batch_distribute requires at least one payment");
+        }
+        let contract_addr = env.current_contract_address();
+        let mut total: i128 = 0;
+        for payment in payments.iter() {
+            let (to, amount) = payment;
+            if amount <= 0 {
+                panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            }
+            if to == contract_addr {
+                panic!("invalid recipient: cannot distribute to the contract itself");
+            }
+            total = total.checked_add(amount).expect("total overflow");
+        }
+        let usdc_addr = Self::get_usdc_token(env.clone());
+        let usdc = token::Client::new(&env, &usdc_addr);
+        if usdc.balance(&contract_addr) < total {
+            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+        }
+        for payment in payments.iter() {
+            let (to, amount) = payment;
+            usdc.transfer(&contract_addr, &to, &amount);
+        }
     }
 }
 

@@ -139,6 +139,9 @@ fn run_trace(seed: u64) {
     // Enable developer withdrawals on settlement.
     h.settlement.set_usdc_token(&h.owner, &h.usdc_id);
 
+    // Track withdrawn amounts for full settlement conservation.
+    let mut cumulative_withdrawn: i128 = 0;
+
     // Deposit into vault so deductions have something to work with.
     // Keep deposit small enough that we don't overshoot INITIAL_MINT.
     let initial_deposit: i128 = AMOUNT_CAP * TRACE_LEN as i128;
@@ -181,7 +184,16 @@ fn run_trace(seed: u64) {
             }
             // single deduct: vault → settlement (global pool, via token transfer + receive_payment)
             1 => {
-                let _ = h.vault.try_deduct(&h.backend, &amount, &None, &u16::MAX);
+                let _ = h.vault.try_deduct(&h.backend, &amount, &0u64);
+                // Credit settlement's internal accounting (global pool) so the
+                // internal conservation invariant is meaningful.
+                let _ = h.settlement.try_receive_payment(
+                    &h.owner,
+                    &amount,
+                    &true,
+                    &None::<Address>,
+                    &h.usdc_id,
+                );
                 trace.push(step, std::format!("deduct {amount}"));
             }
             // batch_deduct: vault → settlement (two items)
@@ -190,24 +202,30 @@ fn run_trace(seed: u64) {
                 let a2 = rng.amount(AMOUNT_CAP / 2);
                 let items = soroban_sdk::vec![
                     &env,
-                    callora_vault::DeductItem {
-                        amount: a1,
-                        request_id: None
-                    },
-                    callora_vault::DeductItem {
-                        amount: a2,
-                        request_id: None
-                    },
+                    (a1, 0u64),
+                    (a2, 0u64),
                 ];
+                let batch_total = a1 + a2;
                 let _ = h.vault.try_batch_deduct(&h.backend, &items);
+                // Credit settlement's internal accounting for the batch total.
+                let _ = h.settlement.try_receive_payment(
+                    &h.owner,
+                    &batch_total,
+                    &true,
+                    &None::<Address>,
+                    &h.usdc_id,
+                );
                 trace.push(step, std::format!("batch_deduct [{a1}, {a2}]"));
             }
             // developer withdraw: settlement → dev wallet
             3 => {
-                let bal = h.settlement.get_developer_balance(&dev);
+                let bal = h.settlement.get_developer_balance(&dev, &h.usdc_id);
                 if bal > 0 {
                     let w = amount.min(bal);
-                    let _ = h.settlement.try_withdraw_developer_balance(&dev, &w, &None);
+                    let _ =
+                        h.settlement
+                            .try_withdraw_developer_balance(&dev, &w, &None);
+                    cumulative_withdrawn += w;
                     trace.push(step, std::format!("dev_withdraw {w}"));
                 } else {
                     trace.push(step, "dev_withdraw skipped (no balance)".into());
@@ -240,17 +258,17 @@ fn run_trace(seed: u64) {
         }
 
         // ── Invariant 2: settlement internal conservation ───────────────────
-        // settlement on-ledger USDC == global_pool.total_balance + Σ dev_balances
+        // settlement on-ledger USDC >= global_pool.total_balance + Σ dev_balances
+        // (withdrawals reduce both sides, so this holds after full accounting)
         let settlement_on_ledger = h.usdc.balance(&h.settlement_id);
         let settlement_internal: i128 = h.settlement.get_global_pool().total_balance
             + devs
                 .iter()
-                .map(|d| h.settlement.get_developer_balance(d))
-                .sum::<i128>();
-        // Note: settlement may hold more on-ledger USDC than its internal
-        // tracking records, because vault deducts transfer USDC to settlement
-        // but also credit the global pool — so they stay in sync.
-        // The internal sum should never exceed the on-ledger balance.
+                .map(|d| h.settlement.get_developer_balance(d, &h.usdc_id))
+                .sum::<i128>()
+            + cumulative_withdrawn;
+        // The internal sum (pool + dev_balances + withdrawn) should never
+        // exceed the on-ledger balance.
         if settlement_internal > settlement_on_ledger {
             trace.fail(
                 step,

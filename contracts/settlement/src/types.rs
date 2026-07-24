@@ -45,11 +45,8 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
-    /// Per-developer high-water mark for ledger-sequence replay protection.
-    /// Stores the greatest ledger sequence this developer has been credited in.
-    HighWaterMark(Address),
-    /// Global-pool high-water mark for ledger-sequence replay protection.
-    PoolHighWaterMark,
+    /// Cumulative total received from vault deducts.
+    TotalReceived,
 }
 
 /// Severity levels for admin broadcast messages.
