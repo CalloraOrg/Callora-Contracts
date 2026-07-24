@@ -275,4 +275,19 @@ mod tests {
             Symbol::new(&env, "deposit")
         );
     }
+
+    #[test]
+    fn test_event_metadata_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_metadata_removed(&env),
+            Symbol::new(&env, "metadata_removed")
+        );
+    }
 }
+
+/// Returns the Symbol for the `"metadata_removed"` event topic.
+pub fn event_metadata_removed(env: &soroban_sdk::Env) -> soroban_sdk::Symbol {
+    soroban_sdk::Symbol::new(env, "metadata_removed")
+}
+
