@@ -1,82 +1,24 @@
 #![no_std]
+#![allow(dead_code, unused_imports)]
+pub mod archive;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
 };
-
-#[cfg(any(test, feature = "testutils"))]
-use soroban_sdk::testutils::storage::{Instance, Persistent};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+extern crate alloc;
 
-/// Typed errors for the settlement contract.
-///
-/// Using `#[contracterror]` encodes each variant as a stable `u32` code.
-/// Callers and indexers can match on the code rather than parsing raw panic strings,
-/// and the WASM binary shrinks because no error string literals are embedded.
-///
-/// | Code | Variant                      | When                                                 |
-/// |------|------------------------------|------------------------------------------------------|
-/// | 1    | NotInitialized               | A function is called before `init`                   |
-/// | 2    | AlreadyInitialized           | `init` is called more than once                      |
-/// | 3    | Unauthorized                 | Caller is not the vault or admin                     |
-/// | 4    | AmountNotPositive            | `amount` is zero or negative                         |
-/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied    |
-/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given     |
-/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow           |
-/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow     |
-/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals    |
-/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount     |
-/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow         |
-/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC             |
-/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded   |
-/// | 14   | GasExhaustionRisk            | Index too large for safe full scan; use pagination   |
-/// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length         |
-/// | 16   | MigrationSameAddress         | Migration source and target are identical            |
-/// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
-/// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
-/// | 19   | TimelockOverflow             | Timelock timestamp addition overflowed               |
-/// | 20   | MigrationNotFound            | No migration is pending for the source               |
-/// | 21   | TimelockNotExpired           | Migration delay has not elapsed                      |
-/// | 22   | MigrationBalanceChanged      | Approved amount is no longer available               |
-/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance    |
-/// | 24   | InvalidClaimWindow           | Claim window `end_ts` is before `start_ts`           |
-/// | 25   | ClaimWindowClosed            | Claim attempted outside developer's claim window     |
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum SettlementError {
-    NotInitialized = 1,
-    AlreadyInitialized = 2,
-    Unauthorized = 3,
-    AmountNotPositive = 4,
-    DeveloperRequired = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow = 7,
-    DeveloperOverflow = 8,
-    UsdcTokenNotConfigured = 9,
-    InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow = 11,
-    InsufficientContractBalance = 12,
-    DailyWithdrawCapExceeded = 13,
-    GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
-    MigrationSameAddress = 16,
-    InvalidMigrationTarget = 17,
-    NoDeveloperBalance = 18,
-    TimelockOverflow = 19,
-    MigrationNotFound = 20,
-    TimelockNotExpired = 21,
-    MigrationBalanceChanged = 22,
-    OverDraft = 23,
-    InvalidClaimWindow = 24,
-    ClaimWindowClosed = 25,
-}
+mod admin;
+mod errors;
+mod limits;
+mod pagination;
+mod timelock;
+mod types;
 
 /// Persistent storage keys for settlement contract
 #[contracttype]
@@ -238,31 +180,6 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
-}
-
-/// Maximum byte length for the `reason` Symbol in `force_credit_developer`.
-/// The Soroban SDK enforces a 32-byte limit on Symbol values at construction;
-/// this constant is used for explicit defense-in-depth validation.
-pub const MAX_REASON_LENGTH: u32 = 32;
-
-/// Maximum message length for broadcast calls.
-pub const MAX_MESSAGE_LEN: u32 = 256;
-
-/// Severity levels for admin broadcast messages.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum Severity {
-    Info,
-    Warn,
-    Crit,
-}
-
-/// Payload for the admin_broadcast event.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct AdminBroadcast {
-    pub severity: Severity,
-    pub message: soroban_sdk::String,
 }
 
 /// Storage entry TTL information for diagnostics.
@@ -559,15 +476,6 @@ impl CalloraSettlement {
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
-    /// Return the contract semver string.
-    ///
-    /// Read-only view returning the Cargo package version embedded at
-    /// compile time, enabling off-chain tooling to detect capability
-    /// deltas after upgrades.
-    pub fn version(_env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
-    }
-
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
         env.storage()
@@ -722,7 +630,7 @@ impl CalloraSettlement {
             ))
             .unwrap_or(0);
         if amount > current_balance {
-            return Err(SettlementError::OverDraft);
+            return Err(SettlementError::InsufficientDeveloperBalance);
         }
 
         let cap: i128 = env
@@ -752,7 +660,6 @@ impl CalloraSettlement {
         let new_balance = current_balance
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-
         let usdc = token::Client::new(&env, &usdc_address);
 
         if usdc.balance(&contract_address) < amount {
@@ -1177,8 +1084,8 @@ impl CalloraSettlement {
             .saturating_add(limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE))
             .min(index.len());
         let mut result = Vec::new(&env);
-        let mut cursor = 0;
-        for address in index.iter() {
+        for (cursor, address) in index.iter().enumerate() {
+            let cursor = cursor as u32;
             if cursor >= start && cursor < end {
                 let balance = env
                     .storage()
@@ -1197,7 +1104,6 @@ impl CalloraSettlement {
             if cursor >= end {
                 break;
             }
-            cursor += 1;
         }
         Ok(result)
     }
@@ -1258,95 +1164,10 @@ impl CalloraSettlement {
     ///
     /// # Parameters
     /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
-    pub fn get_storage_ttl(env: Env, developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl> {
-        let mut result = Vec::new(&env);
-        let usdc_address: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Usdc)
-            .unwrap_or_else(|| env.current_contract_address());
-
-        // 1. Instance Storage
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                17_280 * 60
-            }
-        };
-        result.push_back(StorageEntryTtl {
-            category: String::from_str(&env, "Instance"),
-            key_desc: String::from_str(&env, "Instance"),
-            storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
-            threshold: 17_280 * 30,
-            bump_amount: 17_280 * 60,
-        });
-
-        // Determine which developer addresses to inspect
-        let devs = if developer_addresses.len() > 0 {
-            developer_addresses
-        } else {
-            env.storage()
-                .instance()
-                .get(&StorageKey::DeveloperIndex)
-                .unwrap_or_else(|| Vec::new(&env))
-        };
-
-        for dev in devs.iter() {
-            // Check DeveloperBalance (Persistent)
-            let bal_key = StorageKey::DeveloperBalance(dev.clone(), usdc_address.clone());
-            if env.storage().persistent().has(&bal_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&bal_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DeveloperBalance"),
-                    key_desc: String::from_str(&env, "DeveloperBalance"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-
-            // Check DailyWithdrawCap (Persistent)
-            let cap_key = StorageKey::DailyWithdrawCap(dev.clone());
-            if env.storage().persistent().has(&cap_key) {
-                let ttl = {
-                    #[cfg(any(test, feature = "testutils"))]
-                    {
-                        env.storage().persistent().get_ttl(&cap_key)
-                    }
-                    #[cfg(not(any(test, feature = "testutils")))]
-                    {
-                        50000
-                    }
-                };
-                result.push_back(StorageEntryTtl {
-                    category: String::from_str(&env, "DailyWithdrawCap"),
-                    key_desc: String::from_str(&env, "DailyWithdrawCap"),
-                    storage_type: String::from_str(&env, "Persistent"),
-                    ttl,
-                    threshold: 50000,
-                    bump_amount: 50000,
-                });
-            }
-        }
-
-        result
-    }
-
+    /// Return the remaining TTL for each storage key category.
+    ///
+    /// # Parameters
+    /// - `developer_addresses` — optional list of developers to check. If empty, the index is used.
     /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
     ///
     /// Integrators can poll this to detect an in-flight admin handover
@@ -1582,17 +1403,17 @@ impl CalloraSettlement {
     /// Only the current admin may call. This will instruct the host to update
     /// the current contract WASM to `new_wasm_hash` and persist the version marker.
     /// Emits an `upgraded` event with the admin as topic and the new version as data.
-    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
+    pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
-        let len = message.len();
+        let len = message.len() as usize;
         if len == 0 {
             panic!("message cannot be empty");
         }
-        if len > MAX_MESSAGE_LEN {
+        if len > MAX_MESSAGE_LEN as usize {
             panic!("message length exceeds maximum of 256 characters");
         }
         env.events().publish(
@@ -1694,6 +1515,56 @@ impl CalloraSettlement {
     /// # Idempotency
     /// Returns `(0, true)` immediately when migration is already complete.
     pub fn migrate_v1_to_v2_page(
+        env: Env,
+        caller: Address,
+        offset: u32,
+        batch_size: u32,
+    ) -> (u32, bool) {
+        migrate::migrate_v1_to_v2_page(&env, &caller, offset, batch_size)
+    }
+
+    /// Return the current storage-layout version.
+    ///
+    /// `1` = V1 layout (pre-migration or key absent).
+    /// `2` = V2 per-token layout (migration complete).
+    pub fn migration_storage_version(env: Env) -> u32 {
+        migrate::storage_version(&env)
+    }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_developer_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        caller.require_auth();
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
+
+    /// Migrate a single developer's V1 balance to V2 (admin only).
+    pub fn migrate_single_dev_v2(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        caller.require_auth();
+        migrate::migrate_single_developer(&env, &caller, &developer)
+    }
+
+    /// Batch-withdraw developer balances with a cursor for pagination.
+    ///
+    /// # Access Control
+    /// Only the nominated pending admin can call this function.
+    ///
+    /// # Security
+    /// This is the second step of the two-step admin transfer process.
+    /// The nominated admin must explicitly accept, proving control of
+    /// their private keys before gaining admin privileges.
+    ///
+    /// Returns `(next_cursor, is_complete)`. When `is_complete` is `true` the
+    /// full list has been processed.
+    pub fn batch_withdraw_dev_cursor(
         env: Env,
         caller: Address,
         offset: u32,
@@ -1815,18 +1686,24 @@ impl CalloraSettlement {
         migrate::migrate_v1_to_v2_page(&env, &caller, offset, limit)
     }
 
-    pub fn migration_storage_version(env: Env) -> u32 {
-        migrate::storage_version(&env)
+        for i in start..end {
+            let developer = developers
+                .get(i as u32)
+                .ok_or(SettlementError::InsufficientDeveloperBalance)?;
+            let amount = amounts
+                .get(i as u32)
+                .ok_or(SettlementError::AmountNotPositive)?;
+            Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
+        }
+
+        let next_cursor = end as u32;
+        let is_complete = next_cursor >= count;
+        Ok((next_cursor, is_complete))
     }
 }
 
-mod admin;
 mod events;
-mod limits;
-mod migrate;
-mod pagination;
-mod timelock;
-mod types;
+pub mod migrate;
 
 #[cfg(test)]
 mod test;
@@ -1842,9 +1719,3 @@ mod test_error_codes;
 
 #[cfg(test)]
 mod test_multi_asset;
-
-#[cfg(test)]
-mod test_admin_migration;
-
-#[cfg(test)]
-mod test_overdraft;

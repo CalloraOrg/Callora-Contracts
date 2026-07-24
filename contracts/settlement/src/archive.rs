@@ -89,18 +89,30 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Bytes, Env};
+
+    #[contract]
+    pub struct TestContract;
+
+    #[contractimpl]
+    impl TestContract {
+        pub fn run_archive(env: Env, developer: Address, batch_size: u32) -> u32 {
+            archive_events(&env, developer, batch_size)
+        }
+    }
 
     #[test]
     fn test_fifo_archival_batching_and_ttl() {
         let env = Env::default();
         env.mock_all_auths();
         let developer = Address::generate(&env);
-        let contract_id = env.register(crate::CalloraSettlement, ());
+        let contract_id = env.register(TestContract, ());
+        let client = TestContractClient::new(&env, &contract_id);
+
+        let cursor_key = DataKey::Cursor(developer.clone());
+        let cursor = Cursor { tail: 0, head: 5 };
 
         env.as_contract(&contract_id, || {
-            let cursor_key = DataKey::Cursor(developer.clone());
-            let cursor = Cursor { tail: 0, head: 5 };
             env.storage().persistent().set(&cursor_key, &cursor);
 
             // Seed 5 active events
@@ -110,11 +122,13 @@ mod tests {
                     .persistent()
                     .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
             }
+        });
 
-            // Execute batch constraint test
-            let archived_first_pass = archive_events(&env, developer.clone(), 3);
-            assert_eq!(archived_first_pass, 3);
+        // Execute batch constraint test
+        let archived_first_pass = client.run_archive(&developer, &3);
+        assert_eq!(archived_first_pass, 3);
 
+        env.as_contract(&contract_id, || {
             // Verify cursor state
             let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
             assert_eq!(updated_cursor.tail, 3);
@@ -128,11 +142,13 @@ mod tests {
                 assert!(env.storage().temporary().has(&archive_key));
                 assert!(!env.storage().persistent().has(&active_key));
             }
+        });
 
-            // Exhaust remaining events
-            let archived_second_pass = archive_events(&env, developer.clone(), 10);
-            assert_eq!(archived_second_pass, 2);
+        // Exhaust remaining events
+        let archived_second_pass = client.run_archive(&developer, &10);
+        assert_eq!(archived_second_pass, 2);
 
+        env.as_contract(&contract_id, || {
             let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
             assert_eq!(final_cursor.tail, 5);
             assert_eq!(final_cursor.head, 5);
@@ -144,7 +160,9 @@ mod tests {
     fn test_require_auth_enforcement() {
         let env = Env::default();
         let developer = Address::generate(&env);
+        let contract_id = env.register(TestContract, ());
+        let client = TestContractClient::new(&env, &contract_id);
         // Will panic as auth is not mocked
-        archive_events(&env, developer, 1);
+        client.run_archive(&developer, &1);
     }
 }
