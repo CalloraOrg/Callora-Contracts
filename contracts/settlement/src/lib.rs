@@ -578,3 +578,9 @@ impl CalloraSettlement {
         migrate::storage_version(&env)
     }
 }
+
+#[cfg(test)]
+pub mod settlement_tests;
+
+#[cfg(test)]
+mod test_views;
