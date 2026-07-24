@@ -31,9 +31,8 @@ use soroban_sdk::contracterror;
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
 /// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
-/// | 24   | InvalidClaimWindow           | Claim window start > end                              |
-/// | 25   | ClaimWindowClosed            | Current timestamp is outside the claim window         |
-/// | 26   | ReplayDetected               | Settlement ledger_seq is not greater than HWM         |
+/// | 24   | InvalidClaimWindow           | Claim window `end_ts` is before `start_ts`            |
+/// | 25   | ClaimWindowClosed            | Withdrawal attempted outside the developer's window   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
