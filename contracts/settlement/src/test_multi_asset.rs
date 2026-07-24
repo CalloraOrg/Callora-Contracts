@@ -128,6 +128,11 @@ fn test_withdraw_asserts_token() {
     token_a_sac.mint(&addr, &1000i128);
     token_b_sac.mint(&addr, &1000i128);
 
+    // withdraw_developer_balance always moves the currently-configured USDC
+    // token; switching that configuration is how an operator moves which
+    // per-developer balance a withdrawal draws from.
+    client.set_usdc_token(&admin, &token_a);
+
     // Withdraw token_a — succeeds, uses token_a's contract
     let result = client.try_withdraw_developer_balance(
         &developer,
@@ -138,6 +143,8 @@ fn test_withdraw_asserts_token() {
     assert_eq!(client.get_developer_balance(&developer, &token_a), 300i128);
     assert_eq!(token_b_client.balance(&recipient), 0i128); // token_b not touched
 
+    client.set_usdc_token(&admin, &token_b);
+
     // Withdraw token_b — succeeds, uses token_b's contract
     let result = client.try_withdraw_developer_balance(
         &developer,
@@ -147,9 +154,8 @@ fn test_withdraw_asserts_token() {
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_b), 200i128);
 
-    // Cannot withdraw token_a balance when passing token_b (wrong token assertion)
-    // token_a balance is 300, trying to withdraw 300 but passing token_b address
-    // This should check balance for token_b (which is 200) and reject.
+    // Configured token is still token_b (200 remaining); withdrawing 300
+    // exceeds that balance and is rejected.
     let result = client.try_withdraw_developer_balance(
         &developer,
         &300i128,
@@ -157,7 +163,9 @@ fn test_withdraw_asserts_token() {
     );
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_b
 
-    // Cannot withdraw token_b balance when passing token_a (301 > token_a's 300 balance)
+    client.set_usdc_token(&admin, &token_a);
+
+    // Configured token is token_a (300 remaining); withdrawing 301 exceeds it.
     let result = client.try_withdraw_developer_balance(
         &developer,
         &301i128,

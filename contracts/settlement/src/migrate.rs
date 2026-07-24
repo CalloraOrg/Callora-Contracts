@@ -248,6 +248,7 @@ pub fn migrate_single_developer(
     caller: &Address,
     developer: &Address,
 ) -> Result<(), crate::SettlementError> {
+    caller.require_auth();
     require_admin(env, caller);
     let inst = env.storage().instance();
     let usdc_token: Address = inst

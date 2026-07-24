@@ -22,21 +22,33 @@
       { "code": 13, "name": "DailyWithdrawCapExceeded",     "when": "Developer's daily withdrawal cap would be exceeded." },
       { "code": 14, "name": "GasExhaustionRisk",            "when": "Index exceeds 100 entries; use get_developer_balances_cursor instead of get_all_developer_balances." },
       { "code": 15, "name": "ReasonTooLong",                "when": "Reason Symbol exceeds maximum allowed length." },
-      { "code": 16, "name": "InvalidClaimWindow",           "when": "Claim window end timestamp is before the start timestamp." },
-      { "code": 17, "name": "ClaimWindowClosed",            "when": "A developer attempts to claim outside their configured claim window." }
+      { "code": 16, "name": "MigrationSameAddress",         "when": "Balance migration source and target addresses are identical." },
+      { "code": 17, "name": "InvalidMigrationTarget",       "when": "Balance migration target is the settlement contract itself." },
+      { "code": 18, "name": "NoDeveloperBalance",           "when": "Balance migration source has no positive balance to move." },
+      { "code": 19, "name": "TimelockOverflow",             "when": "Migration timelock timestamp addition overflowed." },
+      { "code": 20, "name": "MigrationNotFound",            "when": "No balance migration is pending for the source address." },
+      { "code": 21, "name": "TimelockNotExpired",            "when": "Balance migration delay has not elapsed." },
+      { "code": 22, "name": "MigrationBalanceChanged",      "when": "Approved migration amount is no longer available at the source." },
+      { "code": 23, "name": "OverDraft",                    "when": "Withdrawal amount exceeds the developer's balance." },
+      { "code": 24, "name": "InvalidClaimWindow",           "when": "Claim window end timestamp is before the start timestamp." },
+      { "code": 25, "name": "ClaimWindowClosed",            "when": "A developer attempts to claim outside their configured claim window." }
     ]
   },
   "types": {
     "DeveloperBalance": {
-      "description": "Snapshot of a single developer's tracked balance.",
+      "description": "Snapshot of a single developer's tracked balance for one token.",
       "fields": {
         "address": {
           "type": "Address",
           "description": "Developer Stellar address."
         },
+        "token": {
+          "type": "Address",
+          "description": "Token contract address this balance is denominated in."
+        },
         "balance": {
           "type": "i128",
-          "description": "Credited balance in USDC base units (stroops)."
+          "description": "Credited balance in the token's base units."
         }
       }
     },
@@ -277,7 +289,7 @@
         { "code": 11, "name": "DeveloperBalanceUnderflow",    "when": "Balance subtraction would underflow." },
         { "code": 12, "name": "InsufficientContractBalance",  "when": "Settlement contract lacks on-ledger USDC." },
         { "code": 13, "name": "DailyWithdrawCapExceeded",     "when": "Withdrawal would exceed the developer's daily cap." },
-        { "code": 17, "name": "ClaimWindowClosed",            "when": "Current ledger timestamp is outside the developer's configured claim window." }
+        { "code": 25, "name": "ClaimWindowClosed",            "when": "Current ledger timestamp is outside the developer's configured claim window." }
       ],
       "events": [
         { "topics": ["\"developer_withdraw\"", "developer"], "data": "DeveloperWithdrawEvent" }
@@ -297,7 +309,7 @@
       "returns": "Result<void, SettlementError>",
       "errors": [
         { "code": 3,  "name": "Unauthorized",       "when": "Caller is not the current admin." },
-        { "code": 16, "name": "InvalidClaimWindow", "when": "end_ts < start_ts." }
+        { "code": 24, "name": "InvalidClaimWindow", "when": "end_ts < start_ts." }
       ],
       "events": [
         { "topics": ["\"claim_window_changed\"", "developer"], "data": "DeveloperClaimWindowChanged { enabled: true }" }
@@ -335,7 +347,7 @@
 
     {
       "name": "get_all_developer_balances",
-      "description": "Return a list of all developer balances. Admin only. Rejects the call with GasExhaustionRisk when the developer index exceeds 100 entries \u2014 use get_developer_balances_cursor for larger sets. The index is maintained in deterministic ascending order by address bytes.",
+      "description": "Return a list of all developer balances for a token. Admin only. Iterates the full developer index regardless of size \u2014 for large deployments prefer get_developer_balances_cursor or get_developer_balances_page for bounded, paginated access. The index is maintained in deterministic ascending order by address bytes.",
       "access": "admin",
       "params": [
         {
@@ -343,13 +355,18 @@
           "type": "Address",
           "optional": false,
           "description": "Must be the current admin."
+        },
+        {
+          "name": "token",
+          "type": "Address",
+          "optional": false,
+          "description": "Token contract address to query balances for."
         }
       ],
       "returns": "Vec<DeveloperBalance>",
       "errors": [
         { "code": 1,  "name": "NotInitialized",   "when": "Called before init." },
-        { "code": 3,  "name": "Unauthorized",      "when": "Caller is not the admin." },
-        { "code": 14, "name": "GasExhaustionRisk", "when": "Developer index has more than 100 entries." }
+        { "code": 3,  "name": "Unauthorized",      "when": "Caller is not the admin." }
       ],
       "events": []
     },
