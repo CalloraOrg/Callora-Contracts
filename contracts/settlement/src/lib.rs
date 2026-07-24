@@ -1,4 +1,7 @@
 #![no_std]
+pub mod archive;
+pub mod events;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 mod admin;
 pub mod archive;

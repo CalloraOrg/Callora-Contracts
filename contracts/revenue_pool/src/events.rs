@@ -283,6 +283,16 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
+    #[test]
+    fn test_event_yield_deposited_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_yield_deposited(&env),
+            Symbol::new(&env, "yield_deposited")
+        );
+    }
+
     /// Snapshot: proves event_distribute still maps to exactly the bytes for "distribute".
     #[test]
     fn test_event_distribute_bytes() {

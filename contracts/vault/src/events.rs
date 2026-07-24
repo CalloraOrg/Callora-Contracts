@@ -257,6 +257,21 @@ pub fn event_reserve_cap_set(env: &Env) -> Symbol {
     Symbol::new(env, "reserve_cap_set")
 }
 
+/// Returns the Symbol for the `"rescue_funds"` event topic.
+///
+/// Emitted when the admin rescues tokens accidentally sent to the vault.
+pub fn event_rescue_funds(env: &Env) -> Symbol {
+    Symbol::new(env, "rescue_funds")
+}
+
+/// Returns the Symbol for the `"swept"` event topic.
+///
+/// Emitted when the vault owner sweeps surplus USDC to a sibling contract
+/// via `sweep_idle_balance()`.
+pub fn event_swept(env: &Env) -> Symbol {
+    Symbol::new(env, "swept")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +516,14 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_broadcast(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
+    }
+
+    /// Snapshot: proves event_reserve_cap_set still maps to exactly the bytes for "reserve_cap_set".
+    #[test]
+    fn test_event_reserve_cap_set_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_reserve_cap_set(&env);
+        assert_eq!(sym, Symbol::new(&env, "reserve_cap_set"));
     }
 
     /// Snapshot: proves event_swept still maps to exactly the bytes for "swept".

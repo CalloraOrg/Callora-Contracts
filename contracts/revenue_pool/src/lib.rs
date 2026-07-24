@@ -1,16 +1,6 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol, Vec};
-
-mod emergency;
-mod events;
-
-const USDC_KEY: &str = "usdc";
-const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
-const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
-const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
-const LIFETIME_THRESHOLD: u32 = 50000;
-const BUMP_AMOUNT: u32 = 50000;
+pub mod events;
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
 
 #[contracttype]
 #[derive(Clone)]
