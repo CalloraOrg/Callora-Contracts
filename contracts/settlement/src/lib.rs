@@ -1,5 +1,7 @@
 #![no_std]
 pub mod archive;
+pub mod events;
+pub mod limits;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contracttype]
@@ -415,11 +417,33 @@ impl CalloraSettlement {
             .get(&StorageKey::Admin)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
+
+    /// Set the minimum balance for a developer (admin only).
+    ///
+    /// A withdrawal that would leave the developer's balance below this
+    /// threshold is rejected with [`SettlementError::MinBalanceViolation`].
+    /// Setting `min_balance` to `0` removes the restriction.
+    ///
+    /// Emits `developer_min_balance_changed`.
+    pub fn set_developer_min_balance(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        min_balance: i128,
+    ) {
+        limits::set_developer_min_balance(&env, caller, developer, min_balance);
+    }
+
+    /// Get the minimum balance for a developer.
+    ///
+    /// Returns `0` if no minimum has been configured (no restriction).
+    pub fn get_developer_min_balance(env: Env, developer: Address) -> i128 {
+        limits::get_developer_min_balance(&env, developer)
+    }
     /// Returns the contract version from Cargo.toml
     pub fn version(_env: Env) -> soroban_sdk::String {
         soroban_sdk::String::from_str(&_env, env!("CARGO_PKG_VERSION"))
     }
-
 
     /// Get registered vault address
     pub fn get_vault(env: Env) -> Address {
@@ -563,6 +587,18 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        // Enforce per-developer minimum balance.
+        let dev_balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
+        let dev_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&dev_balance_key)
+            .unwrap_or(0);
+        let remaining = dev_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::InsufficientDeveloperBalance)?;
+        limits::check_min_balance(&env, &developer, remaining)?;
+
         let usdc_address = Self::get_usdc_token(env.clone())?;
         let current_balance: i128 = env
             .storage()
@@ -643,8 +679,12 @@ impl CalloraSettlement {
         let end = (start + safe_limit as usize).min(count as usize);
 
         for i in start..end {
-            let developer = developers.get(i as u32).ok_or(SettlementError::InsufficientDeveloperBalance)?;
-            let amount = amounts.get(i as u32).ok_or(SettlementError::AmountNotPositive)?;
+            let developer = developers
+                .get(i as u32)
+                .ok_or(SettlementError::InsufficientDeveloperBalance)?;
+            let amount = amounts
+                .get(i as u32)
+                .ok_or(SettlementError::AmountNotPositive)?;
             Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
         }
 
