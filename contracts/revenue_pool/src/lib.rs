@@ -562,24 +562,12 @@ impl CalloraRevenuePool {
         let contract_address = env.current_contract_address();
         Self::validate_recipient(&to, &contract_address);
 
-        let _ = usdc.try_balance(&to).unwrap_or_else(|_| {
-            panic!(
-                "invalid recipient: account does not exist \
-                                      or has no USDC trustline"
-            )
-        });
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY), &drain);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        if usdc.balance(&contract_address) < amount {
-            panic!("{}", ERR_INSUFFICIENT_BALANCE);
-        }
-
-        env.storage()
-            .instance()
-            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-
-        usdc.transfer(&contract_address, &to, &amount);
         env.events()
-            .publish((events::event_distribute(&env), to), amount);
+            .publish((events::event_emergency_drain_proposed(&env), admin), drain);
     }
 
     /// Distribute USDC from this contract to multiple developer wallets in one atomic transaction.

@@ -31,11 +31,11 @@ fn rate_limit_bucket_enforcement() {
         &None,
     );
     let settlement = Address::generate(&env);
-
+    client.set_settlement(&owner, &settlement);
 
     // Set up rate limit config
     // capacity: 100, refill_rate: 10 per ledger
-
+    client.set_developer_rate_limit(&owner, &developer, &100, &10);
 
     // Try to deduct more than capacity -> fails
     let res = client.try_deduct(&caller, &150, &None, &u32::MAX, &developer);

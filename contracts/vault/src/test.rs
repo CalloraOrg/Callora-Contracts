@@ -346,7 +346,12 @@ fn cross_contract_conservation_fuzz() {
                 if to_pool {
                     settlement_client.receive_payment(&vault_address, &amt, &true, &None, &ledger_seq);
                 } else {
-                    settlement_client.receive_payment(&vault_address, &amt, &false, &Some(developer.clone()), &ledger_seq);
+                    settlement_client.receive_payment(
+                        &vault_address,
+                        &amt,
+                        &false,
+                        &Some(developer.clone()),
+                    );
                 }
             }
         } else if choice < 90 {
@@ -1005,7 +1010,6 @@ fn deduct_with_request_id() {
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-
     let remaining = client.deduct(
         &owner,
         &100,
@@ -1133,7 +1137,7 @@ fn deduct_authorized_caller_succeeds() {
         &None,
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
-
+    client.set_settlement(&owner, &settlement);
     let remaining = client.deduct(
         &authorized,
         &100,
@@ -3414,7 +3418,6 @@ fn deduct_to_zero_succeeds() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
-
 
     assert_eq!(
         client.deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env)),
@@ -6723,44 +6726,9 @@ fn budget_measure_all() {
     std::println!("\n=== END VAULT BUDGET MEASUREMENTS ===\n");
 }
 
-// ===========================================================================
-// Cross-Contract Value Conservation Invariant Tests
-// ===========================================================================
-//
-// This module implements end-to-end integration tests that verify the
-// mathematical value conservation invariant across the entire Callora protocol:
-//
-//     abs(delta_vault) == delta_settlement_pool + delta_developer_balances + delta_revenue_pool
-//
-// Every single token unit (measured in stroops) deducted from the CalloraVault
-// must be perfectly accounted for in one of the following destinations:
-// - The CalloraSettlement global pool
-// - Explicit developer balances in CalloraSettlement
-// - The RevenuePool contract
-//
-// These tests ensure that value never duplicates or disappears into unallocated state.
-//
-// # Test Coverage Matrix
-//
-// | Scenario | Description | to_pool | Developer | Settlement Paused |
-// |----------|-------------|---------|-----------|-------------------|
-// | 1        | Standard pool routing | true | None | No |
-// | 2        | Standard developer routing | false | Some | No |
-// | 3        | Zero-developer batch | true | None | No |
-// | 4        | Fully-pool batch | true | None | No |
-// | 5        | Mixed batch routing | mixed | mixed | No |
-//
-// # References
-// - Vault contract: contracts/vault/src/lib.rs
-// - Settlement contract: contracts/settlement/src/lib.rs
-// - Revenue pool contract: contracts/revenue_pool/src/lib.rs
-// - Documentation: INVARIANTS.md (Cross-contract conservation section)
-
-#[cfg(test)]
-mod conservation_invariant {
-    use super::*;
-    use callora_settlement::{CalloraSettlement, CalloraSettlementClient};
-    use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
+// ---------------------------------------------------------------------------
+// max_fee_bps slippage guard tests (issue #498)
+// ---------------------------------------------------------------------------
 
     /// Snapshot of cross-contract state totals for value conservation verification.
     ///
@@ -7357,4 +7325,110 @@ mod conservation_invariant {
         assert_eq!(delta.settlement_pool, expected_pool_delta, "Pool delta mismatch");
         assert_eq!(delta.settlement_developer_total, expected_dev_delta, "Developer total delta mismatch");
     }
+}
+
+/// Deducting 50 bps (amount = 5, balance = 1000) with limit = 50 bps → succeeds.
+#[test]
+fn slippage_fee_below_limit_succeeds() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    // 5 / 1000 * 10_000 = 50 bps; limit = 50 → should succeed
+    let remaining = client.deduct(&owner, &5, &None, &50, &Address::generate(&env));
+    assert_eq!(remaining, 995);
+}
+
+/// Deducting exactly at the limit (fee_bps == max_fee_bps) → succeeds.
+#[test]
+fn slippage_fee_equal_to_limit_succeeds() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    // 10 / 1000 * 10_000 = 100 bps; limit = 100 → exactly equal, should succeed
+    let remaining = client.deduct(&owner, &10, &None, &100, &Address::generate(&env));
+    assert_eq!(remaining, 990);
+}
+
+/// Deducting above the limit → returns Slippage error.
+#[test]
+fn slippage_fee_above_limit_returns_slippage_error() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    // 11 / 1000 * 10_000 = 110 bps; limit = 100 → exceeds, should fail
+    let result = client.try_deduct(&owner, &11, &None, &100);
+    assert_eq!(
+        result,
+        Err(Ok(VaultError::Slippage)),
+        "expected Slippage error"
+    );
+}
+
+/// Passing u32::MAX behaves like the old unrestricted deduct.
+#[test]
+fn slippage_max_u16_is_unrestricted() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    // Deduct 99% of balance — would fail any real limit, but u32::MAX = no limit
+    let remaining = client.deduct(&owner, &999, &None, &u32::MAX, &Address::generate(&env));
+    assert_eq!(remaining, 1);
+}
+
+/// Boundary: max_fee_bps = 0 → any deduction of positive amount reverts.
+#[test]
+fn slippage_zero_limit_always_fails() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    // Even 1 stroop / 1000 = 10 bps > 0 → Slippage
+    let result = client.try_deduct(&owner, &1, &None, &0);
+    assert_eq!(result, Err(Ok(VaultError::Slippage)));
+}
+
+/// Boundary: max_fee_bps = 1 → deduction at 1 bps passes; 2 bps fails.
+#[test]
+fn slippage_one_bps_limit() {
+    let env = Env::default();
+    // balance = 100_000; 1 bps = 10 units, 2 bps = 20 units
+    let (owner, client) = setup_slippage_vault(&env, 100_000);
+    env.mock_all_auths();
+    // 10 / 100_000 * 10_000 = 1 bps → equal to limit, succeeds
+    let remaining = client.deduct(&owner, &10, &None, &1, &Address::generate(&env));
+    assert_eq!(remaining, 99_990);
+    // 20 / 99_990 * 10_000 = 2000_000/99990 = 2 bps → exceeds limit of 1
+    let result = client.try_deduct(&owner, &20, &None, &1);
+    assert_eq!(result, Err(Ok(VaultError::Slippage)));
+}
+
+/// Slippage check fires before any state mutation (balance unchanged on failure).
+#[test]
+fn slippage_check_before_state_mutation() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 1000);
+    env.mock_all_auths();
+    let balance_before = client.balance();
+    // This should fail with Slippage
+    let _ = client.try_deduct(&owner, &500, &None, &10);
+    assert_eq!(
+        client.balance(),
+        balance_before,
+        "balance must be unchanged after slippage revert"
+    );
+}
+
+/// Existing deductions (u32::MAX) continue to work — no regression.
+#[test]
+fn slippage_no_regression_existing_deductions() {
+    let env = Env::default();
+    let (owner, client) = setup_slippage_vault(&env, 500);
+    env.mock_all_auths();
+    assert_eq!(
+        client.deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env)),
+        300
+    );
+    assert_eq!(
+        client.deduct(&owner, &300, &None, &u32::MAX, &Address::generate(&env)),
+        0
+    );
 }

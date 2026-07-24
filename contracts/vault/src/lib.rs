@@ -599,14 +599,6 @@ impl CalloraVault {
     }
 }
 
-#[cfg(test)]
-mod test {
-    #[test]
-    fn test_cei_order_preservation() {
-        assert_eq!(1 + 1, 2);
-    }
-}
-
 pub mod capabilities;
 mod cold_storage;
 mod events;
@@ -630,30 +622,24 @@ mod test;
 // vault API is migrated.
 //
 // #[cfg(test)]
-// mod test_init_hardening;
-//
-// #[cfg(test)]
-// mod test_setter_validation;
-//
-// // #[cfg(test)]
-// // mod test_settler_validation;
-//
-// #[cfg(test)]
-// mod test_views;
-//
-// #[cfg(test)]
-// mod test_idempotency;
-//
-// #[cfg(test)]
-// mod test_error_codes;
-//
-// #[cfg(test)]
-// mod test_reentrancy;
-//
-// #[cfg(test)]
-// mod test_balance_property;
-//
-// #[cfg(test)]
-// mod test_rate_limit;
-//
-// #[cfg(test)] mod test_gas_budget;
+// mod test_settler_validation;
+
+#[cfg(test)]
+mod test_views;
+
+#[cfg(test)]
+mod test_idempotency;
+
+#[cfg(test)]
+mod test_error_codes;
+
+#[cfg(test)]
+mod test_reentrancy;
+
+#[cfg(test)]
+mod test_balance_property;
+
+#[cfg(test)]
+mod test_gas_budget;
+#[cfg(test)]
+mod test_rate_limit;

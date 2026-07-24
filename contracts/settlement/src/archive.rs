@@ -89,30 +89,20 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Bytes, Env};
-
-    #[contract]
-    pub struct TestContract;
-
-    #[contractimpl]
-    impl TestContract {
-        pub fn run_archive(env: Env, developer: Address, batch_size: u32) -> u32 {
-            archive_events(&env, developer, batch_size)
-        }
-    }
+    use crate::CalloraSettlement;
+    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
 
     #[test]
     fn test_fifo_archival_batching_and_ttl() {
         let env = Env::default();
         env.mock_all_auths();
         let developer = Address::generate(&env);
-        let contract_id = env.register(TestContract, ());
-        let client = TestContractClient::new(&env, &contract_id);
+        let contract_id = env.register(CalloraSettlement, ());
 
         let cursor_key = DataKey::Cursor(developer.clone());
-        let cursor = Cursor { tail: 0, head: 5 };
 
         env.as_contract(&contract_id, || {
+            let cursor = Cursor { tail: 0, head: 5 };
             env.storage().persistent().set(&cursor_key, &cursor);
 
             // Seed 5 active events
@@ -124,8 +114,11 @@ mod tests {
             }
         });
 
-        // Execute batch constraint test
-        let archived_first_pass = client.run_archive(&developer, &3);
+        // Each call establishes its own authorization frame, so every
+        // `archive_events` invocation (which calls `require_auth`) needs its
+        // own `as_contract` scope rather than sharing one.
+        let archived_first_pass =
+            env.as_contract(&contract_id, || archive_events(&env, developer.clone(), 3));
         assert_eq!(archived_first_pass, 3);
 
         env.as_contract(&contract_id, || {
@@ -145,7 +138,8 @@ mod tests {
         });
 
         // Exhaust remaining events
-        let archived_second_pass = client.run_archive(&developer, &10);
+        let archived_second_pass =
+            env.as_contract(&contract_id, || archive_events(&env, developer.clone(), 10));
         assert_eq!(archived_second_pass, 2);
 
         env.as_contract(&contract_id, || {
@@ -160,9 +154,10 @@ mod tests {
     fn test_require_auth_enforcement() {
         let env = Env::default();
         let developer = Address::generate(&env);
-        let contract_id = env.register(TestContract, ());
-        let client = TestContractClient::new(&env, &contract_id);
+        let contract_id = env.register(CalloraSettlement, ());
         // Will panic as auth is not mocked
-        client.run_archive(&developer, &1);
+        env.as_contract(&contract_id, || {
+            archive_events(&env, developer, 1);
+        });
     }
 }

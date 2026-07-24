@@ -87,6 +87,7 @@ individual events through the ladder as indexer needs arise.
 | `balance_credited` | `event_balance_credited` | developer address | `BalanceCreditedEvent { developer, amount, new_balance }` |
 | `developer_withdraw` | `event_developer_withdraw` | developer address | `DeveloperWithdrawEvent { developer, amount, to }` |
 | `daily_withdraw_cap_changed` | `event_daily_withdraw_cap_changed` | caller | `DailyWithdrawCapChanged { developer, new_cap }` |
+| `claim_window_changed` | `event_developer_claim_window_changed` | developer address | `DeveloperClaimWindowChanged { developer, start_ts, end_ts, enabled }` |
 | `developer_force_credited` | `event_developer_force_credited` | developer address | `DeveloperForceCreditedEvent { developer, amount, reason, new_balance }` |
 | `admin_nominated` | `event_admin_nominated` | current admin | new admin address |
 | `admin_accepted` | `event_admin_accepted` | pending admin | — |

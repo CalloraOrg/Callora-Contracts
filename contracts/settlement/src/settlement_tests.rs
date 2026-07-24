@@ -5,7 +5,7 @@ mod settlement_tests {
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::token as token_mod;
-    use soroban_sdk::{Address, BytesN, Env, Error, IntoVal, InvokeError, Symbol, TryFromVal};
+    use soroban_sdk::{Address, Env, Error, IntoVal, InvokeError, Symbol, TryFromVal};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address, Address) {
         let env = Env::default();
@@ -434,10 +434,8 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         client.init(&admin, &vault);
-        let token = Address::generate(&env);
 
         let zero_result = client.try_withdraw_developer_balance(&developer, &0i128, &None);
         let negative_result = client.try_withdraw_developer_balance(&developer, &-1i128, &None);
@@ -818,6 +816,9 @@ mod settlement_tests {
         assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
 
         client.cancel_admin_transfer(&admin);
+
+        // Events reflect only the most recent invocation, so read them
+        // before any further (event-less) client calls.
         let events = env.events().all();
         std::println!("Immediate events len: {}", events.len());
         for (i, ev) in events.iter().enumerate() {
@@ -1749,7 +1750,6 @@ mod settlement_tests {
         let vault = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         env.ledger().set_timestamp(1_000);
         client.init(&admin, &vault);
@@ -1782,7 +1782,6 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         env.ledger().set_timestamp(1_000);
         client.init(&admin, &vault);
@@ -1950,7 +1949,7 @@ mod settlement_tests {
 
         assert_eq!(deposit_events.len(), 2);
 
-        let ev1 = deposit_events.get(0).unwrap();
+        let ev1 = deposit_events.first().unwrap();
         let topic1_dev1: Address = ev1.1.get(1).unwrap().into_val(&env);
         assert_eq!(topic1_dev1, dev1);
         let data1: crate::DepositEvent = ev1.2.into_val(&env);
@@ -2178,7 +2177,6 @@ mod settlement_tests {
     #[test]
     fn test_force_credit_developer_emits_event() {
         use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
 
         let (env, addr, admin, _vault, _third_party, token) = setup_contract();
         let client = CalloraSettlementClient::new(&env, &addr);
@@ -2308,8 +2306,7 @@ mod settlement_tests {
             total_credited += half_remaining;
 
             // Large credit to a developer
-            if let Some(developer) = developers.get(0) {
-                ledger_seq += 1;
+            if let Some(developer) = developers.first() {
                 client.receive_payment(
                     &vault,
                     &half_remaining,
@@ -2344,18 +2341,24 @@ mod settlement_tests {
 
         assert_eq!(client.get_version(), None);
 
+        // `upgrade` swaps the contract's installed code, so the target hash
+        // must correspond to WASM actually uploaded to the test ledger. An
+        // empty blob is the established pattern for this in the workspace —
+        // see `contracts/vault/tests/upgrade_events.rs::upload_empty_wasm`.
         let new_hash = env
             .deployer()
             .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
         client.upgrade(&admin, &new_hash);
 
-        // An `upgraded` event should have been emitted
-        let events = env.events().all();
-        let ev = events.last().unwrap();
-        let name = soroban_sdk::Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
-        assert_eq!(name, soroban_sdk::Symbol::new(&env, "upgraded"));
-
         assert_eq!(client.get_version(), Some(new_hash.clone()));
+
+        // `update_current_contract_wasm` switches this native registered test
+        // contract to Wasm at the end of the call, so the SDK test harness
+        // does not expose the contract-level `upgraded` event through
+        // `env.events().all()` after upgrade (same limitation documented in
+        // `contracts/revenue_pool/src/test.rs::upgrade_sets_version_with_uploaded_wasm`
+        // and `contracts/vault/tests/upgrade_events.rs`). The event topic
+        // itself is covered by `events::tests::test_event_upgraded_bytes`.
     }
 
     // ── daily withdrawal cap tests ──────────────────────────────────────────
@@ -3022,5 +3025,326 @@ mod settlement_tests {
             cursor_pages, devs,
             "cursor pages must iterate in deterministic sorted order"
         );
+    }
+
+    // ── developer claim window tests ────────────────────────────────────────
+
+    #[test]
+    fn test_get_developer_claim_window_none_by_default() {
+        let (env, addr, _admin, _vault, _third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        assert_eq!(client.get_developer_claim_window(&developer), None);
+    }
+
+    #[test]
+    fn test_set_developer_claim_window_unauthorized() {
+        let (env, addr, _admin, vault, third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_set_developer_claim_window(&vault, &developer, &0u64, &100u64);
+        assert!(is_error(result, SettlementError::Unauthorized));
+
+        let result =
+            client.try_set_developer_claim_window(&third_party, &developer, &0u64, &100u64);
+        assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn test_set_developer_claim_window_rejects_invalid_range() {
+        let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_set_developer_claim_window(&admin, &developer, &100u64, &50u64);
+        assert!(is_error(result, SettlementError::InvalidClaimWindow));
+        assert_eq!(client.get_developer_claim_window(&developer), None);
+    }
+
+    #[test]
+    fn test_set_developer_claim_window_allows_start_equals_end() {
+        let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        client.set_developer_claim_window(&admin, &developer, &500u64, &500u64);
+        let window = client.get_developer_claim_window(&developer).unwrap();
+        assert_eq!(window.start_ts, 500);
+        assert_eq!(window.end_ts, 500);
+    }
+
+    #[test]
+    fn test_set_developer_claim_window_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+
+        let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        client.set_developer_claim_window(&admin, &developer, &10u64, &20u64);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "claim_window_changed")
+                }
+            })
+            .expect("expected claim_window_changed event");
+
+        let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
+        assert_eq!(topic1, developer);
+
+        let data: crate::DeveloperClaimWindowChanged = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.start_ts, 10);
+        assert_eq!(data.end_ts, 20);
+        assert!(data.enabled);
+    }
+
+    #[test]
+    fn test_clear_developer_claim_window_restores_unrestricted_claiming() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin_client.mint(&addr, &100i128);
+
+        // Window closed at the current timestamp — withdrawal is rejected.
+        client.set_developer_claim_window(&admin, &developer, &0u64, &10u64);
+        let result = client.try_withdraw_developer_balance(&developer, &50i128, &None);
+        assert!(is_error(result, SettlementError::ClaimWindowClosed));
+
+        // Clearing the window restores unrestricted claiming.
+        client.clear_developer_claim_window(&admin, &developer);
+        assert_eq!(client.get_developer_claim_window(&developer), None);
+        let result = client.try_withdraw_developer_balance(&developer, &50i128, &None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_clear_developer_claim_window_emits_event() {
+        use soroban_sdk::testutils::Events as _;
+
+        let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        client.set_developer_claim_window(&admin, &developer, &10u64, &20u64);
+        client.clear_developer_claim_window(&admin, &developer);
+
+        let events = env.events().all();
+        let ev = events
+            .iter()
+            .rev()
+            .find(|e| {
+                !e.1.is_empty() && {
+                    let t: Symbol = e.1.get(0).unwrap().into_val(&env);
+                    t == Symbol::new(&env, "claim_window_changed")
+                }
+            })
+            .expect("expected claim_window_changed event");
+
+        let data: crate::DeveloperClaimWindowChanged = ev.2.into_val(&env);
+        assert_eq!(data.developer, developer);
+        assert_eq!(data.start_ts, 0);
+        assert_eq!(data.end_ts, 0);
+        assert!(!data.enabled);
+    }
+
+    #[test]
+    fn test_clear_developer_claim_window_unauthorized() {
+        let (env, addr, _admin, vault, third_party, _token) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let developer = Address::generate(&env);
+
+        let result = client.try_clear_developer_claim_window(&vault, &developer);
+        assert!(is_error(result, SettlementError::Unauthorized));
+
+        let result = client.try_clear_developer_claim_window(&third_party, &developer);
+        assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn test_withdraw_rejects_before_claim_window_start() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin_client.mint(&addr, &100i128);
+
+        // Window opens in the future (starts at 2_000; current time is 1_000).
+        client.set_developer_claim_window(&admin, &developer, &2_000u64, &3_000u64);
+
+        let result = client.try_withdraw_developer_balance(&developer, &50i128, &None);
+        assert!(is_error(result, SettlementError::ClaimWindowClosed));
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            100i128
+        );
+    }
+
+    #[test]
+    fn test_withdraw_rejects_after_claim_window_end() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(5_000);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin_client.mint(&addr, &100i128);
+
+        // Window already closed (ended at 3_000; current time is 5_000).
+        client.set_developer_claim_window(&admin, &developer, &1_000u64, &3_000u64);
+
+        let result = client.try_withdraw_developer_balance(&developer, &50i128, &None);
+        assert!(is_error(result, SettlementError::ClaimWindowClosed));
+    }
+
+    #[test]
+    fn test_withdraw_allows_boundary_timestamps_inclusive() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin_client.mint(&addr, &100i128);
+        client.set_developer_claim_window(&admin, &developer, &1_000u64, &2_000u64);
+
+        // Exactly at start_ts — allowed.
+        env.ledger().set_timestamp(1_000);
+        let result = client.try_withdraw_developer_balance(&developer, &10i128, &None);
+        assert!(result.is_ok());
+
+        // Exactly at end_ts — allowed.
+        env.ledger().set_timestamp(2_000);
+        let result = client.try_withdraw_developer_balance(&developer, &10i128, &None);
+        assert!(result.is_ok());
+
+        // One second past end_ts — rejected.
+        env.ledger().set_timestamp(2_001);
+        let result = client.try_withdraw_developer_balance(&developer, &10i128, &None);
+        assert!(is_error(result, SettlementError::ClaimWindowClosed));
+    }
+
+    #[test]
+    fn test_withdraw_succeeds_within_claim_window() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_500);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin_client.mint(&addr, &100i128);
+        client.set_developer_claim_window(&admin, &developer, &1_000u64, &2_000u64);
+
+        let result = client.try_withdraw_developer_balance(&developer, &40i128, &None);
+        assert!(result.is_ok());
+        assert_eq!(
+            client.get_developer_balance(&developer, &usdc_address),
+            60i128
+        );
+    }
+
+    #[test]
+    fn test_claim_window_does_not_affect_other_developers() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(5_000);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let dev1 = Address::generate(&env);
+        let dev2 = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &usdc_address);
+        client.receive_payment(&vault, &100i128, &false, &Some(dev2.clone()), &usdc_address);
+        usdc_admin_client.mint(&addr, &200i128);
+
+        // dev1's window already closed; dev2 has no window (unrestricted).
+        client.set_developer_claim_window(&admin, &dev1, &0u64, &1_000u64);
+
+        let result = client.try_withdraw_developer_balance(&dev1, &10i128, &None);
+        assert!(is_error(result, SettlementError::ClaimWindowClosed));
+
+        let result = client.try_withdraw_developer_balance(&dev2, &10i128, &None);
+        assert!(result.is_ok());
     }
 }

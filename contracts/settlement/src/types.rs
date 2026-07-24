@@ -45,7 +45,8 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
-    /// Cumulative total received from vault deducts.
+    /// Cumulative total of every amount ever credited via `receive_payment` /
+    /// `batch_receive_payment`, regardless of routing (pool or developer).
     TotalReceived,
 }
 
@@ -64,6 +65,19 @@ pub enum Severity {
 pub struct AdminBroadcast {
     pub severity: Severity,
     pub message: soroban_sdk::String,
+}
+
+/// Storage TTL entry for a given storage key category, returned by
+/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
 }
 
 /// Developer balance record in settlement contract.
@@ -197,6 +211,7 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when the admin proposes or executes a timelock'd developer balance
