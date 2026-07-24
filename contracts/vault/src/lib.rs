@@ -233,16 +233,98 @@ impl CalloraVault {
         }
     }
 
-    pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Address) {
+    // -----------------------------------------------------------------------
+    // View functions — no TTL bump (read-only, zero write cost)
+    // -----------------------------------------------------------------------
+
+    /// Simulates a vault deduction without altering on-chain state.
+    ///
+    /// Performs validation checks identical to `deduct` and returns the predicted
+    /// balance after the specified `amount` is deducted.
+    ///
+    /// # Errors
+    /// Returns `VaultError` under the exact same conditions as `deduct`
+    /// (e.g., paused state, amount exceeding balance, amount exceeding max deduction limit).
+    pub fn simulate_deduct(
+        env: Env,
+        caller: Address,
+        amount: i128,
+        request_id: Option<Symbol>,
+    ) -> Result<i128, VaultError> {
+        Self::require_not_paused(env.clone())?;
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
-        if caller != owner {
-            panic!("Not owner");
+        if amount <= 0 {
+            return Err(VaultError::AmountNotPositive);
         }
+        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+        let max_d = Self::get_max_deduct(env.clone());
+        if amount > max_d {
+            return Err(VaultError::ExceedsMaxDeduct);
+        }
+        if let Some(ref rid) = request_id {
+            Self::require_not_duplicate(&env, rid)?;
+        }
+        let meta = Self::get_meta(env.clone())?;
+        if meta.balance < amount {
+            return Err(VaultError::InsufficientBalance);
+        }
+        let _ = Self::require_settlement(&env)?;
+        meta.balance
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)
+    }
+
+    /// Simulates a batch vault deduction without altering on-chain state.
+    ///
+    /// Performs validation checks identical to `batch_deduct` and returns the predicted
+    /// balance after all specified deductions are applied.
+    ///
+    /// # Errors
+    /// Returns `VaultError` under the exact same conditions as `batch_deduct`.
+    pub fn simulate_batch_deduct(
+        env: Env,
+        caller: Address,
+        items: Vec<DeductItem>,
+    ) -> Result<i128, VaultError> {
+        Self::require_not_paused(env.clone())?;
+        caller.require_auth();
+        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+        let n = items.len();
+        if n == 0 {
+            return Err(VaultError::BatchEmpty);
+        }
+        if n > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+        let max_d = Self::get_max_deduct(env.clone());
+        let meta = Self::get_meta(env.clone())?;
+        let mut running = meta.balance;
+        let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
+        for item in items.iter() {
+            if item.amount <= 0 {
+                return Err(VaultError::AmountNotPositive);
+            }
+            if item.amount > max_d {
+                return Err(VaultError::ExceedsMaxDeduct);
+            }
+            if running < item.amount {
+                return Err(VaultError::InsufficientBalance);
+            }
+            if let Some(ref rid) = item.request_id {
+                Self::require_not_duplicate(&env, rid)?;
+                if seen_in_batch.contains(rid) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_in_batch.push_back(rid.clone());
+            }
+            running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
+        }
+        let _ = Self::require_settlement(&env)?;
+        Ok(running)
+    }
+
+    /// Return full vault state. Returns error if vault is not initialized.
+    pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
         env.storage()
             .instance()
             .set(&DataKey::Depositor(depositor), &true);
