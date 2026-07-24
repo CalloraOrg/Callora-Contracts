@@ -1,5 +1,6 @@
 #![no_std]
 pub mod archive;
+pub mod queue;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 #[contracttype]
