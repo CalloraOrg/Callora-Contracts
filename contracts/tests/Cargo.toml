@@ -1,0 +1,20 @@
+[package]
+name = "callora-cross-contract-tests"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+name = "callora_cross_contract_tests"
+path = "src/cross_contract_conservation.rs"
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+callora-vault = { path = "../vault" }
+callora-settlement = { path = "../settlement" }
+callora-revenue-pool = { path = "../revenue_pool" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+rand = "0.8"
