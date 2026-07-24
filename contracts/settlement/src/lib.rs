@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
+pub mod archive;
+pub mod replay_guard;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
 
 pub mod admin;
 pub mod archive;
@@ -76,12 +78,26 @@ impl CalloraSettlement {
         to_pool: bool,
         developer: Option<Address>,
         token: Address,
+        ledger_seq: u32,
     ) {
         caller.require_auth();
         Self::require_authorized_caller(env.clone(), caller.clone());
         if amount <= 0 {
             env.panic_with_error(SettlementError::AmountNotPositive);
         }
+
+        // Replay guard: reject duplicate / out-of-order settlement claims.
+        if to_pool {
+            replay_guard::check_pool(&env, ledger_seq)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+        } else {
+            let dev = developer.clone().unwrap_or_else(|| {
+                env.panic_with_error(SettlementError::DeveloperRequired)
+            });
+            replay_guard::check_developer(&env, &dev, ledger_seq)
+                .unwrap_or_else(|e| env.panic_with_error(e));
+        }
+
         let inst = env.storage().instance();
         if to_pool {
             if developer.is_some() {
@@ -205,6 +221,7 @@ impl CalloraSettlement {
         caller: Address,
         items: Vec<(Address, i128)>,
         token: Address,
+        ledger_seq: u32,
     ) {
         caller.require_auth();
         Self::require_authorized_caller(env.clone(), caller.clone());
@@ -217,6 +234,13 @@ impl CalloraSettlement {
         for item in items.iter() {
             let (_, amount) = item;
             assert!(amount > 0, "amount must be positive");
+        }
+
+        // Replay guard: validate ALL developer HWMs before any state change.
+        for item in items.iter() {
+            let (dev, _) = item;
+            replay_guard::check_developer(&env, &dev, ledger_seq)
+                .unwrap_or_else(|e| { env.panic_with_error(e) });
         }
 
         let inst = env.storage().instance();

@@ -19,7 +19,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address) {
     let contract = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &contract);
     client.init(&admin, &vault);
-    client.receive_payment(&vault, &500, &false, &Some(from.clone()), &token);
+    client.receive_payment(&vault, &500, &false, &Some(from.clone()), &token, &1u32);
     (env, contract, admin, vault, from, to)
 }
 
@@ -75,9 +75,9 @@ fn execution_requires_timelock_and_succeeds_at_boundary() {
 fn execution_adds_to_destination_and_leaves_later_source_credits() {
     let (env, contract, admin, vault, from, to) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
-    client.receive_payment(&vault, &40, &false, &Some(to.clone()), &token);
+    client.receive_payment(&vault, &40, &false, &Some(to.clone()), &token, &1u32);
     client.propose_balance_migration(&admin, &from, &to);
-    client.receive_payment(&vault, &25, &false, &Some(from.clone()), &token);
+    client.receive_payment(&vault, &25, &false, &Some(from.clone()), &token, &2u32);
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
 

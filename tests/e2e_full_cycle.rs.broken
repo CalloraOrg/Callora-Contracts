@@ -232,6 +232,7 @@ fn e2e_full_cycle() {
         &false,
         &Some(h.dev_a.clone()),
         &h.usdc_id,
+        &1u32,
     );
 
     assert_eq!(

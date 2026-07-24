@@ -45,6 +45,7 @@ fn test_two_tokens_independent_balances() {
         &false,
         &Some(developer.clone()),
         &token_a,
+        &1u32,
     );
     // Credit token_b to developer
     client.receive_payment(
@@ -53,6 +54,7 @@ fn test_two_tokens_independent_balances() {
         &false,
         &Some(developer.clone()),
         &token_b,
+        &2u32,
     );
 
     // Balances are independent per token
@@ -91,8 +93,8 @@ fn test_two_tokens_two_developers() {
     client.init(&admin, &vault);
 
     // dev1 gets token_a, dev2 gets token_b
-    client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token_a);
-    client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token_b);
+    client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token_a, &1u32);
+    client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token_b, &1u32);
 
     assert_eq!(client.get_developer_balance(&dev1, &token_a), 100i128);
     assert_eq!(client.get_developer_balance(&dev2, &token_b), 200i128);
@@ -121,8 +123,8 @@ fn test_withdraw_asserts_token() {
     client.init(&admin, &vault);
 
     // Credit both tokens to developer
-    client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token_a);
-    client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()), &token_b);
+    client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token_a, &1u32);
+    client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()), &token_b, &2u32);
 
     // Fund the settlement contract with both tokens so withdrawal succeeds.
     token_a_sac.mint(&addr, &1000i128);
@@ -329,7 +331,7 @@ fn test_batch_receive_payment_with_token() {
     items.push_back((dev1.clone(), 100i128));
     items.push_back((dev2.clone(), 200i128));
 
-    client.batch_receive_payment(&vault, &items, &token);
+    client.batch_receive_payment(&vault, &items, &token, &1u32);
 
     assert_eq!(client.get_developer_balance(&dev1, &token), 100i128);
     assert_eq!(client.get_developer_balance(&dev2, &token), 200i128);
