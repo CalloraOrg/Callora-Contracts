@@ -74,7 +74,6 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
     let dev = Address::generate(&env);
-    let token = Address::generate(&env);
 
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);

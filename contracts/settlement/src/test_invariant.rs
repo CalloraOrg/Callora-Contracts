@@ -101,10 +101,6 @@ impl Prng {
         }
         min + (self.next_u64() as usize) % (max - min + 1)
     }
-
-    fn gen_bool(&mut self) -> bool {
-        self.next_u64() & 1 == 1
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -178,64 +174,6 @@ impl Trace {
 // Test harness helpers
 // ---------------------------------------------------------------------------
 
-fn make_usdc<'a>(
-    env: &'a Env,
-    mint_to: &Address,
-    amount: i128,
-) -> (
-    Address,
-    token_mod::Client<'a>,
-    token_mod::StellarAssetClient<'a>,
-) {
-    let admin = Address::generate(env);
-    let ca = env.register_stellar_asset_contract_v2(admin.clone());
-    let addr = ca.address();
-    let client = token_mod::Client::new(env, &addr);
-    let sac = token_mod::StellarAssetClient::new(env, &addr);
-    // Pre-fund the settlement contract so withdrawals can succeed.
-    sac.mint(mint_to, &amount);
-    (addr, client, sac)
-}
-
-fn setup_env() -> (
-    &'static Env,
-    Address, // contract address
-    CalloraSettlementClient<'static>,
-    Address,                                // admin
-    Address,                                // vault
-    Address,                                // usdc token
-    token_mod::StellarAssetClient<'static>, // usdc SAC (for minting)
-) {
-    // SAFETY: We immediately tie the 'static lifetime to `env` via Box::leak.
-    // The Env is leaked so the client can borrow it for the duration of the test.
-    let env = Box::leak(Box::new(Env::default()));
-    env.mock_all_auths();
-
-    let admin = Address::generate(env);
-    let vault = Address::generate(env);
-    let contract = env.register(CalloraSettlement, ());
-
-    // Mint a large enough USDC reserve so withdrawals don't run out.
-    let (usdc_addr, _usdc_client, _usdc_sac) = make_usdc(env, &contract, i128::MAX / 2);
-
-    let client = CalloraSettlementClient::new(env, &contract);
-    client.init(&admin, &vault);
-    client.set_usdc_token(&admin, &usdc_addr);
-
-    let usdc_sac_static: token_mod::StellarAssetClient<'static> =
-        token_mod::StellarAssetClient::new(env, &usdc_addr);
-
-    (
-        env,
-        contract,
-        client,
-        admin,
-        vault,
-        usdc_addr,
-        usdc_sac_static,
-    )
-}
-
 // ---------------------------------------------------------------------------
 // Invariant checker
 // ---------------------------------------------------------------------------
@@ -245,7 +183,6 @@ fn setup_env() -> (
 /// The global pool is tracked separately; this checks only the developer side.
 /// A full conservation check is: `total_in == dev_sum + pool`.
 fn check_invariant(
-    _env: &Env,
     client: &CalloraSettlementClient<'_>,
     admin: &Address,
     token: &Address,
@@ -330,7 +267,7 @@ fn run_trace(seed: u64) {
     let mut expected_pool_total: i128 = 0;
 
     // Check invariant at t=0 (empty state).
-    check_invariant(env, &client, &admin, &usdc_addr, 0, 0, &trace, 0);
+    check_invariant(&client, &admin, &usdc_addr, 0, 0, &trace, 0);
 
     for step in 1..=TRACE_LENGTH {
         let op = (rng.next_u64() % OP_COUNT) as u8;
@@ -392,8 +329,7 @@ fn run_trace(seed: u64) {
                 let current: i128 = client.get_developer_balance(&dev, &usdc_addr);
                 if current > 0 {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
-                    let result =
-                        client.try_withdraw_developer_balance(&dev, &amount, &None);
+                    let result = client.try_withdraw_developer_balance(&dev, &amount, &None);
                     if result.is_ok() {
                         expected_dev_total = expected_dev_total
                             .checked_sub(amount)
@@ -422,7 +358,6 @@ fn run_trace(seed: u64) {
         }
 
         check_invariant(
-            env,
             &client,
             &admin,
             &usdc_addr,

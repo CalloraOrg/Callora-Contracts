@@ -10,6 +10,8 @@ mod pagination;
 mod timelock;
 mod types;
 
+#[cfg(any(test, feature = "testutils"))]
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 pub use errors::SettlementError;
@@ -747,7 +749,11 @@ impl CalloraSettlement {
     /// Iterates the full developer index. For deployments with many
     /// developers, prefer `get_developer_balances_cursor` for bounded,
     /// paginated access.
-    pub fn get_all_developer_balances(env: Env, caller: Address, token: Address) -> Vec<DeveloperBalance> {
+    pub fn get_all_developer_balances(
+        env: Env,
+        caller: Address,
+        token: Address,
+    ) -> Vec<DeveloperBalance> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone());
         if caller != admin {
@@ -807,8 +813,7 @@ impl CalloraSettlement {
             .saturating_add(limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE))
             .min(index.len());
         let mut result = Vec::new(&env);
-        let mut cursor: u32 = 0;
-        for address in index.iter() {
+        for (cursor, address) in (0_u32..).zip(index.iter()) {
             if cursor >= end {
                 break;
             }
@@ -827,7 +832,6 @@ impl CalloraSettlement {
                     balance,
                 });
             }
-            cursor += 1;
         }
         result
     }
@@ -882,7 +886,11 @@ impl CalloraSettlement {
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
         env.events().publish(
-            (events::event_admin_nominated(&env), admin, new_admin.clone()),
+            (
+                events::event_admin_nominated(&env),
+                admin,
+                new_admin.clone(),
+            ),
             new_admin,
         );
     }
@@ -906,7 +914,11 @@ impl CalloraSettlement {
         inst.set(&StorageKey::Admin, &pending);
         inst.remove(&StorageKey::PendingAdmin);
         env.events().publish(
-            (events::event_admin_accepted(&env), old_admin, pending.clone()),
+            (
+                events::event_admin_accepted(&env),
+                old_admin,
+                pending.clone(),
+            ),
             pending,
         );
     }
@@ -1060,7 +1072,12 @@ impl CalloraSettlement {
     }
 
     /// Paginated V1 -> V2 storage migration (admin only). See [`migrate`] module docs.
-    pub fn migrate_v1_to_v2_page(env: Env, caller: Address, offset: u32, batch_size: u32) -> (u32, bool) {
+    pub fn migrate_v1_to_v2_page(
+        env: Env,
+        caller: Address,
+        offset: u32,
+        batch_size: u32,
+    ) -> (u32, bool) {
         migrate::migrate_v1_to_v2_page(&env, &caller, offset, batch_size)
     }
 
@@ -1076,7 +1093,7 @@ impl CalloraSettlement {
     /// authorises its own withdrawal.
     ///
     /// Returns `(next_cursor, is_complete)`.
-    pub fn batch_withdraw_developer_balance_cursor(
+    pub fn batch_withdraw_balance_cursor(
         env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
@@ -1130,7 +1147,7 @@ impl CalloraSettlement {
             bump_amount: 17_280 * 60,
         });
 
-        let devs = if developer_addresses.len() > 0 {
+        let devs = if !developer_addresses.is_empty() {
             developer_addresses
         } else {
             env.storage()

@@ -367,8 +367,10 @@ impl CalloraVault {
             let key = StorageKey::ProcessedRequest(id.clone());
             if env.storage().persistent().has(&key) {
                 env.storage().persistent().remove(&key);
-                env.events()
-                    .publish((events::event_request_id_pruned(&env), caller.clone()), id.clone());
+                env.events().publish(
+                    (events::event_request_id_pruned(&env), caller.clone()),
+                    id.clone(),
+                );
             }
         }
 
@@ -433,11 +435,11 @@ mod test {
     }
 }
 
+pub mod capabilities;
 mod cold_storage;
 mod events;
-pub mod capabilities;
-pub mod rate_limit;
 pub mod limits;
+pub mod rate_limit;
 
 #[cfg(any(kani, test))]
 #[path = "../proofs/deduct.rs"]
@@ -475,5 +477,6 @@ mod test_reentrancy;
 mod test_balance_property;
 
 #[cfg(test)]
+mod test_gas_budget;
+#[cfg(test)]
 mod test_rate_limit;
-#[cfg(test)] mod test_gas_budget;

@@ -5,7 +5,7 @@ mod settlement_tests {
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::token as token_mod;
-    use soroban_sdk::{Address, BytesN, Env, Error, InvokeError, Symbol, TryFromVal};
+    use soroban_sdk::{Address, Env, Error, IntoVal, InvokeError, Symbol, TryFromVal};
 
     fn setup_contract() -> (Env, Address, Address, Address, Address, Address) {
         let env = Env::default();
@@ -393,10 +393,8 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         client.init(&admin, &vault);
-        let token = Address::generate(&env);
 
         let zero_result = client.try_withdraw_developer_balance(&developer, &0i128, &None);
         let negative_result = client.try_withdraw_developer_balance(&developer, &-1i128, &None);
@@ -477,7 +475,8 @@ mod settlement_tests {
         );
         usdc_admin_client.mint(&addr, &150i128);
 
-        let result = client.try_withdraw_developer_balance(&developer, &150i128, &Some(custodial.clone()));
+        let result =
+            client.try_withdraw_developer_balance(&developer, &150i128, &Some(custodial.clone()));
         assert!(result.is_ok());
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
@@ -519,7 +518,8 @@ mod settlement_tests {
         );
         usdc_admin_client.mint(&addr, &200i128);
 
-        let result = client.try_withdraw_developer_balance(&developer, &200i128, &Some(custodial.clone()));
+        let result =
+            client.try_withdraw_developer_balance(&developer, &200i128, &Some(custodial.clone()));
         assert!(result.is_ok());
 
         let events = env.events().all();
@@ -771,12 +771,15 @@ mod settlement_tests {
         assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
 
         client.cancel_admin_transfer(&admin);
-        assert_eq!(client.get_pending_admin(), None);
 
+        // Events reflect only the most recent invocation, so read them
+        // before any further (event-less) client calls.
         let events = env.events().all();
         let last_event = events.last().unwrap();
         let event_name = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
         assert_eq!(event_name, Symbol::new(&env, "admin_cancelled"));
+
+        assert_eq!(client.get_pending_admin(), None);
     }
 
     #[test]
@@ -1696,7 +1699,6 @@ mod settlement_tests {
         let vault = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         env.ledger().set_timestamp(1_000);
         client.init(&admin, &vault);
@@ -1729,7 +1731,6 @@ mod settlement_tests {
         let developer = Address::generate(&env);
         let addr = env.register(CalloraSettlement, ());
         let client = CalloraSettlementClient::new(&env, &addr);
-        let token = Address::generate(&env);
 
         env.ledger().set_timestamp(1_000);
         client.init(&admin, &vault);
@@ -1897,7 +1898,7 @@ mod settlement_tests {
 
         assert_eq!(deposit_events.len(), 2);
 
-        let ev1 = deposit_events.get(0).unwrap();
+        let ev1 = deposit_events.first().unwrap();
         let topic1_dev1: Address = ev1.1.get(1).unwrap().into_val(&env);
         assert_eq!(topic1_dev1, dev1);
         let data1: crate::DepositEvent = ev1.2.into_val(&env);
@@ -2125,7 +2126,6 @@ mod settlement_tests {
     #[test]
     fn test_force_credit_developer_emits_event() {
         use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
 
         let (env, addr, admin, _vault, _third_party, token) = setup_contract();
         let client = CalloraSettlementClient::new(&env, &addr);
@@ -2251,7 +2251,7 @@ mod settlement_tests {
             total_credited += half_remaining;
 
             // Large credit to a developer
-            if let Some(developer) = developers.get(0) {
+            if let Some(developer) = developers.first() {
                 client.receive_payment(
                     &vault,
                     &half_remaining,
@@ -2285,16 +2285,24 @@ mod settlement_tests {
 
         assert_eq!(client.get_version(), None);
 
-        let new_hash = BytesN::from_array(&env, &[1u8; 32]);
+        // `upgrade` swaps the contract's installed code, so the target hash
+        // must correspond to WASM actually uploaded to the test ledger. An
+        // empty blob is the established pattern for this in the workspace —
+        // see `contracts/vault/tests/upgrade_events.rs::upload_empty_wasm`.
+        let new_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
         client.upgrade(&admin, &new_hash);
 
         assert_eq!(client.get_version(), Some(new_hash.clone()));
 
-        // An `upgraded` event should have been emitted
-        let events = env.events().all();
-        let ev = events.last().unwrap();
-        let name = soroban_sdk::Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
-        assert_eq!(name, soroban_sdk::Symbol::new(&env, "upgraded"));
+        // `update_current_contract_wasm` switches this native registered test
+        // contract to Wasm at the end of the call, so the SDK test harness
+        // does not expose the contract-level `upgraded` event through
+        // `env.events().all()` after upgrade (same limitation documented in
+        // `contracts/revenue_pool/src/test.rs::upgrade_sets_version_with_uploaded_wasm`
+        // and `contracts/vault/tests/upgrade_events.rs`). The event topic
+        // itself is covered by `events::tests::test_event_upgraded_bytes`.
     }
 
     // ── daily withdrawal cap tests ──────────────────────────────────────────
@@ -2323,8 +2331,7 @@ mod settlement_tests {
         usdc_admin_client.mint(&addr, &1000i128);
 
         // First withdrawal of 300 should succeed (under 500 cap)
-        let result =
-            client.try_withdraw_developer_balance(&developer, &300i128, &None);
+        let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(result.is_ok());
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
@@ -2332,8 +2339,7 @@ mod settlement_tests {
         );
 
         // Second withdrawal of 300 would push total to 600 (over 500 cap)
-        let result =
-            client.try_withdraw_developer_balance(&developer, &300i128, &None);
+        let result = client.try_withdraw_developer_balance(&developer, &300i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
         assert_eq!(
             client.get_developer_balance(&developer, &usdc_address),
@@ -2386,8 +2392,7 @@ mod settlement_tests {
         );
 
         // Fourth withdrawal of 1 would exceed cap
-        let result =
-            client.try_withdraw_developer_balance(&developer, &1i128, &None);
+        let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
     }
 
@@ -2491,8 +2496,7 @@ mod settlement_tests {
         );
 
         // Another 200 would exceed the 500 cap
-        let result =
-            client.try_withdraw_developer_balance(&developer, &200i128, &None);
+        let result = client.try_withdraw_developer_balance(&developer, &200i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
 
         // Advance to day 1
@@ -2640,9 +2644,13 @@ mod settlement_tests {
         usdc_admin_client.mint(&addr, &1500i128);
 
         // dev1 hits cap at 500
-        assert!(client.try_withdraw_developer_balance(&dev1, &300i128, &None).is_ok());
+        assert!(client
+            .try_withdraw_developer_balance(&dev1, &300i128, &None)
+            .is_ok());
         // Still within cap (300 < 500)
-        assert!(client.try_withdraw_developer_balance(&dev1, &200i128, &None).is_ok());
+        assert!(client
+            .try_withdraw_developer_balance(&dev1, &200i128, &None)
+            .is_ok());
         // Exceeds cap (300 + 200 + 1 > 500)
         let result = client.try_withdraw_developer_balance(&dev1, &1i128, &None);
         assert!(is_error(result, SettlementError::DailyWithdrawCapExceeded));
@@ -2678,10 +2686,17 @@ mod settlement_tests {
 
         let (page, next) = client.get_developer_balances_cursor(&admin, &None, &2u32, &token);
 
-        assert_eq!(page.len(), 2, "first page must contain exactly limit records");
+        assert_eq!(
+            page.len(),
+            2,
+            "first page must contain exactly limit records"
+        );
         // next_cursor must point at the last record on this page so the caller
         // can continue from there.
-        assert!(next.is_some(), "next_cursor must be Some when more records exist");
+        assert!(
+            next.is_some(),
+            "next_cursor must be Some when more records exist"
+        );
         assert_eq!(
             next.as_ref().unwrap(),
             &page.get(1).unwrap().address,
@@ -2725,8 +2740,12 @@ mod settlement_tests {
 
         // Together the two pages must cover all three developers exactly once.
         let mut all_addrs: std::vec::Vec<Address> = std::vec::Vec::new();
-        for r in page1.iter() { all_addrs.push(r.address.clone()); }
-        for r in page2.iter() { all_addrs.push(r.address.clone()); }
+        for r in page1.iter() {
+            all_addrs.push(r.address.clone());
+        }
+        for r in page2.iter() {
+            all_addrs.push(r.address.clone());
+        }
         assert_eq!(all_addrs.len(), 3);
         assert!(all_addrs.contains(&dev1));
         assert!(all_addrs.contains(&dev2));
@@ -2926,10 +2945,16 @@ mod settlement_tests {
                 cursor_pages.push(r.address.clone());
             }
             next = nc;
-            if next.is_none() { break; }
+            if next.is_none() {
+                break;
+            }
         }
 
-        assert_eq!(cursor_pages.len(), 5, "all developers must be returned across pages");
+        assert_eq!(
+            cursor_pages.len(),
+            5,
+            "all developers must be returned across pages"
+        );
 
         // The cursor pages must be in sorted order (ascending by address).
         devs.sort();
@@ -2990,7 +3015,6 @@ mod settlement_tests {
     #[test]
     fn test_set_developer_claim_window_emits_event() {
         use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
 
         let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
         let client = CalloraSettlementClient::new(&env, &addr);
@@ -3057,7 +3081,6 @@ mod settlement_tests {
     #[test]
     fn test_clear_developer_claim_window_emits_event() {
         use soroban_sdk::testutils::Events as _;
-        use soroban_sdk::IntoVal;
 
         let (env, addr, admin, _vault, _third_party, _token) = setup_contract();
         let client = CalloraSettlementClient::new(&env, &addr);

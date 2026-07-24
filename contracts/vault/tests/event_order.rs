@@ -1,7 +1,7 @@
+use callora_settlement::CalloraSettlement;
 use callora_vault::{CalloraVault, CalloraVaultClient, DeductItem};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{token, Address, Env, IntoVal, Symbol, Vec};
-use callora_settlement::CalloraSettlement;
 
 fn setup(env: &Env) -> (CalloraVaultClient<'_>, Address, Address, Address) {
     env.mock_all_auths();
@@ -27,17 +27,14 @@ fn setup(env: &Env) -> (CalloraVaultClient<'_>, Address, Address, Address) {
     );
 
     let settlement_addr = env.register(CalloraSettlement, ());
-    let settlement_client =
-        callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
+    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
     settlement_client.init(&owner, &vault_addr);
     client.set_settlement(&owner, &settlement_addr);
 
     (client, owner, developer, vault_addr)
 }
 
-fn collect_deduct_events(
-    env: &Env,
-) -> Vec<(Address, Symbol)> {
+fn collect_deduct_events(env: &Env) -> Vec<(Address, Symbol)> {
     let events = env.events().all();
     let mut result: Vec<(Address, Symbol)> = Vec::new(env);
     for ev in events.iter() {
@@ -201,13 +198,7 @@ fn mixed_deposit_deduct_withdraw_event_order() {
     }
 
     let mut idx = 0;
-    let expected_order = [
-        "init",
-        "set_settlement",
-        "deposit",
-        "deduct",
-        "withdraw",
-    ];
+    let expected_order = ["init", "set_settlement", "deposit", "deduct", "withdraw"];
     for et in event_types.iter() {
         let s: Symbol = et;
         let mut buf = [0u8; 32];
@@ -322,9 +313,7 @@ fn deposit_event_emitted_before_deduct_event() {
         "expected at least one deduct event"
     );
 
-    let last_deposit = deposit_positions
-        .get(deposit_positions.len() - 1)
-        .unwrap();
+    let last_deposit = deposit_positions.get(deposit_positions.len() - 1).unwrap();
     let first_deduct = deduct_positions.get(0).unwrap();
     assert!(
         last_deposit < first_deduct,
