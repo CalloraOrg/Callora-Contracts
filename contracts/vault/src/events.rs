@@ -220,6 +220,82 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
+// --- Escape-hatch timelock event symbols (Issue #482) ---------------------
+
+/// Returns the Symbol for the `"pause_proposed"` event topic.
+///
+/// Emitted when an admin stages a pause proposal that must wait for the
+/// configured timelock window before it can be executed.
+pub fn event_pause_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_proposed")
+}
+
+/// Returns the Symbol for the `"pause_executed"` event topic.
+///
+/// Emitted when an admin executes a pause proposal after the timelock
+/// window has elapsed.
+pub fn event_pause_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_executed")
+}
+
+/// Returns the Symbol for the `"pause_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending pause proposal.
+pub fn event_pause_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_cancelled")
+}
+
+/// Returns the Symbol for the `"upgrade_proposed"` event topic.
+///
+/// Emitted when an admin stages an upgrade proposal.
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_executed"` event topic.
+///
+/// Emitted when an admin executes an upgrade proposal after the timelock
+/// window has elapsed.
+pub fn event_upgrade_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_executed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending upgrade proposal.
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
+/// Returns the Symbol for the `"sweep_proposed"` event topic.
+///
+/// Emitted when an admin stages a sweep (`distribute`) proposal.
+pub fn event_sweep_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_proposed")
+}
+
+/// Returns the Symbol for the `"sweep_executed"` event topic.
+///
+/// Emitted when an admin executes a sweep proposal after the timelock
+/// window has elapsed.
+pub fn event_sweep_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_executed")
+}
+
+/// Returns the Symbol for the `"sweep_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending sweep proposal.
+pub fn event_sweep_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_cancelled")
+}
+
+/// Returns the Symbol for the `"timelock_window_changed"` event topic.
+///
+/// Emitted when the admin updates the configured timelock window length.
+pub fn event_timelock_window_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "tl_window_changed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
