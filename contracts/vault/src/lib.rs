@@ -1161,6 +1161,9 @@ pub mod rate_limit;
 #[cfg(test)]
 mod test_sweep_idle_balance;
 
+#[cfg(test)]
+mod test_access_control_matrix;
+
 // #[cfg(test)]
 // mod test_gas_budget;
 // #[cfg(test)]
