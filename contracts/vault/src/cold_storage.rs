@@ -50,6 +50,7 @@ use crate::VaultError;
 /// If the hot pool's actual share of total balance drifts more than this
 /// many basis points from the configured target (`hot_bps`), a deposit
 /// triggers an automatic rebalance.
+#[allow(dead_code)]
 pub const DEFAULT_REBALANCE_THRESHOLD_BPS: u32 = 500; // 5%
 
 /// Basis-point denominator (10_000 bps = 100%).

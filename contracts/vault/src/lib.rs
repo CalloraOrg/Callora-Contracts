@@ -1204,7 +1204,7 @@ impl CalloraVault {
 
 pub mod capabilities;
 mod cold_storage;
-mod events;
+pub mod events;
 pub mod limits;
 pub mod rate_limit;
 mod timelock;
