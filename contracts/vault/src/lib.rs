@@ -48,8 +48,7 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, Address, BytesN, Env,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
 };
 
 pub mod views;
@@ -509,14 +508,7 @@ impl CalloraVault {
     // View functions — no TTL bump (read-only, zero write cost)
     // -----------------------------------------------------------------------
 
-    /// Simulates a vault deduction without altering on-chain state.
-    ///
-    /// Performs validation checks identical to `deduct` and returns the predicted
-    /// balance after the specified `amount` is deducted.
-    ///
-    /// # Errors
-    /// Returns `VaultError` under the exact same conditions as `deduct`
-    /// (e.g., paused state, amount exceeding balance, amount exceeding max deduction limit).
+    // Simulates a vault deduction without altering on-chain state.
     // pub fn simulate_deduct(
     //     env: Env,
     //     caller: Address,
@@ -771,7 +763,7 @@ impl CalloraVault {
     /// - `VaultError::InvalidTimelockWindow` if `window < MIN` or `window > MAX`.
     pub fn set_timelock_window(env: Env, caller: Address, window: u64) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        if window < timelock::MIN_TIMELOCK_SECONDS || window > timelock::MAX_TIMELOCK_SECONDS {
+        if !(timelock::MIN_TIMELOCK_SECONDS..=timelock::MAX_TIMELOCK_SECONDS).contains(&window) {
             return Err(VaultError::InvalidTimelockWindow);
         }
         timelock::set_timelock_window(&env, window);
@@ -936,7 +928,7 @@ impl CalloraVault {
         timelock::clear_pending_pause(&env);
         env.events().publish(
             (events::event_pause_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -1018,7 +1010,7 @@ impl CalloraVault {
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
             (events::event_upgrade_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -1122,7 +1114,7 @@ impl CalloraVault {
         timelock::clear_pending_sweep(&env);
         env.events().publish(
             (events::event_sweep_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
