@@ -142,6 +142,18 @@ pub enum VaultError {
     TimelockOverflow = 39,
     /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
     InvalidTimelockWindow = 40,
+    /// Hot balance basis points are outside the allowed range (code 41).
+    InvalidHotBps = 41,
+    /// Rebalance threshold basis points are outside the allowed range (code 42).
+    InvalidRebalanceThreshold = 42,
+    /// The cold signer set is empty (code 43).
+    ColdSignersEmpty = 43,
+    /// The cold signer threshold is invalid (code 44).
+    InvalidColdThreshold = 44,
+    /// The cold signer set contains a duplicate address (code 45).
+    DuplicateColdSigner = 45,
+    /// A deposit would exceed the configured reserve cap (code 46).
+    ExceedsReserveCap = 46,
 }
 
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 100_000;
@@ -222,7 +234,7 @@ pub mod settlement {
             _to_global_pool: &bool,
             _developer: &Option<Address>,
             _token: &Address,
-            _nonce: &u64,
+            _nonce: &u32,
         ) {
         }
     }
@@ -412,7 +424,7 @@ impl CalloraVault {
             &true,
             &None,
             &usdc_addr,
-            &request_id,
+            &(request_id as u32),
         );
     }
 
@@ -488,7 +500,7 @@ impl CalloraVault {
                 &true,
                 &None,
                 &usdc_addr,
-                &request_id,
+                &(request_id as u32),
             );
         }
     }
@@ -901,7 +913,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (events::event_pause_executed(&env), caller),
+            (events::event_pause_executed(&env), caller.clone()),
             env.ledger().timestamp(),
         );
         env.events()
