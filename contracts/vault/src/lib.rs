@@ -48,104 +48,13 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
 };
 
 pub mod views;
 
 mod errors;
 pub use errors::VaultError;
-
-/// Typed error codes for the Callora Vault contract.
-///
-/// These error codes are returned instead of string panics to enable
-/// machine-readable error handling by integrators using @stellar/stellar-sdk.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum VaultError {
-    /// Vault has not been initialized yet (code 1).
-    NotInitialized = 1,
-    /// Vault has already been initialized (code 2).
-    AlreadyInitialized = 2,
-    /// Caller is not authorized for this operation (code 3).
-    Unauthorized = 3,
-    /// Vault is currently paused (code 4).
-    Paused = 4,
-    /// Insufficient balance for the requested operation (code 5).
-    InsufficientBalance = 5,
-    /// Amount must be positive (code 6).
-    AmountNotPositive = 6,
-    /// Deduct amount exceeds the configured maximum (code 7).
-    ExceedsMaxDeduct = 7,
-    /// Deposit amount is below the configured minimum (code 8).
-    BelowMinDeposit = 8,
-    /// Arithmetic overflow detected (code 9).
-    Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
-    /// Min deposit must be positive (code 11).
-    MinDepositNotPositive = 11,
-    /// Max deduct must be positive (code 12).
-    MaxDeductNotPositive = 12,
-    /// Min deposit cannot exceed max deduct (code 13).
-    MinDepositExceedsMaxDeduct = 13,
-    /// USDC token address cannot be the vault address (code 14).
-    UsdcTokenCannotBeVault = 14,
-    /// Revenue pool address cannot be the vault address (code 15).
-    RevenuePoolCannotBeVault = 15,
-    /// Authorized caller address cannot be the vault address (code 16).
-    AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
-    /// Vault is already paused (code 18).
-    AlreadyPaused = 18,
-    /// Vault is not paused (code 19).
-    NotPaused = 19,
-    /// Settlement address has not been configured (code 20).
-    SettlementNotSet = 20,
-    /// Batch deduct requires at least one item (code 21).
-    BatchEmpty = 21,
-    /// Batch size exceeds maximum allowed (code 22).
-    BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
-    /// No admin transfer is pending (code 25).
-    NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
-    PriceParseError = 28,
-    /// Duplicate request ID detected (code 29).
-    DuplicateRequestId = 29,
-    /// Offering ID is empty or contains invalid characters (code 30).
-    OfferingIdInvalid = 30,
-    /// Metadata string is empty or contains invalid characters (code 31).
-    MetadataInvalid = 31,
-    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
-    StaleNonce = 32,
-    /// New revenue pool must be different from current revenue pool (code 33).
-    NewRevenuePoolSameAsCurrent = 33,
-    /// No revenue pool transfer is pending (code 34).
-    NoRevenuePoolTransferPending = 34,
-    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
-    Slippage = 35,
-    /// Rate limit exceeded for the developer (code 36).
-    RateLimited = 36,
-    /// No pending timelock proposal for the requested action (code 37).
-    ProposalNotFound = 37,
-    /// Action attempted before the timelock window has elapsed (code 38).
-    TimelockNotExpired = 38,
-    /// `proposed_at + window` overflowed `u64` (code 39).
-    TimelockOverflow = 39,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
-    InvalidTimelockWindow = 40,
-}
 
 #[contracttype]
 #[derive(Clone)]
@@ -187,6 +96,27 @@ pub enum StorageKey {
     ContractVersion,
 }
 
+/// Ledgers-per-day at 5-second close time (Stellar mainnet).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Instance TTL bump is triggered when fewer than 30 days remain.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Each instance TTL bump extends the lifetime to 60 days from now.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Processed-request TTL bump is triggered when fewer than 7 days remain.
+pub const REQUEST_ID_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
+
+/// Each processed-request TTL bump extends the lifetime to 30 days from now.
+pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
+
+/// Persistent-storage TTL bump threshold — matches instance threshold (30 days).
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// Persistent-storage TTL bump amount — matches instance amount (60 days).
+pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
+
 pub mod token {
     pub use soroban_sdk::token::Client;
 }
@@ -224,6 +154,18 @@ pub struct CalloraVault;
 
 #[contractimpl]
 impl CalloraVault {
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    fn bump_persistent_key(env: &Env, key: &StorageKey) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+
     fn require_positive_amount(amount: i128) {
         if amount <= 0 {
             panic!("amount must be positive");
@@ -295,6 +237,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &false);
         // Admin defaults to owner at initialization.
         env.storage().instance().set(&StorageKey::Admin, &owner);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) {
@@ -342,6 +285,7 @@ impl CalloraVault {
             .unwrap();
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
@@ -398,6 +342,7 @@ impl CalloraVault {
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
@@ -466,10 +411,13 @@ impl CalloraVault {
             let (amount, request_id) = item;
             settlement_client.record_deduction(&amount, &request_id);
         }
+        Self::bump_instance_ttl(&env);
     }
 
     // -----------------------------------------------------------------------
-    // View functions — no TTL bump (read-only, zero write cost)
+    // View functions — TTL bump on hot read paths (buffer #5 pattern)
+    // Bumps instance storage TTL so frequently-read vaults do not archive
+    // even when writes are infrequent.
     // -----------------------------------------------------------------------
 
     /// Simulates a vault deduction without altering on-chain state.
@@ -570,6 +518,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn pause(env: Env, caller: Address) {
@@ -583,6 +532,7 @@ impl CalloraVault {
             panic!("Not owner");
         }
         env.storage().instance().set(&DataKey::Paused, &true);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn unpause(env: Env, caller: Address) {
@@ -596,21 +546,25 @@ impl CalloraVault {
             panic!("Not owner");
         }
         env.storage().instance().set(&DataKey::Paused, &false);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
     }
     pub fn balance(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap()
     }
     pub fn get_owner(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
@@ -625,12 +579,14 @@ impl CalloraVault {
         Ok(())
     }
     pub fn get_usdc_token(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
             .unwrap()
     }
     pub fn get_max_deduct(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
@@ -653,9 +609,11 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn get_settlement(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
@@ -675,8 +633,10 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::Settlement, &settlement);
+        Self::bump_instance_ttl(&env);
     }
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::RevenuePool)
@@ -745,6 +705,7 @@ impl CalloraVault {
             ),
             (timelock::get_timelock_window(&env), window),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -753,22 +714,38 @@ impl CalloraVault {
     /// Defaults to [`timelock::DEFAULT_TIMELOCK_SECONDS`] (48 h) when no
     /// window has been explicitly configured.
     pub fn get_timelock_window(env: Env) -> u64 {
+        Self::bump_instance_ttl(&env);
         timelock::get_timelock_window(&env)
     }
 
     /// Return the pending pause proposal, if any.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
-        timelock::get_pending_pause(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_pause(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+        }
+        result
     }
 
     /// Return the pending upgrade proposal, if any.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
-        timelock::get_pending_upgrade(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_upgrade(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+        }
+        result
     }
 
     /// Return the pending sweep proposal, if any.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
-        timelock::get_pending_sweep(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_sweep(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+        }
+        result
     }
 
     /// Require the caller to be the current admin.
@@ -788,6 +765,7 @@ impl CalloraVault {
     /// # Errors
     /// - `VaultError::NotInitialized` if the contract has not been initialized.
     pub fn get_admin(env: Env) -> Result<Address, VaultError> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&StorageKey::Admin)
@@ -806,6 +784,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -828,6 +807,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .remove(&StorageKey::PendingAdmin);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -859,6 +839,7 @@ impl CalloraVault {
         );
         env.events()
             .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -882,9 +863,10 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+            .publish((events::event_pause_executed(&env), caller.clone()), env.ledger().timestamp());
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -906,8 +888,9 @@ impl CalloraVault {
                 events::event_pause_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -942,6 +925,7 @@ impl CalloraVault {
             (events::event_upgrade_proposed(&env), caller),
             (new_wasm_hash, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -971,6 +955,7 @@ impl CalloraVault {
         );
         env.events()
             .publish((events::event_upgraded(&env), caller), wasm_hash);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -991,8 +976,9 @@ impl CalloraVault {
                 events::event_upgrade_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1033,6 +1019,7 @@ impl CalloraVault {
             (events::event_sweep_proposed(&env), caller),
             (to, amount, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1079,6 +1066,7 @@ impl CalloraVault {
             proposal.amount,
         );
         timelock::clear_pending_sweep(&env);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1099,8 +1087,9 @@ impl CalloraVault {
                 events::event_sweep_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1126,10 +1115,12 @@ impl CalloraVault {
             }
         }
 
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Depositor(caller))
@@ -1168,6 +1159,7 @@ impl CalloraVault {
             (events::event_reserve_cap_set(&env), caller, token),
             (prev, cap),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1175,6 +1167,7 @@ impl CalloraVault {
     ///
     /// Returns `i128::MAX` when no cap has been configured (effectively unlimited).
     pub fn get_reserve_cap(env: Env, token: Address) -> i128 {
+        Self::bump_instance_ttl(&env);
         limits::get(&env, &token)
     }
 }
@@ -1184,6 +1177,7 @@ mod cold_storage;
 mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
@@ -1221,6 +1215,9 @@ mod test_sweep_idle_balance;
 
 #[cfg(test)]
 mod test_access_control_matrix;
+
+#[cfg(test)]
+mod test_ttl_bump;
 
 // #[cfg(test)]
 // mod test_gas_budget;

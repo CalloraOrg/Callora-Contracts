@@ -6593,7 +6593,7 @@ fn instance_ttl_extended_on_deduct_and_batch_deduct() {
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
     assert_eq!(
-        client.balance(, &Address::generate(&env)),
+        client.balance(),
         400,
         "balance readable after ledger advance post-deduct"
     );
