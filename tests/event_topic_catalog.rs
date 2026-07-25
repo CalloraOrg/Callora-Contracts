@@ -19,121 +19,96 @@ use soroban_sdk::{Env, Symbol};
 /// Kept as a single constant array so the count is enforced at compile time.
 const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("init", |e| callora_vault::events::event_init(e)),
-    ("admin_nominated", |e| callora_vault::events::event_admin_nominated(e)),
-    ("admin_accepted", |e| callora_vault::events::event_admin_accepted(e)),
-    ("admin_cancelled", |e| callora_vault::events::event_admin_cancelled(e)),
-    (
-        "set_authorized_caller",
-        |e| callora_vault::events::event_set_authorized_caller(e),
-    ),
-    (
-        "set_max_deduct",
-        |e| callora_vault::events::event_set_max_deduct(e),
-    ),
-    (
-        "vault_paused",
-        |e| callora_vault::events::event_vault_paused(e),
-    ),
-    (
-        "vault_unpaused",
-        |e| callora_vault::events::event_vault_unpaused(e),
-    ),
+    ("admin_nominated", |e| {
+        callora_vault::events::event_admin_nominated(e)
+    }),
+    ("admin_accepted", |e| {
+        callora_vault::events::event_admin_accepted(e)
+    }),
+    ("admin_cancelled", |e| {
+        callora_vault::events::event_admin_cancelled(e)
+    }),
+    ("set_authorized_caller", |e| {
+        callora_vault::events::event_set_authorized_caller(e)
+    }),
+    ("set_max_deduct", |e| {
+        callora_vault::events::event_set_max_deduct(e)
+    }),
+    ("vault_paused", |e| {
+        callora_vault::events::event_vault_paused(e)
+    }),
+    ("vault_unpaused", |e| {
+        callora_vault::events::event_vault_unpaused(e)
+    }),
     ("deposit", |e| callora_vault::events::event_deposit(e)),
     ("deduct", |e| callora_vault::events::event_deduct(e)),
-    (
-        "ownership_nominated",
-        |e| callora_vault::events::event_ownership_nominated(e),
-    ),
-    (
-        "ownership_accepted",
-        |e| callora_vault::events::event_ownership_accepted(e),
-    ),
+    ("ownership_nominated", |e| {
+        callora_vault::events::event_ownership_nominated(e)
+    }),
+    ("ownership_accepted", |e| {
+        callora_vault::events::event_ownership_accepted(e)
+    }),
     ("withdraw", |e| callora_vault::events::event_withdraw(e)),
-    (
-        "withdraw_to",
-        |e| callora_vault::events::event_withdraw_to(e),
-    ),
-    (
-        "distribute",
-        |e| callora_vault::events::event_distribute(e),
-    ),
-    (
-        "set_revenue_pool",
-        |e| callora_vault::events::event_set_revenue_pool(e),
-    ),
-    (
-        "clear_revenue_pool",
-        |e| callora_vault::events::event_clear_revenue_pool(e),
-    ),
-    (
-        "set_settlement",
-        |e| callora_vault::events::event_set_settlement(e),
-    ),
-    (
-        "metadata_set",
-        |e| callora_vault::events::event_metadata_set(e),
-    ),
-    (
-        "price_set",
-        |e| callora_vault::events::event_price_set(e),
-    ),
-    (
-        "price_removed",
-        |e| callora_vault::events::event_price_removed(e),
-    ),
-    (
-        "metadata_updated",
-        |e| callora_vault::events::event_metadata_updated(e),
-    ),
-    (
-        "metadata_removed",
-        |e| callora_vault::events::event_metadata_removed(e),
-    ),
+    ("withdraw_to", |e| {
+        callora_vault::events::event_withdraw_to(e)
+    }),
+    ("distribute", |e| callora_vault::events::event_distribute(e)),
+    ("set_revenue_pool", |e| {
+        callora_vault::events::event_set_revenue_pool(e)
+    }),
+    ("clear_revenue_pool", |e| {
+        callora_vault::events::event_clear_revenue_pool(e)
+    }),
+    ("set_settlement", |e| {
+        callora_vault::events::event_set_settlement(e)
+    }),
+    ("metadata_set", |e| {
+        callora_vault::events::event_metadata_set(e)
+    }),
+    ("price_set", |e| callora_vault::events::event_price_set(e)),
+    ("price_removed", |e| {
+        callora_vault::events::event_price_removed(e)
+    }),
+    ("metadata_updated", |e| {
+        callora_vault::events::event_metadata_updated(e)
+    }),
+    ("metadata_removed", |e| {
+        callora_vault::events::event_metadata_removed(e)
+    }),
     ("upgraded", |e| callora_vault::events::event_upgraded(e)),
-    (
-        "upgrade_started",
-        |e| callora_vault::events::event_upgrade_started(e),
-    ),
-    (
-        "upgrade_completed",
-        |e| callora_vault::events::event_upgrade_completed(e),
-    ),
-    (
-        "allowlist_add",
-        |e| callora_vault::events::event_allowlist_add(e),
-    ),
-    (
-        "allowlist_clear",
-        |e| callora_vault::events::event_allowlist_clear(e),
-    ),
-    (
-        "revenue_pool_proposed",
-        |e| callora_vault::events::event_revenue_pool_proposed(e),
-    ),
-    (
-        "revenue_pool_accepted",
-        |e| callora_vault::events::event_revenue_pool_accepted(e),
-    ),
-    (
-        "revenue_pool_cancelled",
-        |e| callora_vault::events::event_revenue_pool_cancelled(e),
-    ),
-    (
-        "request_id_pruned",
-        |e| callora_vault::events::event_request_id_pruned(e),
-    ),
-    (
-        "admin_broadcast",
-        |e| callora_vault::events::event_admin_broadcast(e),
-    ),
-    (
-        "reserve_cap_set",
-        |e| callora_vault::events::event_reserve_cap_set(e),
-    ),
-    (
-        "rescue_funds",
-        |e| callora_vault::events::event_rescue_funds(e),
-    ),
+    ("upgrade_started", |e| {
+        callora_vault::events::event_upgrade_started(e)
+    }),
+    ("upgrade_completed", |e| {
+        callora_vault::events::event_upgrade_completed(e)
+    }),
+    ("allowlist_add", |e| {
+        callora_vault::events::event_allowlist_add(e)
+    }),
+    ("allowlist_clear", |e| {
+        callora_vault::events::event_allowlist_clear(e)
+    }),
+    ("revenue_pool_proposed", |e| {
+        callora_vault::events::event_revenue_pool_proposed(e)
+    }),
+    ("revenue_pool_accepted", |e| {
+        callora_vault::events::event_revenue_pool_accepted(e)
+    }),
+    ("revenue_pool_cancelled", |e| {
+        callora_vault::events::event_revenue_pool_cancelled(e)
+    }),
+    ("request_id_pruned", |e| {
+        callora_vault::events::event_request_id_pruned(e)
+    }),
+    ("admin_broadcast", |e| {
+        callora_vault::events::event_admin_broadcast(e)
+    }),
+    ("reserve_cap_set", |e| {
+        callora_vault::events::event_reserve_cap_set(e)
+    }),
+    ("rescue_funds", |e| {
+        callora_vault::events::event_rescue_funds(e)
+    }),
     ("swept", |e| callora_vault::events::event_swept(e)),
 ];
 
@@ -142,66 +117,51 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
 // ---------------------------------------------------------------------------
 
 const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
-    (
-        "payment_received",
-        |e| callora_settlement::events::event_payment_received(e),
-    ),
-    (
-        "balance_credited",
-        |e| callora_settlement::events::event_balance_credited(e),
-    ),
-    (
-        "developer_withdraw",
-        |e| callora_settlement::events::event_developer_withdraw(e),
-    ),
-    (
-        "daily_withdraw_cap_changed",
-        |e| callora_settlement::events::event_daily_withdraw_cap_changed(e),
-    ),
-    (
-        "claim_window_changed",
-        |e| callora_settlement::events::event_developer_claim_window_changed(e),
-    ),
-    (
-        "admin_nominated",
-        |e| callora_settlement::events::event_admin_nominated(e),
-    ),
-    (
-        "admin_accepted",
-        |e| callora_settlement::events::event_admin_accepted(e),
-    ),
-    (
-        "admin_cancelled",
-        |e| callora_settlement::events::event_admin_cancelled(e),
-    ),
-    (
-        "vault_proposed",
-        |e| callora_settlement::events::event_vault_proposed(e),
-    ),
-    (
-        "vault_accepted",
-        |e| callora_settlement::events::event_vault_accepted(e),
-    ),
-    (
-        "upgraded",
-        |e| callora_settlement::events::event_upgraded(e),
-    ),
-    (
-        "developer_force_credited",
-        |e| callora_settlement::events::event_developer_force_credited(e),
-    ),
-    (
-        "admin_broadcast",
-        |e| callora_settlement::events::event_admin_broadcast(e),
-    ),
-    (
-        "admin_migration_proposed",
-        |e| callora_settlement::events::event_admin_migration_proposed(e),
-    ),
-    (
-        "admin_migration",
-        |e| callora_settlement::events::event_admin_migration(e),
-    ),
+    ("payment_received", |e| {
+        callora_settlement::events::event_payment_received(e)
+    }),
+    ("balance_credited", |e| {
+        callora_settlement::events::event_balance_credited(e)
+    }),
+    ("developer_withdraw", |e| {
+        callora_settlement::events::event_developer_withdraw(e)
+    }),
+    ("daily_withdraw_cap_changed", |e| {
+        callora_settlement::events::event_daily_withdraw_cap_changed(e)
+    }),
+    ("claim_window_changed", |e| {
+        callora_settlement::events::event_developer_claim_window_changed(e)
+    }),
+    ("admin_nominated", |e| {
+        callora_settlement::events::event_admin_nominated(e)
+    }),
+    ("admin_accepted", |e| {
+        callora_settlement::events::event_admin_accepted(e)
+    }),
+    ("admin_cancelled", |e| {
+        callora_settlement::events::event_admin_cancelled(e)
+    }),
+    ("vault_proposed", |e| {
+        callora_settlement::events::event_vault_proposed(e)
+    }),
+    ("vault_accepted", |e| {
+        callora_settlement::events::event_vault_accepted(e)
+    }),
+    ("upgraded", |e| {
+        callora_settlement::events::event_upgraded(e)
+    }),
+    ("developer_force_credited", |e| {
+        callora_settlement::events::event_developer_force_credited(e)
+    }),
+    ("admin_broadcast", |e| {
+        callora_settlement::events::event_admin_broadcast(e)
+    }),
+    ("admin_migration_proposed", |e| {
+        callora_settlement::events::event_admin_migration_proposed(e)
+    }),
+    ("admin_migration", |e| {
+        callora_settlement::events::event_admin_migration(e)
+    }),
     ("deposit", |e| callora_settlement::events::event_deposit(e)),
 ];
 
@@ -210,90 +170,67 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
 // ---------------------------------------------------------------------------
 
 const REVENUE_POOL_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
-    (
-        "init",
-        |e| callora_revenue_pool::events::event_init(e),
-    ),
-    (
-        "admin_changed",
-        |e| callora_revenue_pool::events::event_admin_changed(e),
-    ),
-    (
-        "admin_transfer_started",
-        |e| callora_revenue_pool::events::event_admin_transfer_started(e),
-    ),
-    (
-        "admin_transfer_completed",
-        |e| callora_revenue_pool::events::event_admin_transfer_completed(e),
-    ),
-    (
-        "admin_cancelled",
-        |e| callora_revenue_pool::events::event_admin_cancelled(e),
-    ),
-    (
-        "pause_guardian_set",
-        |e| callora_revenue_pool::events::event_pause_guardian_set(e),
-    ),
-    (
-        "pause_guardian_cleared",
-        |e| callora_revenue_pool::events::event_pause_guardian_cleared(e),
-    ),
-    (
-        "pause_set",
-        |e| callora_revenue_pool::events::event_pause_set(e),
-    ),
-    (
-        "receive_payment",
-        |e| callora_revenue_pool::events::event_receive_payment(e),
-    ),
-    (
-        "yield_deposited",
-        |e| callora_revenue_pool::events::event_yield_deposited(e),
-    ),
-    (
-        "treasury_transfer_started",
-        |e| callora_revenue_pool::events::event_treasury_transfer_started(e),
-    ),
-    (
-        "treasury_transfer_completed",
-        |e| callora_revenue_pool::events::event_treasury_transfer_completed(e),
-    ),
-    (
-        "treasury_cancelled",
-        |e| callora_revenue_pool::events::event_treasury_cancelled(e),
-    ),
-    (
-        "set_max_distribute",
-        |e| callora_revenue_pool::events::event_set_max_distribute(e),
-    ),
-    (
-        "distribute",
-        |e| callora_revenue_pool::events::event_distribute(e),
-    ),
-    (
-        "batch_distribute",
-        |e| callora_revenue_pool::events::event_batch_distribute(e),
-    ),
-    (
-        "upgraded",
-        |e| callora_revenue_pool::events::event_upgraded(e),
-    ),
-    (
-        "admin_broadcast",
-        |e| callora_revenue_pool::events::event_admin_broadcast(e),
-    ),
-    (
-        "emergency_drain_proposed",
-        |e| callora_revenue_pool::events::event_emergency_drain_proposed(e),
-    ),
-    (
-        "emergency_drain_executed",
-        |e| callora_revenue_pool::events::event_emergency_drain_executed(e),
-    ),
-    (
-        "emergency_drain_cancelled",
-        |e| callora_revenue_pool::events::event_emergency_drain_cancelled(e),
-    ),
+    ("init", |e| callora_revenue_pool::events::event_init(e)),
+    ("admin_changed", |e| {
+        callora_revenue_pool::events::event_admin_changed(e)
+    }),
+    ("admin_transfer_started", |e| {
+        callora_revenue_pool::events::event_admin_transfer_started(e)
+    }),
+    ("admin_transfer_completed", |e| {
+        callora_revenue_pool::events::event_admin_transfer_completed(e)
+    }),
+    ("admin_cancelled", |e| {
+        callora_revenue_pool::events::event_admin_cancelled(e)
+    }),
+    ("pause_guardian_set", |e| {
+        callora_revenue_pool::events::event_pause_guardian_set(e)
+    }),
+    ("pause_guardian_cleared", |e| {
+        callora_revenue_pool::events::event_pause_guardian_cleared(e)
+    }),
+    ("pause_set", |e| {
+        callora_revenue_pool::events::event_pause_set(e)
+    }),
+    ("receive_payment", |e| {
+        callora_revenue_pool::events::event_receive_payment(e)
+    }),
+    ("yield_deposited", |e| {
+        callora_revenue_pool::events::event_yield_deposited(e)
+    }),
+    ("treasury_transfer_started", |e| {
+        callora_revenue_pool::events::event_treasury_transfer_started(e)
+    }),
+    ("treasury_transfer_completed", |e| {
+        callora_revenue_pool::events::event_treasury_transfer_completed(e)
+    }),
+    ("treasury_cancelled", |e| {
+        callora_revenue_pool::events::event_treasury_cancelled(e)
+    }),
+    ("set_max_distribute", |e| {
+        callora_revenue_pool::events::event_set_max_distribute(e)
+    }),
+    ("distribute", |e| {
+        callora_revenue_pool::events::event_distribute(e)
+    }),
+    ("batch_distribute", |e| {
+        callora_revenue_pool::events::event_batch_distribute(e)
+    }),
+    ("upgraded", |e| {
+        callora_revenue_pool::events::event_upgraded(e)
+    }),
+    ("admin_broadcast", |e| {
+        callora_revenue_pool::events::event_admin_broadcast(e)
+    }),
+    ("emergency_drain_proposed", |e| {
+        callora_revenue_pool::events::event_emergency_drain_proposed(e)
+    }),
+    ("emergency_drain_executed", |e| {
+        callora_revenue_pool::events::event_emergency_drain_executed(e)
+    }),
+    ("emergency_drain_cancelled", |e| {
+        callora_revenue_pool::events::event_emergency_drain_cancelled(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -349,7 +286,11 @@ fn revenue_pool_topics_match_catalog() {
 fn topic_counts_match_catalog_documentation() {
     // These counts MUST match the totals in docs/EVENT_TOPICS.md.
     // If you added a new event, update both this test AND the catalog.
-    assert_eq!(VAULT_TOPICS.len(), 36, "vault topic count changed — update docs/EVENT_TOPICS.md");
+    assert_eq!(
+        VAULT_TOPICS.len(),
+        36,
+        "vault topic count changed — update docs/EVENT_TOPICS.md"
+    );
     assert_eq!(
         SETTLEMENT_TOPICS.len(),
         16,
@@ -375,7 +316,11 @@ fn all_topic_strings_are_valid_identifiers() {
     let all: Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
         .iter()
         .map(|(s, c)| ("vault", *s, *c))
-        .chain(SETTLEMENT_TOPICS.iter().map(|(s, c)| ("settlement", *s, *c)))
+        .chain(
+            SETTLEMENT_TOPICS
+                .iter()
+                .map(|(s, c)| ("settlement", *s, *c)),
+        )
         .chain(
             REVENUE_POOL_TOPICS
                 .iter()
@@ -464,6 +409,9 @@ fn topic_constructors_are_deterministic() {
     for ctor in all {
         let first = ctor(&env);
         let second = ctor(&env);
-        assert_eq!(first, second, "constructor returned different Symbols on repeated calls");
+        assert_eq!(
+            first, second,
+            "constructor returned different Symbols on repeated calls"
+        );
     }
 }

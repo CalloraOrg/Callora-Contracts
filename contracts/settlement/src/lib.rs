@@ -1,17 +1,14 @@
 #![no_std]
+pub mod admin;
 pub mod archive;
+pub mod batch;
+pub mod errors;
 pub mod events;
 pub mod limits;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
-
-mod admin;
-pub mod archive;
-mod errors;
-mod events;
-mod limits;
-mod migrate;
-mod pagination;
-mod timelock;
+pub mod migrate;
+pub mod pagination;
+pub mod replay_guard;
+pub mod timelock;
 mod types;
 
 #[cfg(any(test, feature = "testutils"))]
@@ -105,12 +102,11 @@ impl CalloraSettlement {
 
         // Replay guard: reject duplicate / out-of-order settlement claims.
         if to_pool {
-            replay_guard::check_pool(&env, ledger_seq)
-                .unwrap_or_else(|e| env.panic_with_error(e));
+            replay_guard::check_pool(&env, ledger_seq).unwrap_or_else(|e| env.panic_with_error(e));
         } else {
-            let dev = developer.clone().unwrap_or_else(|| {
-                env.panic_with_error(SettlementError::DeveloperRequired)
-            });
+            let dev = developer
+                .clone()
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperRequired));
             replay_guard::check_developer(&env, &dev, ledger_seq)
                 .unwrap_or_else(|e| env.panic_with_error(e));
         }
@@ -166,7 +162,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::insert_if_absent(&env, &mut index, dev_address.clone());
+            Self::sorted_insert(&env, &mut index, dev_address.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
 
             env.events().publish(
@@ -231,7 +227,7 @@ impl CalloraSettlement {
         for item in items.iter() {
             let (dev, _) = item;
             replay_guard::check_developer(&env, &dev, ledger_seq)
-                .unwrap_or_else(|e| { env.panic_with_error(e) });
+                .unwrap_or_else(|e| env.panic_with_error(e));
         }
 
         let inst = env.storage().instance();
@@ -257,7 +253,7 @@ impl CalloraSettlement {
             let mut index: Vec<Address> = inst
                 .get(&StorageKey::DeveloperIndex)
                 .unwrap_or_else(|| Vec::new(&env));
-            Self::insert_if_absent(&env, &mut index, dev.clone());
+            Self::sorted_insert(&env, &mut index, dev.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
             env.events().publish(
                 (events::event_balance_credited(&env), dev.clone()),
@@ -439,6 +435,8 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+
         // Enforce per-developer minimum balance.
         let dev_balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let dev_balance: i128 = env
@@ -450,8 +448,6 @@ impl CalloraSettlement {
             .checked_sub(amount)
             .ok_or(SettlementError::InsufficientDeveloperBalance)?;
         limits::check_min_balance(&env, &developer, remaining)?;
-
-        let usdc_address = Self::get_usdc_token(env.clone())?;
         let balance_key = StorageKey::DeveloperBalance(developer.clone(), usdc_address.clone());
         let current_balance: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
         if amount > current_balance {
@@ -698,12 +694,12 @@ impl CalloraSettlement {
     /// Set the minimum balance for a developer (admin only). Advisory limit;
     /// not currently enforced by `withdraw_developer_balance`.
     pub fn set_minimum_balance(env: Env, caller: Address, developer: Address, min_balance: i128) {
-        limits::set_developer_min_balance(env, caller, developer, min_balance);
+        limits::set_developer_min_balance(&env, caller, developer, min_balance);
     }
 
     /// Get the minimum balance configured for a developer. Returns `0` if unset.
     pub fn get_minimum_balance(env: Env, developer: Address) -> i128 {
-        limits::get_developer_min_balance(env, developer)
+        limits::get_developer_min_balance(&env, developer)
     }
 
     /// Admin-only escape hatch to manually credit a developer balance for a
@@ -1135,26 +1131,7 @@ impl CalloraSettlement {
         if count != amounts.len() {
             return Err(SettlementError::AmountNotPositive);
         }
-    }
-
-    fn sorted_insert(env: &Env, index: &mut soroban_sdk::Vec<Address>, address: Address) {
-        if !index.contains(&address) {
-            index.push_back(address);
-        }
-    }
-
-    fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<crate::types::DeveloperClaimWindow> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
-        if let Some(w) = window {
-            let now = env.ledger().timestamp();
-            if now < w.start_ts || now > w.end_ts {
-                return Err(SettlementError::ClaimWindowClosed);
-            }
-        }
-        Ok(())
+        Ok((0, true))
     }
 
     pub fn batch_settle(
@@ -1162,35 +1139,6 @@ impl CalloraSettlement {
         settlements: soroban_sdk::Vec<batch::SettleInput>,
     ) -> soroban_sdk::Vec<batch::SettleOutcome> {
         batch::batch_settle(&env, settlements)
-    }
-
-
-    pub fn migrate_v1_to_v2(env: Env, caller: Address) {
-        migrate::migrate_v1_to_v2(&env, &caller);
-    }
-
-    pub fn migrate_v1_to_v2_page(
-        env: Env,
-        caller: Address,
-        offset: u32,
-        limit: u32,
-    ) -> (u32, bool) {
-        migrate::migrate_v1_to_v2_page(&env, &caller, offset, limit)
-    }
-
-        for i in start..end {
-            let developer = developers
-                .get(i as u32)
-                .ok_or(SettlementError::InsufficientDeveloperBalance)?;
-            let amount = amounts
-                .get(i as u32)
-                .ok_or(SettlementError::AmountNotPositive)?;
-            Self::withdraw_developer_balance(env.clone(), developer, amount, None)?;
-        }
-
-        let next_cursor = end as u32;
-        let is_complete = next_cursor >= count;
-        Ok((next_cursor, is_complete))
     }
 
     /// Return the remaining TTL for each tracked storage-key category, for
@@ -1313,7 +1261,7 @@ impl CalloraSettlement {
 }
 
 #[cfg(test)]
-mod test;
+mod settlement_tests;
 #[cfg(test)]
 mod test_admin_migration;
 #[cfg(test)]

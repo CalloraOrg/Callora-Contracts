@@ -148,7 +148,6 @@ fn setup_reentrancy_test(env: &Env) -> (Address, CalloraVaultClient, Address, Ad
     // Init vault with the malicious token
     vault_client.init(&owner, &token_addr, &Some(1000), &None, &None, &None, &None);
 
-
     (vault_addr, vault_client, token_addr, settlement_addr, owner)
 }
 

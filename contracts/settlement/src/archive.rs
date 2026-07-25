@@ -126,6 +126,7 @@ mod tests {
             let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
             assert_eq!(updated_cursor.tail, 3);
             assert_eq!(updated_cursor.head, 5);
+        });
 
         // Verify isolation and data movement
         for i in 0..3 {

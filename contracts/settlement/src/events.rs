@@ -297,4 +297,3 @@ mod tests {
 pub fn event_metadata_removed(env: &soroban_sdk::Env) -> soroban_sdk::Symbol {
     soroban_sdk::Symbol::new(env, "metadata_removed")
 }
-

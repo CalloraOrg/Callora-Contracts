@@ -30,7 +30,11 @@ pub const HWM_THRESHOLD: u32 = 50_000;
 /// Returns [`SettlementError::ReplayDetected`] when `ledger_seq <= stored`
 /// high-water mark.  On success the stored mark is raised to `ledger_seq` and
 /// the persistent TTL is extended.
-pub fn check_developer(env: &Env, developer: &Address, ledger_seq: u32) -> Result<(), SettlementError> {
+pub fn check_developer(
+    env: &Env,
+    developer: &Address,
+    ledger_seq: u32,
+) -> Result<(), SettlementError> {
     let key = StorageKey::HighWaterMark(developer.clone());
     let stored: u32 = env.storage().persistent().get(&key).unwrap_or(0);
 
@@ -116,18 +120,9 @@ mod tests {
 
         client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &10u32);
 
-        let result = client.try_receive_payment(
-            &vault,
-            &50i128,
-            &false,
-            &Some(d.clone()),
-            &t,
-            &10u32,
-        );
-        assert!(
-            result.is_err(),
-            "equal ledger_seq should be rejected"
-        );
+        let result =
+            client.try_receive_payment(&vault, &50i128, &false, &Some(d.clone()), &t, &10u32);
+        assert!(result.is_err(), "equal ledger_seq should be rejected");
     }
 
     /// Lower ledger_seq is rejected.
@@ -140,18 +135,9 @@ mod tests {
 
         client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &20u32);
 
-        let result = client.try_receive_payment(
-            &vault,
-            &50i128,
-            &false,
-            &Some(d.clone()),
-            &t,
-            &5u32,
-        );
-        assert!(
-            result.is_err(),
-            "lower ledger_seq should be rejected"
-        );
+        let result =
+            client.try_receive_payment(&vault, &50i128, &false, &Some(d.clone()), &t, &5u32);
+        assert!(result.is_err(), "lower ledger_seq should be rejected");
     }
 
     /// Different developers have independent HWMs.
@@ -199,14 +185,8 @@ mod tests {
         assert_eq!(client.get_developer_balance(&d, &t), 500);
 
         // Reorg replay: same payload at same ledger_seq
-        let result = client.try_receive_payment(
-            &vault,
-            &500i128,
-            &false,
-            &Some(d.clone()),
-            &t,
-            &42u32,
-        );
+        let result =
+            client.try_receive_payment(&vault, &500i128, &false, &Some(d.clone()), &t, &42u32);
         assert!(
             result.is_err(),
             "reorg replay with same ledger_seq must be rejected"
@@ -232,6 +212,9 @@ mod tests {
         assert_eq!(client.get_developer_balance(&d2, &t), 200);
 
         let result = client.try_batch_receive_payment(&vault, &items, &t, &10u32);
-        assert!(result.is_err(), "batch replay with same seq must be rejected");
+        assert!(
+            result.is_err(),
+            "batch replay with same seq must be rejected"
+        );
     }
 }
