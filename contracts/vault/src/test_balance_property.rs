@@ -250,7 +250,6 @@ fn run_property_trace(seed: u64) {
     );
     let settlement = create_settlement(&env, &owner, &vault_addr);
 
-
     // Fund depositors and approve the vault for pulls.
     let reserve: i128 = INITIAL_BALANCE * 10;
     usdc_admin.mint(&owner, &reserve);
@@ -451,7 +450,7 @@ fn run_property_trace(seed: u64) {
                     depositor_allowed = false;
                     trace.push(step, "clear_allowed_depositors", "");
                 } else {
-                    client.set_allowed_depositor(&owner, &Some(depositor.clone();
+                    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
                     depositor_allowed = true;
                     trace.push(
                         step,
@@ -464,7 +463,7 @@ fn run_property_trace(seed: u64) {
             x if x == OpKind::RequestIdRetry as u8 => {
                 if used_request_ids.is_empty() {
                     // No prior id — perform a fresh deduct with id, then retry.
-                    let amount = rng.gen_range_i128(1, AMOUNT_CAP.min(balance_before.max(1);
+                    let amount = rng.gen_range_i128(1, AMOUNT_CAP.min(balance_before.max(1)));
                     if !paused && balance_before >= amount {
                         let rid = make_request_id(&env, rid_counter);
                         rid_counter += 1;
@@ -594,7 +593,7 @@ fn test_balance_property_depositor_flips() {
     usdc_client.approve(&depositor, &vault_addr, &i128::MAX, &999_999);
     usdc_client.approve(&owner, &vault_addr, &i128::MAX, &999_999);
 
-    client.set_allowed_depositor(&owner, &Some(depositor.clone();
+    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
     client.deposit(&depositor, &500);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(7), 1);
 
@@ -627,7 +626,6 @@ fn test_balance_property_request_id_reuse() {
         &Some(AMOUNT_CAP),
     );
     let settlement = create_settlement(&env, &owner, &vault_addr);
-
 
     let rid = Symbol::new(&env, "reuse_test_id");
     client.deduct(

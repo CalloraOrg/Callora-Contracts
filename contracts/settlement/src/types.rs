@@ -20,6 +20,8 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
+    HighWaterMark(Address),
+    PoolHighWaterMark,
     Vault,
     PendingAdmin,
     PendingVault,
@@ -223,13 +225,4 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
-}
-
-/// Emitted when a deposit is made for a developer.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DepositEvent {
-    pub developer: Address,
-    pub token: Address,
-    pub amount: i128,
 }

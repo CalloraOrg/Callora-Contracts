@@ -67,11 +67,15 @@ impl CalloraVault {
     /// does not bump TTL on any key. It performs one cross-contract `balance`
     /// call to the configured USDC token contract.
     pub fn dry_run_sweep_idle_balance(env: Env) -> Result<SweepPreview, VaultError> {
-        let meta = Self::get_meta(env.clone())?;
+        let tracked_balance: i128 = env
+            .storage()
+            .instance()
+            .get(&crate::DataKey::Balance)
+            .unwrap_or(0);
         let usdc_addr: Address = env
             .storage()
             .instance()
-            .get(&StorageKey::UsdcToken)
+            .get(&crate::DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
         let usdc = token::Client::new(&env, &usdc_addr);
         let on_ledger = usdc.balance(&env.current_contract_address());
@@ -79,15 +83,15 @@ impl CalloraVault {
         // Defensive: if the tracked balance somehow exceeds on-ledger USDC
         // (e.g. a prior accounting bug), saturate at zero rather than reporting
         // a negative idle balance or panicking on a `checked_sub` failure.
-        let idle = if on_ledger > meta.balance {
-            on_ledger - meta.balance
+        let idle = if on_ledger > tracked_balance {
+            on_ledger - tracked_balance
         } else {
             0
         };
 
         Ok(SweepPreview {
             on_ledger_balance: on_ledger,
-            tracked_balance: meta.balance,
+            tracked_balance,
             idle_balance: idle,
             has_idle: idle > 0,
         })

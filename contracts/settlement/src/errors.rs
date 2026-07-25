@@ -64,4 +64,5 @@ pub enum SettlementError {
     InvalidClaimWindow = 24,
     ClaimWindowClosed = 25,
     MinBalanceViolation = 26,
+    ReplayDetected = 27,
 }

@@ -278,7 +278,14 @@ fn run_trace(seed: u64) {
                 let dev = devs[rng.gen_usize(0, DEV_POOL_SIZE - 1)].clone();
                 let amount = rng.gen_i128(1, AMOUNT_CAP);
                 ledger_seq += 1;
-                client.receive_payment(&vault, &amount, &false, &Some(dev.clone()), &usdc_addr, &ledger_seq);
+                client.receive_payment(
+                    &vault,
+                    &amount,
+                    &false,
+                    &Some(dev.clone()),
+                    &usdc_addr,
+                    &ledger_seq,
+                );
                 expected_dev_total = expected_dev_total
                     .checked_add(amount)
                     .expect("test tally overflow");
@@ -451,8 +458,22 @@ fn test_invariant_single_dev_full_withdraw() {
     client.set_usdc_token(&admin, &usdc_addr);
 
     // Credit the developer.
-    client.receive_payment(&vault, &1_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
-    client.receive_payment(&vault, &2_000, &false, &Some(dev.clone()), &usdc_addr, &2u32);
+    client.receive_payment(
+        &vault,
+        &1_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &2_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &2u32,
+    );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
     let balance = client.get_developer_balance(&dev, &usdc_addr);
