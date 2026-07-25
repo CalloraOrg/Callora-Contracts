@@ -254,18 +254,14 @@ mod vault_access_control {
     #[test]
     fn set_authorized_caller_owner_succeeds() {
         let ctx = setup();
-        let new_caller = Address::generate(&ctx.env);
-        let result = ctx.vault.try_set_authorized_caller(&ctx.owner, &new_caller);
+        let result = ctx.vault.try_set_authorized_caller(&ctx.owner);
         assert!(result.is_ok());
     }
 
     #[test]
     fn set_authorized_caller_outsider_fails() {
         let ctx = setup();
-        let new_caller = Address::generate(&ctx.env);
-        let result = ctx
-            .vault
-            .try_set_authorized_caller(&ctx.outsider, &new_caller);
+        let result = ctx.vault.try_set_authorized_caller(&ctx.outsider);
         assert!(
             result.is_err(),
             "outsider should not be able to set_authorized_caller"
@@ -300,7 +296,7 @@ mod vault_access_control {
         ctx.vault.set_admin(&ctx.owner, &ctx.pending_admin);
         let result = ctx.vault.try_accept_admin();
         assert!(result.is_ok());
-        assert_eq!(ctx.vault.get_admin().unwrap(), ctx.pending_admin);
+        assert_eq!(ctx.vault.get_admin(), ctx.pending_admin);
     }
 
     #[test]

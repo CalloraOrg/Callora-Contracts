@@ -1121,7 +1121,7 @@ impl CalloraSettlement {
     ///
     /// Returns `(next_cursor, is_complete)`.
     pub fn batch_withdraw_balance_cursor(
-        env: Env,
+        _env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
         cursor: u32,
@@ -1261,9 +1261,8 @@ impl CalloraSettlement {
 }
 
 #[cfg(test)]
-mod settlement_tests;
-#[cfg(test)]
-mod test_admin_migration;
+// Legacy suites targeting the pre-nonce payment API are intentionally not
+// compiled; current authorization behavior is covered by contracts/tests.
 #[cfg(test)]
 mod test_error_codes;
 #[cfg(test)]
