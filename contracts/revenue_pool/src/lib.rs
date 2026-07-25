@@ -1,11 +1,35 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol};
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+pub(crate) const USDC_KEY: &str = "usdc_token";
+pub(crate) const LIFETIME_THRESHOLD: u32 = 17280;
+pub(crate) const BUMP_AMOUNT: u32 = 17280 * 30;
+pub(crate) const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+pub(crate) const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+pub(crate) const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
+pub(crate) const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+
+// ---------------------------------------------------------------------------
+// Modules
+// ---------------------------------------------------------------------------
+
+pub mod token {
+    pub use soroban_sdk::token;
+}
+
+mod emergency;
+mod events;
+pub mod admin;
 
 #[contract]
 pub struct CalloraRevenuePool;
@@ -20,21 +44,151 @@ impl CalloraRevenuePool {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
+    /// Start a two-step admin transfer by nominating a pending admin.
+    ///
+    /// Only the current admin may call this. The nominated admin must
+    /// call `claim_admin` to complete the transfer. The pause guardian
+    /// is preserved across admin rotations.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
-        let current_admin = env
-            .storage()
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        admin::set_pending_admin(&env, &new_admin);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_admin_transfer_started(&env), caller),
+            new_admin,
+        );
+    }
+
+    /// Complete a pending two-step admin transfer.
+    ///
+    /// Only the nominated pending admin may call this. On success the
+    /// pending admin becomes the new admin and the pending slot is cleared.
+    pub fn claim_admin(env: Env, caller: Address) {
+        caller.require_auth();
+        let pending = admin::get_pending_admin(&env)
+            .expect("no pending admin");
+        if caller != pending {
+            panic!("unauthorized: caller is not pending admin");
+        }
+        admin::clear_pending_admin(&env);
+        env.storage().instance().set(&DataKey::Admin, &caller);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_admin_transfer_completed(&env), caller),
+            (),
+        );
+    }
+
+    /// Return the current admin address.
+    pub fn get_admin(env: Env) -> Address {
+        env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Admin)
-            .unwrap();
+            .expect(ERR_NOT_INITIALIZED)
+    }
+
+    /// Designate an emergency pause guardian.
+    ///
+    /// Only the current admin may call this. The guardian can pause the
+    /// pool in an emergency but cannot unpause or exercise other admin
+    /// powers. Overwrites any previous guardian.
+    pub fn set_pause_guardian(env: Env, caller: Address, guardian: Address) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
         if caller != current_admin {
-            panic!("Not admin");
+            panic!("{}", ERR_UNAUTHORIZED);
         }
+        admin::set_guardian(&env, &guardian);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (symbol_short!("admin"), symbol_short!("changed")),
-            (current_admin, new_admin.clone()),
+            (events::event_pause_guardian_set(&env), caller),
+            guardian,
         );
-        env.storage().instance().set(&DataKey::Admin, &new_admin);
+    }
+
+    /// Remove the emergency pause guardian.
+    ///
+    /// Only the current admin may call this. After clearing, the guardian
+    /// can no longer pause the pool. If no guardian is currently set, the
+    /// call is a no-op (no event is emitted).
+    pub fn clear_pause_guardian(env: Env, caller: Address) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        let guardian = admin::get_pause_guardian(&env);
+        admin::clear_guardian(&env);
+        if let Some(g) = guardian {
+            env.storage()
+                .instance()
+                .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+            env.events().publish(
+                (events::event_pause_guardian_cleared(&env), caller),
+                g,
+            );
+        }
+    }
+
+    /// Pause the pool, preventing distributions.
+    ///
+    /// Can be called by either the current admin or the pause guardian.
+    /// Once paused, only the admin can unpause.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        let guardian = admin::get_pause_guardian(&env);
+        let is_guardian = guardian.as_ref().map_or(false, |g| *g == caller);
+        if caller != current_admin && !is_guardian {
+            panic!("unauthorized: caller is not admin or pause guardian");
+        }
+        admin::set_paused(&env, true);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_pause_set(&env), caller),
+            true,
+        );
+    }
+
+    /// Unpause the pool, resuming distributions.
+    ///
+    /// Only the current admin may call this. The pause guardian cannot unpause.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        let current_admin = Self::get_admin(env.clone());
+        if caller != current_admin {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        admin::set_paused(&env, false);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_pause_set(&env), caller),
+            false,
+        );
+    }
+
+    /// Return whether the pool is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        admin::is_paused(&env)
+    }
+
+    /// Return the current pause guardian address, or `None` if none is set.
+    pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        admin::get_pause_guardian(&env)
     }
 
     /// Propose an emergency drain of USDC from the revenue pool to a designated address.
@@ -209,3 +363,6 @@ impl CalloraRevenuePool {
             .get(&Symbol::new(&env, emergency::EMERGENCY_DRAIN_KEY))
     }
 }
+
+#[cfg(test)]
+mod test;
