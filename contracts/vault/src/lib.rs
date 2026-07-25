@@ -179,6 +179,12 @@ pub enum StorageKey {
     PendingUpgrade,
     /// Active sweep proposal (recipient + amount) pending timelock expiry.
     PendingSweep,
+    /// Current admin address (defaults to owner at init).
+    Admin,
+    /// Pending admin address awaiting acceptance (two-step transfer).
+    PendingAdmin,
+    /// Recorded wasm hash after a successful upgrade.
+    ContractVersion,
 }
 
 pub mod token {
@@ -287,6 +293,8 @@ impl CalloraVault {
             .instance()
             .set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
+        // Admin defaults to owner at initialization.
+        env.storage().instance().set(&StorageKey::Admin, &owner);
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) {
@@ -773,6 +781,56 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Return the current admin address.
+    ///
+    /// Defaults to the owner when no admin has been explicitly set.
+    ///
+    /// # Errors
+    /// - `VaultError::NotInitialized` if the contract has not been initialized.
+    pub fn get_admin(env: Env) -> Result<Address, VaultError> {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::Admin)
+            .ok_or(VaultError::NotInitialized)
+    }
+
+    /// Initiate a two-step admin transfer (current admin only).
+    ///
+    /// Stores `new_admin` as a pending admin. The transfer is not complete
+    /// until `accept_admin` is called by `new_admin`.
+    ///
+    /// # Errors
+    /// - `VaultError::Unauthorized` if caller is not the current admin.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingAdmin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin transfer (pending admin only).
+    ///
+    /// Promotes the pending admin to the current admin and clears the pending slot.
+    ///
+    /// # Errors
+    /// - `VaultError::NoAdminTransferPending` if there is no pending admin.
+    pub fn accept_admin(env: Env) -> Result<(), VaultError> {
+        let new_admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(VaultError::NoAdminTransferPending)?;
+        new_admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingAdmin);
+        Ok(())
+    }
+
     /// Propose pausing the vault (admin only, timelocked).
     ///
     /// Snapshots the proposal deadline `proposed_at + window`. Execution
@@ -821,7 +879,7 @@ impl CalloraVault {
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
-        env.storage().instance().set(&StorageKey::Paused, &true);
+        env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events()
             .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
@@ -901,7 +959,7 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         let wasm_hash = proposal.wasm_hash.clone();
-        let admin = Self::get_admin(env.clone())?;
+        let _admin = Self::get_admin(env.clone())?;
         env.deployer().update_current_contract_wasm(wasm_hash.clone());
         env.storage()
             .instance()
@@ -1000,7 +1058,7 @@ impl CalloraVault {
         let usdc_addr: Address = env
             .storage()
             .instance()
-            .get(&StorageKey::UsdcToken)
+            .get(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
         let usdc = token::Client::new(&env, &usdc_addr);
         if usdc.balance(&env.current_contract_address()) < proposal.amount {

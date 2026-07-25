@@ -325,6 +325,27 @@ pub fn event_timelock_window_changed(env: &Env) -> Symbol {
     Symbol::new(env, "tl_window_changed")
 }
 
+/// Returns the Symbol for the `"rescue_funds"` event topic.
+///
+/// Emitted when the admin rescues funds from the vault.
+pub fn event_rescue_funds(env: &Env) -> Symbol {
+    Symbol::new(env, "rescue_funds")
+}
+
+/// Returns the Symbol for the `"reserve_cap_set"` event topic.
+///
+/// Emitted when the owner configures a reserve cap for a token.
+pub fn event_reserve_cap_set(env: &Env) -> Symbol {
+    Symbol::new(env, "reserve_cap_set")
+}
+
+/// Returns the Symbol for the `"swept"` event topic.
+///
+/// Emitted when idle balance is swept from the vault.
+pub fn event_swept(env: &Env) -> Symbol {
+    Symbol::new(env, "swept")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
