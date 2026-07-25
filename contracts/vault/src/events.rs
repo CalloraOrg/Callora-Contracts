@@ -249,27 +249,80 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
-/// Returns the Symbol for the `"reserve_cap_set"` event topic.
+// --- Escape-hatch timelock event symbols (Issue #482) ---------------------
+
+/// Returns the Symbol for the `"pause_proposed"` event topic.
 ///
-/// Emitted when the owner sets or updates the reserve cap for a token.
-/// Data payload: `(prev_cap: Option<i128>, new_cap: i128)`.
-pub fn event_reserve_cap_set(env: &Env) -> Symbol {
-    Symbol::new(env, "reserve_cap_set")
+/// Emitted when an admin stages a pause proposal that must wait for the
+/// configured timelock window before it can be executed.
+pub fn event_pause_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_proposed")
 }
 
-/// Returns the Symbol for the `"rescue_funds"` event topic.
+/// Returns the Symbol for the `"pause_executed"` event topic.
 ///
-/// Emitted when the admin rescues tokens accidentally sent to the vault.
-pub fn event_rescue_funds(env: &Env) -> Symbol {
-    Symbol::new(env, "rescue_funds")
+/// Emitted when an admin executes a pause proposal after the timelock
+/// window has elapsed.
+pub fn event_pause_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_executed")
 }
 
-/// Returns the Symbol for the `"swept"` event topic.
+/// Returns the Symbol for the `"pause_cancelled"` event topic.
 ///
-/// Emitted when the vault owner sweeps surplus USDC to a sibling contract
-/// via `sweep_idle_balance()`.
-pub fn event_swept(env: &Env) -> Symbol {
-    Symbol::new(env, "swept")
+/// Emitted when an admin aborts a pending pause proposal.
+pub fn event_pause_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_cancelled")
+}
+
+/// Returns the Symbol for the `"upgrade_proposed"` event topic.
+///
+/// Emitted when an admin stages an upgrade proposal.
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_executed"` event topic.
+///
+/// Emitted when an admin executes an upgrade proposal after the timelock
+/// window has elapsed.
+pub fn event_upgrade_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_executed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending upgrade proposal.
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
+/// Returns the Symbol for the `"sweep_proposed"` event topic.
+///
+/// Emitted when an admin stages a sweep (`distribute`) proposal.
+pub fn event_sweep_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_proposed")
+}
+
+/// Returns the Symbol for the `"sweep_executed"` event topic.
+///
+/// Emitted when an admin executes a sweep proposal after the timelock
+/// window has elapsed.
+pub fn event_sweep_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_executed")
+}
+
+/// Returns the Symbol for the `"sweep_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending sweep proposal.
+pub fn event_sweep_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_cancelled")
+}
+
+/// Returns the Symbol for the `"timelock_window_changed"` event topic.
+///
+/// Emitted when the admin updates the configured timelock window length.
+pub fn event_timelock_window_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "tl_window_changed")
 }
 
 #[cfg(test)]
