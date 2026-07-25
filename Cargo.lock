@@ -241,6 +241,7 @@ dependencies = [
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
