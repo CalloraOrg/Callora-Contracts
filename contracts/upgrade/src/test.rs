@@ -1,7 +1,7 @@
 #![cfg(test)]
 extern crate std;
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, Env, Symbol};
 
 #[test]
 fn test_default_cooldown() {
