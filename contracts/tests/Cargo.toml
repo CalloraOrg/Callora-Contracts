@@ -6,7 +6,7 @@ publish = false
 
 [lib]
 name = "callora_cross_contract_tests"
-path = "src/cross_contract_conservation.rs"
+path = "src/mod.rs"
 doctest = false
 
 [dependencies]

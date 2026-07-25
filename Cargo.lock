@@ -248,6 +248,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-cross-contract-tests"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
+ "callora-vault",
+ "rand 0.8.7",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-helpers"
 version = "0.1.0"
 

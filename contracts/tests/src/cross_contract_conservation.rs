@@ -1,8 +1,3 @@
-
-#![no_std]
-
-extern crate std;
-
 use soroban_sdk::{token, Address, Env, Symbol};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
