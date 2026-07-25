@@ -50,7 +50,8 @@ pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), Upgra
     caller.require_auth();
 
     let current_time = env.ledger().timestamp();
-    let last_time = env.storage()
+    let last_time = env
+        .storage()
         .instance()
         .get::<_, u64>(&Symbol::new(env, LAST_UPGRADE_TIME_KEY))
         .unwrap_or(0);
@@ -58,7 +59,9 @@ pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), Upgra
     let cooldown = get_cooldown(env);
 
     if last_time != 0 {
-        let elapsed = current_time.checked_sub(last_time).ok_or(UpgradeError::Overflow)?;
+        let elapsed = current_time
+            .checked_sub(last_time)
+            .ok_or(UpgradeError::Overflow)?;
         if elapsed < cooldown {
             return Err(UpgradeError::CooldownNotElapsed);
         }
