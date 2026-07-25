@@ -432,7 +432,9 @@ impl CalloraVault {
         for item in items.iter() {
             let (amount, _) = item;
             Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
+            total_amount = total_amount
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("overflow"));
         }
         let current_bal = env
             .storage()
@@ -739,10 +741,7 @@ impl CalloraVault {
         }
         timelock::set_timelock_window(&env, window);
         env.events().publish(
-            (
-                events::event_timelock_window_changed(&env),
-                caller.clone(),
-            ),
+            (events::event_timelock_window_changed(&env), caller.clone()),
             (timelock::get_timelock_window(&env), window),
         );
         Ok(())
@@ -822,12 +821,8 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&StorageKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         Ok(())
     }
 
@@ -857,8 +852,10 @@ impl CalloraVault {
                 execute_after,
             },
         );
-        env.events()
-            .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
@@ -874,15 +871,16 @@ impl CalloraVault {
     /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_pause(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
-        env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+        env.events().publish(
+            (events::event_pause_executed(&env), caller),
+            env.ledger().timestamp(),
+        );
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
@@ -902,10 +900,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_pause(&env);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (
-                events::event_pause_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_pause_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
@@ -953,14 +948,14 @@ impl CalloraVault {
     /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_upgrade(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         let wasm_hash = proposal.wasm_hash.clone();
         let _admin = Self::get_admin(env.clone())?;
-        env.deployer().update_current_contract_wasm(wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(wasm_hash.clone());
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &wasm_hash);
@@ -987,10 +982,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_upgrade(&env);
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
-            (
-                events::event_upgrade_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_upgrade_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
@@ -1049,8 +1041,7 @@ impl CalloraVault {
     /// - `VaultError::InsufficientBalance` if vault holds less than `amount`.
     pub fn execute_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_sweep(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
@@ -1095,10 +1086,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_sweep(&env);
         timelock::clear_pending_sweep(&env);
         env.events().publish(
-            (
-                events::event_sweep_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_sweep_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
