@@ -135,6 +135,7 @@ impl RevenuePool {
     /// # Panics
     /// * `"revenue pool already initialized"` — called more than once.
     /// * `"invalid config: usdc_token cannot be the contract itself"` — bad token address.
+    /// * `"invalid config: usdc_token cannot be the admin address"` - token/admin aliasing.
     ///
     /// # Events
     /// Emits `init` with `admin` as topic and `usdc_token` as data.
@@ -273,6 +274,13 @@ impl RevenuePool {
     }
 
     /// Alias for `accept_admin` — legacy name kept for backward compatibility.
+    ///
+    /// # Panics
+    /// * `"no pending admin"` - no transfer is in progress.
+    /// * `"unauthorized: caller is not pending admin"` - wrong caller.
+    ///
+    /// # Events
+    /// Emits `admin_transfer_completed` with the new admin as topic.
     pub fn claim_admin(env: Env, caller: Address) {
         Self::accept_admin(env, caller);
     }
@@ -957,6 +965,14 @@ impl RevenuePool {
 ///
 /// A zero `chunk_size` or empty `payments` yields no chunks.
 /// This is a pure helper: no storage access, no auth, no token transfers.
+///
+/// # Arguments
+/// * `env` - Soroban environment used to allocate the returned vectors.
+/// * `payments` - Ordered `(recipient, amount)` pairs to split.
+/// * `chunk_size` - Maximum number of payment legs per returned chunk.
+///
+/// # Returns
+/// A vector of consecutive payment chunks, each no larger than `chunk_size`.
 pub fn chunk_iter(
     env: &Env,
     payments: Vec<(Address, i128)>,
@@ -1001,3 +1017,43 @@ mod test_invariant;
 
 #[cfg(test)]
 mod test_proptest;
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod rustdoc_tests {
+    #[test]
+    fn every_public_fn_in_lib_has_rustdoc() {
+        let source = include_str!("lib.rs")
+            .split("// ---------------------------------------------------------------------------\n// Test modules")
+            .next()
+            .expect("lib.rs contains test module marker");
+        let lines: std::vec::Vec<&str> = source.lines().collect();
+
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if !(trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("pub(super) fn "))
+            {
+                continue;
+            }
+
+            let has_rustdoc = lines[..idx]
+                .iter()
+                .rev()
+                .map(|candidate| candidate.trim_start())
+                .find(|candidate| !candidate.is_empty())
+                .map(|candidate| candidate.starts_with("///"))
+                .unwrap_or(false);
+
+            assert!(
+                has_rustdoc,
+                "public function on line {} is missing /// rustdoc: {}",
+                idx + 1,
+                trimmed
+            );
+        }
+    }
+}
