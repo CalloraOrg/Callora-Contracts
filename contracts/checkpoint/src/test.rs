@@ -1,5 +1,5 @@
 use crate::{
-    CalloraCheckpoint, CalloraCheckpointClient, CheckpointError, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+    CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
@@ -156,7 +156,7 @@ fn test_cancel_admin_transfer_fails_for_non_admin() {
 #[test]
 #[should_panic(expected = "no admin transfer pending")]
 fn test_cancel_admin_transfer_panics_when_none_pending() {
-    let (env, admin, client) = setup();
+    let (_env, admin, client) = setup();
     client.cancel_admin_transfer(&admin);
 }
 
@@ -335,14 +335,14 @@ fn test_batch_create_fails_for_negative_balance() {
 
 #[test]
 fn test_get_checkpoint_not_found() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.try_get_checkpoint(&999);
     assert!(result.is_err(), "expected CheckpointNotFound error");
 }
 
 #[test]
 fn test_get_checkpoints_range_empty_when_no_checkpoints() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.get_checkpoints_range(&1u64, &10u32);
     assert!(result.is_empty());
 }
@@ -405,14 +405,14 @@ fn test_get_checkpoints_range_start_beyond_count() {
 
 #[test]
 fn test_get_checkpoints_range_fails_for_zero_limit() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.try_get_checkpoints_range(&1u64, &0u32);
     assert!(result.is_err(), "expected InvalidPageSize error");
 }
 
 #[test]
 fn test_get_latest_checkpoint_returns_none_when_empty() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     assert_eq!(client.get_latest_checkpoint_id(), 0);
     assert_eq!(client.get_latest_checkpoint(), None);
 }
