@@ -132,13 +132,13 @@ pub fn setup<'a>(env: &Env) -> Harness<'a> {
     vault.init(
         &owner,
         &usdc_id,
-        &None,                          // initial_balance: deposit explicitly in the test
-        &Some(backend.clone()),         // authorized_caller
-        &None,                          // min_deposit: default (1)
-        &Some(revenue_pool_id.clone()), // revenue_pool: informational on vault
-        &None,                          // max_deduct: default (i128::MAX)
+        &0i128,                            // initial_balance
+        &backend.clone(),                   // authorized_caller
+        &1i128,                             // min_deposit
+        &Some(revenue_pool_id.clone()),     // revenue_pool
+        &i128::MAX,                         // max_deduct
+        &settlement_id,                     // settlement
     );
-    vault.set_settlement(&owner, &settlement_id);
 
     // ---- Initialize settlement ---------------------------------------------
     settlement.init(&owner, &vault_id);

@@ -74,7 +74,6 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
     let dev = Address::generate(&env);
-    let token = Address::generate(&env);
 
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
@@ -118,7 +117,7 @@ fn test_pagination_fewer_than_limit() {
     // 5 developers
     for _ in 0..5 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     // limit 10
@@ -142,7 +141,7 @@ fn test_pagination_exactly_limit() {
     let mut devs = soroban_sdk::Vec::new(&env);
     for _ in 0..10 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev.clone()), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev.clone()), &token, &1u32);
         devs.push_back(dev);
     }
 
@@ -172,7 +171,7 @@ fn test_pagination_more_than_limit() {
     // 15 developers
     for _ in 0..15 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     // Page 1: limit 10
@@ -199,7 +198,7 @@ fn test_pagination_stable_ordering() {
 
     for _ in 0..8 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     let (p1_run1, cursor1_run1) =
@@ -250,7 +249,7 @@ fn test_pagination_invalid_cursor() {
 
     for _ in 0..5 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     let invalid_cursor = Some(Address::generate(&env));

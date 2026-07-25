@@ -1,4 +1,4 @@
-﻿# Event Schema
+# Event Schema
 
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
@@ -809,7 +809,7 @@ the WASM swap and `ContractVersion` write were rolled back.
 }
 ```
 
-#### `upgraded` (legacy)
+### `upgraded` (legacy)
 
 | Index   | Location | Type       | Description                                       |
 |---------|----------|------------|---------------------------------------------------|
@@ -925,6 +925,99 @@ No tokens are moved; this is an out-of-band signaling channel for indexers and f
 
 ---
 
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain via
+`propose_emergency_drain()`. The drain cannot be executed until the 24-hour
+timelock has elapsed.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_proposed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that proposed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details (see below)                 |
+
+`PendingEmergencyDrain` fields:
+
+| Field           | Type      | Description                                              |
+|-----------------|-----------|----------------------------------------------------------|
+| `to`            | `Address` | Destination address for the drained USDC                 |
+| `amount`        | `i128`    | Amount of USDC to drain                                  |
+| `proposed_at`   | `u64`     | Ledger timestamp when the proposal was created           |
+| `execute_after` | `u64`     | Earliest timestamp at which the drain may be executed    |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> Only one emergency drain may be pending at a time. Re-proposing replaces
+> the previous proposal and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a pending emergency drain after the
+timelock has expired via `execute_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_executed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that executed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details at time of execution         |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, the pending drain is cleared. The USDC has been
+> transferred to `to`.
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain via
+`cancel_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_cancelled"`                |
+| topic 1 | topics   | Address                 | `admin` — current admin that cancelled       |
+| data    | data     | `PendingEmergencyDrain` | proposal details of the cancelled drain       |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, `get_pending_emergency_drain()` returns `None`.
+
+---
+
 ### `swept`
 
 Emitted when the vault owner sweeps surplus USDC to a sibling contract via
@@ -960,6 +1053,72 @@ atomically in the same transaction.
 **Indexer note:** After this event, `balance()` returns `new_balance`. The USDC
 has left the vault on-ledger; `sweep_idle_balance` does **not** call
 `settlement.receive_payment()` — it is a raw token transfer only.
+
+---
+
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain of USDC to a
+designated address via `propose_emergency_drain()`. No tokens are moved yet;
+the drain becomes executable after `EMERGENCY_DRAIN_TIMELOCK_SECONDS` (24 hours).
+
+| Index   | Location | Type                  | Description                                    |
+|---------|----------|-----------------------|-------------------------------------------------|
+| topic 0 | topics   | Symbol                | `"emergency_drain_proposed"`                    |
+| topic 1 | topics   | Address                | `admin` — current admin who proposed the drain  |
+| data    | data     | `PendingEmergencyDrain`| struct with `to`, `amount`, `proposed_at`, `execute_after` |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
+
+> Re-proposing while a drain is already pending replaces the prior proposal
+> and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a previously proposed emergency drain after
+its timelock has expired via `execute_emergency_drain()`. The proposed USDC
+amount is transferred from the contract to the destination address, and the
+proposal is consumed to prevent replay.
+
+| Index   | Location | Type    | Description                                          |
+|---------|----------|---------|-------------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_executed"`                          |
+| topic 1 | topics   | Address | `admin` — current admin who executed the drain        |
+| data    | data     | `(Address, i128, u64, u64)` | `(to, amount, proposed_at, executed_at)` |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": ["GTREASURY...", 5000000, 1700000000, 1700086400]
+}
+```
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain proposal via
+`cancel_emergency_drain()` before it is executed. No tokens are moved.
+
+| Index   | Location | Type                   | Description                                     |
+|---------|----------|------------------------|--------------------------------------------------|
+| topic 0 | topics   | Symbol                 | `"emergency_drain_cancelled"`                    |
+| topic 1 | topics   | Address                 | `admin` — current admin who cancelled the drain  |
+| data    | data     | `PendingEmergencyDrain` | the cancelled proposal, unchanged                |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
 
 ---
 
@@ -1225,6 +1384,9 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `treasury_cancelled`   | revenue-pool    | `cancel_treasury_transfer()`             |
 | `yield_deposited`        | revenue-pool    | `deposit_yield()`                        |
 | `admin_broadcast`        | revenue-pool    | `broadcast()`                            |
+| `emergency_drain_proposed` | revenue-pool  | `propose_emergency_drain()`              |
+| `emergency_drain_executed` | revenue-pool  | `execute_emergency_drain()`              |
+| `emergency_drain_cancelled` | revenue-pool | `cancel_emergency_drain()`               |
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
@@ -1244,3 +1406,5 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
 | 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |
+| 0.2.0   | revenue-pool  | Added `emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled` events |
+| 0.2.0   | settlement    | Added `developer_min_balance_changed` event on `set_developer_min_balance()` (Issue #633) |

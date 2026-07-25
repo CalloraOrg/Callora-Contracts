@@ -80,6 +80,8 @@ must not be reassigned once released.
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
 | 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
+| 24 | `InvalidClaimWindow` | Settlement | Claim window end timestamp is before the start timestamp |
+| 25 | `ClaimWindowClosed` | Settlement | Developer attempted to claim outside their configured claim window |
 
 ## Revenue Pool
 

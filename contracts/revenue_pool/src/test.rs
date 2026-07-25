@@ -156,20 +156,24 @@ fn distribute_excess_panics() {
 }
 
 #[test]
-#[should_panic(expected = "invalid recipient: expected account address shape")]
 fn distribute_contract_recipient_shape_panics() {
+    // Distributing to a non-self contract address (C-shape) is permitted.
+    // Only distributing to the pool contract itself is rejected.
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let (pool_addr, client) = create_pool(&env);
-    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
 
-    // Create a different contract address (shape `C...`) as an invalid recipient.
+    // Create a different contract address (shape `C...`) as recipient.
     let other_contract_recipient = env.register(RevenuePool, ());
 
     client.init(&admin, &usdc_address);
     fund_pool(&usdc_admin, &pool_addr, 100);
+    // Distribution to another contract address should succeed — the USDC token
+    // contract enforces its own recipient rules.
     client.distribute(&admin, &other_contract_recipient, &10);
+    assert_eq!(usdc_client.balance(&other_contract_recipient), 10);
 }
 
 #[test]

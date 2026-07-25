@@ -1,7 +1,7 @@
+use callora_settlement::CalloraSettlement;
 use callora_vault::{CalloraVault, CalloraVaultClient, DeductItem};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{token, Address, Env, IntoVal, Symbol, Vec};
-use callora_settlement::CalloraSettlement;
 
 fn setup(env: &Env) -> (CalloraVaultClient<'_>, Address, Address, Address) {
     env.mock_all_auths();
@@ -27,17 +27,14 @@ fn setup(env: &Env) -> (CalloraVaultClient<'_>, Address, Address, Address) {
     );
 
     let settlement_addr = env.register(CalloraSettlement, ());
-    let settlement_client =
-        callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
+    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
     settlement_client.init(&owner, &vault_addr);
     client.set_settlement(&owner, &settlement_addr);
 
     (client, owner, developer, vault_addr)
 }
 
-fn collect_deduct_events(
-    env: &Env,
-) -> Vec<(Address, Symbol)> {
+fn collect_deduct_events(env: &Env) -> Vec<(Address, Symbol)> {
     let events = env.events().all();
     let mut result: Vec<(Address, Symbol)> = Vec::new(env);
     for ev in events.iter() {
@@ -140,27 +137,9 @@ fn sequential_deduct_events_match_call_order() {
     let env = Env::default();
     let (client, owner, developer, _) = setup(&env);
 
-    client.deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "first_call")),
-        &u16::MAX,
-        &developer,
-    );
-    client.deduct(
-        &owner,
-        &200,
-        &Some(Symbol::new(&env, "second_call")),
-        &u16::MAX,
-        &developer,
-    );
-    client.deduct(
-        &owner,
-        &300,
-        &Some(Symbol::new(&env, "third_call")),
-        &u16::MAX,
-        &developer,
-    );
+    client.deduct(&owner, &100, &0);
+    client.deduct(&owner, &200, &0);
+    client.deduct(&owner, &300, &0);
 
     let deduct_events = collect_deduct_events(&env);
     assert_eq!(deduct_events.len(), 3);
@@ -180,13 +159,7 @@ fn mixed_deposit_deduct_withdraw_event_order() {
 
     client.deposit(&owner, &500);
 
-    client.deduct(
-        &owner,
-        &200,
-        &Some(Symbol::new(&env, "deduct_1")),
-        &u16::MAX,
-        &developer,
-    );
+    client.deduct(&owner, &200, &0);
 
     client.withdraw(&100);
 
@@ -201,17 +174,11 @@ fn mixed_deposit_deduct_withdraw_event_order() {
     }
 
     let mut idx = 0;
-    let expected_order = [
-        "init",
-        "set_settlement",
-        "deposit",
-        "deduct",
-        "withdraw",
-    ];
+    let expected_order = ["init", "set_settlement", "deposit", "deduct", "withdraw"];
     for et in event_types.iter() {
         let s: Symbol = et;
         let mut buf = [0u8; 32];
-        let len = s.to_str().copy_into_slice(&mut buf);
+        let len = s.to_string().copy_into_slice(&mut buf);
         let name = core::str::from_utf8(&buf[..len as usize]).unwrap();
         if idx < expected_order.len() && name == expected_order[idx] {
             idx += 1;
@@ -286,13 +253,7 @@ fn deposit_event_emitted_before_deduct_event() {
 
     client.deposit(&owner, &500);
 
-    client.deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "r1")),
-        &u16::MAX,
-        &developer,
-    );
+    client.deduct(&owner, &100, &0);
 
     let events = env.events().all();
     let mut deposit_positions: Vec<u32> = Vec::new(&env);
@@ -302,7 +263,7 @@ fn deposit_event_emitted_before_deduct_event() {
             continue;
         }
         let s: Symbol = ev.1.get(0).unwrap().into_val(&env);
-        let name = s.to_str();
+        let name = s.to_string();
         let mut buf = [0u8; 32];
         let len = name.copy_into_slice(&mut buf);
         let name_str = core::str::from_utf8(&buf[..len as usize]).unwrap();
@@ -322,9 +283,7 @@ fn deposit_event_emitted_before_deduct_event() {
         "expected at least one deduct event"
     );
 
-    let last_deposit = deposit_positions
-        .get(deposit_positions.len() - 1)
-        .unwrap();
+    let last_deposit = deposit_positions.get(deposit_positions.len() - 1).unwrap();
     let first_deduct = deduct_positions.get(0).unwrap();
     assert!(
         last_deposit < first_deduct,

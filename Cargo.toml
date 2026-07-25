@@ -10,13 +10,16 @@ members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/checkpoint",
     "contracts/helpers",
     "contracts/revenue_pool/fuzz",
+    "contracts/tests",
 ]
 default-members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/checkpoint",
     "contracts/helpers",
 ]
 

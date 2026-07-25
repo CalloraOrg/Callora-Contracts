@@ -132,7 +132,7 @@ pub struct VaultMeta {
 - `owner`: `Address` - The vault owner; immutable except via `transfer_ownership()`; always permitted to deposit; can set allowed depositors and manage metadata
 - `balance`: `i128` - Current vault balance in smallest USDC units; incremented by deposits, decremented by deducts/withdrawals
 - `authorized_caller`: `Option<Address>` - Optional address permitted to trigger `deduct()` and `batch_deduct()` operations; can be set via `set_authorized_caller()`
-- `min_deposit`: `i128` - Minimum required per deposit; configured at initialization; prevents dust deposits
+- `min_deposit`: `i128` - Minimum required per deposit; configured at initialization; prevents dust deposits and rejects zero or sub-unit transfer requests on the deposit path
 
 ### DeductItem
 

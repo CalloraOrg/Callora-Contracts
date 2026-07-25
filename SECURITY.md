@@ -162,6 +162,9 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - **Emergency Pause Delegation:** The admin can configure a `pause_guardian` for operational emergencies where the pool needs to be stopped quickly without sharing full admin power.
   - *Mitigation:* `pause_guardian` is scoped to `pause` only. It cannot unpause, distribute funds, rotate admin, update caps, clear or replace itself, or upgrade the contract. `set_pause_guardian` and `clear_pause_guardian` are admin-only and emit dedicated events for monitoring.
 
+- **Emergency Drain (Multisig + Timelock):** The admin can move the entire pool balance to a treasury address as a last-resort evacuation. Without controls, this could be exploited by a compromised admin key.
+  - *Mitigation:* `propose_emergency_drain` stores a `PendingEmergencyDrain` snapshot. `execute_emergency_drain` is only callable after `EMERGENCY_DRAIN_TIMELOCK_SECONDS` (86 400 s = 24 h) have elapsed, giving operators a window to call `cancel_emergency_drain` before funds move. A new proposal replaces any existing one, resetting the clock. When the admin is a Stellar multisig account, `require_auth` enforces the native multi-signature threshold automatically — no additional multi-sig logic is required in the contract. Every state change emits an audit event (`emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled`).
+
 ### Input Validation
 
 - [ ] All amounts validated to be > 0

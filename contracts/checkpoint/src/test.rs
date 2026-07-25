@@ -1,0 +1,574 @@
+use crate::{CalloraCheckpoint, CalloraCheckpointClient, CheckpointError, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
+
+/// Helper: initialise a fresh checkpoint contract and return `(env, admin, client)`.
+fn setup() -> (Env, Address, CalloraCheckpointClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+    client.init(&admin);
+    (env, admin, client)
+}
+
+// ===========================================================================
+// Initialisation tests
+// ===========================================================================
+
+#[test]
+fn test_init_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+
+    let result = client.try_init(&admin);
+    assert!(result.is_ok());
+
+    // Verify admin is stored correctly.
+    assert_eq!(client.get_admin(), admin);
+
+    // Verify checkpoint count starts at 0.
+    assert_eq!(client.get_checkpoint_count(), 0);
+    assert_eq!(client.get_latest_checkpoint_id(), 0);
+}
+
+#[test]
+fn test_init_fails_when_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+
+    client.init(&admin);
+
+    let result = client.try_init(&Address::generate(&env));
+    assert!(result.is_err(), "expected AlreadyInitialized error");
+}
+
+#[test]
+fn test_get_admin_before_init_returns_error() {
+    let env = Env::default();
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+    let result = client.try_get_admin();
+    assert!(result.is_err(), "expected NotInitialized error");
+}
+
+// ===========================================================================
+// Admin rotation tests
+// ===========================================================================
+
+#[test]
+fn test_set_admin_succeeds() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+
+    let result = client.try_set_admin(&admin, &new_admin);
+    assert!(result.is_ok());
+
+    // Pending admin should be set.
+    let pending = client.get_pending_admin();
+    assert_eq!(pending, Some(new_admin.clone()));
+
+    // Current admin should still be old admin.
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_set_admin_fails_for_non_admin() {
+    let (env, _admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    let result = client.try_set_admin(&non_admin, &new_admin);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+fn test_accept_admin_succeeds() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+
+    client.set_admin(&admin, &new_admin);
+    let result = client.try_accept_admin(&new_admin);
+    assert!(result.is_ok());
+
+    // New admin should now be the current admin.
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Pending admin should be cleared.
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+#[test]
+#[should_panic(expected = "no admin transfer pending")]
+fn test_accept_admin_panics_when_no_transfer_pending() {
+    let (env, _admin, client) = setup();
+    let caller = Address::generate(&env);
+    client.accept_admin(&caller);
+}
+
+#[test]
+#[should_panic(expected = "unauthorized: caller is not pending admin")]
+fn test_accept_admin_panics_for_wrong_caller() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    let wrong_caller = Address::generate(&env);
+
+    client.set_admin(&admin, &new_admin);
+    client.accept_admin(&wrong_caller);
+}
+
+#[test]
+fn test_cancel_admin_transfer_succeeds() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+
+    client.set_admin(&admin, &new_admin);
+    let result = client.try_cancel_admin_transfer(&admin);
+    assert!(result.is_ok());
+
+    // Pending admin should be cleared.
+    assert_eq!(client.get_pending_admin(), None);
+
+    // Current admin should be unchanged.
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_cancel_admin_transfer_fails_for_non_admin() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_cancel_admin_transfer(&non_admin);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+#[should_panic(expected = "no admin transfer pending")]
+fn test_cancel_admin_transfer_panics_when_none_pending() {
+    let (env, admin, client) = setup();
+    client.cancel_admin_transfer(&admin);
+}
+
+// ===========================================================================
+// Checkpoint creation tests
+// ===========================================================================
+
+#[test]
+fn test_create_checkpoint_succeeds() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let metadata = Symbol::new(&env, "monthly_close");
+
+    // create_checkpoint returns Result<u64, CheckpointError>; the client
+    // auto-unwraps on success, so this returns u64 directly.
+    let id = client.create_checkpoint(&admin, &subject, &token, &1000i128, &metadata);
+    assert_eq!(id, 1);
+
+    // Verify checkpoint record (get_checkpoint also auto-unwraps Result).
+    let record = client.get_checkpoint(&id);
+    assert_eq!(record.id, 1);
+    assert_eq!(record.subject, subject);
+    assert_eq!(record.token, token);
+    assert_eq!(record.balance, 1000);
+    assert_eq!(record.metadata, metadata);
+
+    // Verify counts.
+    assert_eq!(client.get_checkpoint_count(), 1);
+    assert_eq!(client.get_latest_checkpoint_id(), 1);
+}
+
+#[test]
+fn test_create_checkpoint_fails_for_non_admin() {
+    let (env, _admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let metadata = Symbol::new(&env, "test");
+
+    let result = client.try_create_checkpoint(&non_admin, &subject, &token, &100, &metadata);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+fn test_create_checkpoint_fails_for_negative_balance() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let metadata = Symbol::new(&env, "test");
+
+    let result = client.try_create_checkpoint(&admin, &subject, &token, &(-1i128), &metadata);
+    assert!(result.is_err(), "expected AmountNegative error");
+}
+
+#[test]
+fn test_create_checkpoint_zero_balance_is_allowed() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let metadata = Symbol::new(&env, "zero_balance");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &0i128, &metadata);
+    let record = client.get_checkpoint(&id);
+    assert_eq!(record.balance, 0);
+}
+
+#[test]
+fn test_create_multiple_checkpoints_sequential_ids() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "seq");
+
+    for i in 1..=5u64 {
+        let id = client.create_checkpoint(&admin, &subject, &token, &((i as i128) * 100), &meta);
+        assert_eq!(id, i);
+    }
+
+    assert_eq!(client.get_checkpoint_count(), 5);
+    assert_eq!(client.get_latest_checkpoint_id(), 5);
+}
+
+// ===========================================================================
+// Batch checkpoint creation tests
+// ===========================================================================
+
+#[test]
+fn test_batch_create_succeeds() {
+    let (env, admin, client) = setup();
+    let subject_a = Address::generate(&env);
+    let subject_b = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "audit");
+
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject_a.clone(), token.clone(), 500i128, meta.clone()),
+            (subject_b.clone(), token.clone(), 750i128, meta.clone()),
+            (subject_a.clone(), token.clone(), 1000i128, meta.clone()),
+        ],
+    );
+
+    let ids = client.batch_create_checkpoints(&admin, &items);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.get(0).unwrap(), 1);
+    assert_eq!(ids.get(1).unwrap(), 2);
+    assert_eq!(ids.get(2).unwrap(), 3);
+
+    assert_eq!(client.get_checkpoint_count(), 3);
+
+    let r1 = client.get_checkpoint(&1);
+    assert_eq!(r1.subject, subject_a);
+    assert_eq!(r1.balance, 500);
+
+    let r2 = client.get_checkpoint(&2);
+    assert_eq!(r2.subject, subject_b);
+    assert_eq!(r2.balance, 750);
+
+    let r3 = client.get_checkpoint(&3);
+    assert_eq!(r3.subject, subject_a);
+    assert_eq!(r3.balance, 1000);
+}
+
+#[test]
+fn test_batch_create_fails_for_empty_batch() {
+    let (env, admin, client) = setup();
+    let items: Vec<(Address, Address, i128, Symbol)> = Vec::new(&env);
+
+    let result = client.try_batch_create_checkpoints(&admin, &items);
+    assert!(result.is_err(), "expected BatchEmpty error");
+}
+
+#[test]
+fn test_batch_create_fails_for_batch_too_large() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "big");
+
+    let mut items = Vec::new(&env);
+    for _ in 0..(MAX_BATCH_SIZE + 1) {
+        items.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
+    }
+
+    let result = client.try_batch_create_checkpoints(&admin, &items);
+    assert!(result.is_err(), "expected BatchTooLarge error");
+}
+
+#[test]
+fn test_batch_create_fails_for_negative_balance() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "err");
+
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject.clone(), token.clone(), 100i128, meta.clone()),
+            (subject.clone(), token.clone(), -1i128, meta.clone()),
+        ],
+    );
+
+    let result = client.try_batch_create_checkpoints(&admin, &items);
+    assert!(result.is_err(), "expected AmountNegative error");
+
+    // Nothing should have been written.
+    assert_eq!(client.get_checkpoint_count(), 0);
+}
+
+// ===========================================================================
+// Query tests
+// ===========================================================================
+
+#[test]
+fn test_get_checkpoint_not_found() {
+    let (env, _admin, client) = setup();
+    let result = client.try_get_checkpoint(&999);
+    assert!(result.is_err(), "expected CheckpointNotFound error");
+}
+
+#[test]
+fn test_get_checkpoints_range_empty_when_no_checkpoints() {
+    let (env, _admin, client) = setup();
+    let result = client.get_checkpoints_range(&1u64, &10u32);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_checkpoints_range_returns_paginated_results() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "page");
+
+    // Create 15 checkpoints.
+    for i in 1..=15u64 {
+        client.create_checkpoint(&admin, &subject, &token, &((i * 10) as i128), &meta);
+    }
+
+    // Page 1: IDs 1-10.
+    let page1 = client.get_checkpoints_range(&1u64, &10u32);
+    assert_eq!(page1.len(), 10);
+    assert_eq!(page1.get(0).unwrap().id, 1);
+    assert_eq!(page1.get(9).unwrap().id, 10);
+
+    // Page 2: IDs 11-15.
+    let page2 = client.get_checkpoints_range(&11u64, &10u32);
+    assert_eq!(page2.len(), 5);
+    assert_eq!(page2.get(0).unwrap().id, 11);
+    assert_eq!(page2.get(4).unwrap().id, 15);
+}
+
+#[test]
+fn test_get_checkpoints_range_caps_limit() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "cap");
+
+    let n = MAX_PAGE_SIZE as u64 + 50;
+    for i in 1..=n {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128), &meta);
+    }
+
+    let result = client.get_checkpoints_range(&1u64, &(MAX_PAGE_SIZE + 100));
+    assert_eq!(result.len() as u32, MAX_PAGE_SIZE);
+}
+
+#[test]
+fn test_get_checkpoints_range_start_beyond_count() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "beyond");
+
+    for i in 1..=5u64 {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128), &meta);
+    }
+
+    let result = client.get_checkpoints_range(&100u64, &10u32);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_get_checkpoints_range_fails_for_zero_limit() {
+    let (env, _admin, client) = setup();
+    let result = client.try_get_checkpoints_range(&1u64, &0u32);
+    assert!(result.is_err(), "expected InvalidPageSize error");
+}
+
+#[test]
+fn test_get_latest_checkpoint_returns_none_when_empty() {
+    let (env, _admin, client) = setup();
+    assert_eq!(client.get_latest_checkpoint_id(), 0);
+    assert_eq!(client.get_latest_checkpoint(), None);
+}
+
+#[test]
+fn test_get_latest_checkpoint_returns_most_recent() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "latest");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    client.create_checkpoint(&admin, &subject, &token, &200i128, &meta);
+
+    let latest = client.get_latest_checkpoint().unwrap();
+    assert_eq!(latest.id, 2);
+    assert_eq!(latest.balance, 200);
+}
+
+// ===========================================================================
+// Upgrade tests
+// ===========================================================================
+
+#[test]
+#[should_panic]
+fn test_upgrade_succeeds_for_admin() {
+    let (env, admin, client) = setup();
+    let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+    let result = client.try_upgrade(&admin, &wasm_hash);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_upgrade_fails_for_non_admin() {
+    let (env, _admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+    let result = client.try_upgrade(&non_admin, &wasm_hash);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+// ===========================================================================
+// Edge-case & invariant tests
+// ===========================================================================
+
+#[test]
+fn test_create_checkpoint_before_init_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "pre_init");
+
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+
+    // Calling create_checkpoint before init should fail.
+    let result = client.try_create_checkpoint(&admin, &subject, &token, &100, &meta);
+    assert!(result.is_err(), "expected error before init");
+}
+
+#[test]
+fn test_batch_create_fails_for_non_admin() {
+    let (env, _admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "batch_nonadmin");
+
+    let items = Vec::from_array(
+        &env,
+        [(subject.clone(), token.clone(), 100i128, meta.clone())],
+    );
+
+    let result = client.try_batch_create_checkpoints(&non_admin, &items);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+fn test_get_checkpoints_range_start_id_zero() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "zero_start");
+
+    for i in 1..=3u64 {
+        client.create_checkpoint(&admin, &subject, &token, &((i * 100) as i128), &meta);
+    }
+
+    // start_id=0 means "from the beginning" - same as start_id=1.
+    let result = client.get_checkpoints_range(&0u64, &10u32);
+    // Returns checkpoints 1, 2, 3 (checkpoint 0 doesn't exist).
+    assert_eq!(result.len(), 3);
+    assert_eq!(result.get(0).unwrap().id, 1);
+    assert_eq!(result.get(2).unwrap().id, 3);
+}
+
+#[test]
+fn test_checkpoints_are_immutable() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "immutable");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &999i128, &meta);
+
+    // Read the checkpoint -- cannot "overwrite" it via the public API
+    // because `create_checkpoint` always assigns a new ID.
+    let record = client.get_checkpoint(&id);
+    assert_eq!(record.balance, 999);
+
+    // Create another checkpoint -- it gets a new ID, old one is unchanged.
+    let id2 = client.create_checkpoint(&admin, &subject, &token, &888i128, &meta);
+
+    assert_ne!(id, id2);
+
+    let record1 = client.get_checkpoint(&id);
+    assert_eq!(record1.balance, 999); // unchanged
+
+    let record2 = client.get_checkpoint(&id2);
+    assert_eq!(record2.balance, 888);
+}
+
+#[test]
+fn test_admin_can_create_checkpoints_after_admin_rotation() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "post_rotation");
+
+    // Rotate admin.
+    client.set_admin(&admin, &new_admin);
+    client.accept_admin(&new_admin);
+
+    // Old admin can no longer create checkpoints.
+    let result1 = client.try_create_checkpoint(&admin, &subject, &token, &100, &meta);
+    assert!(result1.is_err(), "old admin should be unauthorized after rotation");
+
+    // New admin can.
+    let result2 = client.try_create_checkpoint(&new_admin, &subject, &token, &200, &meta);
+    assert!(result2.is_ok());
+}
+
+#[test]
+fn test_count_and_latest_id_stay_consistent() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "consistency");
+
+    for i in 1..=25u64 {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128), &meta);
+
+        assert_eq!(client.get_checkpoint_count(), i);
+        assert_eq!(client.get_latest_checkpoint_id(), i);
+    }
+}

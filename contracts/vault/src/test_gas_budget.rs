@@ -128,7 +128,7 @@ mod gas_budget {
             &None,
             &None,
         );
-        client.set_settlement(&owner, &settlement);
+
         measure!(env, "deduct", {
             client.deduct(&owner, &100, &None);
         });
@@ -153,7 +153,7 @@ mod gas_budget {
             &None,
             &None,
         );
-        client.set_settlement(&owner, &settlement);
+
         let mut items: Vec<DeductItem> = Vec::new(&env);
         items.push_back(DeductItem {
             amount: 100,
