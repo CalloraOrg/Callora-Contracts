@@ -431,6 +431,99 @@ fn test_get_latest_checkpoint_returns_most_recent() {
 }
 
 // ===========================================================================
+// TTL bump tests (buffer top-up)
+// ===========================================================================
+
+#[test]
+fn test_bump_checkpoint_ttl_succeeds() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "bump");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &1000i128, &meta);
+
+    let result = client.try_bump_checkpoint_ttl(&admin, &id);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_bump_checkpoint_ttl_fails_for_non_admin() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "bump_unauth");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &1000i128, &meta);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_bump_checkpoint_ttl(&non_admin, &id);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+fn test_bump_checkpoint_ttl_fails_for_nonexistent() {
+    let (env, _admin, client) = setup();
+    // No checkpoints created — ID 999 does not exist.
+    let admin = Address::generate(&env);
+    let result = client.try_bump_checkpoint_ttl(&admin, &999u64);
+    assert!(result.is_err(), "expected CheckpointNotFound error");
+}
+
+#[test]
+fn test_bump_checkpoints_ttl_range_succeeds() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "bulk_bump");
+
+    for i in 1..=5u64 {
+        client.create_checkpoint(&admin, &subject, &token, &((i * 100) as i128), &meta);
+    }
+
+    let result = client.try_bump_checkpoints_ttl_range(&admin, &1u64, &5u64);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_bump_checkpoints_ttl_range_fails_for_non_admin() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "bulk_unauth");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let non_admin = Address::generate(&env);
+    let result = client.try_bump_checkpoints_ttl_range(&non_admin, &1u64, &1u64);
+    assert!(result.is_err(), "expected Unauthorized error");
+}
+
+#[test]
+fn test_bump_checkpoints_ttl_range_fails_when_start_gt_end() {
+    let (env, admin, client) = setup();
+
+    let result = client.try_bump_checkpoints_ttl_range(&admin, &5u64, &3u64);
+    assert!(result.is_err(), "expected InvalidPageSize error");
+}
+
+#[test]
+fn test_bump_checkpoints_ttl_range_skips_missing_ids() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "skip_gaps");
+
+    // Create checkpoints 1 and 3 (skip 2 by not creating it).
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    client.create_checkpoint(&admin, &subject, &token, &300i128, &meta);
+
+    // Bump range 1–3 should not error on missing ID 2.
+    let result = client.try_bump_checkpoints_ttl_range(&admin, &1u64, &3u64);
+    assert!(result.is_ok());
+}
+
+// ===========================================================================
 // Upgrade tests
 // ===========================================================================
 

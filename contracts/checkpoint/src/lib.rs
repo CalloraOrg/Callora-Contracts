@@ -568,6 +568,86 @@ impl CalloraCheckpoint {
     }
 
     // -----------------------------------------------------------------------
+    // TTL management (buffer top-up)
+    // -----------------------------------------------------------------------
+
+    /// Extend the TTL of a single checkpoint record.
+    ///
+    /// Allows the admin to "top up" the persistent storage lifetime of a
+    /// checkpoint so that important audit records do not expire. After the
+    /// call the checkpoint's TTL is reset to [`BUMP_AMOUNT`] ledgers
+    /// (≈6 months).
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `checkpoint_id` -- The ID of the checkpoint to bump.
+    ///
+    /// # Errors
+    /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint with the
+    ///   given ID exists.
+    pub fn bump_checkpoint_ttl(
+        env: Env,
+        caller: Address,
+        checkpoint_id: u64,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+
+        let key = StorageKey::Checkpoint(checkpoint_id);
+        if !env.storage().persistent().has(&key) {
+            return Err(CheckpointError::CheckpointNotFound);
+        }
+
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        Ok(())
+    }
+
+    /// Extend the TTL of a range of checkpoint records.
+    ///
+    /// Convenience wrapper around [`CalloraCheckpoint::bump_checkpoint_ttl`]
+    /// for bulk operations. Iterates from `start_id` to `end_id` (inclusive)
+    /// and bumps every checkpoint that exists. Missing IDs in the range are
+    /// silently skipped so callers can use the current checkpoint count as
+    /// `end_id` without worrying about gaps.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `start_id` -- First checkpoint ID to bump (inclusive, 1-based).
+    /// * `end_id` -- Last checkpoint ID to bump (inclusive).
+    ///
+    /// # Errors
+    /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::InvalidPageSize`] -- `start_id` is greater than `end_id`.
+    pub fn bump_checkpoints_ttl_range(
+        env: Env,
+        caller: Address,
+        start_id: u64,
+        end_id: u64,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+
+        if start_id > end_id {
+            return Err(CheckpointError::InvalidPageSize);
+        }
+
+        for id in start_id..=end_id {
+            let key = StorageKey::Checkpoint(id);
+            if env.storage().persistent().has(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+            }
+        }
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Upgrade
     // -----------------------------------------------------------------------
 
