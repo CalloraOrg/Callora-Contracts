@@ -258,6 +258,49 @@ mod vault_access_control {
         assert!(result.is_err(), "outsider should not be able to set_authorized_caller");
     }
 
+    #[test]
+    fn set_admin_current_admin_succeeds() {
+        let ctx = setup();
+        let result = ctx.vault.try_set_admin(&ctx.owner, &ctx.pending_admin);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn set_admin_outsider_fails() {
+        let ctx = setup();
+        let result = ctx.vault.try_set_admin(&ctx.outsider, &ctx.pending_admin);
+        assert!(result.is_err(), "outsider should not be able to set_admin");
+    }
+
+    #[test]
+    fn set_admin_without_auth_fails() {
+        let ctx = setup();
+        ctx.env.set_auths(&[]);
+        let result = ctx.vault.try_set_admin(&ctx.owner, &ctx.pending_admin);
+        assert!(result.is_err(), "set_admin must require current-admin auth");
+    }
+
+    #[test]
+    fn accept_admin_pending_admin_succeeds() {
+        let ctx = setup();
+        ctx.vault.set_admin(&ctx.owner, &ctx.pending_admin);
+        let result = ctx.vault.try_accept_admin();
+        assert!(result.is_ok());
+        assert_eq!(ctx.vault.get_admin().unwrap(), ctx.pending_admin);
+    }
+
+    #[test]
+    fn accept_admin_without_pending_admin_auth_fails() {
+        let ctx = setup();
+        ctx.vault.set_admin(&ctx.owner, &ctx.pending_admin);
+        ctx.env.set_auths(&[]);
+        let result = ctx.vault.try_accept_admin();
+        assert!(
+            result.is_err(),
+            "accept_admin must require pending-admin auth"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // pause / unpause — owner only
     // -----------------------------------------------------------------------
