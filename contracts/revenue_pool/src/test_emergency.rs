@@ -192,8 +192,7 @@ fn execute_emits_event() {
     let event = events
         .iter()
         .find(|ev| {
-            let topic: Symbol =
-                Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+            let topic: Symbol = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
             topic == Symbol::new(&env, "emergency_drain_executed")
         })
         .expect("emergency_drain_executed event not emitted");
@@ -334,8 +333,7 @@ fn cancel_emits_event() {
     let event = events
         .iter()
         .find(|ev| {
-            let topic: Symbol =
-                Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+            let topic: Symbol = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
             topic == Symbol::new(&env, "emergency_drain_cancelled")
         })
         .expect("emergency_drain_cancelled event not emitted");
