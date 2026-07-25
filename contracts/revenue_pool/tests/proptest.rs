@@ -11,8 +11,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 enum PoolAction {
     Fund(i128),
     Schedule(i128),
-    Distribute { recipient_idx: usize, amount: i128 },
-    BatchDistribute { start_idx: usize, amounts: std::vec::Vec<i128> },
+    Distribute {
+        recipient_idx: usize,
+        amount: i128,
+    },
+    BatchDistribute {
+        start_idx: usize,
+        amounts: std::vec::Vec<i128>,
+    },
     Pause,
     Unpause,
     SetMaxDistribute(i128),
