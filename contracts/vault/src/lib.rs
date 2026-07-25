@@ -258,6 +258,8 @@ impl CalloraVault {
         max_deduct: i128,
         settlement: Address,
     ) {
+        owner.require_auth();
+
         if env.storage().instance().has(&DataKey::Owner) {
             panic!("Already initialized");
         }
@@ -270,28 +272,19 @@ impl CalloraVault {
         if min_deposit > max_deduct {
             panic!("min_deposit cannot exceed max_deduct");
         }
+
         env.storage().instance().set(&DataKey::Owner, &owner);
-        env.storage()
-            .instance()
-            .set(&DataKey::UsdcToken, &usdc_token);
-        env.storage()
-            .instance()
-            .set(&DataKey::Balance, &initial_balance);
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedCaller, &authorized_caller);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinDeposit, &min_deposit);
+        env.storage().instance().set(&DataKey::UsdcToken, &usdc_token);
+        env.storage().instance().set(&DataKey::Balance, &initial_balance);
+        env.storage().instance().set(&DataKey::AuthorizedCaller, &authorized_caller);
+        env.storage().instance().set(&DataKey::MinDeposit, &min_deposit);
+        
         if let Some(pool) = revenue_pool {
             env.storage().instance().set(&DataKey::RevenuePool, &pool);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxDeduct, &max_deduct);
-        env.storage()
-            .instance()
-            .set(&DataKey::Settlement, &settlement);
+        
+        env.storage().instance().set(&DataKey::MaxDeduct, &max_deduct);
+        env.storage().instance().set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
         // Admin defaults to owner at initialization.
         env.storage().instance().set(&StorageKey::Admin, &owner);
@@ -299,25 +292,19 @@ impl CalloraVault {
 
     pub fn deposit(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
+        
+        if env.storage().instance().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
             panic!("Contract paused");
         }
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
+        
+        let min_dep = env.storage().instance().get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap_or_else(|| panic!("Min deposit not set"));
+            
         Self::require_valid_deposit_amount(amount, min_dep);
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             let is_allowed = env
                 .storage()
@@ -328,139 +315,116 @@ impl CalloraVault {
                 panic!("Not authorized depositor");
             }
         }
-        let current_bal = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::Balance)
-            .unwrap_or(0);
-        let new_bal = current_bal.checked_add(amount).unwrap();
+        
+        let current_bal = env.storage().instance().get::<_, i128>(&DataKey::Balance).unwrap_or(0);
+        
+        let new_bal = current_bal.checked_add(amount).unwrap_or_else(|| panic!("Math overflow"));
+        
         env.storage().instance().set(&DataKey::Balance, &new_bal);
-        let token_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        
+        let token_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
     }
 
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
         caller.require_auth();
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap();
+        
+        let auth_caller = env.storage().instance().get::<_, Address>(&DataKey::AuthorizedCaller)
+            .unwrap_or_else(|| panic!("Authorized caller not set"));
+            
         if caller != auth_caller {
             panic!("Not authorized caller");
         }
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
+        
+        if env.storage().instance().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
             panic!("Contract paused");
         }
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
+        
+        let min_dep = env.storage().instance().get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap_or_else(|| panic!("Min deposit not set"));
+            
+        let max_deduct = env.storage().instance().get::<_, i128>(&DataKey::MaxDeduct)
+            .unwrap_or_else(|| panic!("Max deduct not set"));
+            
         Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-        let current_bal = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::Balance)
-            .unwrap_or(0);
+        
+        let current_bal = env.storage().instance().get::<_, i128>(&DataKey::Balance).unwrap_or(0);
+        
         if current_bal < amount {
             panic!("insufficient balance");
         }
-        let new_bal = current_bal - amount;
+        
+        let new_bal = current_bal.checked_sub(amount).unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
+        
         // Transfer USDC from vault to settlement on-ledger.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        let usdc_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let usdc = token::Client::new(&env, &usdc_addr);
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap();
+        
+        let settlement_addr = env.storage().instance().get::<_, Address>(&DataKey::Settlement)
+            .unwrap_or_else(|| panic!("Settlement not set"));
+            
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
+        
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
     }
 
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
         caller.require_auth();
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap();
+        
+        let auth_caller = env.storage().instance().get::<_, Address>(&DataKey::AuthorizedCaller)
+            .unwrap_or_else(|| panic!("Authorized caller not set"));
+            
         if caller != auth_caller {
             panic!("Not authorized caller");
         }
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
+        
+        if env.storage().instance().get::<_, bool>(&DataKey::Paused).unwrap_or(false) {
             panic!("Contract paused");
         }
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
+        
+        let min_dep = env.storage().instance().get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap_or_else(|| panic!("Min deposit not set"));
+            
+        let max_deduct = env.storage().instance().get::<_, i128>(&DataKey::MaxDeduct)
+            .unwrap_or_else(|| panic!("Max deduct not set"));
+            
         let mut total_amount: i128 = 0;
         for item in items.iter() {
             let (amount, _) = item;
             Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
+            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("Math overflow"));
         }
-        let current_bal = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::Balance)
-            .unwrap_or(0);
+        
+        let current_bal = env.storage().instance().get::<_, i128>(&DataKey::Balance).unwrap_or(0);
+        
         if current_bal < total_amount {
             panic!("insufficient balance");
         }
-        let new_bal = current_bal - total_amount;
+        
+        let new_bal = current_bal.checked_sub(total_amount).unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
+        
         // Transfer total USDC from vault to settlement on-ledger atomically.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        let usdc_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let usdc = token::Client::new(&env, &usdc_addr);
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap();
+        let settlement_addr = env.storage().instance().get::<_, Address>(&DataKey::Settlement)
+            .unwrap_or_else(|| panic!("Settlement not set"));
+            
         usdc.transfer(
             &env.current_contract_address(),
             &settlement_addr,
             &total_amount,
         );
+        
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         for item in items.iter() {
             let (amount, request_id) = item;
@@ -472,129 +436,47 @@ impl CalloraVault {
     // View functions — no TTL bump (read-only, zero write cost)
     // -----------------------------------------------------------------------
 
-    /// Simulates a vault deduction without altering on-chain state.
+    /// Modifies the authorized caller (Owner only).
     ///
-    /// Performs validation checks identical to `deduct` and returns the predicted
-    /// balance after the specified `amount` is deducted.
-    ///
-    /// # Errors
-    /// Returns `VaultError` under the exact same conditions as `deduct`
-    /// (e.g., paused state, amount exceeding balance, amount exceeding max deduction limit).
-    // pub fn simulate_deduct(
-    //     env: Env,
-    //     caller: Address,
-    //     amount: i128,
-    //     request_id: Option<Symbol>,
-    // ) -> Result<i128, VaultError> {
-    //     Self::require_not_paused(env.clone())?;
-    //     caller.require_auth();
-    //     if amount <= 0 {
-    //         return Err(VaultError::AmountNotPositive);
-    //     }
-    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
-    //     let max_d = Self::get_max_deduct(env.clone());
-    //     if amount > max_d {
-    //         return Err(VaultError::ExceedsMaxDeduct);
-    //     }
-    //     if let Some(ref rid) = request_id {
-    //         Self::require_not_duplicate(&env, rid)?;
-    //     }
-    //     let meta = Self::get_meta(env.clone())?;
-    //     if meta.balance < amount {
-    //         return Err(VaultError::InsufficientBalance);
-    //     }
-    //     let _ = Self::require_settlement(&env)?;
-    //     meta.balance
-    //         .checked_sub(amount)
-    //         .ok_or(VaultError::Overflow)
-    // }
-
-    // pub fn simulate_batch_deduct(
-    //     env: Env,
-    //     caller: Address,
-    //     items: Vec<DeductItem>,
-    // ) -> Result<i128, VaultError> {
-    //     Self::require_not_paused(env.clone())?;
-    //     caller.require_auth();
-    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
-    //     let n = items.len();
-    //     if n == 0 {
-    //         return Err(VaultError::BatchEmpty);
-    //     }
-    //     if n > MAX_BATCH_SIZE {
-    //         return Err(VaultError::BatchTooLarge);
-    //     }
-    //     let max_d = Self::get_max_deduct(env.clone());
-    //     let meta = Self::get_meta(env.clone())?;
-    //     let mut running = meta.balance;
-    //     let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
-    //     for item in items.iter() {
-    //         if item.amount <= 0 {
-    //             return Err(VaultError::AmountNotPositive);
-    //         }
-    //         if item.amount > max_d {
-    //             return Err(VaultError::ExceedsMaxDeduct);
-    //         }
-    //         if running < item.amount {
-    //             return Err(VaultError::InsufficientBalance);
-    //         }
-    //         if let Some(ref rid) = item.request_id {
-    //             Self::require_not_duplicate(&env, rid)?;
-    //             if seen_in_batch.contains(rid) {
-    //                 return Err(VaultError::DuplicateRequestId);
-    //             }
-    //             seen_in_batch.push_back(rid.clone());
-    //         }
-    //         running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
-    //     }
-    //     let _ = Self::require_settlement(&env)?;
-    //     Ok(running)
-    // }
-
-    // pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
-    //     env.storage()
-    //         .instance()
-    //         .set(&DataKey::Depositor(depositor), &true);
-    // }
-
+    /// # Arguments
+    /// * `env` - The execution environment.
+    /// * `caller` - The vault owner address (must authorize).
     pub fn set_authorized_caller(env: Env, caller: Address) {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             panic!("Not owner");
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedCaller, &caller);
+        
+        env.storage().instance().set(&DataKey::AuthorizedCaller, &caller);
     }
 
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             panic!("Not owner");
         }
+        
         env.storage().instance().set(&DataKey::Paused, &true);
     }
 
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             panic!("Not owner");
         }
+        
         env.storage().instance().set(&DataKey::Paused, &false);
     }
 
@@ -604,17 +486,19 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
     }
+    
     pub fn balance(env: Env) -> i128 {
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
-            .unwrap()
+            .unwrap_or(0)
     }
+    
     pub fn get_owner(env: Env) -> Address {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap()
+            .unwrap_or_else(|| panic!("Owner not set"))
     }
 
     pub(crate) fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -624,12 +508,14 @@ impl CalloraVault {
         }
         Ok(())
     }
+    
     pub fn get_usdc_token(env: Env) -> Address {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap()
+            .unwrap_or_else(|| panic!("USDC Token not set"))
     }
+    
     pub fn get_max_deduct(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -639,43 +525,40 @@ impl CalloraVault {
 
     pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             panic!("Not owner");
         }
         if max_deduct <= 0 {
             panic!("max_deduct must be positive");
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxDeduct, &max_deduct);
+        
+        env.storage().instance().set(&DataKey::MaxDeduct, &max_deduct);
     }
 
     pub fn get_settlement(env: Env) -> Address {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
-            .unwrap()
+            .unwrap_or_else(|| panic!("Settlement not set"))
     }
 
     pub fn set_settlement(env: Env, caller: Address, settlement: Address) {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
             panic!("Not owner");
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::Settlement, &settlement);
+        
+        env.storage().instance().set(&DataKey::Settlement, &settlement);
     }
+    
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
         env.storage()
             .instance()
