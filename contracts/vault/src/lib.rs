@@ -48,14 +48,11 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
+    contract, contractclient, contracterror, contractimpl, contracttype, Address, BytesN, Env,
+    String, Symbol, Vec,
 };
 
 pub mod views;
-
-mod errors;
-pub use errors::VaultError;
 
 /// Typed error codes for the Callora Vault contract.
 ///
@@ -147,6 +144,9 @@ pub enum VaultError {
     InvalidTimelockWindow = 40,
 }
 
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 100_000;
+pub const INSTANCE_BUMP_AMOUNT: u32 = 200_000;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -215,7 +215,16 @@ pub mod settlement {
                 _addr: addr,
             }
         }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
+        pub fn receive_payment(
+            &self,
+            _caller: &Address,
+            _amount: &i128,
+            _to_global_pool: &bool,
+            _developer: &Option<Address>,
+            _token: &Address,
+            _nonce: &u64,
+        ) {
+        }
     }
 }
 
@@ -397,7 +406,14 @@ impl CalloraVault {
             .unwrap();
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-        settlement_client.record_deduction(&amount, &request_id);
+        settlement_client.receive_payment(
+            &env.current_contract_address(),
+            &amount,
+            &true,
+            &None,
+            &usdc_addr,
+            &request_id,
+        );
     }
 
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
@@ -466,7 +482,14 @@ impl CalloraVault {
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         for item in items.iter() {
             let (amount, request_id) = item;
-            settlement_client.record_deduction(&amount, &request_id);
+            settlement_client.receive_payment(
+                &env.current_contract_address(),
+                &amount,
+                &true,
+                &None,
+                &usdc_addr,
+                &request_id,
+            );
         }
     }
 
@@ -1172,6 +1195,7 @@ mod cold_storage;
 mod events;
 pub mod limits;
 pub mod rate_limit;
+mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
