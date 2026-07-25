@@ -96,8 +96,18 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 34 | `reserve_cap_set`         | `event_reserve_cap_set`        | Token reserve cap set or updated              |
 | 35 | `rescue_funds`            | `event_rescue_funds`           | Admin rescues accidentally sent tokens        |
 | 36 | `swept`                   | `event_swept`                  | Owner sweeps surplus USDC to sibling contract |
+| 37 | `pause_proposed`          | `event_pause_proposed`         | Admin proposes a vault pause                  |
+| 38 | `pause_executed`          | `event_pause_executed`         | Admin executes a pending pause                |
+| 39 | `pause_cancelled`         | `event_pause_cancelled`        | Admin cancels a pending pause                 |
+| 40 | `upgrade_proposed`        | `event_upgrade_proposed`       | Admin proposes a contract upgrade             |
+| 41 | `upgrade_executed`        | `event_upgrade_executed`       | Admin executes a pending upgrade              |
+| 42 | `upgrade_cancelled`       | `event_upgrade_cancelled`      | Admin cancels a pending upgrade               |
+| 43 | `sweep_proposed`          | `event_sweep_proposed`         | Admin proposes a funds sweep                  |
+| 44 | `sweep_executed`          | `event_sweep_executed`         | Admin executes a pending sweep                |
+| 45 | `sweep_cancelled`         | `event_sweep_cancelled`        | Admin cancels a pending sweep                 |
+| 46 | `tl_window_changed`       | `event_timelock_window_changed`| Admin updates timelock window                 |
 
-**Total: 36 topics**
+**Total: 46 topics**
 
 ---
 
@@ -180,7 +190,10 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `metadata_removed`, `price_set`, `price_removed`, `allowlist_add`,
 `allowlist_clear`, `revenue_pool_proposed`, `revenue_pool_accepted`,
 `revenue_pool_cancelled`, `request_id_pruned`, `reserve_cap_set`,
-`rescue_funds`, `swept`
+`rescue_funds`, `swept`, `pause_proposed`, `pause_executed`,
+`pause_cancelled`, `upgrade_proposed`, `upgrade_executed`,
+`upgrade_cancelled`, `sweep_proposed`, `sweep_executed`,
+`sweep_cancelled`, `tl_window_changed`
 
 **Settlement-specific** (not shared with other contracts):
 `payment_received`, `balance_credited`, `developer_withdraw`,
@@ -206,10 +219,10 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 
 | Contract      | Topics | Unique (not shared) | Shared |
 |---------------|--------|---------------------|--------|
-| vault         | 36     | 27                  | 9      |
+| vault         | 46     | 37                  | 9      |
 | settlement    | 16     | 10                  | 6      |
 | revenue_pool  | 21     | 15                  | 6      |
-| **Total**     | **73** | **52**              | **21** |
+| **Total**     | **83** | **62**              | **21** |
 
 > Shared count: each unique topic string that appears in more than one
 > contract is counted once per contract it appears in. The 9 shared topic
