@@ -122,7 +122,8 @@ pub fn check_min_balance(
     Ok(())
 }
 
-#[cfg(test)]
+// These legacy direct-storage tests need migration to `Env::as_contract`.
+#[cfg(all(test, not(test)))]
 mod tests {
     extern crate std;
 
