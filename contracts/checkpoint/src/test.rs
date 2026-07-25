@@ -1,4 +1,6 @@
-use crate::{CalloraCheckpoint, CalloraCheckpointClient, CheckpointError, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use crate::{
+    CalloraCheckpoint, CalloraCheckpointClient, CheckpointError, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
@@ -383,7 +385,7 @@ fn test_get_checkpoints_range_caps_limit() {
     }
 
     let result = client.get_checkpoints_range(&1u64, &(MAX_PAGE_SIZE + 100));
-    assert_eq!(result.len() as u32, MAX_PAGE_SIZE);
+    assert_eq!(result.len(), MAX_PAGE_SIZE);
 }
 
 #[test]
@@ -551,7 +553,10 @@ fn test_admin_can_create_checkpoints_after_admin_rotation() {
 
     // Old admin can no longer create checkpoints.
     let result1 = client.try_create_checkpoint(&admin, &subject, &token, &100, &meta);
-    assert!(result1.is_err(), "old admin should be unauthorized after rotation");
+    assert!(
+        result1.is_err(),
+        "old admin should be unauthorized after rotation"
+    );
 
     // New admin can.
     let result2 = client.try_create_checkpoint(&new_admin, &subject, &token, &200, &meta);
