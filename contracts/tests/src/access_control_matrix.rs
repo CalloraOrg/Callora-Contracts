@@ -90,7 +90,8 @@ struct TestContext<'a> {
 }
 
 fn setup() -> TestContext<'static> {
-    let env = Env::default();
+    let env_ref = std::boxed::Box::leak(std::boxed::Box::new(Env::default()));
+    let env = env_ref.clone();
     env.mock_all_auths();
 
     let owner = Address::generate(&env);
@@ -101,10 +102,10 @@ fn setup() -> TestContext<'static> {
     let outsider = Address::generate(&env);
     let pending_admin = Address::generate(&env);
 
-    let (vault_addr, vault) = create_vault(&env);
-    let (settlement_addr, settlement) = create_settlement(&env);
-    let (revenue_pool_addr, revenue_pool) = create_revenue_pool(&env);
-    let (usdc_addr, usdc, usdc_admin) = create_usdc(&env, &admin);
+    let (vault_addr, vault) = create_vault(env_ref);
+    let (settlement_addr, settlement) = create_settlement(env_ref);
+    let (revenue_pool_addr, revenue_pool) = create_revenue_pool(env_ref);
+    let (usdc_addr, usdc, usdc_admin) = create_usdc(env_ref, &admin);
 
     // Fund vault on-ledger
     usdc_admin.mint(&vault_addr, &1_000_000_000);

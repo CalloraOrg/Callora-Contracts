@@ -1124,7 +1124,7 @@ impl CalloraSettlement {
         _env: Env,
         developers: Vec<Address>,
         amounts: Vec<i128>,
-        cursor: u32,
+        _cursor: u32,
         limit: u32,
     ) -> Result<(u32, bool), SettlementError> {
         let count = developers.len();
