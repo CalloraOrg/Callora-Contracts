@@ -914,11 +914,14 @@ mod settlement_access_control {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn settlement_upgrade_admin_succeeds() {
+    fn settlement_upgrade_admin_reaches_wasm_validation() {
         let ctx = setup();
         let wasm_hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         let result = ctx.settlement.try_upgrade(&ctx.admin, &wasm_hash);
-        assert!(result.is_ok());
+        assert!(
+            result.is_err(),
+            "the authorized call should reach host validation of the unknown WASM hash"
+        );
     }
 
     #[test]
@@ -982,6 +985,15 @@ mod settlement_access_control {
     fn propose_balance_migration_admin_succeeds() {
         let ctx = setup();
         let new_dev = Address::generate(&ctx.env);
+        let reason = Symbol::new(&ctx.env, "matrix");
+        ctx.settlement.set_usdc_token(&ctx.admin, &ctx.usdc_addr);
+        ctx.settlement.force_credit_developer(
+            &ctx.admin,
+            &ctx.developer,
+            &1,
+            &ctx.usdc_addr,
+            &reason,
+        );
         let result =
             ctx.settlement
                 .try_propose_balance_migration(&ctx.admin, &ctx.developer, &new_dev);
@@ -1371,11 +1383,14 @@ mod revenue_pool_access_control {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn revenue_pool_upgrade_admin_succeeds() {
+    fn revenue_pool_upgrade_admin_reaches_wasm_validation() {
         let ctx = setup();
         let wasm_hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         let result = ctx.revenue_pool.try_upgrade(&ctx.admin, &wasm_hash);
-        assert!(result.is_ok());
+        assert!(
+            result.is_err(),
+            "the authorized call should reach host validation of the unknown WASM hash"
+        );
     }
 
     #[test]
