@@ -47,105 +47,18 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod views;
 
 mod errors;
 pub use errors::VaultError;
 
-/// Typed error codes for the Callora Vault contract.
-///
-/// These error codes are returned instead of string panics to enable
-/// machine-readable error handling by integrators using @stellar/stellar-sdk.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum VaultError {
-    /// Vault has not been initialized yet (code 1).
-    NotInitialized = 1,
-    /// Vault has already been initialized (code 2).
-    AlreadyInitialized = 2,
-    /// Caller is not authorized for this operation (code 3).
-    Unauthorized = 3,
-    /// Vault is currently paused (code 4).
-    Paused = 4,
-    /// Insufficient balance for the requested operation (code 5).
-    InsufficientBalance = 5,
-    /// Amount must be positive (code 6).
-    AmountNotPositive = 6,
-    /// Deduct amount exceeds the configured maximum (code 7).
-    ExceedsMaxDeduct = 7,
-    /// Deposit amount is below the configured minimum (code 8).
-    BelowMinDeposit = 8,
-    /// Arithmetic overflow detected (code 9).
-    Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
-    /// Min deposit must be positive (code 11).
-    MinDepositNotPositive = 11,
-    /// Max deduct must be positive (code 12).
-    MaxDeductNotPositive = 12,
-    /// Min deposit cannot exceed max deduct (code 13).
-    MinDepositExceedsMaxDeduct = 13,
-    /// USDC token address cannot be the vault address (code 14).
-    UsdcTokenCannotBeVault = 14,
-    /// Revenue pool address cannot be the vault address (code 15).
-    RevenuePoolCannotBeVault = 15,
-    /// Authorized caller address cannot be the vault address (code 16).
-    AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
-    /// Vault is already paused (code 18).
-    AlreadyPaused = 18,
-    /// Vault is not paused (code 19).
-    NotPaused = 19,
-    /// Settlement address has not been configured (code 20).
-    SettlementNotSet = 20,
-    /// Batch deduct requires at least one item (code 21).
-    BatchEmpty = 21,
-    /// Batch size exceeds maximum allowed (code 22).
-    BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
-    /// No admin transfer is pending (code 25).
-    NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
-    PriceParseError = 28,
-    /// Duplicate request ID detected (code 29).
-    DuplicateRequestId = 29,
-    /// Offering ID is empty or contains invalid characters (code 30).
-    OfferingIdInvalid = 30,
-    /// Metadata string is empty or contains invalid characters (code 31).
-    MetadataInvalid = 31,
-    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
-    StaleNonce = 32,
-    /// New revenue pool must be different from current revenue pool (code 33).
-    NewRevenuePoolSameAsCurrent = 33,
-    /// No revenue pool transfer is pending (code 34).
-    NoRevenuePoolTransferPending = 34,
-    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
-    Slippage = 35,
-    /// Rate limit exceeded for the developer (code 36).
-    RateLimited = 36,
-    /// No pending timelock proposal for the requested action (code 37).
-    ProposalNotFound = 37,
-    /// Action attempted before the timelock window has elapsed (code 38).
-    TimelockNotExpired = 38,
-    /// `proposed_at + window` overflowed `u64` (code 39).
-    TimelockOverflow = 39,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
-    InvalidTimelockWindow = 40,
-}
+/// Threshold (in ledgers) at which instance-storage TTL is bumped; ~30 days
+/// assuming a 5-second Stellar mainnet ledger close time (17 280 ledgers/day).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+/// Amount (in ledgers) instance-storage TTL is extended to on bump; ~60 days.
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
 #[contracttype]
 #[derive(Clone)]
@@ -881,8 +794,10 @@ impl CalloraVault {
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
-        env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+        env.events().publish(
+            (events::event_pause_executed(&env), caller.clone()),
+            env.ledger().timestamp(),
+        );
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
@@ -906,7 +821,7 @@ impl CalloraVault {
                 events::event_pause_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -991,7 +906,7 @@ impl CalloraVault {
                 events::event_upgrade_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -1002,9 +917,17 @@ impl CalloraVault {
     /// funds and emits the standard `distribute` event. Re-proposing
     /// replaces the recipient+amount **and restarts the timer**.
     ///
+    /// `amount` is checked against the vault's configured `min_deposit` floor,
+    /// the same per-call minimum enforced on `deposit`/`deduct`/`batch_deduct`.
+    /// This closes the one remaining value-moving path that previously had no
+    /// floor, so sub-unit/dust sweeps are rejected consistently everywhere the
+    /// vault moves USDC.
+    ///
     /// # Errors
     /// - `VaultError::Unauthorized` if caller is not admin.
     /// - `VaultError::AmountNotPositive` if `amount <= 0`.
+    /// - `VaultError::BelowMinTransferAmount` if `amount` is below the vault's
+    ///   configured minimum transfer unit (`min_deposit`).
     /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
     pub fn propose_sweep(
         env: Env,
@@ -1015,6 +938,14 @@ impl CalloraVault {
         Self::require_admin(&env, &caller)?;
         if amount <= 0 {
             return Err(VaultError::AmountNotPositive);
+        }
+        let min_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .ok_or(VaultError::NotInitialized)?;
+        if amount < min_amount {
+            return Err(VaultError::BelowMinTransferAmount);
         }
         let proposed_at = env.ledger().timestamp();
         let window = timelock::get_timelock_window(&env);
@@ -1099,7 +1030,7 @@ impl CalloraVault {
                 events::event_sweep_cancelled(&env),
                 caller.clone(),
             ),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -1184,6 +1115,7 @@ mod cold_storage;
 mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
@@ -1221,6 +1153,9 @@ mod test_sweep_idle_balance;
 
 #[cfg(test)]
 mod test_access_control_matrix;
+
+#[cfg(test)]
+mod test_min_amount;
 
 // #[cfg(test)]
 // mod test_gas_budget;

@@ -132,7 +132,7 @@ pub struct VaultMeta {
 - `owner`: `Address` - The vault owner; immutable except via `transfer_ownership()`; always permitted to deposit; can set allowed depositors and manage metadata
 - `balance`: `i128` - Current vault balance in smallest USDC units; incremented by deposits, decremented by deducts/withdrawals
 - `authorized_caller`: `Option<Address>` - Optional address permitted to trigger `deduct()` and `batch_deduct()` operations; can be set via `set_authorized_caller()`
-- `min_deposit`: `i128` - Minimum required per deposit; configured at initialization; prevents dust deposits and rejects zero or sub-unit transfer requests on the deposit path
+- `min_deposit`: `i128` - Minimum required per deposit; configured at initialization; prevents dust deposits and rejects zero or sub-unit transfer requests on the deposit path. The same floor is reused as the per-call minimum for `deduct`/`batch_deduct` items and for `propose_sweep`, so every entrypoint that moves USDC out of or into the vault rejects sub-unit/dust amounts consistently (`propose_sweep` returns `VaultError::BelowMinTransferAmount` when `amount` is below this floor)
 
 ### DeductItem
 
@@ -379,6 +379,7 @@ Monitor storage-related events:
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
 | 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 | 1.3 | Added `StorageKey::LifetimeDeposit(Address)` (persistent, TTL ~1 year) and `StorageKey::LifetimeDepositorIndex` (instance) for per-depositor cumulative deposit tracking. Added `get_lifetime_deposit(addr)` and `list_lifetime_deposits(cursor, limit)` view functions. Page cap: 100. Overflow-protected via `checked_add`. |
+| 1.4 | `propose_sweep` now rejects sub-unit/dust amounts: `amount` must be `>= min_deposit`, in addition to the existing `amount > 0` check. Added `VaultError::BelowMinTransferAmount` (code 48). |
 
 ## Canonical Storage Keys
 
