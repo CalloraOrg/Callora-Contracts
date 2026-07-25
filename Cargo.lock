@@ -238,6 +238,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-contracts-e2e"
 version = "0.0.0"
 dependencies = [
