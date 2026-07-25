@@ -96,8 +96,18 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 34 | `reserve_cap_set`         | `event_reserve_cap_set`        | Token reserve cap set or updated              |
 | 35 | `rescue_funds`            | `event_rescue_funds`           | Admin rescues accidentally sent tokens        |
 | 36 | `swept`                   | `event_swept`                  | Owner sweeps surplus USDC to sibling contract |
+| 37 | `pause_proposed`          | `event_pause_proposed`         | Admin stages a timelocked pause proposal      |
+| 38 | `pause_executed`          | `event_pause_executed`         | Timelocked pause proposal executed            |
+| 39 | `pause_cancelled`         | `event_pause_cancelled`        | Pending pause proposal cancelled              |
+| 40 | `upgrade_proposed`        | `event_upgrade_proposed`       | Admin stages a timelocked upgrade proposal    |
+| 41 | `upgrade_executed`        | `event_upgrade_executed`       | Timelocked upgrade proposal executed          |
+| 42 | `upgrade_cancelled`       | `event_upgrade_cancelled`      | Pending upgrade proposal cancelled            |
+| 43 | `sweep_proposed`          | `event_sweep_proposed`         | Admin stages a timelocked sweep proposal      |
+| 44 | `sweep_executed`          | `event_sweep_executed`         | Timelocked sweep proposal executed            |
+| 45 | `sweep_cancelled`         | `event_sweep_cancelled`        | Pending sweep proposal cancelled              |
+| 46 | `tl_window_changed`       | `event_timelock_window_changed` | Timelock window length updated               |
 
-**Total: 36 topics**
+**Total: 46 topics**
 
 ---
 
@@ -123,8 +133,9 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 14 | `admin_migration_proposed`   | `event_admin_migration_proposed`   | Developer balance migration proposed           |
 | 15 | `admin_migration`            | `event_admin_migration`            | Developer balance migration executed           |
 | 16 | `deposit`                    | `event_deposit`                    | Deposit made for a developer                   |
+| 17 | `developer_min_balance_changed` | `event_developer_min_balance_changed` | Developer minimum balance threshold updated |
 
-**Total: 16 topics**
+**Total: 17 topics**
 
 ---
 
