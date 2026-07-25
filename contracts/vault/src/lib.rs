@@ -70,6 +70,29 @@ pub struct CalloraVault;
 
 #[contractimpl]
 impl CalloraVault {
+    fn require_positive_amount(amount: i128) {
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+    }
+
+    fn require_valid_deposit_amount(amount: i128, min_deposit: i128) {
+        Self::require_positive_amount(amount);
+        if amount < min_deposit {
+            panic!("deposit below minimum");
+        }
+    }
+
+    fn require_valid_deduct_amount(amount: i128, min_amount: i128, max_deduct: i128) {
+        Self::require_positive_amount(amount);
+        if amount < min_amount {
+            panic!("deduct below minimum");
+        }
+        if amount > max_deduct {
+            panic!("deduct amount exceeds max_deduct");
+        }
+    }
+
     pub fn init(
         env: Env,
         owner: Address,
@@ -85,10 +108,13 @@ impl CalloraVault {
             panic!("Already initialized");
         }
         if min_deposit <= 0 {
-            panic!("Invalid min deposit");
+            panic!("min_deposit must be positive");
         }
         if max_deduct <= 0 {
-            panic!("Invalid max deduct");
+            panic!("max_deduct must be positive");
+        }
+        if min_deposit > max_deduct {
+            panic!("min_deposit cannot exceed max_deduct");
         }
         env.storage().instance().set(&DataKey::Owner, &owner);
         env.storage()
@@ -130,9 +156,7 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
             .unwrap();
-        if amount < min_dep {
-            panic!("Deposit under minimum");
-        }
+        Self::require_valid_deposit_amount(amount, min_dep);
         let owner = env
             .storage()
             .instance()
@@ -182,20 +206,26 @@ impl CalloraVault {
         {
             panic!("Contract paused");
         }
+        let min_dep = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap();
         let max_deduct = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
             .unwrap();
-        if amount > max_deduct || amount <= 0 {
-            panic!("Invalid deduct amount");
-        }
+        Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        let new_bal = current_bal.checked_sub(amount).expect("deduct: underflow");
+        if current_bal < amount {
+            panic!("insufficient balance");
+        }
+        let new_bal = current_bal - amount;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         // Transfer USDC from vault to settlement on-ledger.
         let usdc_addr = env
@@ -232,6 +262,11 @@ impl CalloraVault {
         {
             panic!("Contract paused");
         }
+        let min_dep = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap();
         let max_deduct = env
             .storage()
             .instance()
@@ -240,17 +275,18 @@ impl CalloraVault {
         let mut total_amount: i128 = 0;
         for item in items.iter() {
             let (amount, _) = item;
-            if amount > max_deduct || amount <= 0 {
-                panic!("Invalid deduct amount");
-            }
-            total_amount = total_amount.checked_add(amount).unwrap();
+            Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
+            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
         }
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        let new_bal = current_bal.checked_sub(total_amount).unwrap();
+        if current_bal < total_amount {
+            panic!("insufficient balance");
+        }
+        let new_bal = current_bal - total_amount;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         // Transfer total USDC from vault to settlement on-ledger atomically.
         let usdc_addr = env
@@ -460,7 +496,7 @@ impl CalloraVault {
             panic!("Not owner");
         }
         if max_deduct <= 0 {
-            panic!("Invalid max deduct");
+            panic!("max_deduct must be positive");
         }
         env.storage()
             .instance()

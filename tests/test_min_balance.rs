@@ -157,9 +157,6 @@ fn set_min_balance_for_many_developers() {
     }
 
     for (i, dev) in devs.iter().enumerate() {
-        assert_eq!(
-            client.get_developer_min_balance(dev),
-            (i as i128) * 100
-        );
+        assert_eq!(client.get_developer_min_balance(dev), (i as i128) * 100);
     }
 }

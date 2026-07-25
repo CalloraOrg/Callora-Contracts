@@ -282,15 +282,7 @@ fn profile_init() {
     usdc_admin.mint(&vault_addr, &1_000);
 
     measure_profile!(env, snap, {
-        client.init(
-            &owner,
-            &usdc_addr,
-            &Some(1_000),
-            &None,
-            &None,
-            &None,
-            &None,
-        );
+        client.init(&owner, &usdc_addr, &Some(1_000), &None, &None, &None, &None);
     });
 
     assert_within_budget("init", snap, 240_000, 3_000);
@@ -536,12 +528,7 @@ fn profile_batch_single_item_within_50pct_of_deduct() {
         f.client.batch_deduct(&f.owner, &items);
     });
 
-    assert_no_regression(
-        "batch_deduct_single_vs_deduct",
-        snap_single,
-        snap_batch,
-        50,
-    );
+    assert_no_regression("batch_deduct_single_vs_deduct", snap_single, snap_batch, 50);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -4939,6 +4939,23 @@ fn deposit_exact_min_deposit_succeeds() {
 }
 
 #[test]
+fn deposit_zero_amount_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 0);
+    client.init(&owner, &usdc, &None, &None, &Some(1), &None, &None);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.deposit(&owner, &0);
+    }));
+    assert!(result.is_err(), "zero-value deposit must fail");
+}
+
+#[test]
 #[should_panic(expected = "deposit below minimum")]
 fn deposit_below_min_deposit_panics() {
     let env = Env::default();
@@ -5034,6 +5051,72 @@ fn deposit_one_below_large_min_deposit_panics() {
         result.is_err(),
         "deposit one below large min_deposit must fail"
     );
+}
+
+#[test]
+#[should_panic(expected = "deduct below minimum")]
+fn deduct_below_minimum_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &Some(100));
+    let settlement = create_settlement(&env, &owner, &vault_address);
+
+    client.deduct(&owner, &1, &None, &u32::MAX, &Address::generate(&env));
+}
+
+#[test]
+fn batch_deduct_zero_amount_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &Some(100));
+    let settlement = create_settlement(&env, &owner, &vault_address);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 0,
+            request_id: None,
+            developer: Address::generate(&env),
+        },
+    ];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.batch_deduct(&owner, &items);
+    }));
+    assert!(result.is_err(), "zero-value batch item must fail");
+}
+
+#[test]
+#[should_panic(expected = "deduct below minimum")]
+fn batch_deduct_item_below_minimum_panics() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (vault_address, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+
+    env.mock_all_auths();
+    fund_vault(&usdc_admin, &vault_address, 100);
+    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &Some(100));
+    let settlement = create_settlement(&env, &owner, &vault_address);
+
+    let items = soroban_sdk::vec![
+        &env,
+        DeductItem {
+            amount: 1,
+            request_id: None,
+            developer: Address::generate(&env),
+        },
+    ];
+    client.batch_deduct(&owner, &items);
 }
 
 #[test]

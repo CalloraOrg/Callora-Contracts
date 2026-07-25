@@ -280,6 +280,7 @@ dependencies = [
 name = "callora-vault"
 version = "0.0.1"
 dependencies = [
+ "callora-revenue-pool",
  "callora-settlement",
  "rand 0.8.7",
  "soroban-sdk",
