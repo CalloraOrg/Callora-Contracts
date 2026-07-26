@@ -12,6 +12,7 @@ members = [
     "contracts/settlement",
     "contracts/checkpoint",
     "contracts/helpers",
+    "contracts/registry",
     "contracts/revenue_pool/fuzz",
     "contracts/tests",
 ]
