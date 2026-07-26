@@ -47,7 +47,7 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod timelock;
 pub mod views;
@@ -55,9 +55,10 @@ pub mod views;
 mod errors;
 pub use errors::VaultError;
 
-/// The default amount to extend the TTL of instance storage entries.
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17280 * 30; // 30 days
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17280 * 14; // 14 days
+/// TTL extension amounts for instance storage (ledger sequence units).
+/// ~30 days at 5-second ledgers = 518_400 ledgers; bump to ~60 days = 1_036_800.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 518_400;
+pub const INSTANCE_BUMP_AMOUNT: u32 = 1_036_800;
 
 #[contracttype]
 #[derive(Clone)]
@@ -1069,6 +1070,10 @@ impl CalloraVault {
             (events::event_pause_proposed(&env), caller),
             (proposed_at, execute_after),
         );
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
@@ -1096,7 +1101,7 @@ impl CalloraVault {
         timelock::clear_pending_pause(&env);
         env.events().publish(
             (events::event_pause_cancelled(&env), caller.clone()),
-            existing.is_some(),
+            (existing.is_some()),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1162,7 +1167,7 @@ impl CalloraVault {
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
             (events::event_upgrade_cancelled(&env), caller.clone()),
-            existing.is_some(),
+            (existing.is_some()),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1261,7 +1266,7 @@ impl CalloraVault {
         timelock::clear_pending_sweep(&env);
         env.events().publish(
             (events::event_sweep_cancelled(&env), caller.clone()),
-            existing.is_some(),
+            (existing.is_some()),
         );
         Self::bump_instance_ttl(&env);
         Ok(())

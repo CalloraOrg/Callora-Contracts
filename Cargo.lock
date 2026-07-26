@@ -320,10 +320,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-yield"
-version = "0.0.1"
+name = "callora-vault-fuzz"
+version = "0.0.0"
 dependencies = [
- "callora-revenue-pool",
+ "arbitrary",
+ "callora-vault",
+ "libfuzzer-sys",
  "soroban-sdk",
 ]
 

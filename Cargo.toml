@@ -13,7 +13,7 @@ members = [
     "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
-    "contracts/yield",
+    "contracts/vault/fuzz",
     "contracts/revenue_pool/fuzz",
     "contracts/tests", "contracts/upgrade",
 ]
