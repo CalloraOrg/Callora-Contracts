@@ -1,4 +1,4 @@
-use crate::{CalloraSettlement, SettlementError, StorageKey};
+use crate::{CalloraSettlement, SettlementError};
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
 #[contracttype]

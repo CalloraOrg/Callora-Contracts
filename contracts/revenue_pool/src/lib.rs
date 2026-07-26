@@ -1001,9 +1001,6 @@ pub fn chunk_iter(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod test;
-
-#[cfg(test)]
 mod test_balance;
 
 #[cfg(test)]

@@ -50,6 +50,7 @@ use crate::VaultError;
 /// If the hot pool's actual share of total balance drifts more than this
 /// many basis points from the configured target (`hot_bps`), a deposit
 /// triggers an automatic rebalance.
+#[allow(dead_code)]
 pub const DEFAULT_REBALANCE_THRESHOLD_BPS: u32 = 500; // 5%
 
 /// Basis-point denominator (10_000 bps = 100%).
@@ -140,6 +141,7 @@ impl ColdBalances {
 
 /// Computes the hot pool's current share of `total`, in basis points.
 /// Returns `0` if `total` is `0` (no funds, no drift).
+#[allow(dead_code)]
 fn hot_share_bps(hot: i128, total: i128) -> Result<i128, VaultError> {
     if total == 0 {
         return Ok(0);
@@ -152,6 +154,7 @@ fn hot_share_bps(hot: i128, total: i128) -> Result<i128, VaultError> {
 
 /// Public wrapper around `target_hot`, for use from `lib.rs` during
 /// `init_cold_storage` to compute the initial split.
+#[allow(dead_code)]
 pub fn target_hot_pub(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
     target_hot(total, hot_bps)
 }
@@ -159,6 +162,7 @@ pub fn target_hot_pub(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
 /// Computes the target hot amount for a given `total`, per `hot_bps`.
 /// Uses integer division (floor); any remainder stays in cold, which is
 /// the conservative direction (keeps slightly more in cold, never less).
+#[allow(dead_code)]
 fn target_hot(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
     total
         .checked_mul(hot_bps as i128)
@@ -174,6 +178,7 @@ fn target_hot(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
 /// surplus into cold. Pulling cold back into hot requires the explicit,
 /// multisig-gated cold-sweep-to-hot path, never an automatic side effect
 /// of a deposit.
+#[allow(dead_code)]
 pub fn maybe_rebalance(
     balances: &ColdBalances,
     config: &ColdConfig,
@@ -218,8 +223,8 @@ pub fn maybe_rebalance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::Env;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
 
     fn addr(env: &Env, seed: u8) -> Address {
         // Deterministic-ish distinct addresses for unit tests that don't

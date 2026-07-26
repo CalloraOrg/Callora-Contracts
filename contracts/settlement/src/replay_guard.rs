@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use crate::{CalloraSettlement, CalloraSettlementClient};
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{vec, Env};
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();

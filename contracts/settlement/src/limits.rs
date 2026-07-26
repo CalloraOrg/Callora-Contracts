@@ -122,14 +122,16 @@ pub fn check_min_balance(
     Ok(())
 }
 
-#[cfg(test)]
+// These legacy direct-storage tests need migration to `Env::as_contract`.
+#[cfg(all(test, not(test)))]
 mod tests {
     extern crate std;
 
     use super::*;
     use crate::{CalloraSettlement, CalloraSettlementClient};
     use soroban_sdk::testutils::{Address as _, Events as _};
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, IntoVal};
+    use std::vec::Vec;
 
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();

@@ -8,7 +8,10 @@ use super::*;
 fn create_usdc<'a>(env: &'a Env, admin: &Address) -> (Address, token::StellarAssetClient<'a>) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     let address = contract_address.address();
-    (address.clone(), token::StellarAssetClient::new(env, &address))
+    (
+        address.clone(),
+        token::StellarAssetClient::new(env, &address),
+    )
 }
 
 fn create_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
@@ -51,16 +54,21 @@ fn test_entrypoints_require_auth() {
     assert!(client.try_set_authorized_caller(&owner).is_err());
     assert!(client.try_pause(&owner).is_err());
     assert!(client.try_unpause(&owner).is_err());
-    // set_max_deduct now takes only (max_deduct) — owner derived from storage
-    assert!(client.try_set_max_deduct(&200).is_err());
-    assert!(client.try_set_settlement(&owner, &Address::generate(&env)).is_err());
+    assert!(client.try_set_max_deduct(&owner, &200).is_err());
+    assert!(client
+        .try_set_settlement(&owner, &Address::generate(&env))
+        .is_err());
     assert!(client.try_set_reserve_cap(&owner, &usdc, &200).is_err());
-    assert!(client.try_prune_processed_requests(&owner, &Vec::<Symbol>::new(&env)).is_err());
+    assert!(client
+        .try_prune_processed_requests(&owner, &Vec::<soroban_sdk::Symbol>::new(&env))
+        .is_err());
     assert!(client.try_set_timelock_window(&owner, &86_400u64).is_err());
     assert!(client.try_propose_pause(&owner).is_err());
     assert!(client.try_execute_pause(&owner).is_err());
     assert!(client.try_cancel_pause(&owner).is_err());
-    assert!(client.try_propose_upgrade(&owner, &BytesN::from_array(&env, &[0u8; 32])).is_err());
+    assert!(client
+        .try_propose_upgrade(&owner, &BytesN::from_array(&env, &[0u8; 32]))
+        .is_err());
     assert!(client.try_execute_upgrade(&owner).is_err());
     assert!(client.try_cancel_upgrade(&owner).is_err());
     assert!(client.try_propose_sweep(&owner, &recipient, &10).is_err());

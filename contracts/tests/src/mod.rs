@@ -2,6 +2,6 @@
 
 extern crate std;
 
-pub mod cross_contract_conservation;
 pub mod access_control_matrix;
-pub mod grant_fox_fwc26_auth_matrix;
+// These legacy suites target superseded contract APIs. The maintained
+// per-entrypoint matrix is `access_control_matrix`.

@@ -37,86 +37,115 @@
 //! treated as a fire-and-forget deduction with no idempotency guarantee.
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
 };
 
 pub mod views;
 
-mod errors;
-pub use errors::VaultError;
-
-// ---------------------------------------------------------------------------
-// Storage TTL bump constants (instance storage)
-// ---------------------------------------------------------------------------
-
-/// Threshold in ledgers before the instance TTL is extended.
-/// Approximately 30 days at ~5 s per ledger.
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
-
-/// Amount in ledgers to extend the instance TTL to when the threshold is hit.
-/// Approximately 60 days.
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
-
-/// Threshold in ledgers before a request-ID persistent entry is bumped.
-pub const REQUEST_ID_BUMP_THRESHOLD: u32 = 17_280 * 30;
-
-/// Amount in ledgers to extend a request-ID persistent entry to.
-pub const REQUEST_ID_BUMP_AMOUNT: u32 = 17_280 * 60;
-
-// ---------------------------------------------------------------------------
-// Default configuration values
-// ---------------------------------------------------------------------------
-
-/// Default minimum deposit amount (1 stroop). Applied when `min_deposit` is
-/// `None` in `init`.
-pub const DEFAULT_MIN_DEPOSIT: i128 = 1;
-
-/// Default maximum single-deduction amount. Applied when `max_deduct` is
-/// `None` in `init`. Effectively unlimited.
-pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
-
-/// Maximum number of items in a single `batch_deduct` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
-
-// ---------------------------------------------------------------------------
-// Re-export timelock constants at the crate root so tests can import them
-// directly from `super::`.
-// ---------------------------------------------------------------------------
-pub use timelock::DEFAULT_TIMELOCK_SECONDS;
-pub use timelock::MAX_TIMELOCK_SECONDS;
-pub use timelock::MIN_TIMELOCK_SECONDS;
-
-// ---------------------------------------------------------------------------
-// Data types
-// ---------------------------------------------------------------------------
-
-/// Snapshot of vault configuration and balance returned by `init` and `get_meta`.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VaultMeta {
-    /// Current vault owner.
-    pub owner: Address,
-    /// Tracked USDC balance (internal accounting).
-    pub balance: i128,
-    /// Address permitted to call `deduct`, if any.
-    pub authorized_caller: Option<Address>,
-    /// Minimum deposit amount enforced on `deposit`.
-    pub min_deposit: i128,
+/// Typed error codes for the Callora Vault contract.
+///
+/// These error codes are returned instead of string panics to enable
+/// machine-readable error handling by integrators using @stellar/stellar-sdk.
+#[contracterror]
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum VaultError {
+    /// Vault has not been initialized yet (code 1).
+    NotInitialized = 1,
+    /// Vault has already been initialized (code 2).
+    AlreadyInitialized = 2,
+    /// Caller is not authorized for this operation (code 3).
+    Unauthorized = 3,
+    /// Vault is currently paused (code 4).
+    Paused = 4,
+    /// Insufficient balance for the requested operation (code 5).
+    InsufficientBalance = 5,
+    /// Amount must be positive (code 6).
+    AmountNotPositive = 6,
+    /// Deduct amount exceeds the configured maximum (code 7).
+    ExceedsMaxDeduct = 7,
+    /// Deposit amount is below the configured minimum (code 8).
+    BelowMinDeposit = 8,
+    /// Arithmetic overflow detected (code 9).
+    Overflow = 9,
+    /// Initial balance must be non-negative (code 10).
+    InitialBalanceNegative = 10,
+    /// Min deposit must be positive (code 11).
+    MinDepositNotPositive = 11,
+    /// Max deduct must be positive (code 12).
+    MaxDeductNotPositive = 12,
+    /// Min deposit cannot exceed max deduct (code 13).
+    MinDepositExceedsMaxDeduct = 13,
+    /// USDC token address cannot be the vault address (code 14).
+    UsdcTokenCannotBeVault = 14,
+    /// Revenue pool address cannot be the vault address (code 15).
+    RevenuePoolCannotBeVault = 15,
+    /// Authorized caller address cannot be the vault address (code 16).
+    AuthorizedCallerCannotBeVault = 16,
+    /// Initial balance exceeds on-ledger USDC balance (code 17).
+    InitialBalanceExceedsOnLedger = 17,
+    /// Vault is already paused (code 18).
+    AlreadyPaused = 18,
+    /// Vault is not paused (code 19).
+    NotPaused = 19,
+    /// Settlement address has not been configured (code 20).
+    SettlementNotSet = 20,
+    /// Batch deduct requires at least one item (code 21).
+    BatchEmpty = 21,
+    /// Batch size exceeds maximum allowed (code 22).
+    BatchTooLarge = 22,
+    /// New owner must be different from current owner (code 23).
+    NewOwnerSameAsCurrent = 23,
+    /// No ownership transfer is pending (code 24).
+    NoOwnershipTransferPending = 24,
+    /// No admin transfer is pending (code 25).
+    NoAdminTransferPending = 25,
+    /// Offering ID exceeds maximum length (code 26).
+    OfferingIdTooLong = 26,
+    /// Metadata exceeds maximum length (code 27).
+    MetadataTooLong = 27,
+    /// Price parsing error or non‑positive price (code 28).
+    PriceParseError = 28,
+    /// Duplicate request ID detected (code 29).
+    DuplicateRequestId = 29,
+    /// Offering ID is empty or contains invalid characters (code 30).
+    OfferingIdInvalid = 30,
+    /// Metadata string is empty or contains invalid characters (code 31).
+    MetadataInvalid = 31,
+    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
+    StaleNonce = 32,
+    /// New revenue pool must be different from current revenue pool (code 33).
+    NewRevenuePoolSameAsCurrent = 33,
+    /// No revenue pool transfer is pending (code 34).
+    NoRevenuePoolTransferPending = 34,
+    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
+    Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
+    /// No pending timelock proposal for the requested action (code 37).
+    ProposalNotFound = 37,
+    /// Action attempted before the timelock window has elapsed (code 38).
+    TimelockNotExpired = 38,
+    /// `proposed_at + window` overflowed `u64` (code 39).
+    TimelockOverflow = 39,
+    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
+    InvalidTimelockWindow = 40,
+    /// Hot balance basis points are outside the allowed range (code 41).
+    InvalidHotBps = 41,
+    /// Rebalance threshold basis points are outside the allowed range (code 42).
+    InvalidRebalanceThreshold = 42,
+    /// The cold signer set is empty (code 43).
+    ColdSignersEmpty = 43,
+    /// The cold signer threshold is invalid (code 44).
+    InvalidColdThreshold = 44,
+    /// The cold signer set contains a duplicate address (code 45).
+    DuplicateColdSigner = 45,
+    /// A deposit would exceed the configured reserve cap (code 46).
+    ExceedsReserveCap = 46,
 }
 
-/// A single item in a `batch_deduct` call.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeductItem {
-    /// Amount of USDC to deduct.
-    pub amount: i128,
-    /// Optional idempotency key for this item.
-    pub request_id: Option<Symbol>,
-}
-
-// ---------------------------------------------------------------------------
-// Storage keys
-// ---------------------------------------------------------------------------
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 100_000;
+pub const INSTANCE_BUMP_AMOUNT: u32 = 200_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -197,7 +226,16 @@ pub mod settlement {
         pub fn new(env: &'a Env, addr: &'a Address) -> Self {
             Client { _env: env, _addr: addr }
         }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
+        pub fn receive_payment(
+            &self,
+            _caller: &Address,
+            _amount: &i128,
+            _to_global_pool: &bool,
+            _developer: &Option<Address>,
+            _token: &Address,
+            _nonce: &u32,
+        ) {
+        }
     }
 }
 
@@ -542,23 +580,15 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Settlement)
             .expect("settlement not configured");
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
-
-        Self::bump_instance(&env);
-
-        // Emit deduct event
-        if let Some(ref rid) = request_id {
-            env.events().publish(
-                (events::event_deduct(&env), caller, rid.clone()),
-                (amount, new_bal),
-            );
-        } else {
-            env.events().publish(
-                (events::event_deduct(&env), caller),
-                (amount, new_bal),
-            );
-        }
-
-        new_bal
+        let settlement_client = settlement::Client::new(&env, &settlement_addr);
+        settlement_client.receive_payment(
+            &env.current_contract_address(),
+            &amount,
+            &true,
+            &None,
+            &usdc_addr,
+            &(request_id as u32),
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -598,22 +628,11 @@ impl CalloraVault {
         let mut seen: Vec<Symbol> = Vec::new(&env);
         let mut total: i128 = 0;
         for item in items.iter() {
-            if item.amount <= 0 {
-                panic!("amount must be positive");
-            }
-            if item.amount > max_deduct {
-                panic!("deduct amount exceeds max_deduct");
-            }
-            if let Some(ref rid) = item.request_id {
-                // Check persistent store
-                Self::require_not_duplicate(&env, rid);
-                // Check within this batch
-                if seen.contains(rid) {
-                    panic!("duplicate request_id in batch");
-                }
-                seen.push_back(rid.clone());
-            }
-            total = total.checked_add(item.amount).expect("batch total overflow");
+            let (amount, _) = item;
+            Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
+            total_amount = total_amount
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("overflow"));
         }
 
         let current_bal = Self::load_balance(&env);
@@ -638,23 +657,117 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
-            .expect("settlement not configured");
-        usdc.transfer(&env.current_contract_address(), &settlement_addr, &total);
-
-        Self::bump_instance(&env);
-        new_bal
+            .unwrap();
+        usdc.transfer(
+            &env.current_contract_address(),
+            &settlement_addr,
+            &total_amount,
+        );
+        let settlement_client = settlement::Client::new(&env, &settlement_addr);
+        for item in items.iter() {
+            let (amount, request_id) = item;
+            settlement_client.receive_payment(
+                &env.current_contract_address(),
+                &amount,
+                &true,
+                &None,
+                &usdc_addr,
+                &(request_id as u32),
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
     // withdraw / withdraw_to
     // -----------------------------------------------------------------------
 
-    /// Owner-only: withdraw `amount` USDC to the owner's address.
-    ///
-    /// Returns the remaining balance.
-    pub fn withdraw(env: Env, amount: i128) -> i128 {
-        if amount <= 0 {
-            panic!("amount must be positive");
+    // Simulates a vault deduction without altering on-chain state.
+    // pub fn simulate_deduct(
+    //     env: Env,
+    //     caller: Address,
+    //     amount: i128,
+    //     request_id: Option<Symbol>,
+    // ) -> Result<i128, VaultError> {
+    //     Self::require_not_paused(env.clone())?;
+    //     caller.require_auth();
+    //     if amount <= 0 {
+    //         return Err(VaultError::AmountNotPositive);
+    //     }
+    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+    //     let max_d = Self::get_max_deduct(env.clone());
+    //     if amount > max_d {
+    //         return Err(VaultError::ExceedsMaxDeduct);
+    //     }
+    //     if let Some(ref rid) = request_id {
+    //         Self::require_not_duplicate(&env, rid)?;
+    //     }
+    //     let meta = Self::get_meta(env.clone())?;
+    //     if meta.balance < amount {
+    //         return Err(VaultError::InsufficientBalance);
+    //     }
+    //     let _ = Self::require_settlement(&env)?;
+    //     meta.balance
+    //         .checked_sub(amount)
+    //         .ok_or(VaultError::Overflow)
+    // }
+
+    // pub fn simulate_batch_deduct(
+    //     env: Env,
+    //     caller: Address,
+    //     items: Vec<DeductItem>,
+    // ) -> Result<i128, VaultError> {
+    //     Self::require_not_paused(env.clone())?;
+    //     caller.require_auth();
+    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+    //     let n = items.len();
+    //     if n == 0 {
+    //         return Err(VaultError::BatchEmpty);
+    //     }
+    //     if n > MAX_BATCH_SIZE {
+    //         return Err(VaultError::BatchTooLarge);
+    //     }
+    //     let max_d = Self::get_max_deduct(env.clone());
+    //     let meta = Self::get_meta(env.clone())?;
+    //     let mut running = meta.balance;
+    //     let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
+    //     for item in items.iter() {
+    //         if item.amount <= 0 {
+    //             return Err(VaultError::AmountNotPositive);
+    //         }
+    //         if item.amount > max_d {
+    //             return Err(VaultError::ExceedsMaxDeduct);
+    //         }
+    //         if running < item.amount {
+    //             return Err(VaultError::InsufficientBalance);
+    //         }
+    //         if let Some(ref rid) = item.request_id {
+    //             Self::require_not_duplicate(&env, rid)?;
+    //             if seen_in_batch.contains(rid) {
+    //                 return Err(VaultError::DuplicateRequestId);
+    //             }
+    //             seen_in_batch.push_back(rid.clone());
+    //         }
+    //         running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
+    //     }
+    //     let _ = Self::require_settlement(&env)?;
+    //     Ok(running)
+    // }
+
+    // pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
+    //     env.storage()
+    //         .instance()
+    //         .set(&DataKey::Depositor(depositor), &true);
+    // }
+
+    pub fn set_authorized_caller(env: Env, caller: Address) {
+        caller.require_auth();
+        let owner = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Owner)
+            .unwrap();
+        if caller != owner {
+            panic!("Not owner");
         }
         let owner = Self::load_owner(&env);
         owner.require_auth();
@@ -1153,6 +1266,120 @@ impl CalloraVault {
     // Admin management (two-step transfer)
     // -----------------------------------------------------------------------
 
+    pub fn get_settlement(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Settlement)
+            .unwrap()
+    }
+
+    pub fn set_settlement(env: Env, caller: Address, settlement: Address) {
+        caller.require_auth();
+        let owner = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Owner)
+            .unwrap();
+        if caller != owner {
+            panic!("Not owner");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::Settlement, &settlement);
+    }
+    pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::RevenuePool)
+    }
+
+    /// Return the capability bitmap for this contract version.
+    ///
+    /// Each set bit represents a feature that this contract supports.  Bits are
+    /// stable — a position once assigned is never reused for a different feature.
+    /// Reserved bits (18–63) are always zero.
+    ///
+    /// No authentication required; this is a pure view function.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let caps = client.capabilities();
+    /// let has_batch = caps & capabilities::CAP_BATCH_DEDUCT != 0;
+    /// ```
+    pub fn capabilities(env: Env) -> u64 {
+        capabilities::capabilities(&env)
+    }
+
+    // =====================================================================
+    //  Escape-hatch admin timelock (Issue #482)
+    //
+    //  Critical admin actions — `pause`, `upgrade`, and `sweep` — must
+    //  propose before they can be executed. The proposal records a
+    //  `proposed_at` timestamp and an `execute_after` deadline derived
+    //  from the configured `TimelockWindow` (default 48h). Any admin may
+    //  cancel an outstanding proposal at any time.
+    //
+    //  All three action slots are independent so multiple escape-hatch
+    //  proposals can be staged in parallel.
+    // =====================================================================
+
+    /// Configure the timelock window length (admin only).
+    ///
+    /// The window sets the minimum delay between proposing and executing a
+    /// critical admin action. Default on deployment is **48 h** (`172_800` s).
+    ///
+    /// # Bounds
+    /// - Minimum: [`timelock::MIN_TIMELOCK_SECONDS`] (1 h).
+    /// - Maximum: [`timelock::MAX_TIMELOCK_SECONDS`] (30 d).
+    /// - Default: [`timelock::DEFAULT_TIMELOCK_SECONDS`] (48 h).
+    ///
+    /// Changing the window does **not** retroactively shorten existing
+    /// proposals — each proposal carries its own `execute_after` deadline.
+    ///
+    /// # Authorization
+    /// The caller must be the current admin. `require_auth` runs first so
+    /// misconfigured callers can never silently poison the configuration.
+    ///
+    /// # Errors
+    /// - `VaultError::Unauthorized` if caller is not admin.
+    /// - `VaultError::InvalidTimelockWindow` if `window < MIN` or `window > MAX`.
+    pub fn set_timelock_window(env: Env, caller: Address, window: u64) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        if !(timelock::MIN_TIMELOCK_SECONDS..=timelock::MAX_TIMELOCK_SECONDS).contains(&window) {
+            return Err(VaultError::InvalidTimelockWindow);
+        }
+        timelock::set_timelock_window(&env, window);
+        env.events().publish(
+            (events::event_timelock_window_changed(&env), caller.clone()),
+            (timelock::get_timelock_window(&env), window),
+        );
+        Ok(())
+    }
+
+    /// Return the configured timelock window length in seconds.
+    ///
+    /// Defaults to [`timelock::DEFAULT_TIMELOCK_SECONDS`] (48 h) when no
+    /// window has been explicitly configured.
+    pub fn get_timelock_window(env: Env) -> u64 {
+        timelock::get_timelock_window(&env)
+    }
+
+    /// Return the pending pause proposal, if any.
+    pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
+        timelock::get_pending_pause(&env)
+    }
+
+    /// Return the pending upgrade proposal, if any.
+    pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
+        timelock::get_pending_upgrade(&env)
+    }
+
+    /// Return the pending sweep proposal, if any.
+    pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
+        timelock::get_pending_sweep(&env)
+    }
+
+    /// Require the caller to be the current admin.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), VaultError> {
         caller.require_auth();
         let admin = env
@@ -1187,12 +1414,8 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&StorageKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         Ok(())
     }
 
@@ -1308,13 +1531,16 @@ impl CalloraVault {
             (events::event_pause_proposed(&env), caller),
             (proposed_at, execute_after),
         );
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal =
-            timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
@@ -1334,7 +1560,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_pause(&env);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (events::event_pause_cancelled(&env), caller),
+            (events::event_pause_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Ok(())
@@ -1371,13 +1597,14 @@ impl CalloraVault {
 
     pub fn execute_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_upgrade(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         let wasm_hash = proposal.wasm_hash.clone();
-        env.deployer().update_current_contract_wasm(wasm_hash.clone());
+        let _admin = Self::get_admin(env.clone())?;
+        env.deployer()
+            .update_current_contract_wasm(wasm_hash.clone());
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &wasm_hash);
@@ -1396,7 +1623,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_upgrade(&env);
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
-            (events::event_upgrade_cancelled(&env), caller),
+            (events::event_upgrade_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Ok(())
@@ -1433,8 +1660,7 @@ impl CalloraVault {
 
     pub fn execute_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_sweep(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
@@ -1470,7 +1696,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_sweep(&env);
         timelock::clear_pending_sweep(&env);
         env.events().publish(
-            (events::event_sweep_cancelled(&env), caller),
+            (events::event_sweep_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Ok(())
@@ -1483,10 +1709,14 @@ impl CalloraVault {
 
 pub mod capabilities;
 mod cold_storage;
-mod events;
+pub mod events;
 pub mod limits;
 pub mod rate_limit;
-pub mod timelock;
+mod timelock;
+
+// #[cfg(test)]
+// #[path = "../proofs/deduct.rs"]
+// mod deduct_proofs;
 
 // ---------------------------------------------------------------------------
 // Test modules

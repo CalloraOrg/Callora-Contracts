@@ -21,7 +21,7 @@
 
 use soroban_sdk::{contractimpl, contracttype, token, Address, Env};
 
-use crate::{CalloraVault, StorageKey, VaultError};
+use crate::{CalloraVault, CalloraVaultArgs, CalloraVaultClient, VaultError};
 
 /// Structured result of [`CalloraVault::dry_run_sweep_idle_balance`].
 ///

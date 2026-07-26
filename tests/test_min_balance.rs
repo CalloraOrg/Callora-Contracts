@@ -6,9 +6,9 @@
 //! - Event is emitted on min balance change
 //! - Edge cases: zero min, negative min, boundary values
 
-use callora_settlement::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
+use callora_settlement::{CalloraSettlement, CalloraSettlementClient, StorageKey};
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, IntoVal};
 
 fn setup() -> (Env, Address, Address, Address) {
     let env = Env::default();
