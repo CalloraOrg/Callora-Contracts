@@ -43,7 +43,7 @@
 extern crate std;
 
 use soroban_sdk::token as soroban_token;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{testutils::Ledger as _, testutils::Address as _, Address, BytesN, Env, Symbol, Vec};
 
 use callora_revenue_pool::RevenuePoolClient;
 use callora_settlement::CalloraSettlementClient;
@@ -109,8 +109,6 @@ struct Ctx<'a> {
 }
 
 fn setup() -> Ctx<'static> {
-    let env = Env::default();
-    env.mock_all_auths();
 
     let owner = Address::generate(&env);
     let admin = Address::generate(&env);
@@ -183,7 +181,9 @@ mod vault {
 
     #[test]
     fn deposit_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.usdc_admin.mint(&ctx.owner, &500);
         ctx.usdc
             .approve(&ctx.owner, &ctx.vault_addr, &500, &999_999);
@@ -192,7 +192,9 @@ mod vault {
 
     #[test]
     fn deposit_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.usdc_admin.mint(&ctx.outsider, &500);
         ctx.usdc
             .approve(&ctx.outsider, &ctx.vault_addr, &500, &999_999);
@@ -203,7 +205,9 @@ mod vault {
     #[test]
     fn deposit_authorized_caller_rejected() {
         // authorized_caller has no deposit right even with valid auth
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.usdc_admin.mint(&ctx.authorized_caller, &500);
         ctx.usdc
             .approve(&ctx.authorized_caller, &ctx.vault_addr, &500, &999_999);
@@ -216,7 +220,9 @@ mod vault {
 
     #[test]
     fn deduct_authorized_caller_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_deduct(&ctx.authorized_caller, &100, &1)
@@ -225,13 +231,17 @@ mod vault {
 
     #[test]
     fn deduct_owner_rejected() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_deduct(&ctx.owner, &100, &2).is_err());
     }
 
     #[test]
     fn deduct_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_deduct(&ctx.outsider, &100, &3).is_err());
     }
@@ -242,7 +252,9 @@ mod vault {
 
     #[test]
     fn batch_deduct_authorized_caller_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let items = Vec::from_array(&ctx.env, [(50i128, 10u64), (50i128, 11u64)]);
         assert!(ctx
             .vault
@@ -252,14 +264,18 @@ mod vault {
 
     #[test]
     fn batch_deduct_owner_rejected() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let items = Vec::from_array(&ctx.env, [(50i128, 20u64)]);
         assert!(ctx.vault.try_batch_deduct(&ctx.owner, &items).is_err());
     }
 
     #[test]
     fn batch_deduct_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let items = Vec::from_array(&ctx.env, [(50i128, 30u64)]);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_batch_deduct(&ctx.outsider, &items).is_err());
@@ -271,13 +287,17 @@ mod vault {
 
     #[test]
     fn set_authorized_caller_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_set_authorized_caller(&ctx.owner).is_ok());
     }
 
     #[test]
     fn set_authorized_caller_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_set_authorized_caller(&ctx.outsider).is_err());
     }
@@ -288,13 +308,17 @@ mod vault {
 
     #[test]
     fn pause_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_pause(&ctx.owner).is_ok());
     }
 
     #[test]
     fn pause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_pause(&ctx.outsider).is_err());
     }
@@ -305,14 +329,18 @@ mod vault {
 
     #[test]
     fn unpause_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.vault.pause(&ctx.owner);
         assert!(ctx.vault.try_unpause(&ctx.owner).is_ok());
     }
 
     #[test]
     fn unpause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.vault.pause(&ctx.owner);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_unpause(&ctx.outsider).is_err());
@@ -324,7 +352,9 @@ mod vault {
 
     #[test]
     fn set_max_deduct_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_set_max_deduct(&ctx.owner, &200_000_000)
@@ -333,7 +363,9 @@ mod vault {
 
     #[test]
     fn set_max_deduct_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault
@@ -347,14 +379,18 @@ mod vault {
 
     #[test]
     fn set_settlement_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_addr = Address::generate(&ctx.env);
         assert!(ctx.vault.try_set_settlement(&ctx.owner, &new_addr).is_ok());
     }
 
     #[test]
     fn set_settlement_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_addr = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -369,7 +405,9 @@ mod vault {
 
     #[test]
     fn set_reserve_cap_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_set_reserve_cap(&ctx.owner, &ctx.usdc_addr, &5_000_000)
@@ -378,7 +416,9 @@ mod vault {
 
     #[test]
     fn set_reserve_cap_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault
@@ -392,7 +432,9 @@ mod vault {
 
     #[test]
     fn prune_processed_requests_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let ids: Vec<Symbol> = Vec::new(&ctx.env);
         assert!(ctx
             .vault
@@ -402,7 +444,9 @@ mod vault {
 
     #[test]
     fn prune_processed_requests_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let ids: Vec<Symbol> = Vec::new(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -417,7 +461,9 @@ mod vault {
 
     #[test]
     fn set_admin_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_set_admin(&ctx.owner, &ctx.pending_admin)
@@ -426,7 +472,9 @@ mod vault {
 
     #[test]
     fn set_admin_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault
@@ -440,7 +488,9 @@ mod vault {
 
     #[test]
     fn accept_admin_pending_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.vault.set_admin(&ctx.owner, &ctx.pending_admin);
         // accept_admin requires auth from the pending admin; mock_all_auths covers it.
         assert!(ctx.vault.try_accept_admin().is_ok());
@@ -448,7 +498,9 @@ mod vault {
 
     #[test]
     fn accept_admin_without_pending_admin_fails() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         // No pending admin stored — must return an error regardless of auth.
         assert!(ctx.vault.try_accept_admin().is_err());
     }
@@ -459,7 +511,9 @@ mod vault {
 
     #[test]
     fn set_timelock_window_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_set_timelock_window(&ctx.owner, &86_400)
@@ -468,7 +522,9 @@ mod vault {
 
     #[test]
     fn set_timelock_window_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault
@@ -482,13 +538,17 @@ mod vault {
 
     #[test]
     fn propose_pause_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_propose_pause(&ctx.owner).is_ok());
     }
 
     #[test]
     fn propose_pause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_propose_pause(&ctx.outsider).is_err());
     }
@@ -499,13 +559,17 @@ mod vault {
 
     #[test]
     fn cancel_pause_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_cancel_pause(&ctx.owner).is_ok());
     }
 
     #[test]
     fn cancel_pause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_cancel_pause(&ctx.outsider).is_err());
     }
@@ -516,14 +580,18 @@ mod vault {
 
     #[test]
     fn propose_upgrade_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         assert!(ctx.vault.try_propose_upgrade(&ctx.owner, &hash).is_ok());
     }
 
     #[test]
     fn propose_upgrade_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_propose_upgrade(&ctx.outsider, &hash).is_err());
@@ -535,13 +603,17 @@ mod vault {
 
     #[test]
     fn cancel_upgrade_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_cancel_upgrade(&ctx.owner).is_ok());
     }
 
     #[test]
     fn cancel_upgrade_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_cancel_upgrade(&ctx.outsider).is_err());
     }
@@ -552,7 +624,9 @@ mod vault {
 
     #[test]
     fn propose_sweep_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let recipient = Address::generate(&ctx.env);
         assert!(ctx
             .vault
@@ -562,7 +636,9 @@ mod vault {
 
     #[test]
     fn propose_sweep_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let recipient = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -577,13 +653,17 @@ mod vault {
 
     #[test]
     fn cancel_sweep_owner_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.vault.try_cancel_sweep(&ctx.owner).is_ok());
     }
 
     #[test]
     fn cancel_sweep_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.vault.try_cancel_sweep(&ctx.outsider).is_err());
     }
@@ -602,7 +682,9 @@ mod settlement {
 
     #[test]
     fn receive_payment_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_receive_payment(&ctx.admin, &100, &true, &None, &ctx.usdc_addr, &1,)
@@ -613,7 +695,9 @@ mod settlement {
     fn receive_payment_via_vault_deduct_succeeds() {
         // vault.deduct triggers on-ledger transfer; settlement.receive_payment
         // is indirectly authorized because the vault is the registered vault.
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .vault
             .try_deduct(&ctx.authorized_caller, &100, &42)
@@ -622,7 +706,9 @@ mod settlement {
 
     #[test]
     fn receive_payment_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -636,7 +722,9 @@ mod settlement {
 
     #[test]
     fn batch_receive_payment_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let items = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 50i128)]);
         assert!(ctx
             .settlement
@@ -646,7 +734,9 @@ mod settlement {
 
     #[test]
     fn batch_receive_payment_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let items = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 50i128)]);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -661,7 +751,9 @@ mod settlement {
 
     #[test]
     fn set_admin_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_set_admin(&ctx.admin, &ctx.pending_admin)
@@ -670,7 +762,9 @@ mod settlement {
 
     #[test]
     fn set_admin_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -684,7 +778,9 @@ mod settlement {
 
     #[test]
     fn accept_admin_pending_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.settlement.set_admin(&ctx.admin, &ctx.pending_admin);
         assert!(ctx.settlement.try_accept_admin().is_ok());
         assert_eq!(ctx.settlement.get_admin(), ctx.pending_admin);
@@ -696,14 +792,18 @@ mod settlement {
 
     #[test]
     fn cancel_admin_transfer_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.settlement.set_admin(&ctx.admin, &ctx.pending_admin);
         assert!(ctx.settlement.try_cancel_admin_transfer(&ctx.admin).is_ok());
     }
 
     #[test]
     fn cancel_admin_transfer_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.settlement.set_admin(&ctx.admin, &ctx.pending_admin);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -718,7 +818,9 @@ mod settlement {
 
     #[test]
     fn propose_vault_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         assert!(ctx
             .settlement
@@ -728,7 +830,9 @@ mod settlement {
 
     #[test]
     fn propose_vault_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -743,7 +847,9 @@ mod settlement {
 
     #[test]
     fn accept_vault_pending_vault_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
         assert!(ctx.settlement.try_accept_vault(&new_vault).is_ok());
@@ -751,7 +857,9 @@ mod settlement {
 
     #[test]
     fn accept_vault_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
         assert!(ctx.settlement.try_accept_vault(&ctx.admin).is_ok());
@@ -759,7 +867,9 @@ mod settlement {
 
     #[test]
     fn accept_vault_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
         ctx.env.set_auths(&[]);
@@ -772,7 +882,9 @@ mod settlement {
 
     #[test]
     fn set_usdc_token_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_usdc = Address::generate(&ctx.env);
         assert!(ctx
             .settlement
@@ -782,7 +894,9 @@ mod settlement {
 
     #[test]
     fn set_usdc_token_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_usdc = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -797,7 +911,9 @@ mod settlement {
 
     #[test]
     fn set_developer_claim_window_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_set_developer_claim_window(&ctx.admin, &ctx.developer, &100, &200,)
@@ -806,7 +922,9 @@ mod settlement {
 
     #[test]
     fn set_developer_claim_window_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -820,7 +938,9 @@ mod settlement {
 
     #[test]
     fn clear_developer_claim_window_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.settlement
             .set_developer_claim_window(&ctx.admin, &ctx.developer, &100, &200);
         assert!(ctx
@@ -831,7 +951,9 @@ mod settlement {
 
     #[test]
     fn clear_developer_claim_window_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -845,7 +967,9 @@ mod settlement {
 
     #[test]
     fn get_all_developer_balances_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_get_all_developer_balances(&ctx.admin, &ctx.usdc_addr,)
@@ -854,7 +978,9 @@ mod settlement {
 
     #[test]
     fn get_all_developer_balances_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -868,7 +994,9 @@ mod settlement {
 
     #[test]
     fn force_credit_developer_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let reason = Symbol::new(&ctx.env, "test");
         assert!(ctx
             .settlement
@@ -878,7 +1006,9 @@ mod settlement {
 
     #[test]
     fn force_credit_developer_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let reason = Symbol::new(&ctx.env, "test");
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -899,7 +1029,9 @@ mod settlement {
 
     #[test]
     fn set_daily_withdraw_cap_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_set_daily_withdraw_cap(&ctx.admin, &ctx.developer, &10_000,)
@@ -908,7 +1040,9 @@ mod settlement {
 
     #[test]
     fn set_daily_withdraw_cap_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -922,7 +1056,9 @@ mod settlement {
 
     #[test]
     fn set_developer_min_balance_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .settlement
             .try_set_developer_min_balance(&ctx.admin, &ctx.developer, &100,)
@@ -931,7 +1067,9 @@ mod settlement {
 
     #[test]
     fn set_developer_min_balance_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .settlement
@@ -945,7 +1083,9 @@ mod settlement {
 
     #[test]
     fn withdraw_developer_balance_developer_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let reason = Symbol::new(&ctx.env, "pay");
         ctx.settlement.force_credit_developer(
             &ctx.admin,
@@ -963,7 +1103,9 @@ mod settlement {
 
     #[test]
     fn withdraw_developer_balance_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let reason = Symbol::new(&ctx.env, "pay");
         ctx.settlement.force_credit_developer(
             &ctx.admin,
@@ -986,7 +1128,9 @@ mod settlement {
 
     #[test]
     fn propose_balance_migration_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_dev = Address::generate(&ctx.env);
         assert!(ctx
             .settlement
@@ -996,7 +1140,9 @@ mod settlement {
 
     #[test]
     fn propose_balance_migration_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let new_dev = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -1011,7 +1157,9 @@ mod settlement {
 
     #[test]
     fn broadcast_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let severity = callora_settlement::Severity::Info;
         let msg = soroban_sdk::String::from_str(&ctx.env, "hello");
         assert!(ctx
@@ -1022,7 +1170,9 @@ mod settlement {
 
     #[test]
     fn broadcast_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let severity = callora_settlement::Severity::Warn;
         let msg = soroban_sdk::String::from_str(&ctx.env, "bad");
         ctx.env.set_auths(&[]);
@@ -1038,14 +1188,18 @@ mod settlement {
 
     #[test]
     fn upgrade_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         assert!(ctx.settlement.try_upgrade(&ctx.admin, &hash).is_ok());
     }
 
     #[test]
     fn upgrade_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         ctx.env.set_auths(&[]);
         assert!(ctx.settlement.try_upgrade(&ctx.outsider, &hash).is_err());
@@ -1065,7 +1219,9 @@ mod revenue_pool {
 
     #[test]
     fn distribute_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .pool
             .try_distribute(&ctx.admin, &ctx.developer, &100)
@@ -1074,7 +1230,9 @@ mod revenue_pool {
 
     #[test]
     fn distribute_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .pool
@@ -1088,14 +1246,18 @@ mod revenue_pool {
 
     #[test]
     fn batch_distribute_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let payments = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 100i128)]);
         assert!(ctx.pool.try_batch_distribute(&ctx.admin, &payments).is_ok());
     }
 
     #[test]
     fn batch_distribute_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let payments = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 100i128)]);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -1110,7 +1272,9 @@ mod revenue_pool {
 
     #[test]
     fn set_admin_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .pool
             .try_set_admin(&ctx.admin, &ctx.pending_admin)
@@ -1119,7 +1283,9 @@ mod revenue_pool {
 
     #[test]
     fn set_admin_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .pool
@@ -1133,7 +1299,9 @@ mod revenue_pool {
 
     #[test]
     fn accept_admin_pending_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         assert!(ctx.pool.try_accept_admin(&ctx.pending_admin).is_ok());
         assert_eq!(ctx.pool.get_admin(), ctx.pending_admin);
@@ -1141,7 +1309,9 @@ mod revenue_pool {
 
     #[test]
     fn accept_admin_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_accept_admin(&ctx.outsider).is_err());
@@ -1153,7 +1323,9 @@ mod revenue_pool {
 
     #[test]
     fn claim_admin_pending_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         assert!(ctx.pool.try_claim_admin(&ctx.pending_admin).is_ok());
         assert_eq!(ctx.pool.get_admin(), ctx.pending_admin);
@@ -1161,7 +1333,9 @@ mod revenue_pool {
 
     #[test]
     fn claim_admin_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_claim_admin(&ctx.outsider).is_err());
@@ -1173,14 +1347,18 @@ mod revenue_pool {
 
     #[test]
     fn cancel_admin_transfer_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         assert!(ctx.pool.try_cancel_admin_transfer(&ctx.admin).is_ok());
     }
 
     #[test]
     fn cancel_admin_transfer_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.set_admin(&ctx.admin, &ctx.pending_admin);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_cancel_admin_transfer(&ctx.outsider).is_err());
@@ -1192,7 +1370,9 @@ mod revenue_pool {
 
     #[test]
     fn set_pause_guardian_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         assert!(ctx
             .pool
@@ -1202,7 +1382,9 @@ mod revenue_pool {
 
     #[test]
     fn set_pause_guardian_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -1217,7 +1399,9 @@ mod revenue_pool {
 
     #[test]
     fn clear_pause_guardian_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         ctx.pool.set_pause_guardian(&ctx.admin, &guardian);
         assert!(ctx.pool.try_clear_pause_guardian(&ctx.admin).is_ok());
@@ -1225,7 +1409,9 @@ mod revenue_pool {
 
     #[test]
     fn clear_pause_guardian_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         ctx.pool.set_pause_guardian(&ctx.admin, &guardian);
         ctx.env.set_auths(&[]);
@@ -1238,13 +1424,17 @@ mod revenue_pool {
 
     #[test]
     fn pause_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.pool.try_pause(&ctx.admin).is_ok());
     }
 
     #[test]
     fn pause_guardian_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         ctx.pool.set_pause_guardian(&ctx.admin, &guardian);
         assert!(ctx.pool.try_pause(&guardian).is_ok());
@@ -1252,7 +1442,9 @@ mod revenue_pool {
 
     #[test]
     fn pause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_pause(&ctx.outsider).is_err());
     }
@@ -1263,14 +1455,18 @@ mod revenue_pool {
 
     #[test]
     fn unpause_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.pause(&ctx.admin);
         assert!(ctx.pool.try_unpause(&ctx.admin).is_ok());
     }
 
     #[test]
     fn unpause_guardian_rejected() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         ctx.pool.set_pause_guardian(&ctx.admin, &guardian);
         ctx.pool.pause(&guardian);
@@ -1280,7 +1476,9 @@ mod revenue_pool {
 
     #[test]
     fn unpause_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.pool.pause(&ctx.admin);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_unpause(&ctx.outsider).is_err());
@@ -1292,7 +1490,9 @@ mod revenue_pool {
 
     #[test]
     fn receive_payment_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx
             .pool
             .try_receive_payment(&ctx.admin, &100, &true)
@@ -1301,7 +1501,9 @@ mod revenue_pool {
 
     #[test]
     fn receive_payment_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .pool
@@ -1315,7 +1517,9 @@ mod revenue_pool {
 
     #[test]
     fn deposit_yield_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.usdc_admin.mint(&ctx.admin, &1000);
         ctx.usdc
             .approve(&ctx.admin, &ctx.pool_addr, &1000, &999_999);
@@ -1328,7 +1532,9 @@ mod revenue_pool {
 
     #[test]
     fn deposit_yield_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.usdc_admin.mint(&ctx.outsider, &1000);
         ctx.usdc
             .approve(&ctx.outsider, &ctx.pool_addr, &1000, &999_999);
@@ -1346,13 +1552,17 @@ mod revenue_pool {
 
     #[test]
     fn set_max_distribute_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         assert!(ctx.pool.try_set_max_distribute(&ctx.admin, &50_000).is_ok());
     }
 
     #[test]
     fn set_max_distribute_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .pool
@@ -1366,7 +1576,9 @@ mod revenue_pool {
 
     #[test]
     fn broadcast_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let severity = callora_revenue_pool::Severity::Info;
         let msg = soroban_sdk::String::from_str(&ctx.env, "all good");
         assert!(ctx.pool.try_broadcast(&ctx.admin, &severity, &msg).is_ok());
@@ -1374,7 +1586,9 @@ mod revenue_pool {
 
     #[test]
     fn broadcast_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let severity = callora_revenue_pool::Severity::Crit;
         let msg = soroban_sdk::String::from_str(&ctx.env, "bad");
         ctx.env.set_auths(&[]);
@@ -1390,14 +1604,18 @@ mod revenue_pool {
 
     #[test]
     fn upgrade_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         assert!(ctx.pool.try_upgrade(&ctx.admin, &hash).is_ok());
     }
 
     #[test]
     fn upgrade_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let hash = BytesN::from_array(&ctx.env, &[0u8; 32]);
         ctx.env.set_auths(&[]);
         assert!(ctx.pool.try_upgrade(&ctx.outsider, &hash).is_err());
@@ -1409,7 +1627,9 @@ mod revenue_pool {
 
     #[test]
     fn propose_emergency_drain_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         assert!(ctx
             .pool
@@ -1419,7 +1639,9 @@ mod revenue_pool {
 
     #[test]
     fn propose_emergency_drain_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
@@ -1434,7 +1656,9 @@ mod revenue_pool {
 
     #[test]
     fn cancel_emergency_drain_admin_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         ctx.pool
             .propose_emergency_drain(&ctx.admin, &treasury, &500);
@@ -1443,7 +1667,9 @@ mod revenue_pool {
 
     #[test]
     fn cancel_emergency_drain_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         ctx.pool
             .propose_emergency_drain(&ctx.admin, &treasury, &500);
@@ -1457,7 +1683,9 @@ mod revenue_pool {
 
     #[test]
     fn execute_emergency_drain_admin_after_timelock_succeeds() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         ctx.pool
             .propose_emergency_drain(&ctx.admin, &treasury, &500);
@@ -1468,7 +1696,9 @@ mod revenue_pool {
 
     #[test]
     fn execute_emergency_drain_outsider_rejected_without_auth() {
-        let ctx = setup();
+        let env = Env::default();
+    env.mock_all_auths();
+    let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         ctx.pool
             .propose_emergency_drain(&ctx.admin, &treasury, &500);

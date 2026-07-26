@@ -470,7 +470,7 @@ impl CalloraVault {
     //         .set(&DataKey::Depositor(depositor), &true);
     // }
 
-    pub fn set_authorized_caller(env: Env, caller: Address) {
+    pub fn set_authorized_caller(env: Env, caller: Address, new_caller: Address) {
         caller.require_auth();
         let owner = env
             .storage()
@@ -482,7 +482,7 @@ impl CalloraVault {
         }
         env.storage()
             .instance()
-            .set(&DataKey::AuthorizedCaller, &caller);
+            .set(&DataKey::AuthorizedCaller, &new_caller);
     }
 
     pub fn pause(env: Env, caller: Address) {

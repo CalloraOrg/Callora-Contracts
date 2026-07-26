@@ -1,6 +1,6 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use soroban_sdk::{token, Address, Env, Symbol};
+use soroban_sdk::{testutils::Address as _, token, Address, Env};
 
 // Import all contract clients and types
 use callora_revenue_pool::RevenuePoolClient;
@@ -127,7 +127,7 @@ fn cross_contract_conservation_fuzz() {
             0..=39 => {
                 let amount = rng.gen_range(1i128..10_000i128);
                 usdc_admin_client.mint(&depositor, &amount);
-                usdc_client.approve(&depositor, &vault_address, &amount, &(amount * 2));
+                usdc_client.approve(&depositor, &vault_address, &amount, &200u32);
                 let result = vault_client.try_deposit(&depositor, &amount);
                 if result.is_ok() {
                     total_deposited = total_deposited.checked_add(amount).unwrap();
@@ -138,7 +138,7 @@ fn cross_contract_conservation_fuzz() {
             // 35% chance: Deduct to settlement contract
             40..=74 => {
                 let amount = rng.gen_range(1i128..5_000i128);
-                let result = vault_client.try_deduct(&owner, &amount, &None);
+                let result = vault_client.try_deduct(&owner, &amount, &123u64);
                 if result.is_ok() {
                     expected_vault_internal = expected_vault_internal.checked_sub(amount).unwrap();
                     expected_onchain_vault = expected_onchain_vault.checked_sub(amount).unwrap();
