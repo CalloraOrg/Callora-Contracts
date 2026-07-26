@@ -80,8 +80,10 @@ must not be reassigned once released.
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
 | 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
-| 24 | `InvalidClaimWindow` | Settlement | Claim window end timestamp is before the start timestamp |
-| 25 | `ClaimWindowClosed` | Settlement | Developer attempted to claim outside their configured claim window |
+| 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |
+| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
+| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
+| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |
 
 ## Revenue Pool
 
