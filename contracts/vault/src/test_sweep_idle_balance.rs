@@ -4,7 +4,7 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{token, Address, Env};
 
 use super::*;
-use crate::views::SweepPreview;
+
 
 fn create_usdc<'a>(env: &'a Env, admin: &Address) -> (Address, token::StellarAssetClient<'a>) {
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
@@ -17,7 +17,7 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient<'_>, Address) {
     let vault_addr = env.register(CalloraVault, ());
     let client = CalloraVaultClient::new(env, &vault_addr);
 
-    let (usdc, usdc_client) = create_usdc(env, &owner);
+    let (usdc, _usdc_client) = create_usdc(env, &owner);
     env.mock_all_auths();
 
     client.init(

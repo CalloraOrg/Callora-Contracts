@@ -50,7 +50,7 @@ fn test_entrypoints_require_auth() {
     assert!(client.try_deposit(&owner, &50).is_err());
     assert!(client.try_deduct(&owner, &10, &1u64).is_err());
     assert!(client.try_batch_deduct(&owner, &items).is_err());
-    assert!(client.try_set_authorized_caller(&owner).is_err());
+    assert!(client.try_set_authorized_caller(&owner, &owner).is_err());
     assert!(client.try_pause(&owner).is_err());
     assert!(client.try_unpause(&owner).is_err());
     assert!(client.try_set_max_deduct(&owner, &200).is_err());

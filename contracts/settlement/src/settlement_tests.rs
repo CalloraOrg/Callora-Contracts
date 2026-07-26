@@ -54,6 +54,7 @@ mod settlement_tests {
     ///
     /// # Returns
     /// The sum of all developer balances in the settlement contract.
+    #[allow(dead_code)]
     pub fn get_total_developer_balances(
         env: &Env,
         settlement_addr: &Address,
@@ -77,6 +78,7 @@ mod settlement_tests {
     ///
     /// # Returns
     /// The current `total_balance` of the global settlement pool.
+    #[allow(dead_code)]
     pub fn get_settlement_pool_balance(env: &Env, settlement_addr: &Address) -> i128 {
         let client = CalloraSettlementClient::new(env, settlement_addr);
         let global_pool = client.get_global_pool();
