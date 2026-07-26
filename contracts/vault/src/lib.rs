@@ -74,10 +74,7 @@ pub enum DataKey {
     Settlement,
     Paused,
     Depositor(Address),
-    /// Pending revenue pool address (two-step transfer).
-    PendingRevenuePool,
-    /// Pending owner address (two-step transfer).
-    PendingOwner,
+    AllowedDepositorsList,
 }
 
 /// Instance / persistent storage keys for the vault.
@@ -1370,6 +1367,97 @@ impl CalloraVault {
             .instance()
             .get::<_, bool>(&DataKey::Depositor(caller))
             .unwrap_or(false)
+    }
+
+    /// Return the current allowlist of allowed depositors.
+    ///
+    /// Returns an empty vector when no addresses have been allowlisted.
+    /// Public read access — no authorization required.
+    pub fn get_allowed_depositors(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowedDepositorsList)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Add or remove an allowed depositor (owner only).
+    ///
+    /// When `depositor` is `Some(addr)` the address is added to the allowlist.
+    /// Duplicate additions are silently ignored.  Emits `allowlist_add`.
+    ///
+    /// When `depositor` is `None` the **entire** allowlist is cleared (backward-
+    /// compatible with the legacy `clear` convention).  Emits `allowlist_clear`.
+    ///
+    /// # Authorization
+    /// Only the vault owner may call this function.
+    pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Option<Address>) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())
+            .expect("set_allowed_depositor: caller is not owner");
+        match depositor {
+            Some(addr) => {
+                let mut list: Vec<Address> = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowedDepositorsList)
+                    .unwrap_or_else(|| Vec::new(&env));
+                if !list.iter().any(|a| a == addr) {
+                    list.push_back(addr.clone());
+                    env.storage()
+                        .instance()
+                        .set(&DataKey::AllowedDepositorsList, &list);
+                }
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Depositor(addr.clone()), &true);
+                env.events().publish(
+                    (events::event_allowlist_add(&env), caller, addr),
+                    (),
+                );
+            }
+            None => {
+                Self::clear_allowed_depositors_internal(&env);
+                env.events().publish(
+                    (events::event_allowlist_clear(&env), caller),
+                    (),
+                );
+            }
+        }
+    }
+
+    /// Remove the entire allowlist (owner only).
+    ///
+    /// Removes every address from the allowlist and clears the tracked list.
+    /// Idempotent — safe to call when the allowlist is already empty.
+    /// Owner can always deposit regardless of allowlist state.
+    ///
+    /// Emits `allowlist_clear`.
+    pub fn clear_allowed_depositors(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())
+            .expect("clear_allowed_depositors: caller is not owner");
+        Self::clear_allowed_depositors_internal(&env);
+        env.events().publish(
+            (events::event_allowlist_clear(&env), caller),
+            (),
+        );
+    }
+
+    /// Internal helper: clear every per-address depositor entry and the list.
+    fn clear_allowed_depositors_internal(env: &Env) {
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedDepositorsList)
+            .unwrap_or_else(|| Vec::new(env));
+        for addr in list.iter() {
+            env.storage()
+                .instance()
+                .remove(&DataKey::Depositor(addr));
+        }
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedDepositorsList);
     }
 
     /// Set or update the reserve cap for a token (owner only).
