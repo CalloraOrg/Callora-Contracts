@@ -133,8 +133,9 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 14 | `admin_migration_proposed`   | `event_admin_migration_proposed`   | Developer balance migration proposed           |
 | 15 | `admin_migration`            | `event_admin_migration`            | Developer balance migration executed           |
 | 16 | `deposit`                    | `event_deposit`                    | Deposit made for a developer                   |
+| 17 | `developer_min_balance_changed` | `event_developer_min_balance_changed` | Developer min balance updated                  |
 
-**Total: 16 topics**
+**Total: 17 topics**
 
 ---
 
@@ -199,7 +200,7 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `payment_received`, `balance_credited`, `developer_withdraw`,
 `daily_withdraw_cap_changed`, `claim_window_changed`, `vault_proposed`,
 `vault_accepted`, `developer_force_credited`, `admin_migration_proposed`,
-`admin_migration`
+`admin_migration`, `developer_min_balance_changed`
 
 **Revenue Pool-specific** (not shared with other contracts):
 `admin_changed`, `admin_transfer_started`, `admin_transfer_completed`,
@@ -220,9 +221,9 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 | Contract      | Topics | Unique (not shared) | Shared |
 |---------------|--------|---------------------|--------|
 | vault         | 46     | 37                  | 9      |
-| settlement    | 16     | 10                  | 6      |
+| settlement    | 17     | 11                  | 6      |
 | revenue_pool  | 21     | 15                  | 6      |
-| **Total**     | **83** | **62**              | **21** |
+| **Total**     | **84** | **63**              | **21** |
 
 > Shared count: each unique topic string that appears in more than one
 > contract is counted once per contract it appears in. The 9 shared topic

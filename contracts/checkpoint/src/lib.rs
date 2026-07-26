@@ -396,7 +396,7 @@ impl CalloraCheckpoint {
     ) -> Result<Vec<u64>, CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
-        let n = items.len() as u32;
+        let n = items.len();
         if n == 0 {
             return Err(CheckpointError::BatchEmpty);
         }

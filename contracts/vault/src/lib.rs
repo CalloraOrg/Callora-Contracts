@@ -58,6 +58,10 @@ pub mod views;
 mod errors;
 pub use errors::VaultError;
 
+/// The default amount to extend the TTL of instance storage entries.
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17280 * 30; // 30 days
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17280 * 14; // 14 days
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -785,7 +789,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (events::event_pause_executed(&env), caller),
+            (events::event_pause_executed(&env), caller.clone()),
             env.ledger().timestamp(),
         );
         env.events()
