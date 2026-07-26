@@ -47,21 +47,14 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
+};
 
 pub mod views;
 
 mod errors;
 pub use errors::VaultError;
-
-/// Threshold (in ledgers) at which instance-storage TTL is bumped; ~30 days
-/// assuming a 5-second Stellar mainnet ledger close time (17 280 ledgers/day).
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
-/// Amount (in ledgers) instance-storage TTL is extended to on bump; ~60 days.
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
-
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 100_000;
-pub const INSTANCE_BUMP_AMOUNT: u32 = 200_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -109,11 +102,28 @@ pub enum StorageKey {
     AllowedDepositors,
 }
 
-// ---------------------------------------------------------------------------
-// Token client shim
-// ---------------------------------------------------------------------------
+/// Ledgers-per-day at 5-second close time (Stellar mainnet).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-pub mod token_client {
+/// Instance TTL bump is triggered when fewer than 30 days remain.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Each instance TTL bump extends the lifetime to 60 days from now.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Processed-request TTL bump is triggered when fewer than 7 days remain.
+pub const REQUEST_ID_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
+
+/// Each processed-request TTL bump extends the lifetime to 30 days from now.
+pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
+
+/// Persistent-storage TTL bump threshold — matches instance threshold (30 days).
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// Persistent-storage TTL bump amount — matches instance amount (60 days).
+pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
+
+pub mod token {
     pub use soroban_sdk::token::Client;
 }
 
@@ -164,59 +174,21 @@ pub struct CalloraVault;
 
 #[contractimpl]
 impl CalloraVault {
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
-
-    fn bump_instance(env: &Env) {
+    fn bump_instance_ttl(env: &Env) {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
-    fn load_owner(env: &Env) -> Address {
+    fn bump_persistent_key(env: &Env, key: &StorageKey) {
         env.storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .expect("vault not initialized")
+            .persistent()
+            .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
     }
 
-    fn load_balance(env: &Env) -> i128 {
-        env.storage()
-            .instance()
-            .get::<_, i128>(&DataKey::Balance)
-            .expect("vault not initialized")
-    }
-
-    fn load_usdc(env: &Env) -> Address {
-        env.storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .expect("vault not initialized")
-    }
-
-    fn load_max_deduct(env: &Env) -> i128 {
-        env.storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap_or(DEFAULT_MAX_DEDUCT)
-    }
-
-    fn load_min_deposit(env: &Env) -> i128 {
-        env.storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap_or(DEFAULT_MIN_DEPOSIT)
-    }
-
-    fn require_not_paused(env: &Env) {
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            panic!("vault is paused");
+    fn require_positive_amount(amount: i128) {
+        if amount <= 0 {
+            panic!("amount must be positive");
         }
     }
 
@@ -326,28 +298,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &false);
         // Admin defaults to owner at initialization.
         env.storage().instance().set(&StorageKey::Admin, &owner);
-
-        if let Some(ref ac) = authorized_caller {
-            env.storage().instance().set(&DataKey::AuthorizedCaller, ac);
-        }
-        if let Some(ref pool) = revenue_pool {
-            env.storage().instance().set(&DataKey::RevenuePool, pool);
-        }
-
-        Self::bump_instance(&env);
-
-        // Emit init event: topics = (Symbol("init"), owner), data = initial_balance
-        env.events().publish(
-            (events::event_init(&env), owner.clone()),
-            initial_balance,
-        );
-
-        VaultMeta {
-            owner,
-            balance: initial_balance,
-            authorized_caller,
-            min_deposit,
-        }
+        Self::bump_instance_ttl(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -407,16 +358,7 @@ impl CalloraVault {
             
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
-
-        Self::bump_instance(&env);
-
-        // Emit deposit event: topics = (Symbol("deposit"), caller), data = (amount, new_balance)
-        env.events().publish(
-            (events::event_deposit(&env), caller),
-            (amount, new_bal),
-        );
-
-        new_bal
+        Self::bump_instance_ttl(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -477,14 +419,8 @@ impl CalloraVault {
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
         
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-        settlement_client.receive_payment(
-            &env.current_contract_address(),
-            &amount,
-            &true,
-            &None,
-            &usdc_addr,
-            &(request_id as u32),
-        );
+        settlement_client.record_deduction(&amount, &request_id);
+        Self::bump_instance_ttl(&env);
     }
 
     // -----------------------------------------------------------------------
@@ -559,10 +495,13 @@ impl CalloraVault {
                 &(request_id as u32),
             );
         }
+        Self::bump_instance_ttl(&env);
     }
 
     // -----------------------------------------------------------------------
-    // withdraw / withdraw_to
+    // View functions — TTL bump on hot read paths (buffer #5 pattern)
+    // Bumps instance storage TTL so frequently-read vaults do not archive
+    // even when writes are infrequent.
     // -----------------------------------------------------------------------
 
     /// Modifies the authorized caller (Owner only).
@@ -579,8 +518,10 @@ impl CalloraVault {
         if caller != owner {
             panic!("Not owner");
         }
-        
-        env.storage().instance().set(&DataKey::AuthorizedCaller, &caller);
+        env.storage()
+            .instance()
+            .set(&DataKey::AuthorizedCaller, &caller);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn pause(env: Env, caller: Address) {
@@ -594,6 +535,7 @@ impl CalloraVault {
         }
         
         env.storage().instance().set(&DataKey::Paused, &true);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn unpause(env: Env, caller: Address) {
@@ -607,10 +549,12 @@ impl CalloraVault {
         }
         
         env.storage().instance().set(&DataKey::Paused, &false);
+        Self::bump_instance_ttl(&env);
     }
 
     /// Return `true` if the vault is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Paused)
@@ -618,6 +562,7 @@ impl CalloraVault {
     }
     
     pub fn balance(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
@@ -625,6 +570,7 @@ impl CalloraVault {
     }
     
     pub fn get_owner(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
@@ -640,6 +586,7 @@ impl CalloraVault {
     }
     
     pub fn get_usdc_token(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
@@ -647,6 +594,7 @@ impl CalloraVault {
     }
     
     pub fn get_max_deduct(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
@@ -665,11 +613,14 @@ impl CalloraVault {
         if max_deduct <= 0 {
             panic!("max_deduct must be positive");
         }
-        
-        env.storage().instance().set(&DataKey::MaxDeduct, &max_deduct);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxDeduct, &max_deduct);
+        Self::bump_instance_ttl(&env);
     }
 
     pub fn get_settlement(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
@@ -685,11 +636,14 @@ impl CalloraVault {
         if caller != owner {
             panic!("Not owner");
         }
-        
-        env.storage().instance().set(&DataKey::Settlement, &settlement);
+        env.storage()
+            .instance()
+            .set(&DataKey::Settlement, &settlement);
+        Self::bump_instance_ttl(&env);
     }
     
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::RevenuePool)
@@ -755,6 +709,7 @@ impl CalloraVault {
             (events::event_timelock_window_changed(&env), caller.clone()),
             (timelock::get_timelock_window(&env), window),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -763,22 +718,38 @@ impl CalloraVault {
     /// Defaults to [`timelock::DEFAULT_TIMELOCK_SECONDS`] (48 h) when no
     /// window has been explicitly configured.
     pub fn get_timelock_window(env: Env) -> u64 {
+        Self::bump_instance_ttl(&env);
         timelock::get_timelock_window(&env)
     }
 
     /// Return the pending pause proposal, if any.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
-        timelock::get_pending_pause(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_pause(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+        }
+        result
     }
 
     /// Return the pending upgrade proposal, if any.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
-        timelock::get_pending_upgrade(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_upgrade(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+        }
+        result
     }
 
     /// Return the pending sweep proposal, if any.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
-        timelock::get_pending_sweep(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_sweep(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+        }
+        result
     }
 
     /// Require the caller to be the current admin.
@@ -795,6 +766,20 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Return the current admin address.
+    ///
+    /// Defaults to the owner when no admin has been explicitly set.
+    ///
+    /// # Errors
+    /// - `VaultError::NotInitialized` if the contract has not been initialized.
+    pub fn get_admin(env: Env) -> Result<Address, VaultError> {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::Admin)
+            .ok_or(VaultError::NotInitialized)
+    }
+
     /// Initiate a two-step admin transfer (current admin only).
     pub fn set_admin(
         env: Env,
@@ -805,6 +790,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -816,8 +802,13 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage().instance().set(&StorageKey::Admin, &new_admin);
-        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.storage()
+            .instance()
+            .set(&StorageKey::Admin, &new_admin);
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingAdmin);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -937,6 +928,9 @@ impl CalloraVault {
             (events::event_pause_proposed(&env), caller),
             (proposed_at, execute_after),
         );
+        env.events()
+            .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -948,12 +942,11 @@ impl CalloraVault {
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
-        env.events().publish(
-            (events::event_pause_executed(&env), caller.clone()),
-            env.ledger().timestamp(),
-        );
+        env.events()
+            .publish((events::event_pause_executed(&env), caller.clone()), env.ledger().timestamp());
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -968,6 +961,7 @@ impl CalloraVault {
             ),
             existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -997,6 +991,7 @@ impl CalloraVault {
             (events::event_upgrade_proposed(&env), caller),
             (new_wasm_hash, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1020,6 +1015,7 @@ impl CalloraVault {
         );
         env.events()
             .publish((events::event_upgraded(&env), caller), wasm_hash);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1034,6 +1030,7 @@ impl CalloraVault {
             ),
             existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1085,6 +1082,7 @@ impl CalloraVault {
             (events::event_sweep_proposed(&env), caller),
             (to, amount, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1118,6 +1116,8 @@ impl CalloraVault {
             (events::event_distribute(&env), proposal.to),
             proposal.amount,
         );
+        timelock::clear_pending_sweep(&env);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1132,7 +1132,86 @@ impl CalloraVault {
             ),
             existing.is_some(),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
+    }
+
+    /// Garbage-collect processed request markers from persistent storage.
+    /// Only the owner can call this.
+    /// Emits a `request_id_pruned` event for each removed ID.
+    pub fn prune_processed_requests(
+        env: Env,
+        caller: Address,
+        ids: Vec<Symbol>,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+
+        for id in ids.iter() {
+            let key = StorageKey::ProcessedRequest(id.clone());
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                env.events().publish(
+                    (events::event_request_id_pruned(&env), caller.clone()),
+                    id.clone(),
+                );
+            }
+        }
+
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Depositor(caller))
+            .unwrap_or(false)
+    }
+
+    /// Set or update the reserve cap for a token (owner only).
+    ///
+    /// The reserve cap is the maximum total balance the vault may hold for
+    /// `token`.  Any `deposit` call that would push the balance beyond `cap`
+    /// is rejected with [`VaultError::ExceedsReserveCap`].
+    ///
+    /// Pass `i128::MAX` to remove the effective cap (restore unlimited deposits).
+    ///
+    /// # Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `token` — token contract address the cap applies to.
+    /// - `cap` — maximum balance in token stroops; must be > 0.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the owner.
+    /// - [`VaultError::AmountNotPositive`] — `cap <= 0`.
+    pub fn set_reserve_cap(
+        env: Env,
+        caller: Address,
+        token: Address,
+        cap: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if cap <= 0 {
+            return Err(VaultError::AmountNotPositive);
+        }
+        let prev = limits::set(&env, &token, cap);
+        env.events().publish(
+            (events::event_reserve_cap_set(&env), caller, token),
+            (prev, cap),
+        );
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the reserve cap for `token`.
+    ///
+    /// Returns `i128::MAX` when no cap has been configured (effectively unlimited).
+    pub fn get_reserve_cap(env: Env, token: Address) -> i128 {
+        Self::bump_instance_ttl(&env);
+        limits::get(&env, &token)
     }
 }
 
@@ -1177,7 +1256,7 @@ mod test_sweep_idle_balance;
 mod test_access_control_matrix;
 
 #[cfg(test)]
-mod test_min_amount;
+mod test_ttl_bump;
 
 // #[cfg(test)]
 // mod test_gas_budget;

@@ -154,7 +154,4 @@ pub enum VaultError {
     TimelockOverflow = 46,
     /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 47).
     InvalidTimelockWindow = 47,
-    /// Amount is below the vault's configured minimum transfer unit; rejects
-    /// sub-unit/dust transfers (code 48).
-    BelowMinTransferAmount = 48,
 }

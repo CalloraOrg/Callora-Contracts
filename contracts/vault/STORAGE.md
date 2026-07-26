@@ -4,7 +4,9 @@ This document describes the storage layout of the Callora Vault contract, includ
 
 ## Instance Storage TTL
 
-All critical vault state lives in instance storage. To prevent archival on infrequently-used vaults, every mutating entrypoint calls `env.storage().instance().extend_ttl(threshold, extend_to)`.
+All critical vault state lives in instance storage. To prevent archival on infrequently-used vaults, **every mutating entrypoint** and **every public view function ("hot read path")** calls `env.storage().instance().extend_ttl(threshold, extend_to)`.
+
+Read-path bumps (a.k.a. **buffer #5**) are the critical addition in this revision. A vault that is only queried (no writes for months) must not silently archive. Every `get_*`, `is_*`, and `balance` view call re-ups the instance TTL to the same 60-day target as writes.
 
 | Constant                  | Value                    | Rationale                                                    |
 | ------------------------- | ------------------------ | ------------------------------------------------------------ |
@@ -13,13 +15,41 @@ All critical vault state lives in instance storage. To prevent archival on infre
 
 Ledger rate assumption: **17 280 ledgers/day** (5-second close time on Stellar mainnet).
 
-Entrypoints that bump TTL: `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`.
+**Write entrypoints that bump instance TTL** (at exit, after all writes succeed):
+`init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`, `set_authorized_caller`, `pause`, `unpause`, `set_max_deduct`, `set_settlement`, `set_timelock_window`, `set_admin`, `accept_admin`, `propose_pause`, `execute_pause`, `cancel_pause`, `propose_upgrade`, `execute_upgrade`, `cancel_upgrade`, `propose_sweep`, `execute_sweep`, `cancel_sweep`, `prune_processed_requests`, `set_reserve_cap`.
 
-Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_settlement`, `get_revenue_pool`, `get_contract_addresses`, `is_paused`, `is_authorized_depositor`, `get_metadata`, `get_max_deduct`, `get_allowed_depositors`, `is_request_processed`) do **not** bump the TTL — they are read-only and incur no write cost.
+**View entrypoints that bump instance TTL — buffer #5 hot read paths** (at entry, before any reads):
+`balance`, `get_owner`, `get_admin`, `get_usdc_token`, `get_max_deduct`, `get_settlement`, `get_revenue_pool`, `get_timelock_window`, `is_paused`, `is_authorized_depositor`, `get_reserve_cap`, `get_pending_pause`, `get_pending_upgrade`, `get_pending_sweep`.
+
+Rationale for buffer #5: production indexers and UIs call `balance()` / `get_admin()` / `is_paused()` many times per day. Without read-path bumps, a vault that only receives reads (no owner-initiated writes for 60 days) would be archived, breaking all reads and requiring an explicit owner touch to revive. Buffer #5 makes "usage = reads OR writes" for TTL accounting.
+
+Intentionally **excluded** from bumps:
+- `dry_run_sweep_idle_balance` in `views.rs` — documented as side-effect-free, returns estimated surplus for admin dashboards.
+
+## Persistent Storage TTL
+
+Timelock proposals (`PendingPause`, `PendingUpgrade`, `PendingSweep`), idempotency markers (`ProcessedRequest`), and per-developer rate-limit state live in the **persistent** storage tier. Each entry bumps its own TTL on both write and — for proposal entries — on their corresponding `get_pending_*` view.
+
+| Constant                      | Value                    | Rationale                                                    |
+| ----------------------------- | ------------------------ | ------------------------------------------------------------ |
+| `PERSISTENT_BUMP_THRESHOLD`   | `17_280 * 30` (~30 days) | Mirrors instance threshold (30 days)                         |
+| `PERSISTENT_BUMP_AMOUNT`      | `17_280 * 60` (~60 days) | Mirrors instance amount (60 days)                            |
+| `REQUEST_ID_BUMP_THRESHOLD`   | `17_280 * 7` (~7 days)   | Per-key trigger for idempotency markers                      |
+| `REQUEST_ID_BUMP_AMOUNT`      | `17_280 * 30` (~30 days) | Per-key target for idempotency markers                       |
+
+**Persistent keys with buffer #5 read-path bumps** (only if the key exists — non-existent keys are skipped):
+
+| Key                            | Written by                           | Bumped on read via             |
+| ------------------------------ | ------------------------------------ | ------------------------------ |
+| `StorageKey::PendingPause`     | `propose_pause`                      | `get_pending_pause` (if `Some`) |
+| `StorageKey::PendingUpgrade`   | `propose_upgrade`                    | `get_pending_upgrade` (if `Some`) |
+| `StorageKey::PendingSweep`     | `propose_sweep`                      | `get_pending_sweep` (if `Some`) |
+
+Buffer #5 persistent rationale: an admin may propose a pause/upgrade, then poll `get_pending_*` each day waiting for the timelock to expire. Without read bumps, the proposal itself could archive before its own execute window opens, leaving the admin unable to execute even though they "used" the contract every day.
 
 ## Processed-Request Idempotency Storage (Temporary)
 
-Idempotency markers for `deduct` and `batch_deduct` live in **temporary storage** — a separate Soroban storage tier that is automatically archived when its TTL expires, without requiring explicit deletion.
+Idempotency markers for `deduct` and `batch_deduct` live in **persistent storage**. They do **not** silently archive; an owner MUST explicitly prune them with `prune_processed_requests` to recover state space.
 
 | Constant                    | Value                    | Rationale                                                    |
 | --------------------------- | ------------------------ | ------------------------------------------------------------ |
@@ -373,13 +403,14 @@ Monitor storage-related events:
 | 1.0     | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)`                                                                                                                                |
 | 1.1     | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md                                                                                                                     |
 | 1.2     | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| 1.4     | **Buffer #5 — TTL bump on hot read paths.** Added public TTL constants (`LEDGERS_PER_DAY`, `INSTANCE_BUMP_THRESHOLD/AMOUNT`, `PERSISTENT_BUMP_THRESHOLD/AMOUNT`, `REQUEST_ID_BUMP_THRESHOLD/AMOUNT`). Instance TTL now bumped at **entry** of EVERY public view call (`balance`, `get_*`, `is_*`) so read-only usage keeps vault alive. Persistent `PendingPause/PendingUpgrade/PendingSweep` keys bumped by `get_pending_*` getters when the proposal exists. Write entrypoints continue to bump at exit. Added new `VaultError` codes 44-47 (proposal/timelock errors) and declared `pub mod timelock`. |
 | Version | Change |
 |---------|--------|
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
 | 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
 | 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 | 1.3 | Added `StorageKey::LifetimeDeposit(Address)` (persistent, TTL ~1 year) and `StorageKey::LifetimeDepositorIndex` (instance) for per-depositor cumulative deposit tracking. Added `get_lifetime_deposit(addr)` and `list_lifetime_deposits(cursor, limit)` view functions. Page cap: 100. Overflow-protected via `checked_add`. |
-| 1.4 | `propose_sweep` now rejects sub-unit/dust amounts: `amount` must be `>= min_deposit`, in addition to the existing `amount > 0` check. Added `VaultError::BelowMinTransferAmount` (code 48). |
+| 1.4 | **Buffer #5 — TTL bump on hot read paths.** Instance TTL bumped at entry of EVERY public view call (`balance`, `get_*`, `is_*`, `get_pending_*`) so read-only usage keeps vault alive. Persistent timelock proposal keys also bumped by getters when present. All mutating entrypoints continue to bump instance TTL at exit. Added TTL constants (all `pub`). Declared `pub mod timelock`; added `VaultError` codes 44 (ProposalNotFound), 45 (TimelockNotExpired), 46 (TimelockOverflow), 47 (InvalidTimelockWindow). |
 
 ## Canonical Storage Keys
 
