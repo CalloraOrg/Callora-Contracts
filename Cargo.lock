@@ -245,6 +245,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-cold"
+version = "0.0.1"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-contracts-e2e"
 version = "0.0.0"
 dependencies = [
