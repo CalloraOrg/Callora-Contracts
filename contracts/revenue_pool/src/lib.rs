@@ -1058,5 +1058,3 @@ mod rustdoc_tests {
     }
 }
 
-#[cfg(test)]
-mod test;

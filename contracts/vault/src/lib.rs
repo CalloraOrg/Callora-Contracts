@@ -48,7 +48,7 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env,
     Symbol, Vec,
 };
 
@@ -812,7 +812,7 @@ impl CalloraVault {
         timelock::clear_pending_pause(&env);
         env.events().publish(
             (events::event_pause_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -894,7 +894,7 @@ impl CalloraVault {
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
             (events::event_upgrade_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }
@@ -998,7 +998,7 @@ impl CalloraVault {
         timelock::clear_pending_sweep(&env);
         env.events().publish(
             (events::event_sweep_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Ok(())
     }

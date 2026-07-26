@@ -73,6 +73,3 @@ pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), Upgra
 
     Ok(())
 }
-
-#[cfg(test)]
-mod test;

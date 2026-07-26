@@ -4,6 +4,7 @@
 //! ensuring byte-identity is preserved and preventing accidental topic name drift
 //! across call sites.
 
+#![allow(dead_code)]
 use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
