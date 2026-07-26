@@ -23,9 +23,9 @@
 //!
 //! ## Storage Layout
 //! - `PendingPause`         (persistent)
- //! - `PendingUpgrade`       (persistent, holds `BytesN<32>` wasm hash)
- //! - `PendingSweep`         (persistent, holds destination + amount)
- //! - `TimelockWindow`       (instance, `u64` seconds)
+//! - `PendingUpgrade`       (persistent, holds `BytesN<32>` wasm hash)
+//! - `PendingSweep`         (persistent, holds destination + amount)
+//! - `TimelockWindow`       (instance, `u64` seconds)
 
 use soroban_sdk::{contracttype, Address, BytesN, Env};
 
@@ -106,7 +106,9 @@ pub(crate) fn saturating_deadline(proposed_at: u64, window: u64) -> Option<u64> 
 // --- PendingPause helpers --------------------------------------------------
 
 pub(crate) fn get_pending_pause(env: &Env) -> Option<PendingPause> {
-    env.storage().persistent().get(&crate::StorageKey::PendingPause)
+    env.storage()
+        .persistent()
+        .get(&crate::StorageKey::PendingPause)
 }
 
 pub(crate) fn set_pending_pause(env: &Env, proposal: &PendingPause) {
@@ -148,7 +150,9 @@ pub(crate) fn clear_pending_upgrade(env: &Env) {
 // --- PendingSweep helpers --------------------------------------------------
 
 pub(crate) fn get_pending_sweep(env: &Env) -> Option<PendingSweep> {
-    env.storage().persistent().get(&crate::StorageKey::PendingSweep)
+    env.storage()
+        .persistent()
+        .get(&crate::StorageKey::PendingSweep)
 }
 
 pub(crate) fn set_pending_sweep(env: &Env, proposal: &PendingSweep) {

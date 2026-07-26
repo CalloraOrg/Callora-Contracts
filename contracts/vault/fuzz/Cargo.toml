@@ -18,3 +18,9 @@ name = "set_auth"
 path = "targets/set_auth.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "main"
+path = "targets/main.rs"
+test = false
+doc = false

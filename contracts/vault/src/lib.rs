@@ -47,105 +47,17 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
-    Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod views;
 
 mod errors;
 pub use errors::VaultError;
 
-/// Typed error codes for the Callora Vault contract.
-///
-/// These error codes are returned instead of string panics to enable
-/// machine-readable error handling by integrators using @stellar/stellar-sdk.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum VaultError {
-    /// Vault has not been initialized yet (code 1).
-    NotInitialized = 1,
-    /// Vault has already been initialized (code 2).
-    AlreadyInitialized = 2,
-    /// Caller is not authorized for this operation (code 3).
-    Unauthorized = 3,
-    /// Vault is currently paused (code 4).
-    Paused = 4,
-    /// Insufficient balance for the requested operation (code 5).
-    InsufficientBalance = 5,
-    /// Amount must be positive (code 6).
-    AmountNotPositive = 6,
-    /// Deduct amount exceeds the configured maximum (code 7).
-    ExceedsMaxDeduct = 7,
-    /// Deposit amount is below the configured minimum (code 8).
-    BelowMinDeposit = 8,
-    /// Arithmetic overflow detected (code 9).
-    Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
-    /// Min deposit must be positive (code 11).
-    MinDepositNotPositive = 11,
-    /// Max deduct must be positive (code 12).
-    MaxDeductNotPositive = 12,
-    /// Min deposit cannot exceed max deduct (code 13).
-    MinDepositExceedsMaxDeduct = 13,
-    /// USDC token address cannot be the vault address (code 14).
-    UsdcTokenCannotBeVault = 14,
-    /// Revenue pool address cannot be the vault address (code 15).
-    RevenuePoolCannotBeVault = 15,
-    /// Authorized caller address cannot be the vault address (code 16).
-    AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
-    /// Vault is already paused (code 18).
-    AlreadyPaused = 18,
-    /// Vault is not paused (code 19).
-    NotPaused = 19,
-    /// Settlement address has not been configured (code 20).
-    SettlementNotSet = 20,
-    /// Batch deduct requires at least one item (code 21).
-    BatchEmpty = 21,
-    /// Batch size exceeds maximum allowed (code 22).
-    BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
-    /// No admin transfer is pending (code 25).
-    NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
-    PriceParseError = 28,
-    /// Duplicate request ID detected (code 29).
-    DuplicateRequestId = 29,
-    /// Offering ID is empty or contains invalid characters (code 30).
-    OfferingIdInvalid = 30,
-    /// Metadata string is empty or contains invalid characters (code 31).
-    MetadataInvalid = 31,
-    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
-    StaleNonce = 32,
-    /// New revenue pool must be different from current revenue pool (code 33).
-    NewRevenuePoolSameAsCurrent = 33,
-    /// No revenue pool transfer is pending (code 34).
-    NoRevenuePoolTransferPending = 34,
-    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
-    Slippage = 35,
-    /// Rate limit exceeded for the developer (code 36).
-    RateLimited = 36,
-    /// No pending timelock proposal for the requested action (code 37).
-    ProposalNotFound = 37,
-    /// Action attempted before the timelock window has elapsed (code 38).
-    TimelockNotExpired = 38,
-    /// `proposed_at + window` overflowed `u64` (code 39).
-    TimelockOverflow = 39,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
-    InvalidTimelockWindow = 40,
-}
+/// TTL extension amounts for instance storage (ledger sequence units).
+/// ~30 days at 5-second ledgers = 518_400 ledgers; bump to ~60 days = 1_036_800.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 518_400;
+pub const INSTANCE_BUMP_AMOUNT: u32 = 1_036_800;
 
 #[contracttype]
 #[derive(Clone)]
@@ -432,7 +344,9 @@ impl CalloraVault {
         for item in items.iter() {
             let (amount, _) = item;
             Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
+            total_amount = total_amount
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("overflow"));
         }
         let current_bal = env
             .storage()
@@ -739,10 +653,7 @@ impl CalloraVault {
         }
         timelock::set_timelock_window(&env, window);
         env.events().publish(
-            (
-                events::event_timelock_window_changed(&env),
-                caller.clone(),
-            ),
+            (events::event_timelock_window_changed(&env), caller.clone()),
             (timelock::get_timelock_window(&env), window),
         );
         Ok(())
@@ -822,12 +733,8 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&StorageKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         Ok(())
     }
 
@@ -857,8 +764,10 @@ impl CalloraVault {
                 execute_after,
             },
         );
-        env.events()
-            .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
@@ -874,15 +783,16 @@ impl CalloraVault {
     /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_pause(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
-        env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+        env.events().publish(
+            (events::event_pause_executed(&env), caller.clone()),
+            env.ledger().timestamp(),
+        );
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
@@ -902,10 +812,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_pause(&env);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (
-                events::event_pause_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_pause_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
@@ -953,14 +860,14 @@ impl CalloraVault {
     /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_upgrade(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         let wasm_hash = proposal.wasm_hash.clone();
         let _admin = Self::get_admin(env.clone())?;
-        env.deployer().update_current_contract_wasm(wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(wasm_hash.clone());
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &wasm_hash);
@@ -987,10 +894,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_upgrade(&env);
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
-            (
-                events::event_upgrade_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_upgrade_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
@@ -1049,8 +953,7 @@ impl CalloraVault {
     /// - `VaultError::InsufficientBalance` if vault holds less than `amount`.
     pub fn execute_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_sweep(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
@@ -1095,10 +998,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_sweep(&env);
         timelock::clear_pending_sweep(&env);
         env.events().publish(
-            (
-                events::event_sweep_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_sweep_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
         Ok(())
@@ -1184,6 +1084,7 @@ mod cold_storage;
 mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]

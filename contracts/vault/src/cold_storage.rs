@@ -218,8 +218,8 @@ pub fn maybe_rebalance(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::Env;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
 
     fn addr(env: &Env, seed: u8) -> Address {
         // Deterministic-ish distinct addresses for unit tests that don't
