@@ -196,6 +196,8 @@ impl CalloraSettlement {
     ///
     /// # Validation
     /// All amounts must be `> 0`. Empty and oversized batches are rejected before any state change.
+    /// The contract returns typed errors for empty batches (`BatchEmpty`), oversized batches
+    /// (`BatchTooLarge`), and non-positive amounts (`AmountNotPositive`).
     ///
     /// # Atomicity
     /// All validation runs before any state is written. A failure on any item leaves the
@@ -214,13 +216,19 @@ impl CalloraSettlement {
         Self::require_authorized_caller(env.clone(), caller.clone());
 
         let n = items.len();
-        assert!(n > 0, "batch_receive_payment requires at least one item");
-        assert!(n <= MAX_BATCH_SIZE, "batch too large");
+        if n == 0 {
+            env.panic_with_error(SettlementError::BatchEmpty);
+        }
+        if n > MAX_BATCH_SIZE {
+            env.panic_with_error(SettlementError::BatchTooLarge);
+        }
 
         // Validate all amounts before touching state.
         for item in items.iter() {
             let (_, amount) = item;
-            assert!(amount > 0, "amount must be positive");
+            if amount <= 0 {
+                env.panic_with_error(SettlementError::AmountNotPositive);
+            }
         }
 
         // Replay guard: validate ALL developer HWMs before any state change.
