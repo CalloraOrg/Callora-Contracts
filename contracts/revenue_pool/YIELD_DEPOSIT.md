@@ -23,6 +23,9 @@ topics: ["yield_deposited", treasury]
 data:   (amount, source, cumulative_yield_deposited)
 ```
 
-The metric update, token transfer, and event emission are part of the same
-Soroban transaction. If the transfer fails, the metric and event are reverted
-with the rest of the transaction.
+The token transfer runs before the cumulative metric update and event emission.
+All three effects are part of the same Soroban transaction: if the USDC callee
+reverts or panics, the metric and event are not committed.
+
+Cross-contract call safety for this path is covered by
+`contracts/yield/tests/xcontract.rs`.
