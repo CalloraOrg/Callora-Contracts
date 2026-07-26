@@ -13,7 +13,7 @@ members = [
     "contracts/checkpoint",
     "contracts/limits",
     "contracts/helpers",
-    "contracts/registry",
+    "contracts/hot",
     "contracts/revenue_pool/fuzz",
     "contracts/tests", "contracts/upgrade",
 ]
@@ -24,6 +24,7 @@ default-members = [
     "contracts/checkpoint",
     "contracts/limits",
     "contracts/helpers",
+    "contracts/hot",
 ]
 
 
