@@ -44,8 +44,7 @@ impl MaliciousToken {
                 let _ = client.try_deduct(
                     &caller,
                     &1,
-                    &Some(Symbol::new(&env, "reentry_token")),
-                    &u32::MAX,
+                    &Some(Symbol::new(&env, "reentry_token"))
                 );
             }
         }
@@ -111,8 +110,7 @@ impl MaliciousSettlement {
                 let _ = client.try_deduct(
                     &caller,
                     &1,
-                    &Some(Symbol::new(&env, "reentry_settle")),
-                    &u32::MAX,
+                    &Some(Symbol::new(&env, "reentry_settle"))
                 );
             }
         }
@@ -167,8 +165,7 @@ fn test_reentrancy_via_token_transfer_is_blocked_by_auth() {
     let result = vault_client.try_deduct(
         &owner,
         &100,
-        &Some(Symbol::new(&env, "first_call")),
-        &u32::MAX,
+        &Some(Symbol::new(&env, "first_call"))
     );
 
     assert!(result.is_ok(), "First deduct should succeed");
@@ -214,8 +211,7 @@ fn test_reentrancy_via_settlement_callback_is_blocked() {
     let result = vault_client.try_deduct(
         &owner,
         &100,
-        &Some(Symbol::new(&env, "first_call")),
-        &u32::MAX,
+        &Some(Symbol::new(&env, "first_call"))
     );
 
     assert!(result.is_ok(), "First deduct should succeed");
@@ -320,8 +316,7 @@ fn test_reentrancy_by_authorized_attacker() {
     let result = vault_client.try_deduct(
         &attacker,
         &100,
-        &Some(Symbol::new(&env, "first_call")),
-        &u32::MAX,
+        &Some(Symbol::new(&env, "first_call"))
     );
 
     assert!(result.is_ok(), "First deduct should succeed");

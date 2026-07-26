@@ -291,6 +291,15 @@ mod tests {
             Symbol::new(&env, "developer_min_balance_changed")
         );
     }
+
+    #[test]
+    fn test_event_metadata_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_metadata_removed(&env),
+            Symbol::new(&env, "metadata_removed")
+        );
+    }
 }
 
 /// Returns the Symbol for the `"metadata_removed"` event topic.

@@ -42,7 +42,7 @@ fn setup(
     let (usdc, usdc_client, usdc_admin) = create_usdc(env, &owner);
     let (vault_address, client) = create_vault(env);
     env.mock_all_auths();
-    client.init(&owner, &usdc, &0, &owner, &1, &None, &10000000000, &soroban_sdk::Address::generate(&env));
+    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
     (vault_address, client, usdc, usdc_client, usdc_admin, owner)
 }
 

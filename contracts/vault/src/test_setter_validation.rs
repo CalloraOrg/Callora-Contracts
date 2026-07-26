@@ -19,7 +19,7 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient, Address, Address) {
     let admin = Address::generate(env);
     let (vault_addr, client) = create_vault(env);
     let (usdc, _) = create_usdc(env, &admin);
-    client.init(&admin, &usdc, &0, &admin, &1, &None, &10000000000, &soroban_sdk::Address::generate(&env));
+    client.init(&admin, &usdc, &Some(0), &Some(admin.clone()), &Some(1), &None, &None);
     (vault_addr, client, usdc, admin)
 }
 

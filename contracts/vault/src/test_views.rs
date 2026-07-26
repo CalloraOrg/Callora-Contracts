@@ -21,15 +21,15 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient<'_>, Address) {
     let client = CalloraVaultClient::new(env, &vault_addr);
     let (usdc, _) = create_usdc(env, &owner);
     env.mock_all_auths();
+    // 7-arg Option init — settlement set separately via set_settlement if needed
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     (owner, client, usdc)
 }
@@ -136,12 +136,11 @@ fn get_max_deduct_returns_configured_value() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &500,
-        &soroban_sdk::Address::generate(&env),
+        &Some(500),
     );
     assert_eq!(client.get_max_deduct(), 500);
 }
@@ -184,6 +183,7 @@ fn get_settlement_returns_address_after_set() {
     let (owner, client, _) = setup(&env);
     let settlement = Address::generate(&env);
 
+    client.set_settlement(&owner, &settlement);
     assert_eq!(client.get_settlement(), settlement);
 }
 
@@ -228,6 +228,7 @@ fn get_contract_addresses_fully_configured() {
     let settlement = Address::generate(&env);
     let pool = Address::generate(&env);
 
+    client.set_settlement(&owner, &settlement);
     client.set_revenue_pool(&owner, &Some(pool.clone()));
     let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
     assert_eq!(got_usdc, Some(usdc));
