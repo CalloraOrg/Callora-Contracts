@@ -4,6 +4,7 @@
 //! ensuring byte-identity is preserved and preventing accidental topic name drift
 //! across call sites.
 
+#![allow(dead_code)]
 use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
@@ -609,47 +610,72 @@ mod tests {
     }
 
     #[test]
-    fn test_timelock_event_bytes() {
+    fn test_event_pause_proposed_bytes() {
         let env = soroban_sdk::Env::default();
-        assert_eq!(
-            event_pause_proposed(&env),
-            Symbol::new(&env, "pause_proposed")
-        );
-        assert_eq!(
-            event_pause_executed(&env),
-            Symbol::new(&env, "pause_executed")
-        );
-        assert_eq!(
-            event_pause_cancelled(&env),
-            Symbol::new(&env, "pause_cancelled")
-        );
-        assert_eq!(
-            event_upgrade_proposed(&env),
-            Symbol::new(&env, "upgrade_proposed")
-        );
-        assert_eq!(
-            event_upgrade_executed(&env),
-            Symbol::new(&env, "upgrade_executed")
-        );
-        assert_eq!(
-            event_upgrade_cancelled(&env),
-            Symbol::new(&env, "upgrade_cancelled")
-        );
-        assert_eq!(
-            event_sweep_proposed(&env),
-            Symbol::new(&env, "sweep_proposed")
-        );
-        assert_eq!(
-            event_sweep_executed(&env),
-            Symbol::new(&env, "sweep_executed")
-        );
-        assert_eq!(
-            event_sweep_cancelled(&env),
-            Symbol::new(&env, "sweep_cancelled")
-        );
-        assert_eq!(
-            event_timelock_window_changed(&env),
-            Symbol::new(&env, "tl_window_changed")
-        );
+        let sym = event_pause_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_proposed"));
+    }
+
+    #[test]
+    fn test_event_pause_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_executed"));
+    }
+
+    #[test]
+    fn test_event_pause_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_cancelled"));
+    }
+
+    #[test]
+    fn test_event_upgrade_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_proposed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_executed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_cancelled"));
+    }
+
+    #[test]
+    fn test_event_sweep_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_proposed"));
+    }
+
+    #[test]
+    fn test_event_sweep_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_executed"));
+    }
+
+    #[test]
+    fn test_event_sweep_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_cancelled"));
+    }
+
+    #[test]
+    fn test_event_timelock_window_changed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_timelock_window_changed(&env);
+        assert_eq!(sym, Symbol::new(&env, "tl_window_changed"));
     }
 }

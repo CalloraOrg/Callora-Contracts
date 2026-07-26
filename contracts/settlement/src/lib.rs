@@ -65,6 +65,21 @@ impl CalloraSettlement {
         inst.set(&StorageKey::TotalReceived, &0i128);
     }
 
+    /// Record a deduction from the vault.
+    pub fn record_deduction(env: Env, amount: i128, _request_id: u64) {
+        let vault = Self::get_vault(env.clone());
+        vault.require_auth();
+        let total = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&StorageKey::TotalReceived)
+            .unwrap_or(0);
+        let new_total = total.checked_add(amount).unwrap();
+        env.storage()
+            .instance()
+            .set(&StorageKey::TotalReceived, &new_total);
+    }
+
     /// Receive payment from vault and credit to pool or developer balance.
     ///
     /// # Arguments

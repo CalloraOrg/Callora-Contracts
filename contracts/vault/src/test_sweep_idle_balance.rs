@@ -46,7 +46,7 @@ fn test_sweep_idle_balance() {
     assert_eq!(preview.on_ledger_balance, 1000);
     assert_eq!(preview.tracked_balance, 0);
     assert_eq!(preview.idle_balance, 1000);
-    assert!(preview.has_idle);
+    assert_eq!(preview.has_idle, true);
 
     // Deposit 500
     usdc.mint(&owner, &500);

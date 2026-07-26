@@ -131,6 +131,11 @@ pub fn event_developer_min_balance_changed(env: &Env) -> Symbol {
     Symbol::new(env, "developer_min_balance_changed")
 }
 
+/// Returns the Symbol for the `"metadata_removed"` event topic.
+pub fn event_metadata_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "metadata_removed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

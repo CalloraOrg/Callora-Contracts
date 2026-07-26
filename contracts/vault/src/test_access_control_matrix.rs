@@ -51,7 +51,7 @@ fn test_entrypoints_require_auth() {
     // deduct now takes (caller, amount, Option<Symbol>)
     assert!(client.try_deduct(&owner, &10, &None).is_err());
     assert!(client.try_batch_deduct(&owner, &items).is_err());
-    assert!(client.try_set_authorized_caller(&owner).is_err());
+    assert!(client.try_set_authorized_caller(&owner, &owner).is_err());
     assert!(client.try_pause(&owner).is_err());
     assert!(client.try_unpause(&owner).is_err());
     assert!(client.try_set_max_deduct(&owner, &200).is_err());

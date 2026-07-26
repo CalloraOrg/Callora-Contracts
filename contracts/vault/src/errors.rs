@@ -45,7 +45,7 @@ use soroban_sdk::contracterror;
 /// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
-/// | 38   | InvalidHotBps                  | Hot BPS must be between 1 and 10000                       |
+/// | 38   | InvalidHotBps                  | Hot BPS must be between 1 and 10000                      |
 /// | 39   | InvalidRebalanceThreshold      | Rebalance threshold must be between 1 and 10000          |
 /// | 40   | ColdSignersEmpty               | Cold signer set cannot be empty                          |
 /// | 41   | InvalidColdThreshold           | Cold threshold must be between 1 and signer count        |
@@ -55,7 +55,6 @@ use soroban_sdk::contracterror;
 /// | 45   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
 /// | 46   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
 /// | 47   | InvalidTimelockWindow          | Proposed timelock window is outside the allowed bounds   |
-/// | 48   | BelowMinTransferAmount         | Amount is below the configured minimum transfer unit (rejects sub-unit/dust transfers) |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]

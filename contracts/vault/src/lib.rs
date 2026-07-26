@@ -47,14 +47,17 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
 
+pub mod timelock;
 pub mod views;
 
 mod errors;
 pub use errors::VaultError;
+
+/// The default amount to extend the TTL of instance storage entries.
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17280 * 30; // 30 days
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17280 * 14; // 14 days
 
 #[contracttype]
 #[derive(Clone)]
@@ -101,35 +104,6 @@ pub enum StorageKey {
     /// Depositor allowlist (stored as Vec<Address>).
     AllowedDepositors,
 }
-
-/// Ledgers-per-day at 5-second close time (Stellar mainnet).
-pub const LEDGERS_PER_DAY: u32 = 17_280;
-
-/// Instance TTL bump is triggered when fewer than 30 days remain.
-pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
-
-/// Each instance TTL bump extends the lifetime to 60 days from now.
-pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
-
-/// Processed-request TTL bump is triggered when fewer than 7 days remain.
-pub const REQUEST_ID_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
-
-/// Each processed-request TTL bump extends the lifetime to 30 days from now.
-pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
-
-/// Persistent-storage TTL bump threshold — matches instance threshold (30 days).
-pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
-
-/// Persistent-storage TTL bump amount — matches instance amount (60 days).
-pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
-
-pub mod token {
-    pub use soroban_sdk::token::Client;
-}
-
-// ---------------------------------------------------------------------------
-// Settlement cross-contract client
-// ---------------------------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
 pub mod settlement {
@@ -457,7 +431,9 @@ impl CalloraVault {
         for item in items.iter() {
             let (amount, _) = item;
             Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("Math overflow"));
+            total_amount = total_amount
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("overflow"));
         }
         
         let current_bal = env.storage().instance().get::<_, i128>(&DataKey::Balance).unwrap_or(0);
@@ -506,10 +482,90 @@ impl CalloraVault {
 
     /// Modifies the authorized caller (Owner only).
     ///
-    /// # Arguments
-    /// * `env` - The execution environment.
-    /// * `caller` - The vault owner address (must authorize).
-    pub fn set_authorized_caller(env: Env, caller: Address) {
+    /// Performs validation checks identical to `deduct` and returns the predicted
+    /// balance after the specified `amount` is deducted.
+    ///
+    /// # Errors
+    /// Returns `VaultError` under the exact same conditions as `deduct`
+    /// (e.g., paused state, amount exceeding balance, amount exceeding max deduction limit).
+    // pub fn simulate_deduct(
+    //     env: Env,
+    //     caller: Address,
+    //     amount: i128,
+    //     request_id: Option<Symbol>,
+    // ) -> Result<i128, VaultError> {
+    //     Self::require_not_paused(env.clone())?;
+    //     caller.require_auth();
+    //     if amount <= 0 {
+    //         return Err(VaultError::AmountNotPositive);
+    //     }
+    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+    //     let max_d = Self::get_max_deduct(env.clone());
+    //     if amount > max_d {
+    //         return Err(VaultError::ExceedsMaxDeduct);
+    //     }
+    //     if let Some(ref rid) = request_id {
+    //         Self::require_not_duplicate(&env, rid)?;
+    //     }
+    //     let meta = Self::get_meta(env.clone())?;
+    //     if meta.balance < amount {
+    //         return Err(VaultError::InsufficientBalance);
+    //     }
+    //     let _ = Self::require_settlement(&env)?;
+    //     meta.balance
+    //         .checked_sub(amount)
+    //         .ok_or(VaultError::Overflow)
+    // }
+
+    // pub fn simulate_batch_deduct(
+    //     env: Env,
+    //     caller: Address,
+    //     items: Vec<DeductItem>,
+    // ) -> Result<i128, VaultError> {
+    //     Self::require_not_paused(env.clone())?;
+    //     caller.require_auth();
+    //     Self::require_authorized_deduct_caller(env.clone(), &caller)?;
+    //     let n = items.len();
+    //     if n == 0 {
+    //         return Err(VaultError::BatchEmpty);
+    //     }
+    //     if n > MAX_BATCH_SIZE {
+    //         return Err(VaultError::BatchTooLarge);
+    //     }
+    //     let max_d = Self::get_max_deduct(env.clone());
+    //     let meta = Self::get_meta(env.clone())?;
+    //     let mut running = meta.balance;
+    //     let mut seen_in_batch: Vec<Symbol> = Vec::new(&env);
+    //     for item in items.iter() {
+    //         if item.amount <= 0 {
+    //             return Err(VaultError::AmountNotPositive);
+    //         }
+    //         if item.amount > max_d {
+    //             return Err(VaultError::ExceedsMaxDeduct);
+    //         }
+    //         if running < item.amount {
+    //             return Err(VaultError::InsufficientBalance);
+    //         }
+    //         if let Some(ref rid) = item.request_id {
+    //             Self::require_not_duplicate(&env, rid)?;
+    //             if seen_in_batch.contains(rid) {
+    //                 return Err(VaultError::DuplicateRequestId);
+    //             }
+    //             seen_in_batch.push_back(rid.clone());
+    //         }
+    //         running = running.checked_sub(item.amount).ok_or(VaultError::Overflow)?;
+    //     }
+    //     let _ = Self::require_settlement(&env)?;
+    //     Ok(running)
+    // }
+
+    // pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
+    //     env.storage()
+    //         .instance()
+    //         .set(&DataKey::Depositor(depositor), &true);
+    // }
+
+    pub fn set_authorized_caller(env: Env, caller: Address, new_caller: Address) {
         caller.require_auth();
         
         let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
@@ -520,8 +576,7 @@ impl CalloraVault {
         }
         env.storage()
             .instance()
-            .set(&DataKey::AuthorizedCaller, &caller);
-        Self::bump_instance_ttl(&env);
+            .set(&DataKey::AuthorizedCaller, &new_caller);
     }
 
     pub fn pause(env: Env, caller: Address) {
@@ -802,13 +857,8 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&StorageKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
-        Self::bump_instance_ttl(&env);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         Ok(())
     }
 
@@ -928,9 +978,10 @@ impl CalloraVault {
             (events::event_pause_proposed(&env), caller),
             (proposed_at, execute_after),
         );
-        env.events()
-            .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
-        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
@@ -942,8 +993,10 @@ impl CalloraVault {
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
-        env.events()
-            .publish((events::event_pause_executed(&env), caller.clone()), env.ledger().timestamp());
+        env.events().publish(
+            (events::event_pause_executed(&env), caller.clone()),
+            env.ledger().timestamp(),
+        );
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
         Self::bump_instance_ttl(&env);
@@ -955,10 +1008,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_pause(&env);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (
-                events::event_pause_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_pause_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Self::bump_instance_ttl(&env);
@@ -1024,10 +1074,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_upgrade(&env);
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
-            (
-                events::event_upgrade_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_upgrade_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Self::bump_instance_ttl(&env);
@@ -1126,10 +1173,7 @@ impl CalloraVault {
         let existing = timelock::get_pending_sweep(&env);
         timelock::clear_pending_sweep(&env);
         env.events().publish(
-            (
-                events::event_sweep_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_sweep_cancelled(&env), caller.clone()),
             existing.is_some(),
         );
         Self::bump_instance_ttl(&env);

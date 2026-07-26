@@ -115,8 +115,7 @@ impl CalloraCheckpoint {
         inst.set(&StorageKey::NextCheckpointId, &0u64);
         inst.set(&StorageKey::CheckpointCount, &0u64);
 
-        env.events()
-            .publish((events::event_init(&env), admin), ());
+        env.events().publish((events::event_init(&env), admin), ());
 
         Ok(())
     }
@@ -211,11 +210,7 @@ impl CalloraCheckpoint {
     ///
     /// # Events
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
-    pub fn set_admin(
-        env: Env,
-        caller: Address,
-        new_admin: Address,
-    ) -> Result<(), CheckpointError> {
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
         env.storage()
@@ -282,10 +277,7 @@ impl CalloraCheckpoint {
     ///
     /// # Events
     /// Emits `admin_cancelled` with the cancelled pending admin.
-    pub fn cancel_admin_transfer(
-        env: Env,
-        caller: Address,
-    ) -> Result<(), CheckpointError> {
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
@@ -368,10 +360,8 @@ impl CalloraCheckpoint {
             .persistent()
             .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        env.events().publish(
-            (events::event_checkpoint_created(&env), subject),
-            record,
-        );
+        env.events()
+            .publish((events::event_checkpoint_created(&env), subject), record);
 
         Ok(id)
     }
@@ -464,10 +454,7 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
-    pub fn get_checkpoint(
-        env: Env,
-        id: u64,
-    ) -> Result<CheckpointRecord, CheckpointError> {
+    pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
         env.storage()
             .persistent()
             .get(&StorageKey::Checkpoint(id))
@@ -515,11 +502,7 @@ impl CalloraCheckpoint {
 
         let mut result: Vec<CheckpointRecord> = Vec::new(&env);
         for id in start_id..end_id {
-            if let Some(record) = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::Checkpoint(id))
-            {
+            if let Some(record) = env.storage().persistent().get(&StorageKey::Checkpoint(id)) {
                 result.push_back(record);
             }
         }
@@ -555,9 +538,7 @@ impl CalloraCheckpoint {
     /// This is a convenience wrapper around
     /// [`CalloraCheckpoint::get_latest_checkpoint_id`] and
     /// [`CalloraCheckpoint::get_checkpoint`].
-    pub fn get_latest_checkpoint(
-        env: Env,
-    ) -> Option<CheckpointRecord> {
+    pub fn get_latest_checkpoint(env: Env) -> Option<CheckpointRecord> {
         let latest_id = Self::get_latest_checkpoint_id(env.clone());
         if latest_id == 0 {
             return None;
@@ -675,10 +656,7 @@ impl CalloraCheckpoint {
             .update_current_contract_wasm(new_wasm_hash.clone());
 
         env.events().publish(
-            (
-                events::event_upgraded(&env),
-                Self::admin(&env)?,
-            ),
+            (events::event_upgraded(&env), Self::admin(&env)?),
             new_wasm_hash,
         );
 

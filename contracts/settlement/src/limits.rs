@@ -215,6 +215,7 @@ mod tests {
 
     #[test]
     fn set_min_balance_emits_event() {
+        use soroban_sdk::IntoVal;
         let (env, contract, admin) = setup();
         let dev = Address::generate(&env);
         let client = CalloraSettlementClient::new(&env, &contract);
@@ -222,7 +223,7 @@ mod tests {
         client.set_developer_min_balance(&admin, &dev, &5_000);
 
         let events = env.events().all();
-        let min_balance_events: Vec<_> = events
+        let min_balance_events: std::vec::Vec<_> = events
             .iter()
             .filter(|e| {
                 if e.1.is_empty() {

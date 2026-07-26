@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! # Hot/Cold Balance Split
 //!
 //! This module implements a configurable hot/cold balance split for the

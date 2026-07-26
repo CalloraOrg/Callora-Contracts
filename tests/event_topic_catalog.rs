@@ -9,8 +9,7 @@
 //! If any test in this file fails, the corresponding row in
 //! `docs/EVENT_TOPICS.md` must be updated to reflect the new topic string.
 
-use soroban_sdk::{Env, Symbol, Vec as SorobanVec};
-use std::vec::Vec;
+use soroban_sdk::{Env, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
 // Vault contract topics
@@ -314,7 +313,7 @@ fn topic_counts_match_catalog_documentation() {
 #[test]
 fn all_topic_strings_are_valid_identifiers() {
     let env = Env::default();
-    let all: Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
+    let all: std::vec::Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
         .iter()
         .map(|(s, c)| ("vault", *s, *c))
         .chain(
@@ -400,7 +399,7 @@ fn no_duplicate_topics_per_contract() {
 fn topic_constructors_are_deterministic() {
     let env = Env::default();
 
-    let all: Vec<fn(&Env) -> Symbol> = VAULT_TOPICS
+    let all: std::vec::Vec<fn(&Env) -> Symbol> = VAULT_TOPICS
         .iter()
         .map(|(_, c)| *c)
         .chain(SETTLEMENT_TOPICS.iter().map(|(_, c)| *c))

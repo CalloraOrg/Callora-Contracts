@@ -7533,6 +7533,7 @@ impl ConservationSnapshot {
                 env,
                 settlement_addr,
                 admin,
+                &usdc_client.address,
             );
 
         let revenue_pool_balance = usdc_client.balance(revenue_pool_addr);
