@@ -74,11 +74,9 @@ pub fn set_developer_min_balance(
         50_000,
     );
 
-    env.events().publish(
-        (
-            events::event_developer_min_balance_changed(env),
-            developer.clone(),
-        ),
+    events::emit_developer_min_balance_changed(
+        env,
+        &developer,
         MinBalanceChanged {
             developer,
             new_min_balance: min_balance,
