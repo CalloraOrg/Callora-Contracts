@@ -52,6 +52,9 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Sy
 pub mod timelock;
 pub mod views;
 
+/// Bounded visible-ASCII metadata validators (shared `callora-validators` crate).
+pub use callora_validators as validators;
+
 mod errors;
 pub use errors::VaultError;
 
