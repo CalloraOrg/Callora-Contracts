@@ -3455,8 +3455,22 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &usdc_address, &100);
-        client.receive_payment(&vault, &100i128, &false, &Some(dev2.clone()), &usdc_address, &100);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(dev1.clone()),
+            &usdc_address,
+            &100,
+        );
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(dev2.clone()),
+            &usdc_address,
+            &100,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
         // dev1's window already closed; dev2 has no window (unrestricted).

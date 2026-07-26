@@ -47,10 +47,7 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{
-    contract, contractimpl, contracttype, token, Address, BytesN, Env,
-    Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
 
 pub mod timelock;
 pub mod views;

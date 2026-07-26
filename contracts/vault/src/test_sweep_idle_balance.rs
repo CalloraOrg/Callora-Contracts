@@ -5,7 +5,6 @@ use soroban_sdk::{token, Address, Env};
 
 use super::*;
 
-
 fn create_usdc<'a>(env: &'a Env, admin: &Address) -> (Address, token::StellarAssetClient<'a>) {
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
     let addr = ca.address();
