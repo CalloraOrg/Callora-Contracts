@@ -270,6 +270,15 @@ name = "callora-helpers"
 version = "0.1.0"
 
 [[package]]
+name = "callora-limits"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-revenue-pool"
 version = "0.0.1"
 dependencies = [
