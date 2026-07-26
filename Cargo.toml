@@ -19,6 +19,7 @@ members = [
     "contracts/revenue_pool/fuzz",
     "contracts/tests",
     "contracts/whitelist",
+    "contracts/cold",
 ]
 default-members = [
     "contracts/vault",
