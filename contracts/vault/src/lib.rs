@@ -145,6 +145,8 @@ pub enum VaultError {
     TimelockOverflow = 39,
     /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
     InvalidTimelockWindow = 40,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    CallerNotInAllowlist = 44,
 }
 
 #[contracttype]
@@ -185,6 +187,8 @@ pub enum StorageKey {
     PendingAdmin,
     /// Recorded wasm hash after a successful upgrade.
     ContractVersion,
+    /// Vector of addresses allowed to deposit (owner-managed allowlist).
+    AllowedDepositors,
 }
 
 pub mod token {
@@ -224,27 +228,30 @@ pub struct CalloraVault;
 
 #[contractimpl]
 impl CalloraVault {
-    fn require_positive_amount(amount: i128) {
+    fn require_positive_amount(amount: i128) -> Result<(), VaultError> {
         if amount <= 0 {
-            panic!("amount must be positive");
+            return Err(VaultError::AmountNotPositive);
         }
+        Ok(())
     }
 
-    fn require_valid_deposit_amount(amount: i128, min_deposit: i128) {
-        Self::require_positive_amount(amount);
+    fn require_valid_deposit_amount(amount: i128, min_deposit: i128) -> Result<(), VaultError> {
+        Self::require_positive_amount(amount)?;
         if amount < min_deposit {
-            panic!("deposit below minimum");
+            return Err(VaultError::BelowMinDeposit);
         }
+        Ok(())
     }
 
-    fn require_valid_deduct_amount(amount: i128, min_amount: i128, max_deduct: i128) {
-        Self::require_positive_amount(amount);
+    fn require_valid_deduct_amount(amount: i128, min_amount: i128, max_deduct: i128) -> Result<(), VaultError> {
+        Self::require_positive_amount(amount)?;
         if amount < min_amount {
-            panic!("deduct below minimum");
+            return Err(VaultError::BelowMinDeposit);
         }
         if amount > max_deduct {
-            panic!("deduct amount exceeds max_deduct");
+            return Err(VaultError::ExceedsMaxDeduct);
         }
+        Ok(())
     }
 
     pub fn init(
@@ -257,18 +264,18 @@ impl CalloraVault {
         revenue_pool: Option<Address>,
         max_deduct: i128,
         settlement: Address,
-    ) {
+    ) -> Result<(), VaultError> {
         if env.storage().instance().has(&DataKey::Owner) {
-            panic!("Already initialized");
+            return Err(VaultError::AlreadyInitialized);
         }
         if min_deposit <= 0 {
-            panic!("min_deposit must be positive");
+            return Err(VaultError::MinDepositNotPositive);
         }
         if max_deduct <= 0 {
-            panic!("max_deduct must be positive");
+            return Err(VaultError::MaxDeductNotPositive);
         }
         if min_deposit > max_deduct {
-            panic!("min_deposit cannot exceed max_deduct");
+            return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
         env.storage().instance().set(&DataKey::Owner, &owner);
         env.storage()
@@ -295,9 +302,10 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &false);
         // Admin defaults to owner at initialization.
         env.storage().instance().set(&StorageKey::Admin, &owner);
+        Ok(())
     }
 
-    pub fn deposit(env: Env, caller: Address, amount: i128) {
+    pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
         caller.require_auth();
         if env
             .storage()
@@ -305,27 +313,28 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
         let min_dep = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
             .unwrap();
-        Self::require_valid_deposit_amount(amount, min_dep);
+        Self::require_valid_deposit_amount(amount, min_dep)?;
         let owner = env
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            let is_allowed = env
+            let allowlist = env
                 .storage()
                 .instance()
-                .get::<_, bool>(&DataKey::Depositor(caller.clone()))
-                .unwrap_or(false);
-            if !is_allowed {
-                panic!("Not authorized depositor");
+                .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+                .unwrap_or_else(|| Vec::new(&env));
+
+            if !allowlist.contains(&caller) {
+                return Err(VaultError::CallerNotInAllowlist);
             }
         }
         let current_bal = env
@@ -333,7 +342,7 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        let new_bal = current_bal.checked_add(amount).unwrap();
+        let new_bal = current_bal.checked_add(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         let token_addr = env
             .storage()
@@ -342,9 +351,10 @@ impl CalloraVault {
             .unwrap();
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
+        Ok(())
     }
 
-    pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
+    pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) -> Result<(), VaultError> {
         caller.require_auth();
         let auth_caller = env
             .storage()
@@ -352,7 +362,7 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::AuthorizedCaller)
             .unwrap();
         if caller != auth_caller {
-            panic!("Not authorized caller");
+            return Err(VaultError::Unauthorized);
         }
         if env
             .storage()
@@ -360,7 +370,7 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
         let min_dep = env
             .storage()
@@ -372,14 +382,14 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
             .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
+        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
         let new_bal = current_bal - amount;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
@@ -398,9 +408,10 @@ impl CalloraVault {
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
+        Ok(())
     }
 
-    pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
+    pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) -> Result<(), VaultError> {
         caller.require_auth();
         let auth_caller = env
             .storage()
@@ -408,7 +419,7 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::AuthorizedCaller)
             .unwrap();
         if caller != auth_caller {
-            panic!("Not authorized caller");
+            return Err(VaultError::Unauthorized);
         }
         if env
             .storage()
@@ -416,7 +427,7 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
         let min_dep = env
             .storage()
@@ -431,8 +442,8 @@ impl CalloraVault {
         let mut total_amount: i128 = 0;
         for item in items.iter() {
             let (amount, _) = item;
-            Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
+            Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+            total_amount = total_amount.checked_add(amount).ok_or(VaultError::Overflow)?;
         }
         let current_bal = env
             .storage()
@@ -440,7 +451,7 @@ impl CalloraVault {
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
         if current_bal < total_amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
         let new_bal = current_bal - total_amount;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
@@ -466,6 +477,7 @@ impl CalloraVault {
             let (amount, request_id) = item;
             settlement_client.record_deduction(&amount, &request_id);
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -557,7 +569,7 @@ impl CalloraVault {
     //         .set(&DataKey::Depositor(depositor), &true);
     // }
 
-    pub fn set_authorized_caller(env: Env, caller: Address) {
+    pub fn set_authorized_caller(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
         let owner = env
             .storage()
@@ -565,14 +577,15 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
+        Ok(())
     }
 
-    pub fn pause(env: Env, caller: Address) {
+    pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
         let owner = env
             .storage()
@@ -580,12 +593,13 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage().instance().set(&DataKey::Paused, &true);
+        Ok(())
     }
 
-    pub fn unpause(env: Env, caller: Address) {
+    pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
         let owner = env
             .storage()
@@ -593,9 +607,10 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -637,7 +652,7 @@ impl CalloraVault {
             .unwrap_or(i128::MAX)
     }
 
-    pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) {
+    pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) -> Result<(), VaultError> {
         caller.require_auth();
         let owner = env
             .storage()
@@ -645,14 +660,15 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         if max_deduct <= 0 {
-            panic!("max_deduct must be positive");
+            return Err(VaultError::MaxDeductNotPositive);
         }
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
+        Ok(())
     }
 
     pub fn get_settlement(env: Env) -> Address {
@@ -662,7 +678,7 @@ impl CalloraVault {
             .unwrap()
     }
 
-    pub fn set_settlement(env: Env, caller: Address, settlement: Address) {
+    pub fn set_settlement(env: Env, caller: Address, settlement: Address) -> Result<(), VaultError> {
         caller.require_auth();
         let owner = env
             .storage()
@@ -670,11 +686,12 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage()
             .instance()
             .set(&DataKey::Settlement, &settlement);
+        Ok(())
     }
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
         env.storage()
@@ -1134,6 +1151,119 @@ impl CalloraVault {
             .instance()
             .get::<_, bool>(&DataKey::Depositor(caller))
             .unwrap_or(false)
+    }
+
+    /// Add a single address to the deposit allowlist (owner-only).
+    ///
+    /// If the address is already present, this function is idempotent and will
+    /// succeed without error. The `allowlist_add` event is emitted even for
+    /// duplicate adds to maintain audit trail clarity.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the vault owner (verified via `require_owner`)
+    /// - `depositor` — Address to add to the allowlist
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or `VaultError::Unauthorized` if caller is not owner.
+    ///
+    /// # Events
+    /// Emits `("allowlist_add", caller, depositor)` on every successful call,
+    /// including duplicates.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// vault.add_address(&owner, &backend_service_1)?;
+    /// vault.add_address(&owner, &backend_service_2)?;
+    /// ```
+    pub fn add_address(
+        env: Env,
+        caller: Address,
+        depositor: Address,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let mut allowlist = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env));
+        
+        // Idempotent: only add if not already present
+        if !allowlist.contains(&depositor) {
+            allowlist.push_back(depositor.clone());
+            env.storage()
+                .instance()
+                .set(&StorageKey::AllowedDepositors, &allowlist);
+        }
+        
+        env.events().publish(
+            (events::event_allowlist_add(&env), caller, depositor),
+            ()
+        );
+        
+        Ok(())
+    }
+
+    /// Remove all addresses from the deposit allowlist (owner-only).
+    ///
+    /// This function is idempotent — calling it on an empty allowlist succeeds
+    /// without error.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the vault owner (verified via `require_owner`)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or `VaultError::Unauthorized` if caller is not owner.
+    ///
+    /// # Events
+    /// Emits `("allowlist_clear", caller)` on every successful call, even when
+    /// the allowlist is already empty.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// vault.clear_all(&owner)?;
+    /// // Subsequent calls succeed (idempotent):
+    /// vault.clear_all(&owner)?;
+    /// ```
+    pub fn clear_all(
+        env: Env,
+        caller: Address,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        env.storage()
+            .instance()
+            .remove(&StorageKey::AllowedDepositors);
+        
+        env.events().publish(
+            (events::event_allowlist_clear(&env), caller),
+            ()
+        );
+        
+        Ok(())
+    }
+
+    /// Return the current deposit allowlist.
+    ///
+    /// No authentication required — this is a public read-only view function.
+    /// Addresses are returned in insertion order.
+    ///
+    /// # Returns
+    /// `Vec<Address>` containing all addresses currently in the allowlist.
+    /// Returns an empty vector if no allowlist has been configured.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let allowed = vault.get_allowlist();
+    /// assert_eq!(allowed.len(), 3);
+    /// ```
+    pub fn get_allowlist(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Set or update the reserve cap for a token (owner only).

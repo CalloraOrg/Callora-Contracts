@@ -200,16 +200,18 @@ pub fn event_upgrade_completed(env: &Env) -> Symbol {
     Symbol::new(env, "upgrade_completed")
 }
 
-/// Returns the Symbol for the `"allowlist_add"` event topic.
+/// Emitted when an address is added to the deposit allowlist.
 ///
-/// Emitted when the owner adds an address to the vault deposit allowlist.
+/// Topics: ("allowlist_add", caller: Address, depositor: Address)
+/// Data: ()
 pub fn event_allowlist_add(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_add")
 }
 
-/// Returns the Symbol for the `"allowlist_clear"` event topic.
+/// Emitted when the deposit allowlist is cleared.
 ///
-/// Emitted when the owner clears the entire vault deposit allowlist.
+/// Topics: ("allowlist_clear", caller: Address)
+/// Data: ()
 pub fn event_allowlist_clear(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_clear")
 }
