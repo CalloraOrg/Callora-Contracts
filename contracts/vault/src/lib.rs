@@ -54,6 +54,9 @@ use soroban_sdk::{
 
 pub mod views;
 
+/// Bounded visible-ASCII metadata validators (shared `callora-validators` crate).
+pub use callora_validators as validators;
+
 mod errors;
 pub use errors::VaultError;
 

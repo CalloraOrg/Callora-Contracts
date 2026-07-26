@@ -295,11 +295,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-validators"
+version = "0.0.1"
+dependencies = [
+ "proptest",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-vault"
 version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
+ "callora-validators",
  "rand 0.8.7",
  "soroban-sdk",
 ]
