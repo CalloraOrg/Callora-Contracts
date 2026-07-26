@@ -45,16 +45,7 @@ use soroban_sdk::contracterror;
 /// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
-/// | 38   | InvalidHotBps                  | Hot BPS must be between 1 and 10000                      |
-/// | 39   | InvalidRebalanceThreshold      | Rebalance threshold must be between 1 and 10000          |
-/// | 40   | ColdSignersEmpty               | Cold signer set cannot be empty                          |
-/// | 41   | InvalidColdThreshold           | Cold threshold must be between 1 and signer count        |
-/// | 42   | DuplicateColdSigner            | Duplicate address found in cold signer set               |
-/// | 43   | ExceedsReserveCap              | Deposit would exceed the configured reserve cap          |
-/// | 44   | ProposalNotFound               | No pending timelock proposal for the requested action    |
-/// | 45   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
-/// | 46   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
-/// | 47   | InvalidTimelockWindow          | Proposed timelock window is outside the allowed bounds   |
+/// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -145,12 +136,14 @@ pub enum VaultError {
     DuplicateColdSigner = 42,
     /// Deposit would exceed the configured reserve cap (code 43).
     ExceedsReserveCap = 43,
-    /// No pending timelock proposal for the requested action (code 44).
-    ProposalNotFound = 44,
-    /// Action attempted before the timelock window has elapsed (code 45).
-    TimelockNotExpired = 45,
-    /// `proposed_at + window` overflowed `u64` (code 46).
-    TimelockOverflow = 46,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 47).
-    InvalidTimelockWindow = 47,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    ///
+    /// # When returned
+    /// - `deposit()` when a non-owner address attempts to deposit and the caller
+    ///   is not present in the configured allowlist.
+    ///
+    /// # Security note
+    /// Returned instead of panicking to provide machine-readable feedback to
+    /// integrators and prevent information leakage.
+    CallerNotInAllowlist = 44,
 }
