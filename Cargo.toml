@@ -11,7 +11,7 @@ members = [
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/checkpoint",
-    "contracts/limits",
+    "contracts/freeze",
     "contracts/helpers",
     "contracts/yield",
     "contracts/revenue_pool/fuzz",
@@ -22,7 +22,7 @@ default-members = [
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/checkpoint",
-    "contracts/limits",
+    "contracts/freeze",
     "contracts/helpers",
     "contracts/yield",
 ]
