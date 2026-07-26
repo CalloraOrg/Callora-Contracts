@@ -33,8 +33,6 @@ fn settlement_error_codes_are_stable_and_unique() {
         (25, SettlementError::ClaimWindowClosed),
         (26, SettlementError::MinBalanceViolation),
         (27, SettlementError::ReplayDetected),
-        (28, SettlementError::BatchEmpty),
-        (29, SettlementError::BatchTooLarge),
     ];
 
     let mut seen = BTreeSet::new();
@@ -46,7 +44,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 29);
+    assert_eq!(seen.len(), 27);
 }
 
 #[test]
@@ -76,12 +74,10 @@ fn error_code_docs_list_every_settlement_code() {
         "| 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |",
         "| 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |",
         "| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |",
-        "| 24 | `InvalidClaimWindow` | Settlement | Claim window end timestamp is before the start timestamp |",
-        "| 25 | `ClaimWindowClosed` | Settlement | Developer attempted to claim outside their configured claim window |",
+        "| 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |",
+        "| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |",
         "| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |",
-        "| 27 | `ReplayDetected` | Settlement | Settlement claim was replayed or out of order |",
-        "| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |",
-        "| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |",
+        "| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |",
     ];
 
     for line in expected_lines {
