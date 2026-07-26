@@ -14,7 +14,7 @@ members = [
     "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
-    "contracts/migrate",
+    "contracts/limits",
     "contracts/revenue_pool/fuzz",
     "contracts/migrate/fuzz",
     "contracts/tests",

@@ -1,15 +1,18 @@
 [package]
 name = "callora-limits"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
-soroban-sdk = { workspace = true }
+# Documentation / registry crate — runtime limit logic lives in settlement,
+# revenue_pool, and vault. This package owns the auth-snapshot regression suite.
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-settlement = { path = "../settlement" }
+callora-revenue-pool = { path = "../revenue_pool" }
