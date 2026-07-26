@@ -48,7 +48,7 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, String,
     Symbol, Vec,
 };
 
@@ -56,96 +56,6 @@ pub mod views;
 
 mod errors;
 pub use errors::VaultError;
-
-/// Typed error codes for the Callora Vault contract.
-///
-/// These error codes are returned instead of string panics to enable
-/// machine-readable error handling by integrators using @stellar/stellar-sdk.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum VaultError {
-    /// Vault has not been initialized yet (code 1).
-    NotInitialized = 1,
-    /// Vault has already been initialized (code 2).
-    AlreadyInitialized = 2,
-    /// Caller is not authorized for this operation (code 3).
-    Unauthorized = 3,
-    /// Vault is currently paused (code 4).
-    Paused = 4,
-    /// Insufficient balance for the requested operation (code 5).
-    InsufficientBalance = 5,
-    /// Amount must be positive (code 6).
-    AmountNotPositive = 6,
-    /// Deduct amount exceeds the configured maximum (code 7).
-    ExceedsMaxDeduct = 7,
-    /// Deposit amount is below the configured minimum (code 8).
-    BelowMinDeposit = 8,
-    /// Arithmetic overflow detected (code 9).
-    Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
-    /// Min deposit must be positive (code 11).
-    MinDepositNotPositive = 11,
-    /// Max deduct must be positive (code 12).
-    MaxDeductNotPositive = 12,
-    /// Min deposit cannot exceed max deduct (code 13).
-    MinDepositExceedsMaxDeduct = 13,
-    /// USDC token address cannot be the vault address (code 14).
-    UsdcTokenCannotBeVault = 14,
-    /// Revenue pool address cannot be the vault address (code 15).
-    RevenuePoolCannotBeVault = 15,
-    /// Authorized caller address cannot be the vault address (code 16).
-    AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
-    /// Vault is already paused (code 18).
-    AlreadyPaused = 18,
-    /// Vault is not paused (code 19).
-    NotPaused = 19,
-    /// Settlement address has not been configured (code 20).
-    SettlementNotSet = 20,
-    /// Batch deduct requires at least one item (code 21).
-    BatchEmpty = 21,
-    /// Batch size exceeds maximum allowed (code 22).
-    BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
-    /// No admin transfer is pending (code 25).
-    NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
-    PriceParseError = 28,
-    /// Duplicate request ID detected (code 29).
-    DuplicateRequestId = 29,
-    /// Offering ID is empty or contains invalid characters (code 30).
-    OfferingIdInvalid = 30,
-    /// Metadata string is empty or contains invalid characters (code 31).
-    MetadataInvalid = 31,
-    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
-    StaleNonce = 32,
-    /// New revenue pool must be different from current revenue pool (code 33).
-    NewRevenuePoolSameAsCurrent = 33,
-    /// No revenue pool transfer is pending (code 34).
-    NoRevenuePoolTransferPending = 34,
-    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
-    Slippage = 35,
-    /// Rate limit exceeded for the developer (code 36).
-    RateLimited = 36,
-    /// No pending timelock proposal for the requested action (code 37).
-    ProposalNotFound = 37,
-    /// Action attempted before the timelock window has elapsed (code 38).
-    TimelockNotExpired = 38,
-    /// `proposed_at + window` overflowed `u64` (code 39).
-    TimelockOverflow = 39,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
-    InvalidTimelockWindow = 40,
-}
 
 #[contracttype]
 #[derive(Clone)]
@@ -186,6 +96,12 @@ pub enum StorageKey {
     /// Recorded wasm hash after a successful upgrade.
     ContractVersion,
 }
+
+/// TTL extension trigger for instance storage keys (~30 days of ledgers at 5 s/ledger).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+
+/// TTL extension target for instance storage keys (~60 days of ledgers at 5 s/ledger).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
 pub mod token {
     pub use soroban_sdk::token::Client;
@@ -247,6 +163,27 @@ impl CalloraVault {
         }
     }
 
+    /// Initialize the Callora Vault contract (one-time setup).
+    ///
+    /// Stores configuration in instance storage and sets the paused flag to `false`.
+    /// The admin role defaults to `owner` at initialization and may be transferred
+    /// later via the two-step [`set_admin`] / [`accept_admin`] flow.
+    ///
+    /// # Parameters
+    /// - `owner` — vault owner; only this address may call owner-gated functions.
+    /// - `usdc_token` — USDC token contract address used for all transfers.
+    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0).
+    /// - `authorized_caller` — address permitted to call [`deduct`] and [`batch_deduct`].
+    /// - `min_deposit` — minimum accepted deposit amount in stroops; must be > 0.
+    /// - `revenue_pool` — optional revenue pool address; may be `None`.
+    /// - `max_deduct` — per-call deduction cap in stroops; must be > 0 and ≥ `min_deposit`.
+    /// - `settlement` — settlement contract address that receives deducted funds.
+    ///
+    /// # Panics
+    /// - If already initialized.
+    /// - If `min_deposit <= 0`, `max_deduct <= 0`, or `min_deposit > max_deduct`.
+    ///
+    /// No auth is required; `init` is a constructor and may only succeed once.
     pub fn init(
         env: Env,
         owner: Address,
@@ -297,6 +234,24 @@ impl CalloraVault {
         env.storage().instance().set(&StorageKey::Admin, &owner);
     }
 
+    /// Deposit USDC into the vault from `caller`.
+    ///
+    /// Transfers `amount` USDC from `caller` to the vault contract address and
+    /// increments the internally tracked balance. The caller must be either the
+    /// vault owner or an explicitly allowlisted depositor.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. In addition `caller` must be the
+    /// owner or a previously allowlisted depositor address.
+    ///
+    /// # Parameters
+    /// - `caller` — the depositor; must be the owner or an allowlisted address.
+    /// - `amount` — the USDC amount in stroops; must be ≥ `min_deposit`.
+    ///
+    /// # Panics
+    /// - If the vault is paused.
+    /// - If `amount < min_deposit` or `amount <= 0`.
+    /// - If `caller` is neither the owner nor an allowlisted depositor.
     pub fn deposit(env: Env, caller: Address, amount: i128) {
         caller.require_auth();
         if env
@@ -344,6 +299,27 @@ impl CalloraVault {
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
     }
 
+    /// Deduct `amount` USDC from the vault and forward it to the settlement contract.
+    ///
+    /// Decrements the internally tracked balance, transfers the USDC on-ledger
+    /// from the vault to the settlement address, then calls `record_deduction` on
+    /// the settlement contract. The entire operation is atomic within one ledger.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must equal the configured
+    /// `authorized_caller`; all other addresses are rejected.
+    ///
+    /// # Parameters
+    /// - `caller` — must be the configured authorized caller.
+    /// - `amount` — USDC stroops to deduct; must be in `[min_deposit, max_deduct]`.
+    /// - `request_id` — numeric ID forwarded to the settlement contract for
+    ///   bookkeeping; the vault does not deduplicate on this field.
+    ///
+    /// # Panics
+    /// - If the vault is paused.
+    /// - If `caller` is not the authorized caller.
+    /// - If `amount` is outside `[min_deposit, max_deduct]`.
+    /// - If the vault's tracked balance is insufficient for `amount`.
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
         caller.require_auth();
         let auth_caller = env
@@ -400,6 +376,28 @@ impl CalloraVault {
         settlement_client.record_deduction(&amount, &request_id);
     }
 
+    /// Atomically deduct multiple amounts from the vault in a single ledger.
+    ///
+    /// Validates every item individually against `[min_deposit, max_deduct]`,
+    /// accumulates the total with overflow checking, verifies the vault holds at
+    /// least the total, then transfers the aggregate USDC to the settlement contract
+    /// in one on-ledger call. `record_deduction` is invoked on the settlement
+    /// contract for each item after the transfer.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must equal the configured
+    /// `authorized_caller`.
+    ///
+    /// # Parameters
+    /// - `caller` — must be the configured authorized caller.
+    /// - `items` — list of `(amount, request_id)` pairs; must be non-empty.
+    ///
+    /// # Panics
+    /// - If the vault is paused.
+    /// - If `caller` is not the authorized caller.
+    /// - If any item's amount is outside `[min_deposit, max_deduct]`.
+    /// - If the vault balance is insufficient for the accumulated total.
+    /// - If accumulating the total overflows `i128`.
     pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
         caller.require_auth();
         let auth_caller = env
@@ -557,6 +555,16 @@ impl CalloraVault {
     //         .set(&DataKey::Depositor(depositor), &true);
     // }
 
+    /// Update the address permitted to call [`deduct`] and [`batch_deduct`].
+    ///
+    /// After this call the new address can immediately issue deductions;
+    /// the previous authorized caller is rejected on its next attempt.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Panics
+    /// - If `caller` is not the owner.
     pub fn set_authorized_caller(env: Env, caller: Address) {
         caller.require_auth();
         let owner = env
@@ -572,6 +580,18 @@ impl CalloraVault {
             .set(&DataKey::AuthorizedCaller, &caller);
     }
 
+    /// Immediately pause the vault (owner only, no timelock).
+    ///
+    /// While paused, [`deposit`], [`deduct`], and [`batch_deduct`] are blocked.
+    /// Owner withdrawals and admin distributions remain available for emergency
+    /// fund recovery. See [`propose_pause`] / [`execute_pause`] for the
+    /// timelocked admin variant that emits structured audit events.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Panics
+    /// - If `caller` is not the owner.
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         let owner = env
@@ -585,6 +605,16 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &true);
     }
 
+    /// Resume normal vault operation after a [`pause`] (owner only).
+    ///
+    /// Clears the paused flag and restores full access to [`deposit`],
+    /// [`deduct`], and [`batch_deduct`].
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Panics
+    /// - If `caller` is not the owner.
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
         let owner = env
@@ -598,18 +628,38 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &false);
     }
 
+    /// Return `true` if the vault is currently paused, `false` otherwise.
+    ///
+    /// Reads the `Paused` instance storage flag set by [`pause`] / [`execute_pause`]
+    /// and cleared by [`unpause`]. Defaults to `false` when the flag is absent
+    /// (i.e., before initialization).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn is_paused(env: Env) -> bool {
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
     }
+    /// Return the vault's internally tracked USDC balance in stroops.
+    ///
+    /// This value is incremented by [`deposit`] and decremented by [`deduct`],
+    /// [`batch_deduct`], and successful sweep executions. It may diverge from
+    /// the on-ledger USDC balance when USDC is sent directly to the vault address
+    /// (bypassing `deposit`). Use [`dry_run_sweep_idle_balance`] to inspect any
+    /// surplus.
+    ///
+    /// No auth required; this is a read-only view.
     pub fn balance(env: Env) -> i128 {
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap()
     }
+    /// Return the current vault owner address.
+    ///
+    /// The owner is set at [`init`] and may be transferred via a two-step
+    /// ownership-transfer flow. No auth required; this is a read-only view.
     pub fn get_owner(env: Env) -> Address {
         env.storage()
             .instance()
@@ -624,12 +674,24 @@ impl CalloraVault {
         }
         Ok(())
     }
+    /// Return the USDC token contract address configured at [`init`].
+    ///
+    /// All vault transfers use this token contract. No auth required; this is a
+    /// read-only view.
     pub fn get_usdc_token(env: Env) -> Address {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
             .unwrap()
     }
+    /// Return the per-call deduction cap in USDC stroops.
+    ///
+    /// [`deduct`] and each item of [`batch_deduct`] are rejected when their
+    /// amount exceeds this value. Returns `i128::MAX` when no cap is stored
+    /// (effectively unlimited), though in practice the limit is always set
+    /// during [`init`].
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_max_deduct(env: Env) -> i128 {
         env.storage()
             .instance()
@@ -637,6 +699,20 @@ impl CalloraVault {
             .unwrap_or(i128::MAX)
     }
 
+    /// Update the per-call deduction cap (owner only).
+    ///
+    /// Any [`deduct`] or [`batch_deduct`] item whose amount exceeds the new
+    /// `max_deduct` will be rejected immediately.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Parameters
+    /// - `max_deduct` — new maximum in USDC stroops; must be > 0.
+    ///
+    /// # Panics
+    /// - If `caller` is not the owner.
+    /// - If `max_deduct <= 0`.
     pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) {
         caller.require_auth();
         let owner = env
@@ -655,6 +731,13 @@ impl CalloraVault {
             .set(&DataKey::MaxDeduct, &max_deduct);
     }
 
+    /// Return the configured settlement contract address.
+    ///
+    /// This is the on-ledger destination that receives USDC transferred during
+    /// [`deduct`] and [`batch_deduct`]. Panics if the address has never been
+    /// set, which cannot occur after a successful [`init`].
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_settlement(env: Env) -> Address {
         env.storage()
             .instance()
@@ -662,6 +745,16 @@ impl CalloraVault {
             .unwrap()
     }
 
+    /// Update the settlement contract address (owner only).
+    ///
+    /// All subsequent [`deduct`] and [`batch_deduct`] calls will forward funds
+    /// to the new address. Does not affect in-flight or pending settlements.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Panics
+    /// - If `caller` is not the owner.
     pub fn set_settlement(env: Env, caller: Address, settlement: Address) {
         caller.require_auth();
         let owner = env
@@ -676,6 +769,10 @@ impl CalloraVault {
             .instance()
             .set(&DataKey::Settlement, &settlement);
     }
+    /// Return the configured revenue pool address, if any.
+    ///
+    /// Returns `None` when no revenue pool has been set (the default after
+    /// [`init`] when `revenue_pool` is `None`). No auth required.
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
         env.storage()
             .instance()
@@ -756,17 +853,35 @@ impl CalloraVault {
         timelock::get_timelock_window(&env)
     }
 
-    /// Return the pending pause proposal, if any.
+    /// Return the outstanding timelocked pause proposal, if any.
+    ///
+    /// Returns `None` when no pause proposal is currently staged.  A `Some`
+    /// value means a pause was proposed and can be executed once the ledger
+    /// clock reaches `proposal.execute_after` (via [`execute_pause`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
         timelock::get_pending_pause(&env)
     }
 
-    /// Return the pending upgrade proposal, if any.
+    /// Return the outstanding timelocked upgrade proposal, if any.
+    ///
+    /// Returns `None` when no upgrade proposal is staged.  A `Some` value
+    /// includes the target `wasm_hash` and the `execute_after` deadline (see
+    /// [`execute_upgrade`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
         timelock::get_pending_upgrade(&env)
     }
 
-    /// Return the pending sweep proposal, if any.
+    /// Return the outstanding timelocked sweep proposal, if any.
+    ///
+    /// Returns `None` when no sweep proposal is staged.  A `Some` value
+    /// includes the recipient address, the amount, and the `execute_after`
+    /// deadline (see [`execute_sweep`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
         timelock::get_pending_sweep(&env)
     }
@@ -882,7 +997,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+            .publish((events::event_pause_executed(&env), caller.clone()), env.ledger().timestamp());
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
         Ok(())
@@ -1104,9 +1219,24 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Garbage-collect processed request markers from persistent storage.
-    /// Only the owner can call this.
-    /// Emits a `request_id_pruned` event for each removed ID.
+    /// Remove processed request-ID markers from persistent storage (owner only).
+    ///
+    /// Idempotency markers written by [`deduct`] and [`batch_deduct`] live in
+    /// persistent storage indefinitely. This function lets the owner reclaim
+    /// that storage once markers are no longer needed for duplicate detection.
+    /// IDs not present in storage are silently skipped.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Parameters
+    /// - `ids` — list of request IDs whose markers should be removed.
+    ///
+    /// # Events
+    /// Emits a `request_id_pruned` event for each successfully removed ID.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] if `caller` is not the owner.
     pub fn prune_processed_requests(
         env: Env,
         caller: Address,
@@ -1129,6 +1259,11 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Return `true` if `caller` is on the depositor allowlist.
+    ///
+    /// The vault owner may always deposit regardless of this flag.
+    /// Non-owner callers must be explicitly added to the allowlist to call
+    /// [`deposit`]. No auth required; this is a read-only view.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
         env.storage()
             .instance()
@@ -1184,6 +1319,7 @@ mod cold_storage;
 mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
@@ -1221,6 +1357,9 @@ mod test_sweep_idle_balance;
 
 #[cfg(test)]
 mod test_access_control_matrix;
+
+#[cfg(test)]
+mod test_rustdoc_coverage;
 
 // #[cfg(test)]
 // mod test_gas_budget;
