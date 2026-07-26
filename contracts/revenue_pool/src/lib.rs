@@ -459,8 +459,10 @@ impl RevenuePool {
 
     /// Deposit accumulated protocol yield into the revenue pool.
     ///
-    /// Transfers USDC from `treasury` to this contract and updates the
-    /// cumulative yield metric atomically.
+    /// Transfers USDC from `treasury` to this contract, then updates the
+    /// cumulative yield metric. The external token call happens before storage
+    /// writes so a callee panic cannot leave the metric ahead of a failed
+    /// transfer (Soroban still rolls the whole invocation back on panic).
     ///
     /// # Panics
     /// * `ERR_UNAUTHORIZED` — treasury is not the current admin.
@@ -489,13 +491,17 @@ impl RevenuePool {
             .expect(ERR_NOT_INITIALIZED);
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
+        // Transfer before persisting the cumulative metric so a callee panic
+        // (token revert) cannot leave storage ahead of a failed transfer.
+        // Soroban still rolls the whole invocation back on panic; this order
+        // keeps the success path effects-after-external-call.
+        usdc.transfer(&treasury, &contract_address, &amount);
         let inst = env.storage().instance();
         inst.set(
             &Symbol::new(&env, CUMULATIVE_YIELD_DEPOSITED_KEY),
             &new_total,
         );
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        usdc.transfer(&treasury, &contract_address, &amount);
         env.events().publish(
             (events::event_yield_deposited(&env), treasury),
             (amount, source, new_total),
