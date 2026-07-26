@@ -58,11 +58,7 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
         execute_after,
     };
     timelock::set_pending_migration(env, &migration);
-
-    env.events().publish(
-        (events::event_admin_migration_proposed(env), from.clone()),
-        migration,
-    );
+    events::emit_admin_migration_proposed(env, from, migration);
 }
 
 pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Address) {
@@ -116,12 +112,10 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
         .set(&StorageKey::DeveloperIndex, &index);
     timelock::remove_pending_migration(env, from);
 
-    env.events().publish(
-        (
-            events::event_admin_migration(env),
-            from.clone(),
-            migration.to.clone(),
-        ),
+    events::emit_admin_migration(
+        env,
+        from,
+        &migration.to.clone(),
         AdminMigrationEvent {
             from: from.clone(),
             to: migration.to,

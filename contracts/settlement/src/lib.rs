@@ -55,14 +55,14 @@ impl CalloraSettlement {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::Vault, &vault_address);
-        inst.set(
-            &StorageKey::GlobalPool,
-            &GlobalPool {
-                total_balance: 0,
-                last_updated: env.ledger().timestamp(),
-            },
-        );
+        let pool = GlobalPool {
+            total_balance: 0,
+            last_updated: env.ledger().timestamp(),
+        };
+        inst.set(&StorageKey::GlobalPool, &pool);
         inst.set(&StorageKey::TotalReceived, &0i128);
+
+        events::emit_initialized(&env, &admin, &vault_address, &pool);
     }
 
     /// Receive payment from vault and credit to pool or developer balance.
@@ -123,8 +123,9 @@ impl CalloraSettlement {
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow));
             global_pool.last_updated = env.ledger().timestamp();
             inst.set(&StorageKey::GlobalPool, &global_pool);
-            env.events().publish(
-                (events::event_payment_received(&env), caller.clone()),
+            events::emit_payment_received(
+                &env,
+                &caller,
                 PaymentReceivedEvent {
                     from_vault: caller.clone(),
                     amount,
@@ -165,8 +166,9 @@ impl CalloraSettlement {
             Self::sorted_insert(&env, &mut index, dev_address.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
 
-            env.events().publish(
-                (events::event_payment_received(&env), caller.clone()),
+            events::emit_payment_received(
+                &env,
+                &caller,
                 PaymentReceivedEvent {
                     from_vault: caller.clone(),
                     amount,
@@ -175,13 +177,23 @@ impl CalloraSettlement {
                     token: token.clone(),
                 },
             );
-            env.events().publish(
-                (events::event_balance_credited(&env), dev_address.clone()),
+            events::emit_balance_credited(
+                &env,
+                &dev_address,
                 BalanceCreditedEvent {
-                    developer: dev_address,
+                    developer: dev_address.clone(),
                     amount,
                     new_balance,
+                    token: token.clone(),
+                },
+            );
+            events::emit_deposit(
+                &env,
+                &dev_address,
+                DepositEvent {
+                    developer: dev_address,
                     token,
+                    amount,
                 },
             );
         }
@@ -255,13 +267,23 @@ impl CalloraSettlement {
                 .unwrap_or_else(|| Vec::new(&env));
             Self::sorted_insert(&env, &mut index, dev.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
-            env.events().publish(
-                (events::event_balance_credited(&env), dev.clone()),
+            events::emit_balance_credited(
+                &env,
+                &dev,
                 BalanceCreditedEvent {
                     developer: dev.clone(),
                     amount,
                     new_balance,
                     token: token.clone(),
+                },
+            );
+            events::emit_deposit(
+                &env,
+                &dev,
+                DepositEvent {
+                    developer: dev.clone(),
+                    token: token.clone(),
+                    amount,
                 },
             );
         }
@@ -505,8 +527,9 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&today_key, 50000, 50000);
 
-        env.events().publish(
-            (events::event_developer_withdraw(&env), developer.clone()),
+        events::emit_developer_withdraw(
+            &env,
+            &developer,
             DeveloperWithdrawEvent {
                 developer,
                 amount,
@@ -559,11 +582,9 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&window_key, 50000, 50000);
 
-        env.events().publish(
-            (
-                events::event_developer_claim_window_changed(&env),
-                developer.clone(),
-            ),
+        events::emit_developer_claim_window_changed(
+            &env,
+            &developer,
             DeveloperClaimWindowChanged {
                 developer,
                 start_ts,
@@ -597,11 +618,9 @@ impl CalloraSettlement {
             .persistent()
             .remove(&StorageKey::DeveloperClaimWindow(developer.clone()));
 
-        env.events().publish(
-            (
-                events::event_developer_claim_window_changed(&env),
-                developer.clone(),
-            ),
+        events::emit_developer_claim_window_changed(
+            &env,
+            &developer,
             DeveloperClaimWindowChanged {
                 developer,
                 start_ts: 0,
@@ -660,8 +679,9 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&cap_key, 50000, 50000);
 
-        env.events().publish(
-            (events::event_daily_withdraw_cap_changed(&env), caller),
+        events::emit_daily_withdraw_cap_changed(
+            &env,
+            &caller,
             DailyWithdrawCapChanged {
                 developer,
                 new_cap: cap,
@@ -756,11 +776,9 @@ impl CalloraSettlement {
         Self::sorted_insert(&env, &mut index, developer.clone());
         inst.set(&StorageKey::DeveloperIndex, &index);
 
-        env.events().publish(
-            (
-                events::event_developer_force_credited(&env),
-                developer.clone(),
-            ),
+        events::emit_developer_force_credited(
+            &env,
+            &developer,
             DeveloperForceCreditedEvent {
                 developer,
                 amount,
@@ -912,14 +930,7 @@ impl CalloraSettlement {
         env.storage()
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
-        env.events().publish(
-            (
-                events::event_admin_nominated(&env),
-                admin,
-                new_admin.clone(),
-            ),
-            new_admin,
-        );
+        events::emit_admin_nominated(&env, &admin, &new_admin);
     }
 
     /// Finalize a pending admin transfer. Must be called by the nominated admin.
@@ -940,14 +951,7 @@ impl CalloraSettlement {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &pending);
         inst.remove(&StorageKey::PendingAdmin);
-        env.events().publish(
-            (
-                events::event_admin_accepted(&env),
-                old_admin,
-                pending.clone(),
-            ),
-            pending,
-        );
+        events::emit_admin_accepted(&env, &old_admin, &pending);
     }
 
     /// Cancel a pending admin transfer (admin only).
@@ -967,8 +971,7 @@ impl CalloraSettlement {
             panic!("no admin transfer pending");
         }
         env.storage().instance().remove(&StorageKey::PendingAdmin);
-        env.events()
-            .publish((events::event_admin_cancelled(&env), admin.clone()), admin);
+        events::emit_admin_cancelled(&env, &admin);
     }
 
     /// Propose a new vault address (admin only). The proposed vault (or the
@@ -989,8 +992,9 @@ impl CalloraSettlement {
         env.storage()
             .instance()
             .set(&StorageKey::PendingVault, &new_vault);
-        env.events().publish(
-            (events::event_vault_proposed(&env), admin),
+        events::emit_vault_proposed(
+            &env,
+            &admin,
             VaultProposedEvent {
                 current_vault,
                 proposed_vault: new_vault,
@@ -1026,11 +1030,12 @@ impl CalloraSettlement {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Vault, &pending);
         inst.remove(&StorageKey::PendingVault);
-        env.events().publish(
-            (events::event_vault_accepted(&env), pending.clone()),
+        events::emit_vault_accepted(
+            &env,
+            &pending,
             VaultAcceptedEvent {
                 old_vault,
-                new_vault: pending,
+                new_vault: pending.clone(),
                 accepted_by: caller,
             },
         );
@@ -1043,10 +1048,7 @@ impl CalloraSettlement {
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
-        env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
-        );
+        events::emit_admin_broadcast(&env, &caller, AdminBroadcast { severity, message });
     }
 
     /// Upgrade the contract to a new WASM hash (admin only).
@@ -1064,8 +1066,7 @@ impl CalloraSettlement {
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &new_wasm_hash);
-        env.events()
-            .publish((events::event_upgraded(&env), caller), new_wasm_hash);
+        events::emit_upgraded(&env, &caller, &new_wasm_hash);
     }
 
     /// Return the WASM hash installed by the most recent `upgrade` call, or
@@ -1266,6 +1267,8 @@ mod settlement_tests;
 mod test_admin_migration;
 #[cfg(test)]
 mod test_error_codes;
+#[cfg(test)]
+mod test_events;
 #[cfg(test)]
 mod test_invariant;
 #[cfg(test)]
