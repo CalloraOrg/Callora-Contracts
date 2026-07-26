@@ -1,0 +1,23 @@
+[package]
+name = "callora-settlement-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "settlement"
+path = "targets/settlement.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+callora-settlement = { path = ".." }
+soroban-sdk = { version = "22", features = ["testutils"] }
+
+[profile.release]
+panic = "abort"
+overflow-checks = true

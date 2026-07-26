@@ -10,6 +10,7 @@ members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/settlement/fuzz",
     "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
