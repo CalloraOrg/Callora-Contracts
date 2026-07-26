@@ -266,6 +266,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-freeze"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-freeze-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "callora-freeze",
+ "callora-revenue-pool",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-helpers"
 version = "0.1.0"
 
