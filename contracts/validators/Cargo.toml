@@ -1,0 +1,16 @@
+[package]
+name = "callora-validators"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { version = "1", default-features = false, features = ["std"] }

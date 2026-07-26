@@ -311,7 +311,7 @@ fn run_property_trace(seed: u64) {
                     None
                 };
                 if paused {
-                    let result = client.try_deduct(&owner, &amount, &rid, &u32::MAX);
+                    let result = client.try_deduct(&owner, &amount, &rid);
                     trace.push(
                         step,
                         "deduct (paused, expect fail)",
@@ -319,7 +319,7 @@ fn run_property_trace(seed: u64) {
                     );
                     assert!(result.is_err());
                 } else if balance_before >= amount {
-                    client.deduct(&owner, &amount, &rid, &u32::MAX);
+                    client.deduct(&owner, &amount, &rid);
                     if let Some(ref id) = rid {
                         used_request_ids.push(id.clone(), &Address::generate(&env));
                     }
@@ -329,7 +329,7 @@ fn run_property_trace(seed: u64) {
                         std::format!("amount={amount} rid={with_id:?}"),
                     );
                 } else {
-                    let result = client.try_deduct(&owner, &amount, &rid, &u32::MAX);
+                    let result = client.try_deduct(&owner, &amount, &rid);
                     trace.push(
                         step,
                         "deduct (insufficient, expect fail)",
@@ -470,11 +470,10 @@ fn run_property_trace(seed: u64) {
                         client.deduct(
                             &owner,
                             &amount,
-                            &Some(rid.clone(), &Address::generate(&env)),
-                            &u32::MAX,
+                            &Some(rid.clone()),
                         );
                         let retry =
-                            client.try_deduct(&owner, &amount, &Some(rid.clone()), &u32::MAX);
+                            client.try_deduct(&owner, &amount, &Some(rid.clone()));
                         trace.push(
                             step,
                             "request_id_reuse",
@@ -489,7 +488,7 @@ fn run_property_trace(seed: u64) {
                     let idx = rng.gen_range_usize(0, used_request_ids.len());
                     let rid = used_request_ids[idx].clone();
                     let amount = rng.gen_range_i128(1, AMOUNT_CAP);
-                    let retry = client.try_deduct(&owner, &amount, &Some(rid.clone()), &u32::MAX);
+                    let retry = client.try_deduct(&owner, &amount, &Some(rid.clone()));
                     trace.push(
                         step,
                         "request_id_reuse",
@@ -555,7 +554,7 @@ fn test_balance_property_pause_mid_sequence() {
 
     client.pause(&owner);
     assert!(client.try_deposit(&owner, &50).is_err());
-    assert!(client.try_deduct(&owner, &10, &None, &u32::MAX).is_err());
+    assert!(client.try_deduct(&owner, &10, &None).is_err());
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 2);
 
     // Withdraw is allowed while paused.
@@ -563,7 +562,7 @@ fn test_balance_property_pause_mid_sequence() {
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 3);
 
     client.unpause(&owner);
-    client.deduct(&owner, &25, &None, &u32::MAX, &Address::generate(&env));
+    client.deduct(&owner, &25, &None);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 4);
 }
 
@@ -631,12 +630,11 @@ fn test_balance_property_request_id_reuse() {
     client.deduct(
         &owner,
         &100,
-        &Some(rid.clone(), &Address::generate(&env)),
-        &u32::MAX,
+        &Some(rid.clone())
     );
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 1);
 
-    let retry = client.try_deduct(&owner, &50, &Some(rid.clone()), &u32::MAX);
+    let retry = client.try_deduct(&owner, &50, &Some(rid.clone()));
     assert!(retry.is_err());
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(13), 2);
     assert_eq!(client.balance(), INITIAL_BALANCE - 100);

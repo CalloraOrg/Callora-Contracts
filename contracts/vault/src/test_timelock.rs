@@ -11,10 +11,9 @@ extern crate std;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{token, Address, BytesN, Env, IntoVal, Symbol};
 
-use super::test::CalloraVault;
-use super::test::CalloraVaultClient;
 use super::{
-    timelock, VaultError, DEFAULT_TIMELOCK_SECONDS, MAX_TIMELOCK_SECONDS, MIN_TIMELOCK_SECONDS,
+    timelock, CalloraVault, CalloraVaultClient, VaultError,
+    DEFAULT_TIMELOCK_SECONDS, MAX_TIMELOCK_SECONDS, MIN_TIMELOCK_SECONDS,
 };
 
 // ---------------------------------------------------------------------------

@@ -10,17 +10,25 @@ members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/settlement/fuzz",
     "contracts/checkpoint",
+    "contracts/freeze",
     "contracts/helpers",
+    "contracts/limits",
     "contracts/revenue_pool/fuzz",
+    "contracts/migrate/fuzz",
     "contracts/tests",
+    "contracts/whitelist",
+    "contracts/cold",
 ]
 default-members = [
     "contracts/vault",
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/checkpoint",
+    "contracts/freeze",
     "contracts/helpers",
+    "contracts/cold",
 ]
 
 

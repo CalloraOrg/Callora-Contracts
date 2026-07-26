@@ -51,7 +51,18 @@ must not be reassigned once released.
 | 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |
 | 35 | `Slippage` | Vault | Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit |
 | 36 | `RateLimited` | Vault | Developer exceeded the configured rate limit |
-| 37 | `ExceedsReserveCap` | Vault | Deposit would exceed the configured per-token reserve cap |
+| 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
+| 38 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
+| 39 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
+| 40 | `ColdSignersEmpty` | Vault | Cold signer set cannot be empty |
+| 41 | `InvalidColdThreshold` | Vault | Cold threshold must be between 1 and signer count |
+| 42 | `DuplicateColdSigner` | Vault | Duplicate address found in cold signer set |
+| 43 | `ExceedsReserveCap` | Vault | Deposit would exceed the configured per-token reserve cap |
+| 44 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
+| 45 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
+| 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
+| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
+| 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
 
 ## Settlement
 
@@ -80,8 +91,10 @@ must not be reassigned once released.
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
 | 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
-| 24 | `InvalidClaimWindow` | Settlement | Claim window end timestamp is before the start timestamp |
-| 25 | `ClaimWindowClosed` | Settlement | Developer attempted to claim outside their configured claim window |
+| 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |
+| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
+| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
+| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |
 
 ## Revenue Pool
 

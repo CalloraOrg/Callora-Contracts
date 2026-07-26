@@ -1153,6 +1153,32 @@ no events are emitted and state is rolled back.
 
 ---
 
+### `initialized`
+
+Emitted once by `init()` when the settlement contract is first configured.
+
+| Index   | Location | Type    | Description                                     |
+|---------|----------|---------|-------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"initialized"`                                 |
+| topic 1 | topics   | Address | `admin` — initial admin address                 |
+| topic 2 | topics   | Address | `vault_address` — initial authorized vault      |
+| data    | data     | GlobalPool | pool snapshot at init time (`total_balance=0`) |
+
+```json
+{
+  "topics": ["initialized", "GADMIN...", "GVAULT..."],
+  "data": { "total_balance": 0, "last_updated": 1700000000 }
+}
+```
+
+**Indexer guidance.**
+- `initialized` is emitted exactly once per contract lifetime; a second `init`
+  call panics with `AlreadyInitialized` before reaching this emit.
+- Use this event to index the contract's admin and vault addresses from genesis
+  without querying `get_admin()` / `get_vault()` separately.
+
+---
+
 ### `payment_received`
 
 Emitted by `receive_payment()` for every successful inbound payment,
@@ -1254,7 +1280,41 @@ after the matching `payment_received` event.
 
 ---
 
-### `vault_changed`
+### `deposit`
+
+Emitted alongside every `balance_credited` event, once per developer credit in
+both `receive_payment()` (`to_pool = false`) and `batch_receive_payment()`.
+It provides a compact deposit-centric view for indexers that don't need the
+full `PaymentReceivedEvent` context.
+
+| Index       | Location | Type    | Description                                          |
+|-------------|----------|---------|------------------------------------------------------|
+| topic 0     | topics   | Symbol  | `"deposit"`                                          |
+| topic 1     | topics   | Address | `developer` — address receiving the credit           |
+| `developer` | data     | Address | same as topic 1; duplicated for data-only indexers   |
+| `token`     | data     | Address | token contract address for this deposit              |
+| `amount`    | data     | i128    | deposit amount in USDC micro-units; invariant `> 0`  |
+
+```json
+{
+  "topics": ["deposit", "GDEV..."],
+  "data": {
+    "developer": "GDEV...",
+    "token": "GUSDC...",
+    "amount": 2500000
+  }
+}
+```
+
+**Indexer guidance.**
+- `deposit` is always emitted **after** `balance_credited` for the same
+  developer credit within the same transaction.
+- `deposit` is **never** emitted for pool credits (`to_pool = true`).
+- For batch credits, `N` items produce exactly `N` `deposit` events.
+- The `token` field identifies which asset was deposited; required for
+  multi-asset environments.
+
+---
 
 Emitted by `set_vault()` when the admin updates the registered vault address.
 

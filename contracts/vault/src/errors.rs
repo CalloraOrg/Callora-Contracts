@@ -45,6 +45,7 @@ use soroban_sdk::contracterror;
 /// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
+/// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -135,4 +136,14 @@ pub enum VaultError {
     DuplicateColdSigner = 42,
     /// Deposit would exceed the configured reserve cap (code 43).
     ExceedsReserveCap = 43,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    ///
+    /// # When returned
+    /// - `deposit()` when a non-owner address attempts to deposit and the caller
+    ///   is not present in the configured allowlist.
+    ///
+    /// # Security note
+    /// Returned instead of panicking to provide machine-readable feedback to
+    /// integrators and prevent information leakage.
+    CallerNotInAllowlist = 44,
 }

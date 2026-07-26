@@ -1,4 +1,5 @@
-//! Bounded string validators for user-supplied vault metadata.
+#![no_std]
+//! Bounded string validators for user-supplied contract metadata.
 //!
 //! Metadata is stored as contract state and later consumed by wallets,
 //! indexers, and off-chain services. Accepting arbitrary Unicode would allow
@@ -10,6 +11,13 @@
 //!
 //! The validator is O(n) over the input length, with `n` capped at the
 //! contract's existing 256-byte metadata limit.
+//!
+//! # Core invariant
+//! For every input string `s`:
+//! - `is_visible_ascii_metadata(s) == normalize_visible_ascii(s).is_ok()`
+//! - Acceptance iff `s` is non-empty, length ≤ [`MAX_VALIDATED_STRING_LEN`],
+//!   every byte is in `0x20..=0x7E`, and neither the first nor last byte is
+//!   ASCII space (`0x20`).
 
 use soroban_sdk::String;
 
@@ -22,6 +30,11 @@ pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
 /// spaces. This rejects C0/DEL controls, zero-width and bidi controls, and
 /// Unicode confusables by construction. Because ASCII has no decomposed forms,
 /// the returned value is NFC-normalized and byte-stable.
+///
+/// # Errors
+/// Returns `Err(())` when the string is empty, exceeds
+/// [`MAX_VALIDATED_STRING_LEN`], contains a non-visible-ASCII byte, or has
+/// leading/trailing ASCII space.
 pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ()> {
     let len = s.len();
     if len == 0 || len > MAX_VALIDATED_STRING_LEN {
@@ -48,4 +61,19 @@ pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_L
 /// Return whether a bounded metadata string is accepted by the on-chain policy.
 pub fn is_visible_ascii_metadata(s: &String) -> bool {
     normalize_visible_ascii(s).is_ok()
+}
+
+/// Pure reference predicate mirroring [`normalize_visible_ascii`] over raw bytes.
+///
+/// Used by property tests to check the on-chain validator against an independent
+/// oracle that does not touch the Soroban host.
+pub fn bytes_are_visible_ascii(bytes: &[u8]) -> bool {
+    let len = bytes.len();
+    if len == 0 || len > MAX_VALIDATED_STRING_LEN as usize {
+        return false;
+    }
+    if bytes[0] == b' ' || bytes[len - 1] == b' ' {
+        return false;
+    }
+    bytes.iter().all(|b| (0x20..=0x7e).contains(b))
 }

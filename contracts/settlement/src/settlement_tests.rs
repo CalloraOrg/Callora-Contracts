@@ -54,13 +54,15 @@ mod settlement_tests {
     ///
     /// # Returns
     /// The sum of all developer balances in the settlement contract.
+    #[allow(dead_code)]
     pub fn get_total_developer_balances(
         env: &Env,
         settlement_addr: &Address,
         admin: &Address,
+        token: &Address,
     ) -> i128 {
         let client = CalloraSettlementClient::new(env, settlement_addr);
-        let all_balances = client.get_all_developer_balances(admin);
+        let all_balances = client.get_all_developer_balances(admin, token);
         let mut total = 0i128;
         for balance_record in all_balances.iter() {
             total = total
@@ -76,6 +78,7 @@ mod settlement_tests {
     ///
     /// # Returns
     /// The current `total_balance` of the global settlement pool.
+    #[allow(dead_code)]
     pub fn get_settlement_pool_balance(env: &Env, settlement_addr: &Address) -> i128 {
         let client = CalloraSettlementClient::new(env, settlement_addr);
         let global_pool = client.get_global_pool();
@@ -2100,7 +2103,7 @@ mod settlement_tests {
 
         let items: soroban_sdk::Vec<(Address, i128)> = soroban_sdk::Vec::new(&env);
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::BatchEmpty));
     }
 
     #[test]
@@ -2115,7 +2118,7 @@ mod settlement_tests {
             items.push_back((dev.clone(), 1i128));
         }
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::BatchTooLarge));
     }
 
     #[test]
@@ -2127,7 +2130,7 @@ mod settlement_tests {
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 0i128));
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
     #[test]
@@ -2139,7 +2142,7 @@ mod settlement_tests {
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), -1i128));
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
     #[test]
@@ -3239,6 +3242,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &100,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -3317,6 +3321,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &100,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -3351,6 +3356,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &100,
         );
         usdc_admin_client.mint(&addr, &100i128);
 
@@ -3380,6 +3386,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &100,
         );
         usdc_admin_client.mint(&addr, &100i128);
         client.set_developer_claim_window(&admin, &developer, &1_000u64, &2_000u64);
@@ -3420,6 +3427,7 @@ mod settlement_tests {
             &false,
             &Some(developer.clone()),
             &usdc_address,
+            &100,
         );
         usdc_admin_client.mint(&addr, &100i128);
         client.set_developer_claim_window(&admin, &developer, &1_000u64, &2_000u64);
@@ -3447,8 +3455,22 @@ mod settlement_tests {
 
         client.init(&admin, &vault);
         client.set_usdc_token(&admin, &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &usdc_address);
-        client.receive_payment(&vault, &100i128, &false, &Some(dev2.clone()), &usdc_address);
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(dev1.clone()),
+            &usdc_address,
+            &100,
+        );
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(dev2.clone()),
+            &usdc_address,
+            &100,
+        );
         usdc_admin_client.mint(&addr, &200i128);
 
         // dev1's window already closed; dev2 has no window (unrestricted).

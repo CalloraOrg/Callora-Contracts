@@ -89,12 +89,11 @@ fn init_defaults_balance_to_zero() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     assert_eq!(client.balance(), 0);
 }
@@ -110,12 +109,11 @@ fn init_defaults_min_deposit_to_one() {
     let meta = client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(meta.min_deposit, 1);
@@ -449,12 +447,11 @@ fn owner_can_deposit() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &500);
@@ -597,12 +594,11 @@ fn deposit_paused_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     client.pause(&owner);
@@ -636,12 +632,11 @@ fn owner_deposit_increases_balance_and_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &500);
@@ -746,12 +741,11 @@ fn deposit_event_schema_alignment() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &200);
@@ -912,12 +906,11 @@ fn pause_unpause_admin_only() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // intruder fails
@@ -948,12 +941,11 @@ fn pause_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     client.pause(&owner);
@@ -989,12 +981,11 @@ fn nuclear_pause_requires_current_admin_and_sets_pause() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_admin(&owner, &admin);
     client.accept_admin();
@@ -1024,12 +1015,11 @@ fn nuclear_pause_rejects_already_paused() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.nuclear_pause(&owner);
 
@@ -1070,7 +1060,7 @@ fn set_authorized_caller_sets_and_emits_event() {
     assert_eq!(now, Some(new_caller.clone()));
     assert_eq!(nonce, 0u64);
 
-    let remaining = client.deduct(&new_caller, &50, &None, &u32::MAX, &Address::generate(&env));
+    let remaining = client.deduct(&new_caller, &50, &None);
     assert_eq!(remaining, 150);
 }
 
@@ -1086,7 +1076,7 @@ fn deduct_reduces_balance() {
     client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    let returned = client.deduct(&owner, &50, &None, &u32::MAX, &Address::generate(&env));
+    let returned = client.deduct(&owner, &50, &None);
     assert_eq!(returned, 250);
     assert_eq!(client.balance(), 250);
 }
@@ -1107,8 +1097,6 @@ fn deduct_with_request_id() {
         &owner,
         &100,
         &Some(Symbol::new(&env, "req123")),
-        &u32::MAX,
-        &Address::generate(&env),
     );
     assert_eq!(remaining, 900);
 }
@@ -1124,7 +1112,7 @@ fn deduct_insufficient_balance_fails() {
     fund_vault(&usdc_admin, &vault_address, 10);
     client.init(&owner, &usdc, &Some(10), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &100, &None, &u32::MAX);
+    let result = client.try_deduct(&owner, &100, &None);
     assert!(result.is_err(), "expected error for insufficient balance");
 }
 
@@ -1140,7 +1128,7 @@ fn deduct_exact_balance_succeeds() {
     client.init(&owner, &usdc, &Some(75), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    let remaining = client.deduct(&owner, &75, &None, &u32::MAX, &Address::generate(&env));
+    let remaining = client.deduct(&owner, &75, &None);
     assert_eq!(remaining, 0);
     assert_eq!(client.balance(), 0);
 }
@@ -1161,8 +1149,7 @@ fn deduct_event_contains_request_id() {
     client.deduct(
         &owner,
         &150,
-        &Some(request_id.clone(), &Address::generate(&env)),
-        &u32::MAX,
+        &Some(request_id.clone()),
     );
 
     let events = env.events().all();
@@ -1192,28 +1179,28 @@ fn deduct_zero_amount_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &client.address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-    client.deduct(&owner, &0, &None, &u32::MAX);
+    client.deduct(&owner, &0, &None);
 }
 
 #[test]
 #[should_panic(expected = "deduct amount exceeds max_deduct")]
 fn deduct_exceeding_max_fails() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
     fund_vault(&usdc_admin, &client.address, 1000);
     // Set max_deduct to 500
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(500));
-    client.deduct(&owner, &501, &None, &u32::MAX);
+    client.deduct(&owner, &501, &None);
 }
 
 #[test]
 fn deduct_authorized_caller_succeeds() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let authorized = Address::generate(&env, &Address::generate(&env));
+    let authorized = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
@@ -1232,9 +1219,7 @@ fn deduct_authorized_caller_succeeds() {
     let remaining = client.deduct(
         &authorized,
         &100,
-        &None,
-        &u32::MAX,
-        &Address::generate(&env),
+        &None
     );
     assert_eq!(remaining, 900);
 }
@@ -1249,13 +1234,13 @@ fn deduct_paused_fails() {
     fund_vault(&usdc_admin, &client.address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]
 fn deduct_event_no_request_id_uses_empty_symbol() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -1264,12 +1249,12 @@ fn deduct_event_no_request_id_uses_empty_symbol() {
     client.init(&owner, &usdc, &Some(300), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None);
 
     let events = env.events().all();
     let ev = events.last().expect("expected deduct event");
 
-    assert_eq!(ev.1.len(, &Address::generate(&env)), 3, "deduct event must always have 3 topics");
+    assert_eq!(ev.1.len(), 3, "deduct event must always have 3 topics");
     let topic0: Symbol = ev.1.get(0).unwrap().into_val(&env);
     let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
     let topic2: Symbol = ev.1.get(2).unwrap().into_val(&env);
@@ -1293,41 +1278,41 @@ fn deduct_zero_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
-    client.deduct(&owner, &0, &None, &u32::MAX);
+    client.deduct(&owner, &0, &None);
 }
 
 #[test]
 #[should_panic(expected = "amount must be positive")]
 fn deduct_negative_panics() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
-    client.deduct(&owner, &-50, &None, &u32::MAX);
+    client.deduct(&owner, &-50, &None);
 }
 
 #[test]
 #[should_panic(expected = "insufficient balance")]
 fn deduct_exceeds_balance_panics() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 50);
     client.init(&owner, &usdc, &Some(50), &None, &None, &None, &None);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]
 fn balance_unchanged_after_failed_deduct() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
 
@@ -1335,7 +1320,7 @@ fn balance_unchanged_after_failed_deduct() {
     fund_vault(&usdc_admin, &vault_address, 100);
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
 
-    let _ = client.try_deduct(&owner, &200, &None, &u32::MAX);
+    let _ = client.try_deduct(&owner, &200, &None);
     assert_eq!(client.balance(), 100);
 }
 
@@ -1357,12 +1342,11 @@ fn propose_and_accept_revenue_pool_stores_address() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.propose_revenue_pool(&Some(revenue_pool.clone()));
     // pending should be set
@@ -1387,12 +1371,11 @@ fn propose_and_accept_revenue_pool_clear_proposal() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     // Propose None to clear the revenue pool
     client.propose_revenue_pool(&None);
@@ -1467,12 +1450,11 @@ fn cancel_revenue_pool_removes_pending() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Propose
@@ -1496,12 +1478,11 @@ fn accept_revenue_pool_no_pending_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let result = client.try_accept_revenue_pool();
@@ -1519,12 +1500,11 @@ fn cancel_revenue_pool_no_pending_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let result = client.try_cancel_revenue_pool();
@@ -1543,12 +1523,11 @@ fn propose_revenue_pool_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.propose_revenue_pool(&Some(revenue_pool.clone()));
 
@@ -1570,12 +1549,11 @@ fn accept_revenue_pool_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.propose_revenue_pool(&Some(revenue_pool.clone()));
     client.accept_revenue_pool();
@@ -1598,12 +1576,11 @@ fn cancel_revenue_pool_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.propose_revenue_pool(&Some(pool));
     client.cancel_revenue_pool();
@@ -1625,12 +1602,11 @@ fn get_revenue_pool_returns_none_when_not_set() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_revenue_pool(), None);
@@ -1664,7 +1640,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     assert_eq!(before, Some(revenue_pool.clone()));
 
     // Perform deduct operation (routes to settlement, not revenue_pool)
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None);
 
     // Query revenue pool after deduct - should be unchanged
     let after = client.get_revenue_pool(&env);
@@ -1688,12 +1664,11 @@ fn get_pending_revenue_pool_returns_none_when_not_set() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_pending_revenue_pool(), None);
@@ -1711,12 +1686,11 @@ fn get_pending_revenue_pool_returns_proposed() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.propose_revenue_pool(&Some(pool.clone()));
     assert_eq!(client.get_pending_revenue_pool(), Some(pool));
@@ -2156,12 +2130,11 @@ fn set_and_retrieve_metadata() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-001");
@@ -2185,12 +2158,11 @@ fn set_metadata_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-002");
@@ -2230,12 +2202,11 @@ fn update_metadata_and_verify() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-003");
@@ -2261,12 +2232,11 @@ fn update_metadata_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-004");
@@ -2307,12 +2277,11 @@ fn update_metadata_without_existing_uses_empty_old() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-006");
@@ -2341,12 +2310,11 @@ fn unauthorized_cannot_set_metadata() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-005");
@@ -2365,12 +2333,11 @@ fn set_metadata_max_length_succeeds() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "a".repeat(64).as_str());
@@ -2392,12 +2359,11 @@ fn set_metadata_exceeds_length_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "off-1");
@@ -2418,12 +2384,11 @@ fn set_offering_id_exceeds_length_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "a".repeat(65).as_str());
@@ -2443,12 +2408,11 @@ fn update_metadata_max_length_succeeds() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-update");
@@ -2471,12 +2435,11 @@ fn metadata_remains_after_ownership_transfer() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "off-transfer");
@@ -2517,12 +2480,11 @@ fn remove_metadata_clears_entry() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-rm-001");
@@ -2546,12 +2508,11 @@ fn remove_metadata_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-rm-002");
@@ -2587,12 +2548,11 @@ fn unauthorized_cannot_remove_metadata() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-rm-003");
@@ -2611,12 +2571,11 @@ fn remove_metadata_nonexistent_is_noop() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let offering_id = String::from_str(&env, "offering-rm-never-set");
@@ -2688,8 +2647,6 @@ fn vault_full_lifecycle() {
         &owner,
         &25,
         &Some(Symbol::new(&env, "r4")),
-        &u32::MAX,
-        &Address::generate(&env),
     );
     assert_eq!(after_deduct, 500);
 
@@ -2764,14 +2721,14 @@ fn deduct_with_only_revenue_pool_panics() {
         &None,
     );
 
-    client.deduct(&caller, &300, &None, &u32::MAX);
+    client.deduct(&caller, &300, &None);
 }
 
 #[test]
 fn deduct_with_settlement_transfers_usdc() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let caller = Address::generate(&env, &Address::generate(&env));
+    let caller = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
     let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &owner);
@@ -2788,9 +2745,9 @@ fn deduct_with_settlement_transfers_usdc() {
         &None,
     );
 
-    client.deduct(&caller, &250, &None, &u32::MAX);
+    client.deduct(&caller, &250, &None);
 
-    assert_eq!(client.balance(, &Address::generate(&env)), 550);
+    assert_eq!(client.balance(), 550);
     assert_eq!(usdc_client.balance(&settlement), 250);
 }
 
@@ -2889,12 +2846,11 @@ fn set_revenue_pool_stores_and_get_returns_address() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_revenue_pool(&owner, &Some(revenue_pool.clone()));
 
@@ -2954,12 +2910,11 @@ fn set_revenue_pool_unauthorized_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_revenue_pool(&attacker, &Some(revenue_pool));
 }
@@ -2975,12 +2930,11 @@ fn get_revenue_pool_returns_none_when_not_set() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_revenue_pool(), None);
@@ -3000,12 +2954,11 @@ fn get_revenue_pool_returns_correct_after_update() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Set first revenue pool
@@ -3071,7 +3024,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
     assert_eq!(before, Some(revenue_pool.clone()));
 
     // Perform deduct operation (routes to settlement, not revenue_pool)
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None);
 
     // Query revenue pool after deduct - should be unchanged
     let after = client.get_revenue_pool(&env);
@@ -3188,12 +3141,11 @@ fn get_revenue_pool_after_multiple_sequential_updates() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Multiple sequential updates
@@ -3229,7 +3181,7 @@ fn deduct_routes_to_settlement_when_both_configured() {
         &None,
     );
 
-    client.deduct(&caller, &400, &None, &u32::MAX, &Address::generate(&env));
+    client.deduct(&caller, &400, &None);
 
     // settlement gets the funds, revenue_pool gets nothing
     assert_eq!(usdc_client.balance(&settlement), 400);
@@ -3248,12 +3200,11 @@ fn set_revenue_pool_emits_event_on_set() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_revenue_pool(&owner, &Some(revenue_pool.clone()));
 
@@ -3307,12 +3258,11 @@ fn set_settlement_stores_and_get_returns_address() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_settlement(), settlement);
@@ -3332,12 +3282,11 @@ fn set_settlement_unauthorized_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 }
 
@@ -3353,12 +3302,11 @@ fn set_settlement_emits_event() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let events = env.events().all();
@@ -3384,12 +3332,11 @@ fn get_settlement_before_set_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.get_settlement();
 }
@@ -3408,12 +3355,11 @@ fn get_settlement_returns_correct_after_update() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Set first settlement address
@@ -3452,7 +3398,7 @@ fn get_settlement_consistent_after_deduct_operations() {
     assert_eq!(before, settlement);
 
     // Perform deduct operation
-    client.deduct(&caller, &200, &None, &u32::MAX);
+    client.deduct(&caller, &200, &None);
 
     // Query settlement after deduct - should be unchanged
     let after = client.get_settlement(&env);
@@ -3477,12 +3423,11 @@ fn get_settlement_no_mutation_on_multiple_calls() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let initial_balance = client.balance();
@@ -3509,12 +3454,11 @@ fn test_clear_allowed_depositors() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
@@ -3538,12 +3482,11 @@ fn test_set_authorized_caller() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     client.set_authorized_caller(&Some(auth_caller.clone()), &0u64);
@@ -3565,12 +3508,11 @@ fn set_authorized_caller_non_owner_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Attempt to set authorized caller as non-owner
@@ -3589,12 +3531,11 @@ fn set_authorized_caller_vault_address_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let result = client.try_set_authorized_caller(&Some(vault_address), &0u64);
@@ -3613,12 +3554,11 @@ fn set_authorized_caller_clear_succeeds() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Set authorized caller (nonce 0 → stored nonce becomes 1)
@@ -3648,12 +3588,11 @@ fn set_authorized_caller_nonce_default_is_zero() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_authorized_caller_nonce(), 0u64);
@@ -3672,12 +3611,11 @@ fn set_authorized_caller_first_rotation_with_nonce_zero() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
@@ -3700,12 +3638,11 @@ fn set_authorized_caller_stale_nonce_rejected() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // First rotation succeeds with nonce 0.
@@ -3732,12 +3669,11 @@ fn set_authorized_caller_future_nonce_rejected() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let result = client.try_set_authorized_caller(&Some(new_caller), &5u64);
@@ -3759,12 +3695,11 @@ fn set_authorized_caller_nonce_increments_sequentially() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     for nonce in 0u64..3 {
@@ -3788,12 +3723,11 @@ fn set_authorized_caller_nonce_wraps_at_u64_max() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Manually prime the nonce to u64::MAX via storage so we don't need 2^64 calls.
@@ -3823,12 +3757,11 @@ fn set_authorized_caller_failed_rotation_does_not_advance_nonce() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Wrong nonce — must fail.
@@ -3855,12 +3788,11 @@ fn set_authorized_caller_event_emits_nonce() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_authorized_caller(&Some(new_caller.clone()), &0u64);
 
@@ -3896,9 +3828,9 @@ fn test_deduct_with_settlement_success() {
         &None,
     );
 
-    client.deduct(&owner, &300, &None, &u32::MAX);
+    client.deduct(&owner, &300, &None);
 
-    assert_eq!(client.balance(, &Address::generate(&env)), 700);
+    assert_eq!(client.balance(), 700);
     assert_eq!(usdc_client.balance(&settlement), 300);
 }
 
@@ -3958,7 +3890,7 @@ fn deduct_to_zero_succeeds() {
     let settlement = create_settlement(&env, &owner, &vault_address);
 
     assert_eq!(
-        client.deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env)),
+        client.deduct(&owner, &500, &None),
         0
     );
 }
@@ -4005,12 +3937,11 @@ fn batch_deduct_to_zero_succeeds() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
 
@@ -4127,12 +4058,11 @@ fn get_pending_owner_returns_none_before_transfer() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Before any transfer_ownership call, should return None
@@ -4174,12 +4104,11 @@ fn get_pending_admin_returns_none_before_transfer() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Before any set_admin call, should return None
@@ -4221,13 +4150,13 @@ fn deduct_while_paused_fails() {
     let settlement = create_settlement(&env, &owner, &vault_address);
 
     client.pause(&owner);
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None);
 }
 
 #[test]
 fn batch_deduct_while_paused_fails() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
@@ -4260,7 +4189,7 @@ fn deduct_unauthorized_caller_fails() {
     // init with an authorized_caller so the None branch is not taken
     let auth = Address::generate(&env);
     client.init(&owner, &usdc, &Some(500), &Some(auth), &None, &None, &None);
-    client.deduct(&attacker, &100, &None, &u32::MAX);
+    client.deduct(&attacker, &100, &None);
 }
 
 #[test]
@@ -4268,7 +4197,7 @@ fn deduct_unauthorized_caller_fails() {
 fn batch_deduct_unauthorized_caller_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
-    let attacker = Address::generate(&env, &Address::generate(&env));
+    let attacker = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
@@ -4296,14 +4225,14 @@ fn deduct_exceeds_max_deduct_fails() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &Some(50));
-    client.deduct(&owner, &100, &None, &u32::MAX); // 100 > max_deduct(50)
+    client.deduct(&owner, &100, &None); // 100 > max_deduct(50)
 }
 
 #[test]
 #[should_panic(expected = "deduct amount exceeds max_deduct")]
 fn batch_deduct_item_exceeds_max_deduct_fails() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
@@ -4345,12 +4274,11 @@ fn accept_admin_without_pending_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.accept_admin();
 }
@@ -4391,12 +4319,11 @@ fn cancel_admin_transfer_unauthorized() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_admin(&owner, &new_admin);
     client.cancel_admin_transfer(&attacker);
@@ -4413,12 +4340,11 @@ fn cancel_admin_transfer_no_pending_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.cancel_admin_transfer(&owner);
 }
@@ -4434,12 +4360,11 @@ fn accept_ownership_without_pending_fails() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.accept_ownership();
 }
@@ -4486,7 +4411,7 @@ fn deduct_without_settlement_panics() {
     env.mock_all_auths();
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
-    client.deduct(&owner, &200, &None, &u32::MAX);
+    client.deduct(&owner, &200, &None);
 }
 
 #[test]
@@ -4500,7 +4425,7 @@ fn deduct_without_settlement_does_not_mutate_state() {
     fund_vault(&usdc_admin, &vault_address, 500);
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
 
-    let result = client.try_deduct(&owner, &200, &None, &u32::MAX);
+    let result = client.try_deduct(&owner, &200, &None);
     assert!(result.is_err(), "expected panic for missing settlement");
     assert_eq!(client.balance(), 500);
     assert_eq!(usdc_client.balance(&vault_address), 500);
@@ -4648,12 +4573,11 @@ fn get_allowed_depositors_returns_list() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_allowed_depositor(&owner, &Some(d1.clone()));
     client.set_allowed_depositor(&owner, &Some(d2.clone()));
@@ -4671,12 +4595,11 @@ fn vault_unpaused_event_emitted() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.pause(&owner);
     client.unpause(&owner);
@@ -4790,15 +4713,15 @@ mod fuzz {
                     if paused {
                         // deduct must fail while paused
                         assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+                            .try_deduct(&caller, &amount, &None)
                             .is_err());
                     } else if sim >= amount {
                         sim -= amount;
-                        client.deduct(&caller, &amount, &None, &u32::MAX);
+                        client.deduct(&caller, &amount, &None);
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
                         assert!(client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+                            .try_deduct(&caller, &amount, &None)
                             .is_err());
                     }
                 }
@@ -5076,12 +4999,12 @@ mod fuzz {
                 let amount: i128 = rng.gen_range(1..=max_d);
                 if sim >= amount {
                     sim -= amount;
-                    client.deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env));
+                    client.deduct(&caller, &amount, &None);
                 } else {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+                            .try_deduct(&caller, &amount, &None)
                             .is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
@@ -5259,17 +5182,17 @@ mod fuzz {
                 if paused {
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+                            .try_deduct(&caller, &amount, &None)
                             .is_err(),
                         "deduct must fail while paused at step {step}"
                     );
                 } else if sim >= amount {
                     sim -= amount;
-                    client.deduct(&caller, &amount, &None, &u32::MAX, &Address::generate(&env));
+                    client.deduct(&caller, &amount, &None);
                 } else {
                     assert!(
                         client
-                            .try_deduct(&caller, &amount, &None, &u32::MAX)
+                            .try_deduct(&caller, &amount, &None)
                             .is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
@@ -5423,11 +5346,11 @@ mod fuzz {
                 client.deposit(&owner, &1);
             } else if sim >= 1 {
                 sim -= 1;
-                client.deduct(&caller, &1, &None, &u32::MAX, &Address::generate(&env));
+                client.deduct(&caller, &1, &None);
             } else {
                 // Balance exhausted: deduct must fail.
                 assert!(
-                    client.try_deduct(&caller, &1, &None, &u32::MAX).is_err(),
+                    client.try_deduct(&caller, &1, &None).is_err(),
                     "deduct must fail when balance=0 at step {step}"
                 );
             }
@@ -5488,11 +5411,11 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=max_d);
                     if sim >= amount {
                         sim -= amount;
-                        client.deduct(&owner, &amount, &None, &u32::MAX, &Address::generate(&env));
+                        client.deduct(&owner, &amount, &None);
                     } else {
                         assert!(
                             client
-                                .try_deduct(&owner, &amount, &None, &u32::MAX)
+                                .try_deduct(&owner, &amount, &None)
                                 .is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
@@ -5505,14 +5428,12 @@ mod fuzz {
                         client.deduct(
                             &caller_b,
                             &amount,
-                            &None,
-                            &u32::MAX,
-                            &Address::generate(&env),
-                        );
+                            &None
+    );
                     } else {
                         assert!(
                             client
-                                .try_deduct(&caller_b, &amount, &None, &u32::MAX)
+                                .try_deduct(&caller_b, &amount, &None)
                                 .is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
@@ -5613,12 +5534,11 @@ fn deposit_with_default_min_deposit_allows_one() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &1);
@@ -5651,12 +5571,11 @@ fn init_default_min_deposit_is_one() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     let meta = client.get_meta();
     assert_eq!(meta.min_deposit, 1);
@@ -5695,7 +5614,7 @@ fn deduct_below_minimum_panics() {
     client.init(&owner, &usdc, &Some(100), &None, &None, &None, &Some(100));
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    client.deduct(&owner, &1, &None, &u32::MAX, &Address::generate(&env));
+    client.deduct(&owner, &1, &None);
 }
 
 #[test]
@@ -5785,7 +5704,7 @@ fn deduct_equal_to_max_deduct_succeeds() {
     usdc_client.approve(&owner, &vault_address, &200, &1000);
     client.deposit(&owner, &200);
     // deduct exactly equal to max_deduct — must succeed
-    let balance = client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env));
+    let balance = client.deduct(&owner, &100, &None);
     assert_eq!(balance, 600);
 }
 
@@ -5803,13 +5722,13 @@ fn deduct_above_max_deduct_panics() {
     usdc_client.approve(&owner, &vault_address, &200, &1000);
     client.deposit(&owner, &200);
     // deduct 101 > max_deduct 100 — must panic
-    client.deduct(&owner, &101, &None, &u32::MAX);
+    client.deduct(&owner, &101, &None);
 }
 
 #[test]
 fn deduct_default_cap_is_i128_max() {
     let env = Env::default();
-    let owner = Address::generate(&env, &Address::generate(&env));
+    let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
     let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
     env.mock_all_auths();
@@ -5818,12 +5737,11 @@ fn deduct_default_cap_is_i128_max() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
 
@@ -5831,7 +5749,7 @@ fn deduct_default_cap_is_i128_max() {
     usdc_client.approve(&owner, &vault_address, &1_000_000, &1000);
     client.deposit(&owner, &1_000_000);
     // large deduct well below i128::MAX should succeed
-    let balance = client.deduct(&owner, &999_999, &None, &u32::MAX, &Address::generate(&env));
+    let balance = client.deduct(&owner, &999_999, &None);
     assert_eq!(balance, 1);
 }
 
@@ -5847,12 +5765,11 @@ fn batch_deduct_each_item_constrained_by_max_deduct() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        50,
-        &soroban_sdk::Address::generate(&env),
+        &Some(50),
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
 
@@ -5894,12 +5811,11 @@ fn batch_deduct_one_item_above_max_deduct_panics() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        50,
-        &soroban_sdk::Address::generate(&env),
+        &Some(50),
     );
     usdc_admin.mint(&owner, &300);
     usdc_client.approve(&owner, &vault_address, &300, &1000);
@@ -5938,12 +5854,11 @@ fn lifetime_deposit_zero_for_new_address() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     assert_eq!(client.get_lifetime_deposit(&stranger), 0i128);
@@ -5961,12 +5876,11 @@ fn lifetime_deposit_single_deposit() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &500);
@@ -5988,12 +5902,11 @@ fn lifetime_deposit_accumulates_across_multiple_deposits() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &1_000);
@@ -6018,12 +5931,11 @@ fn lifetime_deposit_not_decremented_by_withdraw() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &300);
@@ -6095,12 +6007,11 @@ fn lifetime_deposit_multi_depositor_accumulation() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_allowed_depositor(&owner, &Some(alice.clone()));
     client.set_allowed_depositor(&owner, &Some(bob.clone()));
@@ -6133,12 +6044,11 @@ fn list_lifetime_deposits_empty_before_any_deposit() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let page = client.list_lifetime_deposits(&0, &10);
@@ -6158,12 +6068,11 @@ fn list_lifetime_deposits_returns_entries() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
     client.set_allowed_depositor(&owner, &Some(alice.clone()));
 
@@ -6199,12 +6108,11 @@ fn list_lifetime_deposits_pagination() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Create 5 additional depositors and have each deposit once.
@@ -6243,12 +6151,11 @@ fn list_lifetime_deposits_limit_capped_at_100() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     for _ in 0..105u32 {
@@ -6297,12 +6204,11 @@ fn lifetime_deposit_index_no_duplicates() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &300);
@@ -6335,12 +6241,11 @@ fn get_contract_addresses_returns_usdc_only_after_init() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
@@ -6361,12 +6266,11 @@ fn get_contract_addresses_reflects_set_settlement() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
@@ -6466,12 +6370,11 @@ fn instance_ttl_extended_on_init_and_state_survives_ledger_advance() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     // Advance the ledger to just inside the bump window.
@@ -6513,12 +6416,11 @@ fn instance_ttl_extended_on_mutating_entrypoints() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &500);
@@ -6575,12 +6477,11 @@ fn instance_ttl_extended_on_deduct_and_batch_deduct() {
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &None,
     );
 
     usdc_admin.mint(&owner, &500);
@@ -6588,12 +6489,12 @@ fn instance_ttl_extended_on_deduct_and_batch_deduct() {
     client.deposit(&owner, &500);
 
     // deduct — bumps TTL
-    client.deduct(&owner, &100, &None, &u32::MAX);
+    client.deduct(&owner, &100, &None);
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
     assert_eq!(
-        client.balance(, &Address::generate(&env)),
+        client.balance(),
         400,
         "balance readable after ledger advance post-deduct"
     );
@@ -6703,9 +6604,6 @@ mod malicious_token {
                     &caller,
                     &attack_amount,
                     &Some(Symbol::new(&env, "reentry")),
-                    &u32::MAX,
-                    &Address::generate(&env),
-                    &Address::generate(&env),
                 );
             }
         }
@@ -6779,7 +6677,7 @@ fn test_reentry_protection_single_deduct() {
     // Call 2 (Re-entrant): deduct(600) -> sees balance 500 -> PANIC "insufficient balance".
     malicious_client.set_attack_config(&vault_address, &owner, &600, &1);
 
-    let result = vault_client.try_deduct(&owner, &500, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &500, &None);
 
     // Acceptable Outcome A: Re-entrant call fails due to state guard (insufficient balance).
     assert!(
@@ -6901,11 +6799,11 @@ fn test_reentry_success_preserves_accounting() {
     // Call 1 resumes.
     malicious_client.set_attack_config(&vault_address, &owner, &100, &1);
 
-    vault_client.deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env));
+    vault_client.deduct(&owner, &200, &None);
 
     // Final balance must be exactly 700.
     assert_eq!(
-        vault_client.balance(, &Address::generate(&env)),
+        vault_client.balance(),
         700,
         "Final accounting must be deterministic and correct"
     );
@@ -6939,9 +6837,9 @@ fn test_nested_reentry_protection() {
     // Total should be: 100 (original) + 3 * 100 (re-entries) = 400.
     token_client.set_attack_config(&vault_address, &owner, &100, &3);
 
-    vault_client.deduct(&owner, &100, &None, &u32::MAX, &Address::generate(&env));
+    vault_client.deduct(&owner, &100, &None);
 
-    assert_eq!(vault_client.balance(, &Address::generate(&env)), 600);
+    assert_eq!(vault_client.balance(), 600);
 }
 
 /// ### Test: Re-entry with Exact Balance
@@ -6982,15 +6880,15 @@ fn test_reentry_exact_balance_exhaustion() {
     // re-entry deduct(500) -> balance 0. (Success)
     malicious_client.set_attack_config(&vault_address, &owner, &500, &1);
 
-    vault_client.deduct(&owner, &500, &None, &u32::MAX, &Address::generate(&env));
-    assert_eq!(vault_client.balance(, &Address::generate(&env)), 0);
+    vault_client.deduct(&owner, &500, &None);
+    assert_eq!(vault_client.balance(), 0);
 
     // Try again with over-exhaustion
     vault_client.deposit(&owner, &1000);
     // deduct(600) -> balance 400.
     // re-entry deduct(401) -> Fail.
     malicious_client.set_attack_config(&vault_address, &owner, &401, &1);
-    let result = vault_client.try_deduct(&owner, &600, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &600, &None);
     assert!(result.is_err());
     assert_eq!(vault_client.balance(), 1000);
 }
@@ -7029,7 +6927,7 @@ fn test_reentry_near_zero_balance() {
     // Call 2 (Re-entrant): deduct(1) -> sees balance 0 -> PANIC "insufficient balance"
     malicious_client.set_attack_config(&vault_address, &owner, &1, &1);
 
-    let result = vault_client.try_deduct(&owner, &1, &None, &u32::MAX);
+    let result = vault_client.try_deduct(&owner, &1, &None);
 
     // Must fail due to insufficient balance in re-entrant call
     assert!(result.is_err());
@@ -7201,9 +7099,6 @@ fn test_reentry_repeated_attempts() {
         &owner,
         &100,
         &None,
-        &u32::MAX,
-        &Address::generate(&env),
-        &Address::generate(&env),
     );
 
     // With 5 re-entries of 100 each, plus original 100, total should be 600
@@ -7437,7 +7332,7 @@ fn budget_measure_single_deduct() {
     let (owner, client) = setup_vault_for_deduct(&env, 100_000_000);
 
     let before = BudgetSnapshot::capture(&env);
-    client.deduct(&owner, &1_000_000, &None, &u32::MAX);
+    client.deduct(&owner, &1_000_000, &None);
     let after = BudgetSnapshot::capture(&env);
 
     let delta = after.delta(&before, &Address::generate(&env));
@@ -7638,6 +7533,7 @@ impl ConservationSnapshot {
                 env,
                 settlement_addr,
                 admin,
+                &usdc_client.address,
             );
 
         let revenue_pool_balance = usdc_client.balance(revenue_pool_addr);
@@ -8268,7 +8164,7 @@ fn slippage_max_u16_is_unrestricted() {
     let (owner, client) = setup_slippage_vault(&env, 1000);
     env.mock_all_auths();
     // Deduct 99% of balance — would fail any real limit, but u32::MAX = no limit
-    let remaining = client.deduct(&owner, &999, &None, &u32::MAX, &Address::generate(&env));
+    let remaining = client.deduct(&owner, &999, &None);
     assert_eq!(remaining, 1);
 }
 
@@ -8321,11 +8217,11 @@ fn slippage_no_regression_existing_deductions() {
     let (owner, client) = setup_slippage_vault(&env, 500);
     env.mock_all_auths();
     assert_eq!(
-        client.deduct(&owner, &200, &None, &u32::MAX, &Address::generate(&env)),
+        client.deduct(&owner, &200, &None),
         300
     );
     assert_eq!(
-        client.deduct(&owner, &300, &None, &u32::MAX, &Address::generate(&env)),
+        client.deduct(&owner, &300, &None),
         0
     );
 }
