@@ -90,7 +90,7 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 // ---------------------------------------------------------------------------
 
 struct Ctx<'a> {
-    env: Env,
+    env: &'a Env,
     vault_addr: Address,
     vault: CalloraVaultClient<'a>,
     settlement_addr: Address,
@@ -108,7 +108,7 @@ struct Ctx<'a> {
     outsider: Address,
 }
 
-fn setup() -> Ctx<'static> {
+fn setup<'a>(env: &'a Env) -> Ctx<'a> {
 
     let owner = Address::generate(&env);
     let admin = Address::generate(&env);

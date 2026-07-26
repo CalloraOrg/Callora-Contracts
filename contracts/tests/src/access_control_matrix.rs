@@ -69,8 +69,8 @@ fn create_revenue_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 }
 
 /// Standard test setup: deploy all contracts, mint USDC, init everything.
-struct TestContext<\'a> {
-    env: &\'a Env,
+struct TestContext<'a> {
+    env: &'a Env,
     vault_addr: Address,
     vault: CalloraVaultClient<'a>,
     settlement_addr: Address,
@@ -89,7 +89,7 @@ struct TestContext<\'a> {
     pending_admin: Address,
 }
 
-fn setup<\'a>(env: &\'a Env) -> TestContext<\'a> {
+fn setup<'a>(env: &'a Env) -> TestContext<'a> {
 
     let owner = Address::generate(&env);
     let admin = Address::generate(&env);
