@@ -2103,7 +2103,7 @@ mod settlement_tests {
 
         let items: soroban_sdk::Vec<(Address, i128)> = soroban_sdk::Vec::new(&env);
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::BatchEmpty));
     }
 
     #[test]
@@ -2118,7 +2118,7 @@ mod settlement_tests {
             items.push_back((dev.clone(), 1i128));
         }
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::BatchTooLarge));
     }
 
     #[test]
@@ -2130,7 +2130,7 @@ mod settlement_tests {
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), 0i128));
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
     #[test]
@@ -2142,7 +2142,7 @@ mod settlement_tests {
         let mut items = soroban_sdk::Vec::new(&env);
         items.push_back((dev.clone(), -1i128));
         let result = client.try_batch_receive_payment(&vault, &items, &token, &1u32);
-        assert!(result.is_err());
+        assert!(is_error(result, SettlementError::AmountNotPositive));
     }
 
     #[test]

@@ -93,6 +93,10 @@ must not be reassigned once released.
 | 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
 | 24 | `InvalidClaimWindow` | Settlement | Claim window end timestamp is before the start timestamp |
 | 25 | `ClaimWindowClosed` | Settlement | Developer attempted to claim outside their configured claim window |
+| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
+| 27 | `ReplayDetected` | Settlement | Settlement claim was replayed or out of order |
+| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |
+| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |
 
 ## Revenue Pool
 
