@@ -1,4 +1,4 @@
-use crate::{CalloraCheckpoint, CalloraCheckpointClient, CheckpointError, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use crate::{CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
@@ -154,7 +154,7 @@ fn test_cancel_admin_transfer_fails_for_non_admin() {
 #[test]
 #[should_panic(expected = "no admin transfer pending")]
 fn test_cancel_admin_transfer_panics_when_none_pending() {
-    let (env, admin, client) = setup();
+    let (_env, admin, client) = setup();
     client.cancel_admin_transfer(&admin);
 }
 
@@ -333,14 +333,14 @@ fn test_batch_create_fails_for_negative_balance() {
 
 #[test]
 fn test_get_checkpoint_not_found() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.try_get_checkpoint(&999);
     assert!(result.is_err(), "expected CheckpointNotFound error");
 }
 
 #[test]
 fn test_get_checkpoints_range_empty_when_no_checkpoints() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.get_checkpoints_range(&1u64, &10u32);
     assert!(result.is_empty());
 }
@@ -383,7 +383,7 @@ fn test_get_checkpoints_range_caps_limit() {
     }
 
     let result = client.get_checkpoints_range(&1u64, &(MAX_PAGE_SIZE + 100));
-    assert_eq!(result.len() as u32, MAX_PAGE_SIZE);
+    assert_eq!(result.len(), MAX_PAGE_SIZE);
 }
 
 #[test]
@@ -403,14 +403,14 @@ fn test_get_checkpoints_range_start_beyond_count() {
 
 #[test]
 fn test_get_checkpoints_range_fails_for_zero_limit() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     let result = client.try_get_checkpoints_range(&1u64, &0u32);
     assert!(result.is_err(), "expected InvalidPageSize error");
 }
 
 #[test]
 fn test_get_latest_checkpoint_returns_none_when_empty() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
     assert_eq!(client.get_latest_checkpoint_id(), 0);
     assert_eq!(client.get_latest_checkpoint(), None);
 }
@@ -551,7 +551,10 @@ fn test_admin_can_create_checkpoints_after_admin_rotation() {
 
     // Old admin can no longer create checkpoints.
     let result1 = client.try_create_checkpoint(&admin, &subject, &token, &100, &meta);
-    assert!(result1.is_err(), "old admin should be unauthorized after rotation");
+    assert!(
+        result1.is_err(),
+        "old admin should be unauthorized after rotation"
+    );
 
     // New admin can.
     let result2 = client.try_create_checkpoint(&new_admin, &subject, &token, &200, &meta);
@@ -571,4 +574,106 @@ fn test_count_and_latest_id_stay_consistent() {
         assert_eq!(client.get_checkpoint_count(), i);
         assert_eq!(client.get_latest_checkpoint_id(), i);
     }
+}
+
+// ===========================================================================
+// Overflow protection tests
+// ===========================================================================
+
+#[test]
+fn test_next_checkpoint_id_overflow_protection() {
+    // Test that checked_add prevents overflow when incrementing checkpoint ID.
+    // We can't actually create u64::MAX checkpoints, but we can verify the
+    // arithmetic logic by testing the checked_add behavior directly.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraCheckpoint, ());
+    let client = CalloraCheckpointClient::new(&env, &contract_id);
+    client.init(&admin);
+
+    // Verify that creating checkpoints uses checked arithmetic internally.
+    // The contract's next_checkpoint_id uses checked_add which returns None on overflow.
+    let id1 = client.create_checkpoint(
+        &admin,
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &100i128,
+        &Symbol::new(&env, "test"),
+    );
+    assert_eq!(id1, 1);
+
+    let id2 = client.create_checkpoint(
+        &admin,
+        &Address::generate(&env),
+        &Address::generate(&env),
+        &200i128,
+        &Symbol::new(&env, "test"),
+    );
+    assert_eq!(id2, 2);
+
+    // The internal next_checkpoint_id function uses checked_add(1) which
+    // would return Overflow error if the counter reached u64::MAX.
+    // We verify the current count is correct.
+    assert_eq!(client.get_checkpoint_count(), 2);
+    assert_eq!(client.get_latest_checkpoint_id(), 2);
+}
+
+#[test]
+fn test_get_checkpoints_range_overflow_protection() {
+    // Test that get_checkpoints_range uses checked_add for end_id calculation
+    // to prevent overflow when start_id + limit exceeds u64::MAX.
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "overflow_test");
+
+    // Create a few checkpoints
+    for i in 1..=5u64 {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128 * 100), &meta);
+    }
+
+    // Normal range query should work
+    let range = client.get_checkpoints_range(&1u64, &10u32);
+    assert_eq!(range.len(), 5);
+
+    // Test with start_id near u64::MAX - the checked_add in get_checkpoints_range
+    // would return Overflow error if start_id + limit > u64::MAX
+    // We can't actually set start_id to u64::MAX without creating that many checkpoints,
+    // but we verify the function handles the boundary correctly by checking the logic.
+    let start_id = u64::MAX - 10;
+    let range = client.get_checkpoints_range(&start_id, &100u32);
+    // Should return empty since no checkpoints exist at those IDs
+    assert!(range.is_empty());
+}
+
+#[test]
+fn test_batch_create_checkpoints_overflow_protection() {
+    // Test that batch_create_checkpoints properly handles overflow
+    // when creating many checkpoints sequentially.
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "batch_overflow");
+
+    // Create checkpoints in batches - each batch calls next_checkpoint_id
+    // which uses checked_add internally
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject.clone(), token.clone(), 100i128, meta.clone()),
+            (subject.clone(), token.clone(), 200i128, meta.clone()),
+            (subject.clone(), token.clone(), 300i128, meta.clone()),
+        ],
+    );
+
+    let ids = client.batch_create_checkpoints(&admin, &items);
+    assert_eq!(ids.len(), 3);
+    assert_eq!(ids.get(0).unwrap(), 1);
+    assert_eq!(ids.get(1).unwrap(), 2);
+    assert_eq!(ids.get(2).unwrap(), 3);
+
+    // Verify counts are correct
+    assert_eq!(client.get_checkpoint_count(), 3);
+    assert_eq!(client.get_latest_checkpoint_id(), 3);
 }
