@@ -350,6 +350,7 @@ dependencies = [
 name = "callora-validators"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 

@@ -28,7 +28,7 @@ enum CheckpointAction {
 
 fn checkpoint_action_strategy() -> impl Strategy<Value = CheckpointAction> {
     prop_oneof![
-        5 => (0_i128..=1_000_000_i128).prop_map(CheckpointAction::CreateSingle),
+        5 => (0_i128..=1_000_000_i128).prop_map(|balance| CheckpointAction::CreateSingle { balance }),
         3 => (1_u32..=MAX_BATCH_SIZE, 0_i128..=1_000_000_i128)
             .prop_map(|(count, balance)| CheckpointAction::CreateBatch { count, balance }),
         2 => (0_u64..=200_u64, 0_u32..=150_u32)
@@ -223,15 +223,15 @@ proptest! {
                 record.balance, expected_balance
             );
             prop_assert_eq!(
-                record.subject, subject,
+                record.subject, subject.clone(),
                 "record subject mutated"
             );
             prop_assert_eq!(
-                record.token, token,
+                record.token, token.clone(),
                 "record token mutated"
             );
             prop_assert_eq!(
-                record.metadata, meta,
+                record.metadata, meta.clone(),
                 "record metadata mutated"
             );
         }
@@ -476,8 +476,10 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(Ok(ids)) = result {
-                expected_id = *ids.last().unwrap();
+            if let Ok(ids_result) = result {
+                if let Ok(ids) = ids_result {
+                    expected_id = *ids.last().unwrap();
+                }
             }
 
             let latest = client.get_latest_checkpoint();
