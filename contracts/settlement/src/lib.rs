@@ -326,6 +326,9 @@ impl CalloraSettlement {
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
             .get(&StorageKey::Admin)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
@@ -361,12 +364,18 @@ impl CalloraSettlement {
     pub fn get_vault(env: Env) -> Address {
         env.storage()
             .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
             .get(&StorageKey::Vault)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
     }
 
     /// Get global pool information
     pub fn get_global_pool(env: Env) -> GlobalPool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get::<_, GlobalPool>(&StorageKey::GlobalPool)
@@ -379,6 +388,9 @@ impl CalloraSettlement {
     pub fn get_total_received(env: Env) -> i128 {
         env.storage()
             .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
             .get(&StorageKey::TotalReceived)
             .unwrap_or(0)
     }
@@ -386,14 +398,23 @@ impl CalloraSettlement {
     /// Get developer balance for a specific token.
     ///
     /// Performs a direct O(1) persistent storage lookup for the specified
-    /// developer's balance denominated in `token`.
+    /// developer's balance denominated in `token`. Bumps instance and persistent TTL on read.
     pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> i128 {
         if !env.storage().instance().has(&StorageKey::Admin) {
             env.panic_with_error(SettlementError::NotInitialized);
         }
         env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        let key = StorageKey::DeveloperBalance(developer, token);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        env.storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer, token))
+            .get(&key)
             .unwrap_or(0)
     }
 
@@ -420,8 +441,9 @@ impl CalloraSettlement {
     /// Return the pending migration for `from`, if one exists.
     pub fn get_balance_migration(env: Env, from: Address) -> Option<PendingDeveloperMigration> {
         env.storage()
-            .persistent()
-            .get(&StorageKey::PendingDeveloperMigration(from))
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        timelock::get_pending_migration(&env, &from)
     }
 
     /// Configure the USDC token contract address.
@@ -666,14 +688,21 @@ impl CalloraSettlement {
     }
 
     /// Return the configured claim window for a developer, or `None` when
-    /// claims are unrestricted.
+    /// claims are unrestricted. Bumps instance and persistent TTL on read.
     pub fn get_developer_claim_window(
         env: Env,
         developer: Address,
     ) -> Option<DeveloperClaimWindow> {
         env.storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer))
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        let key = StorageKey::DeveloperClaimWindow(developer);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        env.storage().persistent().get(&key)
     }
 
     /// Abort with `ClaimWindowClosed` when a developer has a configured claim
@@ -681,10 +710,13 @@ impl CalloraSettlement {
     /// `[start_ts, end_ts]` range. A developer with no configured window may
     /// claim at any time.
     fn require_claim_window_open(env: &Env, developer: &Address) -> Result<(), SettlementError> {
-        let window: Option<DeveloperClaimWindow> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperClaimWindow(developer.clone()));
+        let key = StorageKey::DeveloperClaimWindow(developer.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        let window: Option<DeveloperClaimWindow> = env.storage().persistent().get(&key);
         if let Some(window) = window {
             let now = env.ledger().timestamp();
             if now < window.start_ts || now > window.end_ts {
@@ -723,21 +755,33 @@ impl CalloraSettlement {
     }
 
     /// Get the daily withdrawal cap for a developer. Returns `0` (unlimited)
-    /// if no cap has been set.
+    /// if no cap has been set. Bumps instance and persistent TTL on read.
     pub fn get_daily_withdraw_cap(env: Env, developer: Address) -> i128 {
         env.storage()
-            .persistent()
-            .get(&StorageKey::DailyWithdrawCap(developer))
-            .unwrap_or(0)
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        let key = StorageKey::DailyWithdrawCap(developer);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     /// Get the amount a developer has already withdrawn today (UTC epoch day).
-    /// Returns `0` if no withdrawal has been made today.
+    /// Returns `0` if no withdrawal has been made today. Bumps instance and persistent TTL on read.
     pub fn get_withdrawal_today(env: Env, developer: Address) -> i128 {
-        let state: Option<DailyWithdrawState> = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::WithdrawalToday(developer));
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        let key = StorageKey::WithdrawalToday(developer);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        let state: Option<DailyWithdrawState> = env.storage().persistent().get(&key);
         match state {
             Some(s) if s.day == env.ledger().timestamp() / 86400 => s.amount,
             _ => 0,
@@ -826,7 +870,7 @@ impl CalloraSettlement {
     ///
     /// Iterates the full developer index. For deployments with many
     /// developers, prefer `get_developer_balances_cursor` for bounded,
-    /// paginated access.
+    /// paginated access. Bumps instance and persistent TTL for retrieved entries.
     pub fn get_all_developer_balances(
         env: Env,
         caller: Address,
@@ -837,6 +881,9 @@ impl CalloraSettlement {
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         let index: Vec<Address> = env
             .storage()
             .instance()
@@ -845,14 +892,13 @@ impl CalloraSettlement {
 
         let mut result = Vec::new(&env);
         for address in index.iter() {
-            let balance: i128 = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::DeveloperBalance(
-                    address.clone(),
-                    token.clone(),
-                ))
-                .unwrap_or(0i128);
+            let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
+            if env.storage().persistent().has(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            }
+            let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
             result.push_back(DeveloperBalance {
                 address: address.clone(),
                 token: token.clone(),
@@ -864,6 +910,7 @@ impl CalloraSettlement {
 
     /// Get a start/limit-paginated slice of developer balances for a token
     /// (admin only). `limit` is capped at [`MAX_DEVELOPER_BALANCES_PAGE_SIZE`].
+    /// Bumps instance and persistent TTL for retrieved entries.
     pub fn get_developer_balances_page(
         env: Env,
         caller: Address,
@@ -876,6 +923,9 @@ impl CalloraSettlement {
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
         let index: Vec<Address> = env
             .storage()
@@ -896,14 +946,13 @@ impl CalloraSettlement {
                 break;
             }
             if cursor >= start {
-                let balance: i128 = env
-                    .storage()
-                    .persistent()
-                    .get(&StorageKey::DeveloperBalance(
-                        address.clone(),
-                        token.clone(),
-                    ))
-                    .unwrap_or(0);
+                let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
+                if env.storage().persistent().has(&key) {
+                    env.storage()
+                        .persistent()
+                        .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+                }
+                let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
                 result.push_back(DeveloperBalance {
                     address: address.clone(),
                     token: token.clone(),
@@ -946,6 +995,9 @@ impl CalloraSettlement {
 
     /// Return the pending admin address, or `None` if no two-step admin transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
@@ -1105,6 +1157,9 @@ impl CalloraSettlement {
     /// Return the WASM hash installed by the most recent `upgrade` call, or
     /// `None` if the contract has never been upgraded.
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage().instance().get(&StorageKey::ContractVersion)
     }
 
@@ -1307,3 +1362,5 @@ mod test_invariant;
 mod test_multi_asset;
 #[cfg(test)]
 mod test_views;
+#[cfg(test)]
+mod test_ttl_bump;
