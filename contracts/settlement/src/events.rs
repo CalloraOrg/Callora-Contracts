@@ -26,12 +26,12 @@
 
 use soroban_sdk::{Address, BytesN, Env, Symbol};
 
+use crate::limits::MinBalanceChanged;
 use crate::types::{
     AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
-    DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
-    DepositEvent, GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
+    DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
+    GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
-use crate::limits::MinBalanceChanged;
 use crate::Severity;
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
@@ -193,10 +193,8 @@ pub fn emit_initialized(env: &Env, admin: &Address, vault: &Address, pool: &Glob
 /// Topics: `(payment_received, from_vault)`
 /// Data:   [`PaymentReceivedEvent`]
 pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceivedEvent) {
-    env.events().publish(
-        (event_payment_received(env), caller.clone()),
-        payload,
-    );
+    env.events()
+        .publish((event_payment_received(env), caller.clone()), payload);
 }
 
 /// Emit `"balance_credited"` when a developer's balance is incremented.
@@ -204,10 +202,8 @@ pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceiv
 /// Topics: `(balance_credited, developer)`
 /// Data:   [`BalanceCreditedEvent`]
 pub fn emit_balance_credited(env: &Env, developer: &Address, payload: BalanceCreditedEvent) {
-    env.events().publish(
-        (event_balance_credited(env), developer.clone()),
-        payload,
-    );
+    env.events()
+        .publish((event_balance_credited(env), developer.clone()), payload);
 }
 
 /// Emit `"deposit"` alongside each developer credit (both single and batch).
@@ -215,10 +211,8 @@ pub fn emit_balance_credited(env: &Env, developer: &Address, payload: BalanceCre
 /// Topics: `(deposit, developer)`
 /// Data:   [`DepositEvent`]
 pub fn emit_deposit(env: &Env, developer: &Address, payload: DepositEvent) {
-    env.events().publish(
-        (event_deposit(env), developer.clone()),
-        payload,
-    );
+    env.events()
+        .publish((event_deposit(env), developer.clone()), payload);
 }
 
 /// Emit `"developer_withdraw"` when a developer withdraws accrued balance.
@@ -226,10 +220,8 @@ pub fn emit_deposit(env: &Env, developer: &Address, payload: DepositEvent) {
 /// Topics: `(developer_withdraw, developer)`
 /// Data:   [`DeveloperWithdrawEvent`]
 pub fn emit_developer_withdraw(env: &Env, developer: &Address, payload: DeveloperWithdrawEvent) {
-    env.events().publish(
-        (event_developer_withdraw(env), developer.clone()),
-        payload,
-    );
+    env.events()
+        .publish((event_developer_withdraw(env), developer.clone()), payload);
 }
 
 /// Emit `"daily_withdraw_cap_changed"` when the admin updates a developer's
@@ -325,10 +317,8 @@ pub fn emit_vault_accepted(env: &Env, new_vault: &Address, payload: VaultAccepte
 /// Topics: `(upgraded, caller)`
 /// Data:   `new_wasm_hash`
 pub fn emit_upgraded(env: &Env, caller: &Address, new_wasm_hash: &BytesN<32>) {
-    env.events().publish(
-        (event_upgraded(env), caller.clone()),
-        new_wasm_hash.clone(),
-    );
+    env.events()
+        .publish((event_upgraded(env), caller.clone()), new_wasm_hash.clone());
 }
 
 /// Emit `"developer_force_credited"` when the admin manually credits a
@@ -366,10 +356,8 @@ pub fn emit_admin_migration_proposed(
     from: &Address,
     payload: crate::timelock::PendingDeveloperMigration,
 ) {
-    env.events().publish(
-        (event_admin_migration_proposed(env), from.clone()),
-        payload,
-    );
+    env.events()
+        .publish((event_admin_migration_proposed(env), from.clone()), payload);
 }
 
 /// Emit `"admin_migration"` when a pending balance migration is executed.
