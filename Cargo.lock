@@ -258,7 +258,6 @@ version = "0.0.0"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
- "callora-vault",
  "soroban-sdk",
 ]
 
@@ -268,7 +267,6 @@ version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
- "callora-vault",
  "rand 0.8.7",
  "soroban-sdk",
 ]
@@ -356,21 +354,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-vault"
-version = "0.0.1"
-dependencies = [
- "callora-revenue-pool",
- "callora-settlement",
- "callora-validators",
- "rand 0.8.7",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
- "callora-vault",
  "soroban-sdk",
 ]
 
