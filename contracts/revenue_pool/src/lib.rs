@@ -1016,6 +1016,9 @@ mod test_error_codes;
 mod test_emergency;
 
 #[cfg(test)]
+mod test_events;
+
+#[cfg(test)]
 mod test_invariant;
 
 #[cfg(test)]

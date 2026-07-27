@@ -83,16 +83,24 @@ pub fn event_yield_deposited(env: &Env) -> Symbol {
 }
 
 /// Returns the Symbol for the `"treasury_transfer_started"` event topic.
+///
+/// Emitted when the admin nominates a new treasury address via `set_treasury`.
+/// The nominated treasury must call `claim_treasury` to complete the transfer.
 pub fn event_treasury_transfer_started(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_started")
 }
 
 /// Returns the Symbol for the `"treasury_transfer_completed"` event topic.
+///
+/// Emitted when the pending treasury successfully claims the treasury role via `claim_treasury`,
+/// completing the two-step treasury handover.
 pub fn event_treasury_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_completed")
 }
 
 /// Returns the Symbol for the `"treasury_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending treasury transfer via `cancel_treasury`.
 pub fn event_treasury_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_cancelled")
 }
@@ -344,6 +352,16 @@ mod tests {
         assert_eq!(
             event_emergency_drain_executed(&env),
             Symbol::new(&env, "emergency_drain_executed")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_cancelled still maps to exactly the bytes for "emergency_drain_cancelled".
+    #[test]
+    fn test_event_emergency_drain_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_cancelled(&env),
+            Symbol::new(&env, "emergency_drain_cancelled")
         );
     }
 

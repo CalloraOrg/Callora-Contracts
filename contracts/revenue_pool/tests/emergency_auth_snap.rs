@@ -96,7 +96,10 @@ fn propose_emergency_drain_requires_auth() {
     // Strip all authorizations — the call must fail at require_auth.
     env.set_auths(&[]);
     let res = client.try_propose_emergency_drain(&admin, &treasury, &5_000_i128);
-    assert!(res.is_err(), "propose_emergency_drain must require auth on caller");
+    assert!(
+        res.is_err(),
+        "propose_emergency_drain must require auth on caller"
+    );
 }
 
 /// Verify that `execute_emergency_drain` requires auth on `caller`.
@@ -120,7 +123,10 @@ fn execute_emergency_drain_requires_auth() {
     // Strip all authorizations — the call must fail at require_auth.
     env.set_auths(&[]);
     let res = client.try_execute_emergency_drain(&admin);
-    assert!(res.is_err(), "execute_emergency_drain must require auth on caller");
+    assert!(
+        res.is_err(),
+        "execute_emergency_drain must require auth on caller"
+    );
 }
 
 /// Verify that `cancel_emergency_drain` requires auth on `caller`.
@@ -141,7 +147,10 @@ fn cancel_emergency_drain_requires_auth() {
     // Strip all authorizations — the call must fail at require_auth.
     env.set_auths(&[]);
     let res = client.try_cancel_emergency_drain(&admin);
-    assert!(res.is_err(), "cancel_emergency_drain must require auth on caller");
+    assert!(
+        res.is_err(),
+        "cancel_emergency_drain must require auth on caller"
+    );
 }
 
 // ---------------------------------------------------------------------------
