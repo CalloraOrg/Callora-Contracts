@@ -10,6 +10,18 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// non-cursor-based query (gas guard).
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 
+/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+
+/// Number of ledgers to extend instance storage TTL by (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
+
+/// Minimum threshold of remaining ledgers before persistent storage TTL is extended.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
+
+/// Number of ledgers to extend persistent storage TTL by.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
+
 /// Persistent storage keys for settlement contract.
 ///
 /// # Migration note

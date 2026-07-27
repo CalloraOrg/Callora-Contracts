@@ -44,7 +44,9 @@
 
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-use crate::{SettlementError, StorageKey, MAX_BATCH_SIZE};
+use crate::{
+    SettlementError, StorageKey, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD, MAX_BATCH_SIZE,
+};
 
 /// Storage-layout version that predates version tracking.
 pub const STORAGE_VERSION_V1: u32 = 1;
@@ -59,6 +61,9 @@ pub const STORAGE_VERSION_V2: u32 = 2;
 /// (contract initialised before version tracking was introduced).
 /// Returns [`STORAGE_VERSION_V2`] once [`migrate_v1_to_v2`] has completed.
 pub fn storage_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     env.storage()
         .instance()
         .get(&StorageKey::StorageVersion)
