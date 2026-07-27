@@ -536,7 +536,6 @@ impl CalloraSettlement {
         batch::batch_settle(&env, settlements)
     }
 
-
     pub fn migrate_v1_to_v2(env: Env, caller: Address) {
         migrate::migrate_v1_to_v2(&env, &caller);
     }

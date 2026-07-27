@@ -21,7 +21,16 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient<'_>, Address) {
     let client = CalloraVaultClient::new(env, &vault_addr);
     let (usdc, _) = create_usdc(env, &owner);
     env.mock_all_auths();
-    client.init(&owner, &usdc, &0, &owner, &1, &None, &10000000000, &soroban_sdk::Address::generate(&env));
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     (owner, client, usdc)
 }
 
@@ -124,7 +133,16 @@ fn get_max_deduct_returns_configured_value() {
     let client = CalloraVaultClient::new(&env, &vault_addr);
     let (usdc, _) = create_usdc(&env, &owner);
     env.mock_all_auths();
-    client.init(&owner, &usdc, &0, &owner, &1, &None, 500, &soroban_sdk::Address::generate(&env);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        500,
+        &soroban_sdk::Address::generate(&env),
+    );
     assert_eq!(client.get_max_deduct(), 500);
 }
 
@@ -185,7 +203,8 @@ fn get_revenue_pool_returns_some_after_set() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
     let pool = Address::generate(&env);
-    client.set_revenue_pool(&owner, &Some(pool.clone();
+    client.propose_revenue_pool(&Some(pool.clone()));
+    client.accept_revenue_pool();
     assert_eq!(client.get_revenue_pool(), Some(pool));
 }
 
@@ -210,7 +229,8 @@ fn get_contract_addresses_fully_configured() {
     let settlement = Address::generate(&env);
     let pool = Address::generate(&env);
 
-    client.set_revenue_pool(&owner, &Some(pool.clone();
+    client.propose_revenue_pool(&Some(pool.clone()));
+    client.accept_revenue_pool();
     let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
     assert_eq!(got_usdc, Some(usdc));
     assert_eq!(got_settlement, Some(settlement));
@@ -265,7 +285,7 @@ fn is_authorized_depositor_added_address_true() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
     let depositor = Address::generate(&env);
-    client.set_allowed_depositor(&owner, &Some(depositor.clone();
+    client.add_allowed_depositor(&owner, &depositor);
     assert!(client.is_authorized_depositor(&depositor));
 }
 
@@ -286,8 +306,8 @@ fn get_allowed_depositors_reflects_additions() {
     let (owner, client, _) = setup(&env);
     let d1 = Address::generate(&env);
     let d2 = Address::generate(&env);
-    client.set_allowed_depositor(&owner, &Some(d1.clone();
-    client.set_allowed_depositor(&owner, &Some(d2.clone();
+    client.add_allowed_depositor(&owner, &d1);
+    client.add_allowed_depositor(&owner, &d2);
     let list = client.get_allowed_depositors();
     assert_eq!(list.len(), 2);
     assert!(list.contains(&d1));

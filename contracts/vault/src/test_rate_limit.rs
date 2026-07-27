@@ -32,10 +32,8 @@ fn rate_limit_bucket_enforcement() {
     );
     let settlement = Address::generate(&env);
 
-
     // Set up rate limit config
     // capacity: 100, refill_rate: 10 per ledger
-
 
     // Try to deduct more than capacity -> fails
     let res = client.try_deduct(&caller, &150, &None, &u32::MAX, &developer);

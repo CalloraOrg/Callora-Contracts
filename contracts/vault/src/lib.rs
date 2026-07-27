@@ -90,6 +90,9 @@ impl CalloraVault {
             .instance()
             .set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        env.events()
+            .publish((events::event_init(&env), owner.clone()), initial_balance);
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) {
@@ -139,6 +142,9 @@ impl CalloraVault {
             .unwrap();
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
+
+        env.events()
+            .publish((events::event_deposit(&env), caller), (amount, new_bal));
     }
 
     pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
@@ -174,6 +180,12 @@ impl CalloraVault {
             .unwrap_or(0);
         let new_bal = current_bal.checked_sub(amount).unwrap();
         env.storage().instance().set(&DataKey::Balance, &new_bal);
+
+        env.events().publish(
+            (events::event_deduct(&env), caller.clone()),
+            (amount, new_bal),
+        );
+
         let settlement_addr = env
             .storage()
             .instance()
@@ -206,31 +218,37 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
             .unwrap();
-        let mut total_amount: i128 = 0;
-        for item in items.iter() {
-            let (amount, _) = item;
-            if amount > max_deduct || amount <= 0 {
-                panic!("Invalid deduct amount");
-            }
-            total_amount = total_amount.checked_add(amount).unwrap();
-        }
-        let current_bal = env
+
+        let mut running_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        let new_bal = current_bal.checked_sub(total_amount).unwrap();
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
+
         let settlement_addr = env
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
             .unwrap();
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
+
         for item in items.iter() {
             let (amount, request_id) = item;
+            if amount > max_deduct || amount <= 0 {
+                panic!("Invalid deduct amount");
+            }
+            running_bal = running_bal.checked_sub(amount).unwrap();
+
+            env.events().publish(
+                (events::event_deduct(&env), caller.clone()),
+                (amount, running_bal),
+            );
+
             settlement_client.record_deduction(&amount, &request_id);
         }
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
     }
 
     pub fn set_allowed_depositor(env: Env, caller: Address, depositor: Address) {
@@ -261,6 +279,11 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
+
+        env.events().publish(
+            (events::event_set_authorized_caller(&env), caller.clone()),
+            caller,
+        );
     }
 
     pub fn pause(env: Env, caller: Address) {
@@ -274,6 +297,9 @@ impl CalloraVault {
             panic!("Not owner");
         }
         env.storage().instance().set(&DataKey::Paused, &true);
+
+        env.events()
+            .publish((events::event_vault_paused(&env), caller), ());
     }
 
     pub fn unpause(env: Env, caller: Address) {
@@ -287,6 +313,9 @@ impl CalloraVault {
             panic!("Not owner");
         }
         env.storage().instance().set(&DataKey::Paused, &false);
+
+        env.events()
+            .publish((events::event_vault_unpaused(&env), caller), ());
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -344,6 +373,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
+
+        env.events()
+            .publish((events::event_set_max_deduct(&env), caller), max_deduct);
     }
 
     pub fn get_settlement(env: Env) -> Address {
