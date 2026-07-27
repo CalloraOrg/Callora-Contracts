@@ -14,7 +14,7 @@ members = [
     "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
-    "contracts/limits",
+    "contracts/validators",
     "contracts/revenue_pool/fuzz",
     "contracts/migrate/fuzz",
     "contracts/tests",
@@ -28,7 +28,7 @@ default-members = [
     "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
-    "contracts/cold",
+    "contracts/validators",
 ]
 
 
