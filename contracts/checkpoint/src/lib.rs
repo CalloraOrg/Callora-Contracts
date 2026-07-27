@@ -451,14 +451,28 @@ impl CalloraCheckpoint {
 
     /// Return a single checkpoint record by its unique ID.
     ///
+    /// Reading a checkpoint bumps its persistent TTL (buffer #26): audit
+    /// records that are queried often but rarely rewritten would otherwise
+    /// keep counting down to archival on the strength of their original
+    /// write-time bump alone. A read extends the same [`LIFETIME_THRESHOLD`]
+    /// / [`BUMP_AMOUNT`] window used at write time.
+    ///
     /// # Errors
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
     pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
+        let key = StorageKey::Checkpoint(id);
+        let record = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(CheckpointError::CheckpointNotFound)?;
+
         env.storage()
             .persistent()
-            .get(&StorageKey::Checkpoint(id))
-            .ok_or(CheckpointError::CheckpointNotFound)
+            .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        Ok(record)
     }
 
     /// Return a paginated range of checkpoint records.
@@ -470,6 +484,9 @@ impl CalloraCheckpoint {
     /// Checkpoint IDs are sequential starting at 1, so a query with
     /// `start_id = 1, limit = 50` returns the first 50 checkpoints
     /// (or fewer if fewer exist).
+    ///
+    /// Every record returned has its persistent TTL bumped (buffer #26),
+    /// same as [`CalloraCheckpoint::get_checkpoint`].
     ///
     /// # Parameters
     /// * `start_id` -- The first checkpoint ID to retrieve (inclusive, 1-based).
@@ -502,7 +519,11 @@ impl CalloraCheckpoint {
 
         let mut result: Vec<CheckpointRecord> = Vec::new(&env);
         for id in start_id..end_id {
-            if let Some(record) = env.storage().persistent().get(&StorageKey::Checkpoint(id)) {
+            let key = StorageKey::Checkpoint(id);
+            if let Some(record) = env.storage().persistent().get(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
                 result.push_back(record);
             }
         }
@@ -537,15 +558,14 @@ impl CalloraCheckpoint {
     ///
     /// This is a convenience wrapper around
     /// [`CalloraCheckpoint::get_latest_checkpoint_id`] and
-    /// [`CalloraCheckpoint::get_checkpoint`].
+    /// [`CalloraCheckpoint::get_checkpoint`], and so also bumps the
+    /// returned record's persistent TTL (buffer #26).
     pub fn get_latest_checkpoint(env: Env) -> Option<CheckpointRecord> {
         let latest_id = Self::get_latest_checkpoint_id(env.clone());
         if latest_id == 0 {
             return None;
         }
-        env.storage()
-            .persistent()
-            .get(&StorageKey::Checkpoint(latest_id))
+        Self::get_checkpoint(env, latest_id).ok()
     }
 
     // -----------------------------------------------------------------------
