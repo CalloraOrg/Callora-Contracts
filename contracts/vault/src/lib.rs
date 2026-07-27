@@ -366,9 +366,9 @@ impl CalloraVault {
             .instance()
             .set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
-        // Admin defaults to owner at initialization.
-        env.storage().instance().set(&StorageKey::Admin, &owner);
-        Ok(())
+
+        env.events()
+            .publish((events::event_init(&env), owner.clone()), initial_balance);
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
@@ -421,7 +421,9 @@ impl CalloraVault {
 
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
-        Ok(())
+
+        env.events()
+            .publish((events::event_deposit(&env), caller), (amount, new_bal));
     }
 
     pub fn deduct(
@@ -474,14 +476,10 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
-        // Transfer USDC from vault to settlement on-ledger.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let usdc = token::Client::new(&env, &usdc_addr);
+        env.events().publish(
+            (events::event_deduct(&env), caller.clone()),
+            (amount, new_bal),
+        );
 
         let settlement_addr = env
             .storage()
@@ -531,40 +529,14 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap_or_else(|| panic!("Max deduct not set"));
+            .unwrap();
 
-        let mut total_amount: i128 = 0;
-        for item in items.iter() {
-            let (amount, _) = item;
-            Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-
-        let current_bal = env
+        let mut running_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
 
-        if current_bal < total_amount {
-            return Err(VaultError::InsufficientBalance);
-        }
-
-        let new_bal = current_bal
-            .checked_sub(total_amount)
-            .unwrap_or_else(|| panic!("Math underflow"));
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
-
-        // Transfer total USDC from vault to settlement on-ledger atomically.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let usdc = token::Client::new(&env, &usdc_addr);
         let settlement_addr = env
             .storage()
             .instance()
@@ -578,18 +550,24 @@ impl CalloraVault {
         );
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
+
         for item in items.iter() {
             let (amount, request_id) = item;
-            settlement_client.receive_payment(
-                &env.current_contract_address(),
-                &amount,
-                &true,
-                &None,
-                &usdc_addr,
-                &(request_id as u32),
+            if amount > max_deduct || amount <= 0 {
+                panic!("Invalid deduct amount");
+            }
+            running_bal = running_bal.checked_sub(amount).unwrap();
+
+            env.events().publish(
+                (events::event_deduct(&env), caller.clone()),
+                (amount, running_bal),
             );
+
+            settlement_client.record_deduction(&amount, &request_id);
         }
-        Ok(())
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
     }
 
     // -----------------------------------------------------------------------
@@ -698,7 +676,11 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
-        Ok(())
+
+        env.events().publish(
+            (events::event_set_authorized_caller(&env), caller.clone()),
+            caller,
+        );
     }
 
     pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -715,7 +697,9 @@ impl CalloraVault {
         }
 
         env.storage().instance().set(&DataKey::Paused, &true);
-        Ok(())
+
+        env.events()
+            .publish((events::event_vault_paused(&env), caller), ());
     }
 
     pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -732,7 +716,9 @@ impl CalloraVault {
         }
 
         env.storage().instance().set(&DataKey::Paused, &false);
-        Ok(())
+
+        env.events()
+            .publish((events::event_vault_unpaused(&env), caller), ());
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -829,7 +815,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
-        Ok(())
+
+        env.events()
+            .publish((events::event_set_max_deduct(&env), caller), max_deduct);
     }
 
     /// Return the configured settlement contract address.

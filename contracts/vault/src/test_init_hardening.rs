@@ -41,9 +41,27 @@ fn reinit_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     // second call must panic
-    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
 }
 
 #[test]
@@ -54,7 +72,16 @@ fn reinit_via_try_returns_err() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     let result = client.try_init(&owner, &usdc, &None, &None, &None, &None, &None);
     assert!(result.is_err(), "second init must return Err");
 }
@@ -72,7 +99,16 @@ fn init_usdc_token_is_vault_panics() {
     let (vault_addr, client) = create_vault(&env);
 
     // pass the vault's own address as usdc_token
-    client.init(&owner, &vault_addr, &Some(0), &None, &None, &None, &None);
+    client.init(
+        &owner,
+        &vault_addr,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +164,16 @@ fn init_max_deduct_zero_panics() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &None, &None, &None, &None, &Some(0));
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        0,
+        &soroban_sdk::Address::generate(&env),
+    );
 }
 
 #[test]
@@ -202,7 +247,16 @@ fn init_without_revenue_pool_stores_none() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     assert_eq!(client.get_revenue_pool(), None);
 }
 
@@ -278,7 +332,16 @@ fn init_sets_admin_to_owner() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     assert_eq!(client.get_admin(), owner);
 }
 
@@ -318,6 +381,15 @@ fn init_default_min_deposit_is_one() {
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    let meta = client.init(&owner, &usdc, &Some(0), &None, &Some(1), &None, &None);
+    let meta = client.init(
+        &owner,
+        &usdc,
+        &0,
+        &owner,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     assert_eq!(meta.min_deposit, DEFAULT_MIN_DEPOSIT);
 }
