@@ -54,26 +54,55 @@ mod event_tests {
     }
 
     /// Extract the first topic of an event as a `Symbol`.
-    fn topic0(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Symbol {
+    fn topic0(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Symbol {
         event.1.get(0).unwrap().into_val(env)
     }
 
     /// Extract the second topic of an event as an `Address`.
-    fn topic1_addr(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Address {
+    fn topic1_addr(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Address {
         event.1.get(1).unwrap().into_val(env)
     }
 
     /// Extract the third topic of an event as an `Address`.
-    fn topic2_addr(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Address {
+    fn topic2_addr(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Address {
         event.1.get(2).unwrap().into_val(env)
     }
 
     /// Find all events whose topic[0] equals `topic_name`.
     fn filter_by_topic<'a>(
         env: &Env,
-        events: &'a soroban_sdk::Vec<(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)>,
+        events: &'a soroban_sdk::Vec<(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
         topic_name: &str,
-    ) -> std::vec::Vec<(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)> {
+    ) -> std::vec::Vec<(
+        Address,
+        soroban_sdk::Vec<soroban_sdk::Val>,
+        soroban_sdk::Val,
+    )> {
         let expected = Symbol::new(env, topic_name);
         events
             .iter()
@@ -302,7 +331,11 @@ mod event_tests {
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "developer_withdraw");
-        assert_eq!(evs.len(), 1, "expected exactly one developer_withdraw event");
+        assert_eq!(
+            evs.len(),
+            1,
+            "expected exactly one developer_withdraw event"
+        );
         assert_eq!(topic1_addr(&env, &evs[0]), developer);
     }
 
@@ -630,9 +663,8 @@ mod event_tests {
         env.events().all();
 
         // Fast-forward past the timelock.
-        env.ledger().set_timestamp(
-            env.ledger().timestamp() + DEVELOPER_MIGRATION_TIMELOCK_SECONDS + 1,
-        );
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + DEVELOPER_MIGRATION_TIMELOCK_SECONDS + 1);
 
         client.execute_balance_migration(&admin, &developer);
 

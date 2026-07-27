@@ -54,8 +54,7 @@ impl Caller {
             .instance()
             .set(&Symbol::new(&env, "hits"), &1u32);
 
-        let result: i128 =
-            env.invoke_contract(&callee, &Symbol::new(&env, "boom"), Vec::new(&env));
+        let result: i128 = env.invoke_contract(&callee, &Symbol::new(&env, "boom"), Vec::new(&env));
 
         env.events().publish((Symbol::new(&env, "done"),), ());
         result

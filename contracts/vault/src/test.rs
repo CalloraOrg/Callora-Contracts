@@ -1093,11 +1093,7 @@ fn deduct_with_request_id() {
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    let remaining = client.deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "req123")),
-    );
+    let remaining = client.deduct(&owner, &100, &Some(Symbol::new(&env, "req123")));
     assert_eq!(remaining, 900);
 }
 
@@ -1146,11 +1142,7 @@ fn deduct_event_contains_request_id() {
     let settlement = create_settlement(&env, &owner, &vault_address);
 
     let request_id = Symbol::new(&env, "api_call_42");
-    client.deduct(
-        &owner,
-        &150,
-        &Some(request_id.clone()),
-    );
+    client.deduct(&owner, &150, &Some(request_id.clone()));
 
     let events = env.events().all();
     let ev = events.last().expect("expected deduct event");
@@ -1216,11 +1208,7 @@ fn deduct_authorized_caller_succeeds() {
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
     client.set_settlement(&owner, &settlement);
-    let remaining = client.deduct(
-        &authorized,
-        &100,
-        &None
-    );
+    let remaining = client.deduct(&authorized, &100, &None);
     assert_eq!(remaining, 900);
 }
 
@@ -2643,11 +2631,7 @@ fn vault_full_lifecycle() {
     assert_eq!(client.balance(), 525);
 
     // Single deduct
-    let after_deduct = client.deduct(
-        &owner,
-        &25,
-        &Some(Symbol::new(&env, "r4")),
-    );
+    let after_deduct = client.deduct(&owner, &25, &Some(Symbol::new(&env, "r4")));
     assert_eq!(after_deduct, 500);
 
     // Admin change
@@ -3889,10 +3873,7 @@ fn deduct_to_zero_succeeds() {
     client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
     let settlement = create_settlement(&env, &owner, &vault_address);
 
-    assert_eq!(
-        client.deduct(&owner, &500, &None),
-        0
-    );
+    assert_eq!(client.deduct(&owner, &500, &None), 0);
 }
 
 #[test]
@@ -4712,17 +4693,13 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=op_cap);
                     if paused {
                         // deduct must fail while paused
-                        assert!(client
-                            .try_deduct(&caller, &amount, &None)
-                            .is_err());
+                        assert!(client.try_deduct(&caller, &amount, &None).is_err());
                     } else if sim >= amount {
                         sim -= amount;
                         client.deduct(&caller, &amount, &None);
                     } else {
                         // must fail — balance unchanged (insufficient, &Address::generate(&env))
-                        assert!(client
-                            .try_deduct(&caller, &amount, &None)
-                            .is_err());
+                        assert!(client.try_deduct(&caller, &amount, &None).is_err());
                     }
                 }
 
@@ -5003,9 +4980,7 @@ mod fuzz {
                 } else {
                     // Must be rejected; balance and sim are unchanged.
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None).is_err(),
                         "deduct exceeding balance must fail at step {step}"
                     );
                 }
@@ -5181,9 +5156,7 @@ mod fuzz {
                 let amount: i128 = rng.gen_range(1..=max_d);
                 if paused {
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None).is_err(),
                         "deduct must fail while paused at step {step}"
                     );
                 } else if sim >= amount {
@@ -5191,9 +5164,7 @@ mod fuzz {
                     client.deduct(&caller, &amount, &None);
                 } else {
                     assert!(
-                        client
-                            .try_deduct(&caller, &amount, &None)
-                            .is_err(),
+                        client.try_deduct(&caller, &amount, &None).is_err(),
                         "insufficient deduct must fail at step {step}"
                     );
                 }
@@ -5414,9 +5385,7 @@ mod fuzz {
                         client.deduct(&owner, &amount, &None);
                     } else {
                         assert!(
-                            client
-                                .try_deduct(&owner, &amount, &None)
-                                .is_err(),
+                            client.try_deduct(&owner, &amount, &None).is_err(),
                             "owner deduct must fail when balance insufficient at step {step}"
                         );
                     }
@@ -5425,16 +5394,10 @@ mod fuzz {
                     let amount: i128 = rng.gen_range(1..=max_d);
                     if sim >= amount {
                         sim -= amount;
-                        client.deduct(
-                            &caller_b,
-                            &amount,
-                            &None
-    );
+                        client.deduct(&caller_b, &amount, &None);
                     } else {
                         assert!(
-                            client
-                                .try_deduct(&caller_b, &amount, &None)
-                                .is_err(),
+                            client.try_deduct(&caller_b, &amount, &None).is_err(),
                             "caller_b deduct must fail when balance insufficient at step {step}"
                         );
                     }
@@ -6600,11 +6563,7 @@ mod malicious_token {
                 let vault_client = CalloraVaultClient::new(&env, &vault_addr);
 
                 // 😈 ATTACK: Call back into the vault
-                vault_client.deduct(
-                    &caller,
-                    &attack_amount,
-                    &Some(Symbol::new(&env, "reentry")),
-                );
+                vault_client.deduct(&caller, &attack_amount, &Some(Symbol::new(&env, "reentry")));
             }
         }
 
@@ -7095,11 +7054,7 @@ fn test_reentry_repeated_attempts() {
     // This tests that the vault's balance validation prevents over-deduction
     malicious_client.set_attack_config(&vault_address, &owner, &100, &5);
 
-    vault_client.deduct(
-        &owner,
-        &100,
-        &None,
-    );
+    vault_client.deduct(&owner, &100, &None);
 
     // With 5 re-entries of 100 each, plus original 100, total should be 600
     // So final balance should be 1000 - 600 = 400
@@ -8216,12 +8171,6 @@ fn slippage_no_regression_existing_deductions() {
     let env = Env::default();
     let (owner, client) = setup_slippage_vault(&env, 500);
     env.mock_all_auths();
-    assert_eq!(
-        client.deduct(&owner, &200, &None),
-        300
-    );
-    assert_eq!(
-        client.deduct(&owner, &300, &None),
-        0
-    );
+    assert_eq!(client.deduct(&owner, &200, &None), 300);
+    assert_eq!(client.deduct(&owner, &300, &None), 0);
 }

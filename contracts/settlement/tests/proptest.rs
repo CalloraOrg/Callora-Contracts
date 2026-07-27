@@ -321,7 +321,8 @@ fn run_trace(seed: u64) {
                     dev_balances[dev_idx] += amount;
                 }
                 ledger_seq += 1;
-                let result = client.try_batch_receive_payment(&vault, &items, &usdc_addr, &ledger_seq);
+                let result =
+                    client.try_batch_receive_payment(&vault, &items, &usdc_addr, &ledger_seq);
                 if result.is_ok() {
                     expected_dev_total = expected_dev_total
                         .checked_add(batch_total)
@@ -356,7 +357,10 @@ fn run_trace(seed: u64) {
                         trace.push(
                             step,
                             "withdraw(ok)",
-                            std::format!("dev_idx={dev_idx} amount={amount} remaining={}", current - amount),
+                            std::format!(
+                                "dev_idx={dev_idx} amount={amount} remaining={}",
+                                current - amount
+                            ),
                         );
                     } else {
                         trace.push(
@@ -366,7 +370,11 @@ fn run_trace(seed: u64) {
                         );
                     }
                 } else {
-                    trace.push(step, "withdraw(skip-zero)", std::format!("dev_idx={dev_idx}"));
+                    trace.push(
+                        step,
+                        "withdraw(skip-zero)",
+                        std::format!("dev_idx={dev_idx}"),
+                    );
                 }
             }
 
@@ -527,8 +535,22 @@ fn test_invariant_single_dev_full_withdraw() {
     client.set_usdc_token(&admin, &usdc_addr);
 
     // Credit the developer.
-    client.receive_payment(&vault, &1_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
-    client.receive_payment(&vault, &2_000, &false, &Some(dev.clone()), &usdc_addr, &2u32);
+    client.receive_payment(
+        &vault,
+        &1_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &2_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &2u32,
+    );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
     let balance = client.get_developer_balance(&dev, &usdc_addr);

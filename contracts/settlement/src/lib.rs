@@ -204,7 +204,7 @@ impl CalloraSettlement {
             );
             events::emit_deposit(
                 &env,
-                &dev_address,
+                &dev_address.clone(),
                 DepositEvent {
                     developer: dev_address,
                     token,
@@ -552,7 +552,7 @@ impl CalloraSettlement {
 
         events::emit_developer_withdraw(
             &env,
-            &developer,
+            &developer.clone(),
             DeveloperWithdrawEvent {
                 developer,
                 amount,
@@ -607,7 +607,7 @@ impl CalloraSettlement {
 
         events::emit_developer_claim_window_changed(
             &env,
-            &developer,
+            &developer.clone(),
             DeveloperClaimWindowChanged {
                 developer,
                 start_ts,
@@ -643,7 +643,7 @@ impl CalloraSettlement {
 
         events::emit_developer_claim_window_changed(
             &env,
-            &developer,
+            &developer.clone(),
             DeveloperClaimWindowChanged {
                 developer,
                 start_ts: 0,
@@ -801,7 +801,7 @@ impl CalloraSettlement {
 
         events::emit_developer_force_credited(
             &env,
-            &developer,
+            &developer.clone(),
             DeveloperForceCreditedEvent {
                 developer,
                 amount,

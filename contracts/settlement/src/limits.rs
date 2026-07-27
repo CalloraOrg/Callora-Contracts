@@ -76,7 +76,7 @@ pub fn set_developer_min_balance(
 
     events::emit_developer_min_balance_changed(
         env,
-        &developer,
+        &developer.clone(),
         MinBalanceChanged {
             developer,
             new_min_balance: min_balance,

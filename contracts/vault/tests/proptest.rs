@@ -154,7 +154,10 @@ fn assert_balance_in_sync(
         "seed={seed} step={step}: unexpected idle balance {}",
         preview.idle_balance
     );
-    assert!(!preview.has_idle, "seed={seed} step={step}: has_idle unexpectedly true");
+    assert!(
+        !preview.has_idle,
+        "seed={seed} step={step}: has_idle unexpectedly true"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +206,10 @@ fn run_trace(seed: u64) {
                 let amount = rng.range_i128(MIN_DEPOSIT, MIN_DEPOSIT * 20);
                 let result = client.try_deposit(&owner, &amount);
                 if paused {
-                    assert!(result.is_err(), "seed={seed} step={step}: deposit must fail while paused");
+                    assert!(
+                        result.is_err(),
+                        "seed={seed} step={step}: deposit must fail while paused"
+                    );
                 } else {
                     assert!(
                         result.is_ok(),
@@ -224,7 +230,10 @@ fn run_trace(seed: u64) {
                 let request_id = rng.next_u64();
                 let result = client.try_deduct(&authorized_caller, &amount, &request_id);
                 if paused {
-                    assert!(result.is_err(), "seed={seed} step={step}: deduct must fail while paused");
+                    assert!(
+                        result.is_err(),
+                        "seed={seed} step={step}: deduct must fail while paused"
+                    );
                 } else if balance_before < amount {
                     assert!(
                         result.is_err(),
@@ -315,7 +324,11 @@ fn deposit_boundary_exact_minimum_succeeds_one_below_fails() {
 
     let result = client.try_deposit(&owner, &99);
     assert!(result.is_err(), "deposit below min_deposit must fail");
-    assert_eq!(client.balance(), 100, "rejected deposit must not mutate tracked balance");
+    assert_eq!(
+        client.balance(),
+        100,
+        "rejected deposit must not mutate tracked balance"
+    );
     assert_eq!(usdc_client.balance(&client.address), 100);
 }
 
@@ -334,7 +347,11 @@ fn deduct_boundary_exact_maximum_succeeds_one_above_fails() {
 
     let result = client.try_deduct(&authorized_caller, &1_001, &2u64);
     assert!(result.is_err(), "deduct above max_deduct must fail");
-    assert_eq!(client.balance(), 4_000, "rejected deduct must not mutate tracked balance");
+    assert_eq!(
+        client.balance(),
+        4_000,
+        "rejected deduct must not mutate tracked balance"
+    );
     assert_eq!(usdc_client.balance(&client.address), 4_000);
 }
 
@@ -356,7 +373,11 @@ fn pause_blocks_deposit_and_deduct_unpause_restores() {
     let batch = Vec::from_array(&env, [(500i128, 2u64)]);
     assert!(client.try_batch_deduct(&authorized_caller, &batch).is_err());
 
-    assert_eq!(client.balance(), 1_000, "paused rejections must not mutate tracked balance");
+    assert_eq!(
+        client.balance(),
+        1_000,
+        "paused rejections must not mutate tracked balance"
+    );
     assert_eq!(usdc_client.balance(&client.address), 1_000);
 
     client.unpause(&owner);
@@ -378,8 +399,15 @@ fn batch_deduct_is_all_or_nothing() {
 
     let items = Vec::from_array(&env, [(100i128, 1u64), (100i128, 2u64)]);
     let result = client.try_batch_deduct(&authorized_caller, &items);
-    assert!(result.is_err(), "batch total exceeding balance must fail atomically");
-    assert_eq!(client.balance(), 150, "failed batch must not partially mutate tracked balance");
+    assert!(
+        result.is_err(),
+        "batch total exceeding balance must fail atomically"
+    );
+    assert_eq!(
+        client.balance(),
+        150,
+        "failed batch must not partially mutate tracked balance"
+    );
     assert_eq!(usdc_client.balance(&client.address), 150);
 }
 
@@ -397,5 +425,9 @@ fn zero_and_negative_amounts_are_rejected() {
     assert!(client.try_deduct(&authorized_caller, &0, &1u64).is_err());
     assert!(client.try_deduct(&authorized_caller, &-50, &2u64).is_err());
 
-    assert_eq!(client.balance(), 1_000, "all-rejected calls must not mutate tracked balance");
+    assert_eq!(
+        client.balance(),
+        1_000,
+        "all-rejected calls must not mutate tracked balance"
+    );
 }
