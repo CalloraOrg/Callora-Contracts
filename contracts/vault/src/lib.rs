@@ -1316,7 +1316,83 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Return `true` if `caller` is on the depositor allowlist.
+    // -----------------------------------------------------------------------
+    // Private helpers
+    // -----------------------------------------------------------------------
+
+    #[inline(never)]
+    fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
+        let meta = Self::get_meta(env.clone())?;
+        let auth = match &meta.authorized_caller {
+            Some(ac) => caller == ac || *caller == meta.owner,
+            None => *caller == meta.owner,
+        };
+        if !auth {
+            return Err(VaultError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Return `true` if `request_id` has already been processed (marker present
+    /// in persistent storage, or temporary storage for legacy markers).
+    pub fn is_request_processed(env: Env, request_id: Symbol) -> bool {
+        let key = StorageKey::ProcessedRequest(request_id);
+        env.storage().persistent().has(&key) || env.storage().temporary().has(&key)
+    }
+
+    /// Check that `request_id` has NOT been processed yet.
+    /// Returns `VaultError::DuplicateRequestId` if the marker exists.
+    pub(crate) fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
+        let key = StorageKey::ProcessedRequest(request_id.clone());
+        if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
+            return Err(VaultError::DuplicateRequestId);
+        }
+        Ok(())
+    }
+
+    /// Persist a processed-request marker in persistent storage and set its TTL.
+    fn mark_request_processed(env: &Env, request_id: &Symbol) {
+        let key = StorageKey::ProcessedRequest(request_id.clone());
+        env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+    }
+
+    fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
+        token::Client::new(env, usdc_token).transfer(&env.current_contract_address(), to, &amount);
+    }
+
+    fn require_settlement(env: &Env) -> Result<Address, VaultError> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Settlement)
+            .ok_or(VaultError::SettlementNotSet)
+    }
+
+    #[inline(never)]
+    fn require_not_paused(env: Env) -> Result<(), VaultError> {
+        if Self::is_paused(env) {
+            return Err(VaultError::Paused);
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn require_admin_or_owner(env: Env, caller: &Address) -> Result<(), VaultError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .ok_or(VaultError::NotInitialized)?;
+        let meta = Self::get_meta(env)?;
+        if *caller != admin && *caller != meta.owner {
+            return Err(VaultError::Unauthorized);
+        }
+        Ok(())
+    }
+
+    /// Broadcast an emergency message from the admin.
     ///
     /// The vault owner may always deposit regardless of this flag.
     /// Non-owner callers must be explicitly added to the allowlist to call
@@ -1496,11 +1572,7 @@ mod cold_storage;
 pub mod events;
 pub mod limits;
 pub mod rate_limit;
-pub mod timelock;
-
-// #[cfg(test)]
-// #[path = "../proofs/deduct.rs"]
-// mod deduct_proofs;
+mod views;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1511,6 +1583,9 @@ mod test;
 
 #[cfg(test)]
 mod test_views;
+
+#[cfg(test)]
+mod test_simulate_deduct;
 
 #[cfg(test)]
 mod test_idempotency;
