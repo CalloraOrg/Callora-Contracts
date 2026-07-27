@@ -195,11 +195,26 @@ pub enum StorageKey {
     AllowedDepositors,
 }
 
+/// Ledgers per day at a 5-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
 /// TTL extension trigger for instance storage keys (~30 days of ledgers at 5 s/ledger).
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// TTL extension target for instance storage keys (~60 days of ledgers at 5 s/ledger).
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// TTL extension trigger for persistent storage keys — mirrors the instance threshold.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// TTL extension target for persistent storage keys — mirrors the instance amount.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
+
+/// TTL extension trigger for processed-request-id markers (~7 days).
+pub const REQUEST_ID_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
+
+/// TTL extension target for processed-request-id markers (~30 days).
+pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 
 pub mod token {
     pub use soroban_sdk::token::Client;
@@ -1401,6 +1416,26 @@ impl CalloraVault {
     // Private helpers
     // -----------------------------------------------------------------------
 
+    /// Extend instance storage TTL to `INSTANCE_BUMP_AMOUNT` when the
+    /// remaining TTL falls below `INSTANCE_BUMP_THRESHOLD`.
+    ///
+    /// Called on every hot read path so that frequently-queried contracts
+    /// do not archive due to infrequent writes.
+    #[inline]
+    pub(crate) fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Unconditional alias for `bump_instance_ttl` — used on write paths
+    /// that may also update the instance and therefore always need a fresh
+    /// TTL extension.
+    #[inline]
+    pub(crate) fn bump_instance(env: &Env) {
+        Self::bump_instance_ttl(env);
+    }
+
     #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
         let meta = Self::get_meta(env.clone())?;
@@ -1588,6 +1623,73 @@ impl CalloraVault {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    /// Transfer tokens accidentally sent to the vault address to a designated
+    /// recipient (admin only, emergency rescue path).
+    ///
+    /// For non-USDC tokens the full on-ledger balance is available for rescue.
+    /// For the configured USDC token the vault protects the internally-tracked
+    /// balance (`DataKey::Balance`) so that rescue can only recover surplus
+    /// above what the vault's accounting already claims; this prevents draining
+    /// real user funds via the rescue path.
+    ///
+    /// ## TTL behaviour
+    ///
+    /// This is a **hot read path**: it reads the tracked USDC balance and the
+    /// USDC token address from instance storage before executing the transfer.
+    /// The instance TTL is bumped on entry (buffer #5) so that vaults which
+    /// are only ever touched via `admin_rescue` do not silently archive.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `token_address` — Token contract to rescue funds from.
+    /// - `to` — Recipient of the rescued funds.
+    /// - `amount` — Amount to transfer; must be > 0.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the admin.
+    /// - [`VaultError::AmountNotPositive`] — `amount <= 0`.
+    /// - [`VaultError::InsufficientBalance`] — Available (unprotected) balance
+    ///   is less than `amount`.
+    ///
+    /// # Events
+    /// Emits `("rescue_funds", caller, token_address)` with payload `(to, amount)`.
+    pub fn admin_rescue(
+        env: Env,
+        caller: Address,
+        token_address: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_admin(&env, &caller)?;
+
+        // --- Hot read path: bump instance TTL before reading any storage ---
+        Self::bump_instance_ttl(&env);
+
+        // Read the tracked USDC balance so we can pass the protection sentinel
+        // to rescue::rescue_funds for the USDC token.
+        let usdc_addr: Option<Address> = env.storage().instance().get(&DataKey::UsdcToken);
+        let protected_balance: Option<i128> = if usdc_addr.as_ref() == Some(&token_address) {
+            let bal: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::Balance)
+                .unwrap_or(0);
+            Some(bal)
+        } else {
+            None
+        };
+
+        rescue::rescue_funds(&env, &token_address, &to, amount, protected_balance)?;
+
+        env.events().publish(
+            (events::event_rescue_funds(&env), caller, token_address),
+            (to, amount),
+        );
+
+        Ok(())
+    }
+
     /// Set or update the reserve cap for a token (owner only).
     ///
     /// The reserve cap is the maximum total balance the vault may hold for
@@ -1642,6 +1744,7 @@ mod cold_storage;
 pub mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod rescue;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
