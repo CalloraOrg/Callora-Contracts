@@ -1649,7 +1649,7 @@ impl CalloraVault {
 
     /// Check that `request_id` has NOT been processed yet.
     /// Returns `VaultError::DuplicateRequestId` if the marker exists.
-    fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
+    pub(crate) fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
         let key = StorageKey::ProcessedRequest(request_id.clone());
         if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
             return Err(VaultError::DuplicateRequestId);
@@ -1795,6 +1795,7 @@ impl CalloraVault {
 
 mod events;
 pub mod rate_limit;
+mod views;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -1814,6 +1815,9 @@ mod test_setter_validation;
 
 #[cfg(test)]
 mod test_views;
+
+#[cfg(test)]
+mod test_simulate_deduct;
 
 #[cfg(test)]
 mod test_idempotency;
