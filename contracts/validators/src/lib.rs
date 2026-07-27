@@ -48,7 +48,9 @@ pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
 /// Returns `Err(ValidationError)` when the string is empty, exceeds
 /// [`MAX_VALIDATED_STRING_LEN`], contains a non-visible-ASCII byte, or has
 /// leading/trailing ASCII space.
-pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ValidationError> {
+pub fn normalize_visible_ascii(
+    s: &String,
+) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ValidationError> {
     let len = s.len();
     if len == 0 {
         return Err(ValidationError::Empty);
