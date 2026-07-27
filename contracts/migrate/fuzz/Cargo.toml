@@ -17,7 +17,7 @@ doc = false
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 soroban-sdk = { version = "22", features = ["testutils"] }
-callora-settlement = { path = "../settlement" }
+callora-settlement = { path = "../../settlement" }
 
 [profile.release]
 panic = "abort"

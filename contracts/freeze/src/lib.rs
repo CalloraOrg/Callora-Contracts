@@ -16,6 +16,9 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+pub mod errors;
+pub use errors::ContractError;
+
 /// One step in a freeze/unfreeze fuzz sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FreezeOp {

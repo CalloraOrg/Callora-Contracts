@@ -43,7 +43,10 @@ fn test_entrypoints_require_auth() {
     usdc_client.mint(&vault_addr, &1000);
 
     let mut items: Vec<DeductItem> = Vec::new(&env);
-    items.push_back(DeductItem { amount: 10, request_id: None });
+    items.push_back(DeductItem {
+        amount: 10,
+        request_id: None,
+    });
 
     env.set_auths(&[]);
 

@@ -149,7 +149,7 @@ impl CalloraRegistry {
     ///
     /// Performs the token balance read and catalog publish before persisting
     /// registry state so callee failures cannot leave partial registrations.
-    pub fn register_offering_with_balance_gate(
+    pub fn register_offering_with_gate(
         env: Env,
         caller: Address,
         developer: Address,

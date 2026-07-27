@@ -258,7 +258,6 @@ version = "0.0.0"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
- "callora-vault",
  "soroban-sdk",
 ]
 
@@ -268,7 +267,6 @@ version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
- "callora-vault",
  "rand 0.8.7",
  "soroban-sdk",
 ]
@@ -282,26 +280,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-freeze-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "callora-freeze",
- "callora-revenue-pool",
- "libfuzzer-sys",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-helpers"
 version = "0.1.0"
 
 [[package]]
-name = "callora-limits"
-version = "0.0.1"
+name = "callora-hot"
+version = "0.1.0"
 dependencies = [
- "callora-revenue-pool",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-migrate"
+version = "0.1.0"
+dependencies = [
  "callora-settlement",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-registry"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -331,30 +331,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-settlement-fuzz"
+version = "0.0.0"
+dependencies = [
+ "callora-settlement",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-upgrade"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-validators"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "callora-vault"
+name = "callora-yield"
 version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
- "callora-settlement",
- "callora-validators",
- "rand 0.8.7",
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-vault-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "callora-vault",
- "libfuzzer-sys",
  "soroban-sdk",
 ]
 

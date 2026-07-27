@@ -132,10 +132,10 @@ fn run_trace(seed: u64) {
                 let mut v: std::vec::Vec<u8> = (0..len)
                     .map(|_| 0x21 + (rng.gen_byte() % (0x7e - 0x21 + 1)))
                     .collect();
-                if rng.next_u64() % 2 == 0 {
+                if rng.next_u64().is_multiple_of(2) {
                     v.insert(0, b' ');
                 }
-                if rng.next_u64() % 2 == 0 {
+                if rng.next_u64().is_multiple_of(2) {
                     v.push(b' ');
                 }
                 v
@@ -153,11 +153,10 @@ fn run_trace(seed: u64) {
             // Control / DEL injection into otherwise-valid ASCII.
             5 => {
                 let len = rng.gen_len(64).max(1);
-                let mut v: std::vec::Vec<u8> = (0..len)
-                    .map(|_| 0x41 + (rng.gen_byte() % 26))
-                    .collect();
+                let mut v: std::vec::Vec<u8> =
+                    (0..len).map(|_| 0x41 + (rng.gen_byte() % 26)).collect();
                 let idx = (rng.next_u64() as usize) % v.len();
-                v[idx] = if rng.next_u64() % 2 == 0 {
+                v[idx] = if rng.next_u64().is_multiple_of(2) {
                     rng.gen_byte() % 0x20
                 } else {
                     0x7f

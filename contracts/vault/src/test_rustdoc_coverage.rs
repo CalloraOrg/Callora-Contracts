@@ -7,10 +7,7 @@
 
 extern crate std;
 
-use soroban_sdk::{
-    testutils::Address as _,
-    token, Address, BytesN, Env, Vec,
-};
+use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env, Vec};
 
 use crate::*;
 
@@ -444,7 +441,9 @@ fn test_set_reserve_cap_requires_owner() {
     let (_, client, usdc, _) = setup(&env);
     env.set_auths(&[]);
     let stranger = Address::generate(&env);
-    assert!(client.try_set_reserve_cap(&stranger, &usdc, &1_000).is_err());
+    assert!(client
+        .try_set_reserve_cap(&stranger, &usdc, &1_000)
+        .is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -470,14 +469,19 @@ fn test_set_timelock_window_requires_admin() {
     let (_, client, _, _) = setup(&env);
     env.set_auths(&[]);
     let stranger = Address::generate(&env);
-    assert!(client.try_set_timelock_window(&stranger, &86_400u64).is_err());
+    assert!(client
+        .try_set_timelock_window(&stranger, &86_400u64)
+        .is_err());
 }
 
 #[test]
 fn test_get_timelock_window_default() {
     let env = Env::default();
     let (_, client, _, _) = setup(&env);
-    assert_eq!(client.get_timelock_window(), timelock::DEFAULT_TIMELOCK_SECONDS);
+    assert_eq!(
+        client.get_timelock_window(),
+        timelock::DEFAULT_TIMELOCK_SECONDS
+    );
 }
 
 #[test]
