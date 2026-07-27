@@ -194,3 +194,9 @@ Run tests with:
 ```bash
 cargo build --workspace --release --target=wasm32-unknown-unknown
 ```
+-| `set_allowed_depositor` | ✅ | ❌ | ❌ | ❌ | ❌ |
+-| `clear_allowed_depositors` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `add_address` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `clear_all` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `get_allowlist` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
++| `is_authorized_depositor` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
