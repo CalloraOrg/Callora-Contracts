@@ -99,10 +99,7 @@ mod tests {
     #[test]
     fn test_event_balances_set_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_balances_set(&env),
-            Symbol::new(&env, "balances_set")
-        );
+        assert_eq!(event_balances_set(&env), Symbol::new(&env, "balances_set"));
     }
 
     /// Snapshot: proves event_cold_sweep_proposed still maps to exactly the bytes for "cold_sweep_proposed".
