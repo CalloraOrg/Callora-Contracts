@@ -32,6 +32,7 @@ use crate::types::{
     DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
     GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
+use crate::Severity;
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
 
@@ -149,12 +150,20 @@ pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
-/// Returns the Symbol for a proposed developer balance migration.
+/// Returns the Symbol for the `"admin_migration_proposed"` event topic.
+///
+/// Emitted when the admin proposes a timelocked developer balance migration
+/// via [`crate::CalloraSettlement::propose_admin_migration`]. The migration
+/// becomes executable after the configured timelock window has elapsed.
 pub fn event_admin_migration_proposed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration_proposed")
 }
 
-/// Returns the Symbol for an executed developer balance migration.
+/// Returns the Symbol for the `"admin_migration"` event topic.
+///
+/// Emitted when a pending developer balance migration is executed via
+/// [`crate::CalloraSettlement::execute_admin_migration`]. The `from` and `to`
+/// addresses are included as topics so indexers can trace balance movement.
 pub fn event_admin_migration(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration")
 }
@@ -169,6 +178,9 @@ pub fn event_developer_min_balance_changed(env: &Env) -> Symbol {
 }
 
 /// Returns the Symbol for the `"metadata_removed"` event topic.
+///
+/// Emitted when the admin removes metadata associated with a developer or
+/// offering via [`crate::CalloraSettlement::remove_metadata`].
 pub fn event_metadata_removed(env: &Env) -> Symbol {
     Symbol::new(env, "metadata_removed")
 }

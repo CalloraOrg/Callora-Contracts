@@ -84,23 +84,24 @@ pub fn event_yield_deposited(env: &Env) -> Symbol {
 
 /// Returns the Symbol for the `"treasury_transfer_started"` event topic.
 ///
-/// Emitted when the admin nominates a new treasury address via `set_treasury`.
-/// The nominated treasury must call `claim_treasury` to complete the transfer.
+/// Emitted when the admin nominates a new treasury via [`RevenuePool::set_treasury`].
+/// The nominee must call [`RevenuePool::accept_treasury`] to complete the transfer.
 pub fn event_treasury_transfer_started(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_started")
 }
 
 /// Returns the Symbol for the `"treasury_transfer_completed"` event topic.
 ///
-/// Emitted when the pending treasury successfully claims the treasury role via `claim_treasury`,
-/// completing the two-step treasury handover.
+/// Emitted when the pending treasury accepts the nomination via
+/// [`RevenuePool::accept_treasury`], completing the two-step handover.
 pub fn event_treasury_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_completed")
 }
 
 /// Returns the Symbol for the `"treasury_cancelled"` event topic.
 ///
-/// Emitted when the current admin cancels a pending treasury transfer via `cancel_treasury`.
+/// Emitted when the admin cancels a pending treasury nomination via
+/// [`RevenuePool::cancel_treasury_transfer`].
 pub fn event_treasury_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_cancelled")
 }
