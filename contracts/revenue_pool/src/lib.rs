@@ -599,23 +599,42 @@ impl RevenuePool {
             .publish((events::event_distribute(&env), to), amount);
     }
 
-    /// Distribute USDC to multiple developer wallets in one atomic transaction.
+    /// Distribute USDC to multiple developer wallets in a single atomic transaction.
     ///
-    /// All validation runs before any transfer. Returns a typed error for size
-    /// violations; panics for all other invalid conditions.
+    /// All payments are validated upfront before any USDC transfer occurs.
+    /// If **any** payment fails validation **no** transfers are executed and the
+    /// entire call reverts. If all payments pass validation every transfer is
+    /// executed and a `batch_distribute` event is emitted per payment leg.
     ///
-    /// # Errors
-    /// * `RevenuePoolError::BatchEmpty` — `payments` is empty.
-    /// * `RevenuePoolError::BatchTooLarge` — `payments` exceeds `MAX_BATCH_SIZE`.
+    /// # Arguments
+    /// * `caller` — must be the current admin and provide `require_auth`.
+    /// * `payments` — a vector of `(recipient: Address, amount: i128)` pairs.
+    ///   Maximum length is [`MAX_BATCH_SIZE`] (currently 50).
+    ///
+    /// # Errors (returned)
+    /// * [`RevenuePoolError::BatchEmpty`] — `payments` is empty.
+    /// * [`RevenuePoolError::BatchTooLarge`] — `payments` exceeds `MAX_BATCH_SIZE`.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED`, `ERR_PAUSED`, `ERR_AMOUNT_NOT_POSITIVE`,
-    ///   `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE`, `ERR_DUPLICATE_RECIPIENT`,
-    ///   `"total overflow"`, `ERR_INSUFFICIENT_BALANCE`,
-    ///   `"invalid recipient: cannot distribute to the contract itself"`.
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `ERR_PAUSED` — pool is paused.
+    /// * `ERR_AMOUNT_NOT_POSITIVE` — any `amount` ≤ 0.
+    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` — any `amount` exceeds the cap.
+    /// * `ERR_DUPLICATE_RECIPIENT` — two payments share the same `to` address.
+    /// * `"total overflow"` — sum of all amounts overflows `i128`.
+    /// * `ERR_INSUFFICIENT_BALANCE` — pool balance is less than the total.
+    /// * `"invalid recipient: cannot distribute to the contract itself"`.
     ///
     /// # Events
-    /// Emits one `batch_distribute` event per payment leg, after all validation.
+    /// Emits one [`events::event_batch_distribute`] event per payment leg with
+    /// the recipient's address as topic and the amount as data. Events are
+    /// published only after all validation passes **and** all transfers succeed.
+    ///
+    /// # Atomicity
+    /// The function is **all-or-nothing**: either every payment succeeds and every
+    /// event is emitted, or the entire transaction reverts. No partial state is
+    /// observable. Indexers can verify atomicity by checking that all
+    /// `batch_distribute` events share the same `(ledger, tx)` pair.
     pub fn batch_distribute(
         env: Env,
         caller: Address,
