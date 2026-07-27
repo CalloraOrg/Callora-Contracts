@@ -91,21 +91,3 @@ pub fn bytes_are_visible_ascii(bytes: &[u8]) -> bool {
     }
     bytes.iter().all(|b| (0x20..=0x7e).contains(b))
 }
-//! All validators are pure and stateless: they neither read nor write contract
-//! storage and expose no state-changing entrypoints. There is therefore nothing
-//! to authorize (`require_auth` is not applicable here), and all arithmetic uses
-//! overflow-safe checked operations.
-
-pub mod errors;
-pub mod validators;
-
-pub use errors::ValidatorError;
-pub use validators::{
-    checked_add_amount, is_visible_ascii_metadata, normalize_visible_ascii, require_in_range,
-    require_non_negative_amount, require_positive_amount, MAX_VALIDATED_STRING_LEN,
-};
-
-#[cfg(test)]
-mod test_errors;
-#[cfg(test)]
-mod test_validators;
