@@ -21,6 +21,19 @@
 
 use soroban_sdk::String;
 
+/// Error type for validation failures in [`normalize_visible_ascii`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationError {
+    /// String is empty.
+    Empty,
+    /// String exceeds maximum length.
+    TooLong,
+    /// String contains non-visible ASCII characters.
+    InvalidCharacter,
+    /// String has leading or trailing spaces.
+    InvalidSpacing,
+}
+
 /// Maximum byte length accepted by [`normalize_visible_ascii`].
 pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
 
@@ -32,13 +45,16 @@ pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
 /// the returned value is NFC-normalized and byte-stable.
 ///
 /// # Errors
-/// Returns `Err(())` when the string is empty, exceeds
+/// Returns `Err(ValidationError)` when the string is empty, exceeds
 /// [`MAX_VALIDATED_STRING_LEN`], contains a non-visible-ASCII byte, or has
 /// leading/trailing ASCII space.
-pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ()> {
+pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ValidationError> {
     let len = s.len();
-    if len == 0 || len > MAX_VALIDATED_STRING_LEN {
-        return Err(());
+    if len == 0 {
+        return Err(ValidationError::Empty);
+    }
+    if len > MAX_VALIDATED_STRING_LEN {
+        return Err(ValidationError::TooLong);
     }
 
     let mut buf = [0u8; MAX_VALIDATED_STRING_LEN as usize];
@@ -46,12 +62,12 @@ pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_L
     let bytes = &buf[..len as usize];
 
     if bytes[0] == b' ' || bytes[len as usize - 1] == b' ' {
-        return Err(());
+        return Err(ValidationError::InvalidSpacing);
     }
 
     for &b in bytes {
         if !(0x20..=0x7e).contains(&b) {
-            return Err(());
+            return Err(ValidationError::InvalidCharacter);
         }
     }
 

@@ -20,6 +20,11 @@ members = [
     "contracts/tests",
     "contracts/whitelist",
     "contracts/cold",
+    "contracts/hot",
+    "contracts/validators",
+    "contracts/registry",
+    "contracts/upgrade",
+    "contracts/yield",
 ]
 default-members = [
     "contracts/vault",
@@ -29,6 +34,7 @@ default-members = [
     "contracts/freeze",
     "contracts/helpers",
     "contracts/cold",
+    "contracts/hot",
 ]
 
 

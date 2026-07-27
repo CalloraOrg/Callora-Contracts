@@ -90,9 +90,9 @@ mod event_tests {
     }
 
     /// Find all events whose topic[0] equals `topic_name`.
-    fn filter_by_topic<'a>(
+    fn filter_by_topic(
         env: &Env,
-        events: &'a soroban_sdk::Vec<(
+        events: &soroban_sdk::Vec<(
             Address,
             soroban_sdk::Vec<soroban_sdk::Val>,
             soroban_sdk::Val,
@@ -107,7 +107,7 @@ mod event_tests {
         events
             .iter()
             .filter(|e| {
-                e.1.len() > 0 && {
+                !e.1.is_empty() && {
                     let sym: Symbol = e.1.get(0).unwrap().into_val(env);
                     sym == expected
                 }
@@ -156,7 +156,7 @@ mod event_tests {
     /// `to_pool = true` and no developer address.
     #[test]
     fn test_receive_payment_pool_emits_payment_received() {
-        let (env, contract, admin, vault, token) = setup();
+        let (env, contract, _admin, vault, token) = setup();
         let client = CalloraSettlementClient::new(&env, &contract);
 
         client.receive_payment(&vault, &1_000i128, &true, &None, &token, &1u32);
@@ -398,9 +398,7 @@ mod event_tests {
         let developer = Address::generate(&env);
         let client = CalloraSettlementClient::new(&env, &contract);
 
-        client
-            .set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64)
-            .unwrap();
+        client.set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64);
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "claim_window_changed");
@@ -417,14 +415,10 @@ mod event_tests {
         let client = CalloraSettlementClient::new(&env, &contract);
 
         // Set first, then clear.
-        client
-            .set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64)
-            .unwrap();
+        client.set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64);
         env.events().all(); // clear
 
-        client
-            .clear_developer_claim_window(&admin, &developer)
-            .unwrap();
+        client.clear_developer_claim_window(&admin, &developer);
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "claim_window_changed");

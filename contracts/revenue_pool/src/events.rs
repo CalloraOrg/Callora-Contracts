@@ -364,14 +364,4 @@ mod tests {
             Symbol::new(&env, "emergency_drain_cancelled")
         );
     }
-
-    /// Snapshot: proves event_emergency_drain_cancelled still maps to exactly the bytes for "emergency_drain_cancelled".
-    #[test]
-    fn test_event_emergency_drain_cancelled_bytes() {
-        let env = Env::default();
-        assert_eq!(
-            event_emergency_drain_cancelled(&env),
-            Symbol::new(&env, "emergency_drain_cancelled")
-        );
-    }
 }

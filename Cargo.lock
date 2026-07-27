@@ -286,6 +286,13 @@ name = "callora-helpers"
 version = "0.1.0"
 
 [[package]]
+name = "callora-hot"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-limits"
 version = "0.0.1"
 dependencies = [
@@ -299,6 +306,13 @@ name = "callora-migrate"
 version = "0.1.0"
 dependencies = [
  "callora-settlement",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-registry"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -337,6 +351,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-upgrade"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-validators"
 version = "0.0.1"
 dependencies = [
@@ -360,6 +381,14 @@ name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
  "callora-vault",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-yield"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
  "soroban-sdk",
 ]
 

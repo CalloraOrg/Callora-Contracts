@@ -6,7 +6,6 @@ extern crate std;
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::token;
 use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal};
 
 #[test]

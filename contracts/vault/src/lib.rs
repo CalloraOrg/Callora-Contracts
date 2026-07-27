@@ -1566,7 +1566,6 @@ mod cold_storage;
 pub mod events;
 pub mod limits;
 pub mod rate_limit;
-pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
