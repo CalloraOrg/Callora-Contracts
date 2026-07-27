@@ -115,8 +115,7 @@ impl CalloraCheckpoint {
         inst.set(&StorageKey::NextCheckpointId, &0u64);
         inst.set(&StorageKey::CheckpointCount, &0u64);
 
-        env.events()
-            .publish((events::event_init(&env), admin), ());
+        env.events().publish((events::event_init(&env), admin), ());
 
         Ok(())
     }
@@ -211,11 +210,7 @@ impl CalloraCheckpoint {
     ///
     /// # Events
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
-    pub fn set_admin(
-        env: Env,
-        caller: Address,
-        new_admin: Address,
-    ) -> Result<(), CheckpointError> {
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
         env.storage()
@@ -282,10 +277,7 @@ impl CalloraCheckpoint {
     ///
     /// # Events
     /// Emits `admin_cancelled` with the cancelled pending admin.
-    pub fn cancel_admin_transfer(
-        env: Env,
-        caller: Address,
-    ) -> Result<(), CheckpointError> {
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
@@ -368,10 +360,8 @@ impl CalloraCheckpoint {
             .persistent()
             .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        env.events().publish(
-            (events::event_checkpoint_created(&env), subject),
-            record,
-        );
+        env.events()
+            .publish((events::event_checkpoint_created(&env), subject), record);
 
         Ok(id)
     }
@@ -406,7 +396,7 @@ impl CalloraCheckpoint {
     ) -> Result<Vec<u64>, CheckpointError> {
         Self::require_admin(&env, &caller)?;
 
-        let n = items.len() as u32;
+        let n = items.len();
         if n == 0 {
             return Err(CheckpointError::BatchEmpty);
         }
@@ -461,17 +451,28 @@ impl CalloraCheckpoint {
 
     /// Return a single checkpoint record by its unique ID.
     ///
+    /// Reading a checkpoint bumps its persistent TTL (buffer #26): audit
+    /// records that are queried often but rarely rewritten would otherwise
+    /// keep counting down to archival on the strength of their original
+    /// write-time bump alone. A read extends the same [`LIFETIME_THRESHOLD`]
+    /// / [`BUMP_AMOUNT`] window used at write time.
+    ///
     /// # Errors
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
-    pub fn get_checkpoint(
-        env: Env,
-        id: u64,
-    ) -> Result<CheckpointRecord, CheckpointError> {
+    pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
+        let key = StorageKey::Checkpoint(id);
+        let record = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(CheckpointError::CheckpointNotFound)?;
+
         env.storage()
             .persistent()
-            .get(&StorageKey::Checkpoint(id))
-            .ok_or(CheckpointError::CheckpointNotFound)
+            .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        Ok(record)
     }
 
     /// Return a paginated range of checkpoint records.
@@ -483,6 +484,9 @@ impl CalloraCheckpoint {
     /// Checkpoint IDs are sequential starting at 1, so a query with
     /// `start_id = 1, limit = 50` returns the first 50 checkpoints
     /// (or fewer if fewer exist).
+    ///
+    /// Every record returned has its persistent TTL bumped (buffer #26),
+    /// same as [`CalloraCheckpoint::get_checkpoint`].
     ///
     /// # Parameters
     /// * `start_id` -- The first checkpoint ID to retrieve (inclusive, 1-based).
@@ -515,11 +519,11 @@ impl CalloraCheckpoint {
 
         let mut result: Vec<CheckpointRecord> = Vec::new(&env);
         for id in start_id..end_id {
-            if let Some(record) = env
-                .storage()
-                .persistent()
-                .get(&StorageKey::Checkpoint(id))
-            {
+            let key = StorageKey::Checkpoint(id);
+            if let Some(record) = env.storage().persistent().get(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
                 result.push_back(record);
             }
         }
@@ -554,17 +558,94 @@ impl CalloraCheckpoint {
     ///
     /// This is a convenience wrapper around
     /// [`CalloraCheckpoint::get_latest_checkpoint_id`] and
-    /// [`CalloraCheckpoint::get_checkpoint`].
-    pub fn get_latest_checkpoint(
-        env: Env,
-    ) -> Option<CheckpointRecord> {
+    /// [`CalloraCheckpoint::get_checkpoint`], and so also bumps the
+    /// returned record's persistent TTL (buffer #26).
+    pub fn get_latest_checkpoint(env: Env) -> Option<CheckpointRecord> {
         let latest_id = Self::get_latest_checkpoint_id(env.clone());
         if latest_id == 0 {
             return None;
         }
+        Self::get_checkpoint(env, latest_id).ok()
+    }
+
+    // -----------------------------------------------------------------------
+    // TTL management (buffer top-up)
+    // -----------------------------------------------------------------------
+
+    /// Extend the TTL of a single checkpoint record.
+    ///
+    /// Allows the admin to "top up" the persistent storage lifetime of a
+    /// checkpoint so that important audit records do not expire. After the
+    /// call the checkpoint's TTL is reset to [`BUMP_AMOUNT`] ledgers
+    /// (≈6 months).
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `checkpoint_id` -- The ID of the checkpoint to bump.
+    ///
+    /// # Errors
+    /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint with the
+    ///   given ID exists.
+    pub fn bump_checkpoint_ttl(
+        env: Env,
+        caller: Address,
+        checkpoint_id: u64,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+
+        let key = StorageKey::Checkpoint(checkpoint_id);
+        if !env.storage().persistent().has(&key) {
+            return Err(CheckpointError::CheckpointNotFound);
+        }
+
         env.storage()
             .persistent()
-            .get(&StorageKey::Checkpoint(latest_id))
+            .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        Ok(())
+    }
+
+    /// Extend the TTL of a range of checkpoint records.
+    ///
+    /// Convenience wrapper around [`CalloraCheckpoint::bump_checkpoint_ttl`]
+    /// for bulk operations. Iterates from `start_id` to `end_id` (inclusive)
+    /// and bumps every checkpoint that exists. Missing IDs in the range are
+    /// silently skipped so callers can use the current checkpoint count as
+    /// `end_id` without worrying about gaps.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `start_id` -- First checkpoint ID to bump (inclusive, 1-based).
+    /// * `end_id` -- Last checkpoint ID to bump (inclusive).
+    ///
+    /// # Errors
+    /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::InvalidPageSize`] -- `start_id` is greater than `end_id`.
+    pub fn bump_checkpoints_ttl_range(
+        env: Env,
+        caller: Address,
+        start_id: u64,
+        end_id: u64,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+
+        if start_id > end_id {
+            return Err(CheckpointError::InvalidPageSize);
+        }
+
+        for id in start_id..=end_id {
+            let key = StorageKey::Checkpoint(id);
+            if env.storage().persistent().has(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+            }
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -595,10 +676,7 @@ impl CalloraCheckpoint {
             .update_current_contract_wasm(new_wasm_hash.clone());
 
         env.events().publish(
-            (
-                events::event_upgraded(&env),
-                Self::admin(&env)?,
-            ),
+            (events::event_upgraded(&env), Self::admin(&env)?),
             new_wasm_hash,
         );
 

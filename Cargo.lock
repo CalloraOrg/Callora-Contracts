@@ -241,6 +241,14 @@ dependencies = [
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "proptest",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-cold"
+version = "0.0.1"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -266,8 +274,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-freeze"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-freeze-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "callora-freeze",
+ "callora-revenue-pool",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-helpers"
 version = "0.1.0"
+
+[[package]]
+name = "callora-limits"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
+ "soroban-sdk",
+]
 
 [[package]]
 name = "callora-revenue-pool"
@@ -295,12 +331,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-validators"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-vault"
 version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
+ "callora-validators",
  "rand 0.8.7",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-vault-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "callora-vault",
+ "libfuzzer-sys",
  "soroban-sdk",
 ]
 

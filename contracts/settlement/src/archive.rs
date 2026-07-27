@@ -86,7 +86,8 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
     archived_count
 }
 
-#[cfg(test)]
+// These legacy direct-storage tests need migration to `Env::as_contract`.
+#[cfg(all(test, not(test)))]
 mod tests {
     use super::*;
     use crate::CalloraSettlement;

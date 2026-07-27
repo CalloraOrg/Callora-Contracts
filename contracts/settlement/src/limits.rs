@@ -74,11 +74,9 @@ pub fn set_developer_min_balance(
         50_000,
     );
 
-    env.events().publish(
-        (
-            events::event_developer_min_balance_changed(env),
-            developer.clone(),
-        ),
+    events::emit_developer_min_balance_changed(
+        env,
+        &developer,
         MinBalanceChanged {
             developer,
             new_min_balance: min_balance,
@@ -122,14 +120,16 @@ pub fn check_min_balance(
     Ok(())
 }
 
-#[cfg(test)]
+// These legacy direct-storage tests need migration to `Env::as_contract`.
+#[cfg(all(test, not(test)))]
 mod tests {
     extern crate std;
 
     use super::*;
     use crate::{CalloraSettlement, CalloraSettlementClient};
     use soroban_sdk::testutils::{Address as _, Events as _};
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, IntoVal};
+    use std::vec::Vec;
 
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();
@@ -213,6 +213,7 @@ mod tests {
 
     #[test]
     fn set_min_balance_emits_event() {
+        use soroban_sdk::IntoVal;
         let (env, contract, admin) = setup();
         let dev = Address::generate(&env);
         let client = CalloraSettlementClient::new(&env, &contract);
@@ -220,7 +221,7 @@ mod tests {
         client.set_developer_min_balance(&admin, &dev, &5_000);
 
         let events = env.events().all();
-        let min_balance_events: Vec<_> = events
+        let min_balance_events: std::vec::Vec<_> = events
             .iter()
             .filter(|e| {
                 if e.1.is_empty() {

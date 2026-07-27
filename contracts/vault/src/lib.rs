@@ -48,11 +48,15 @@
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
 use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, token, Address, BytesN, Env, String,
+    contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, String,
     Symbol, Vec,
 };
 
+pub mod timelock;
 pub mod views;
+
+/// Bounded visible-ASCII metadata validators (shared `callora-validators` crate).
+pub use callora_validators as validators;
 
 mod errors;
 pub use errors::VaultError;
@@ -145,6 +149,8 @@ pub enum VaultError {
     TimelockOverflow = 39,
     /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
     InvalidTimelockWindow = 40,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    CallerNotInAllowlist = 44,
 }
 
 #[contracttype]
@@ -160,9 +166,10 @@ pub enum DataKey {
     Settlement,
     Paused,
     Depositor(Address),
+    AllowedDepositorsList,
 }
 
-/// Persistent / instance storage keys for the vault.
+/// Instance / persistent storage keys for the vault.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
@@ -185,7 +192,15 @@ pub enum StorageKey {
     PendingAdmin,
     /// Recorded wasm hash after a successful upgrade.
     ContractVersion,
+    /// Vector of addresses allowed to deposit (owner-managed allowlist).
+    AllowedDepositors,
 }
+
+/// TTL extension trigger for instance storage keys (~30 days of ledgers at 5 s/ledger).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+
+/// TTL extension target for instance storage keys (~60 days of ledgers at 5 s/ledger).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
 pub mod token {
     pub use soroban_sdk::token::Client;
@@ -198,9 +213,9 @@ pub mod settlement {
     );
 }
 
-/// In native/test mode, vault calls to settlement are no-ops since the settlement
-/// contract is registered directly in the test `Env` and credits are verified
-/// through its public interface.
+/// In native/test mode the settlement contract is registered directly in the
+/// test `Env`. The vault emits USDC transfers; settlement accounting is
+/// verified through its own public interface.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settlement {
     use soroban_sdk::{Address, Env};
@@ -210,94 +225,120 @@ pub mod settlement {
     }
     impl<'a> Client<'a> {
         pub fn new(env: &'a Env, addr: &'a Address) -> Self {
-            Client {
-                _env: env,
-                _addr: addr,
-            }
+            Client { _env: env, _addr: addr }
         }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
+        pub fn receive_payment(
+            &self,
+            _caller: &Address,
+            _amount: &i128,
+            _to_global_pool: &bool,
+            _developer: &Option<Address>,
+            _token: &Address,
+            _nonce: &u32,
+        ) {
+        }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
 
 #[contract]
 pub struct CalloraVault;
 
 #[contractimpl]
 impl CalloraVault {
-    fn require_positive_amount(amount: i128) {
+    fn require_positive_amount(amount: i128) -> Result<(), VaultError> {
         if amount <= 0 {
-            panic!("amount must be positive");
+            return Err(VaultError::AmountNotPositive);
         }
+        Ok(())
     }
 
-    fn require_valid_deposit_amount(amount: i128, min_deposit: i128) {
-        Self::require_positive_amount(amount);
+    fn require_valid_deposit_amount(amount: i128, min_deposit: i128) -> Result<(), VaultError> {
+        Self::require_positive_amount(amount)?;
         if amount < min_deposit {
-            panic!("deposit below minimum");
+            return Err(VaultError::BelowMinDeposit);
         }
+        Ok(())
     }
 
-    fn require_valid_deduct_amount(amount: i128, min_amount: i128, max_deduct: i128) {
-        Self::require_positive_amount(amount);
+    fn require_valid_deduct_amount(amount: i128, min_amount: i128, max_deduct: i128) -> Result<(), VaultError> {
+        Self::require_positive_amount(amount)?;
         if amount < min_amount {
-            panic!("deduct below minimum");
+            return Err(VaultError::BelowMinDeposit);
         }
         if amount > max_deduct {
-            panic!("deduct amount exceeds max_deduct");
+            return Err(VaultError::ExceedsMaxDeduct);
         }
+        Ok(())
     }
 
+    /// Initialize the Callora Vault contract (one-time setup).
+    ///
+    /// Stores configuration in instance storage and sets the paused flag to `false`.
+    /// The admin role defaults to `owner` at initialization and may be transferred
+    /// later via the two-step [`set_admin`] / [`accept_admin`] flow.
+    ///
+    /// # Parameters
+    /// - `owner` — vault owner; only this address may call owner-gated functions.
+    /// - `usdc_token` — USDC token contract address used for all transfers.
+    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0).
+    /// - `authorized_caller` — address permitted to call [`deduct`] and [`batch_deduct`].
+    /// - `min_deposit` — minimum accepted deposit amount in stroops; must be > 0.
+    /// - `revenue_pool` — optional revenue pool address; may be `None`.
+    /// - `max_deduct` — per-call deduction cap in stroops; must be > 0 and ≥ `min_deposit`.
+    /// - `settlement` — settlement contract address that receives deducted funds.
+    ///
+    /// # Panics
+    /// - If already initialized.
+    /// - If `min_deposit <= 0`, `max_deduct <= 0`, or `min_deposit > max_deduct`.
+    ///
+    /// No auth is required; `init` is a constructor and may only succeed once.
     pub fn init(
         env: Env,
         owner: Address,
         usdc_token: Address,
-        initial_balance: i128,
-        authorized_caller: Address,
-        min_deposit: i128,
+        initial_balance: Option<i128>,
+        authorized_caller: Option<Address>,
+        min_deposit: Option<i128>,
         revenue_pool: Option<Address>,
         max_deduct: i128,
         settlement: Address,
-    ) {
+    ) -> Result<(), VaultError> {
         if env.storage().instance().has(&DataKey::Owner) {
-            panic!("Already initialized");
+            return Err(VaultError::AlreadyInitialized);
         }
         if min_deposit <= 0 {
-            panic!("min_deposit must be positive");
+            return Err(VaultError::MinDepositNotPositive);
         }
         if max_deduct <= 0 {
-            panic!("max_deduct must be positive");
+            return Err(VaultError::MaxDeductNotPositive);
         }
         if min_deposit > max_deduct {
-            panic!("min_deposit cannot exceed max_deduct");
+            return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
+
         env.storage().instance().set(&DataKey::Owner, &owner);
-        env.storage()
-            .instance()
-            .set(&DataKey::UsdcToken, &usdc_token);
-        env.storage()
-            .instance()
-            .set(&DataKey::Balance, &initial_balance);
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedCaller, &authorized_caller);
-        env.storage()
-            .instance()
-            .set(&DataKey::MinDeposit, &min_deposit);
+        env.storage().instance().set(&DataKey::UsdcToken, &usdc_token);
+        env.storage().instance().set(&DataKey::Balance, &initial_balance);
+        env.storage().instance().set(&DataKey::AuthorizedCaller, &authorized_caller);
+        env.storage().instance().set(&DataKey::MinDeposit, &min_deposit);
+        
         if let Some(pool) = revenue_pool {
             env.storage().instance().set(&DataKey::RevenuePool, &pool);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxDeduct, &max_deduct);
-        env.storage()
-            .instance()
-            .set(&DataKey::Settlement, &settlement);
+        
+        env.storage().instance().set(&DataKey::MaxDeduct, &max_deduct);
+        env.storage().instance().set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
         // Admin defaults to owner at initialization.
         env.storage().instance().set(&StorageKey::Admin, &owner);
+        Ok(())
     }
 
-    pub fn deposit(env: Env, caller: Address, amount: i128) {
+    pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
         caller.require_auth();
         if env
             .storage()
@@ -305,27 +346,28 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
         let min_dep = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
             .unwrap();
-        Self::require_valid_deposit_amount(amount, min_dep);
+        Self::require_valid_deposit_amount(amount, min_dep)?;
         let owner = env
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
             .unwrap();
         if caller != owner {
-            let is_allowed = env
+            let allowlist = env
                 .storage()
                 .instance()
-                .get::<_, bool>(&DataKey::Depositor(caller.clone()))
-                .unwrap_or(false);
-            if !is_allowed {
-                panic!("Not authorized depositor");
+                .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+                .unwrap_or_else(|| Vec::new(&env));
+
+            if !allowlist.contains(&caller) {
+                return Err(VaultError::CallerNotInAllowlist);
             }
         }
         let current_bal = env
@@ -333,26 +375,25 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        let new_bal = current_bal.checked_add(amount).unwrap();
+        let new_bal = current_bal.checked_add(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
-        let token_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        
+        let token_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
+        Ok(())
     }
 
-    pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) {
+    pub fn deduct(env: Env, caller: Address, amount: i128, request_id: u64) -> Result<(), VaultError> {
         caller.require_auth();
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap();
+        
+        let auth_caller = env.storage().instance().get::<_, Address>(&DataKey::AuthorizedCaller)
+            .unwrap_or_else(|| panic!("Authorized caller not set"));
+            
         if caller != auth_caller {
-            panic!("Not authorized caller");
+            return Err(VaultError::Unauthorized);
         }
         if env
             .storage()
@@ -360,7 +401,7 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
         let min_dep = env
             .storage()
@@ -372,43 +413,43 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
             .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
+        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
-        let new_bal = current_bal - amount;
+        
+        let new_bal = current_bal.checked_sub(amount).unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
+        
         // Transfer USDC from vault to settlement on-ledger.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        let usdc_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let usdc = token::Client::new(&env, &usdc_addr);
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap();
+        
+        let settlement_addr = env.storage().instance().get::<_, Address>(&DataKey::Settlement)
+            .unwrap_or_else(|| panic!("Settlement not set"));
+            
         usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
+        
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
+        Ok(())
     }
 
-    pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) {
+    pub fn batch_deduct(env: Env, caller: Address, items: Vec<(i128, u64)>) -> Result<(), VaultError> {
         caller.require_auth();
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap();
+        
+        let auth_caller = env.storage().instance().get::<_, Address>(&DataKey::AuthorizedCaller)
+            .unwrap_or_else(|| panic!("Authorized caller not set"));
+            
         if caller != auth_caller {
-            panic!("Not authorized caller");
+            return Err(VaultError::Unauthorized);
         }
         if env
             .storage()
@@ -416,63 +457,67 @@ impl CalloraVault {
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
         {
-            panic!("Contract paused");
+            return Err(VaultError::Paused);
         }
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
+        
+        let min_dep = env.storage().instance().get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap_or_else(|| panic!("Min deposit not set"));
+            
+        let max_deduct = env.storage().instance().get::<_, i128>(&DataKey::MaxDeduct)
+            .unwrap_or_else(|| panic!("Max deduct not set"));
+            
         let mut total_amount: i128 = 0;
         for item in items.iter() {
             let (amount, _) = item;
-            Self::require_valid_deduct_amount(amount, min_dep, max_deduct);
-            total_amount = total_amount.checked_add(amount).unwrap_or_else(|| panic!("overflow"));
+            Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+            total_amount = total_amount.checked_add(amount).ok_or(VaultError::Overflow)?;
         }
-        let current_bal = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::Balance)
-            .unwrap_or(0);
+        
+        let current_bal = env.storage().instance().get::<_, i128>(&DataKey::Balance).unwrap_or(0);
+        
         if current_bal < total_amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
-        let new_bal = current_bal - total_amount;
+        
+        let new_bal = current_bal.checked_sub(total_amount).unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
+        
         // Transfer total USDC from vault to settlement on-ledger atomically.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap();
+        let usdc_addr = env.storage().instance().get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+            
         let usdc = token::Client::new(&env, &usdc_addr);
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap();
+        let settlement_addr = env.storage().instance().get::<_, Address>(&DataKey::Settlement)
+            .unwrap_or_else(|| panic!("Settlement not set"));
+            
         usdc.transfer(
             &env.current_contract_address(),
             &settlement_addr,
             &total_amount,
         );
+        
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         for item in items.iter() {
             let (amount, request_id) = item;
-            settlement_client.record_deduction(&amount, &request_id);
+            settlement_client.receive_payment(
+                &env.current_contract_address(),
+                &amount,
+                &true,
+                &None,
+                &usdc_addr,
+                &(request_id as u32),
+            );
         }
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // View functions — no TTL bump (read-only, zero write cost)
+    // View functions — TTL bump on hot read paths (buffer #5 pattern)
+    // Bumps instance storage TTL so frequently-read vaults do not archive
+    // even when writes are infrequent.
     // -----------------------------------------------------------------------
 
-    /// Simulates a vault deduction without altering on-chain state.
+    /// Modifies the authorized caller (Owner only).
     ///
     /// Performs validation checks identical to `deduct` and returns the predicted
     /// balance after the specified `amount` is deducted.
@@ -557,64 +602,89 @@ impl CalloraVault {
     //         .set(&DataKey::Depositor(depositor), &true);
     // }
 
-    pub fn set_authorized_caller(env: Env, caller: Address) {
+    pub fn set_authorized_caller(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
+        Ok(())
     }
 
-    pub fn pause(env: Env, caller: Address) {
+    pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
+        
         env.storage().instance().set(&DataKey::Paused, &true);
+        Ok(())
     }
 
-    pub fn unpause(env: Env, caller: Address) {
+    pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
+        
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
     }
 
+    /// Return `true` if the vault is currently paused, `false` otherwise.
+    ///
+    /// Reads the `Paused` instance storage flag set by [`pause`] / [`execute_pause`]
+    /// and cleared by [`unpause`]. Defaults to `false` when the flag is absent
+    /// (i.e., before initialization).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Paused)
             .unwrap_or(false)
     }
+    /// Return the vault's internally tracked USDC balance in stroops.
+    ///
+    /// This value is incremented by [`deposit`] and decremented by [`deduct`],
+    /// [`batch_deduct`], and successful sweep executions. It may diverge from
+    /// the on-ledger USDC balance when USDC is sent directly to the vault address
+    /// (bypassing `deposit`). Use [`dry_run_sweep_idle_balance`] to inspect any
+    /// surplus.
+    ///
+    /// No auth required; this is a read-only view.
     pub fn balance(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
-            .unwrap()
+            .unwrap_or(0)
     }
+    /// Return the current vault owner address.
+    ///
+    /// The owner is set at [`init`] and may be transferred via a two-step
+    /// ownership-transfer flow. No auth required; this is a read-only view.
     pub fn get_owner(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap()
+            .unwrap_or_else(|| panic!("Owner not set"))
     }
 
     pub(crate) fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -624,59 +694,86 @@ impl CalloraVault {
         }
         Ok(())
     }
+    /// Return the USDC token contract address configured at [`init`].
+    ///
+    /// All vault transfers use this token contract. No auth required; this is a
+    /// read-only view.
     pub fn get_usdc_token(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap()
+            .unwrap_or_else(|| panic!("USDC Token not set"))
     }
+    /// Return the per-call deduction cap in USDC stroops.
+    ///
+    /// [`deduct`] and each item of [`batch_deduct`] are rejected when their
+    /// amount exceeds this value. Returns `i128::MAX` when no cap is stored
+    /// (effectively unlimited), though in practice the limit is always set
+    /// during [`init`].
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_max_deduct(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
             .unwrap_or(i128::MAX)
     }
 
-    pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) {
+    pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) -> Result<(), VaultError> {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         if max_deduct <= 0 {
-            panic!("max_deduct must be positive");
+            return Err(VaultError::MaxDeductNotPositive);
         }
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
+        Ok(())
     }
 
+    /// Return the configured settlement contract address.
+    ///
+    /// This is the on-ledger destination that receives USDC transferred during
+    /// [`deduct`] and [`batch_deduct`]. Panics if the address has never been
+    /// set, which cannot occur after a successful [`init`].
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_settlement(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
-            .unwrap()
+            .unwrap_or_else(|| panic!("Settlement not set"))
     }
 
-    pub fn set_settlement(env: Env, caller: Address, settlement: Address) {
+    pub fn set_settlement(env: Env, caller: Address, settlement: Address) -> Result<(), VaultError> {
         caller.require_auth();
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
+        
+        let owner = env.storage().instance().get::<_, Address>(&DataKey::Owner)
+            .unwrap_or_else(|| panic!("Owner not set"));
+            
         if caller != owner {
-            panic!("Not owner");
+            return Err(VaultError::Unauthorized);
         }
         env.storage()
             .instance()
             .set(&DataKey::Settlement, &settlement);
+        Ok(())
     }
+    /// Return the configured revenue pool address, if any.
+    ///
+    /// Returns `None` when no revenue pool has been set (the default after
+    /// [`init`] when `revenue_pool` is `None`). No auth required.
     pub fn get_revenue_pool(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::RevenuePool)
@@ -734,17 +831,15 @@ impl CalloraVault {
     /// - `VaultError::InvalidTimelockWindow` if `window < MIN` or `window > MAX`.
     pub fn set_timelock_window(env: Env, caller: Address, window: u64) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        if window < timelock::MIN_TIMELOCK_SECONDS || window > timelock::MAX_TIMELOCK_SECONDS {
+        if !(timelock::MIN_TIMELOCK_SECONDS..=timelock::MAX_TIMELOCK_SECONDS).contains(&window) {
             return Err(VaultError::InvalidTimelockWindow);
         }
         timelock::set_timelock_window(&env, window);
         env.events().publish(
-            (
-                events::event_timelock_window_changed(&env),
-                caller.clone(),
-            ),
+            (events::event_timelock_window_changed(&env), caller.clone()),
             (timelock::get_timelock_window(&env), window),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -753,28 +848,66 @@ impl CalloraVault {
     /// Defaults to [`timelock::DEFAULT_TIMELOCK_SECONDS`] (48 h) when no
     /// window has been explicitly configured.
     pub fn get_timelock_window(env: Env) -> u64 {
+        Self::bump_instance_ttl(&env);
         timelock::get_timelock_window(&env)
     }
 
-    /// Return the pending pause proposal, if any.
+    /// Return the outstanding timelocked pause proposal, if any.
+    ///
+    /// Returns `None` when no pause proposal is currently staged.  A `Some`
+    /// value means a pause was proposed and can be executed once the ledger
+    /// clock reaches `proposal.execute_after` (via [`execute_pause`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
-        timelock::get_pending_pause(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_pause(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+        }
+        result
     }
 
-    /// Return the pending upgrade proposal, if any.
+    /// Return the outstanding timelocked upgrade proposal, if any.
+    ///
+    /// Returns `None` when no upgrade proposal is staged.  A `Some` value
+    /// includes the target `wasm_hash` and the `execute_after` deadline (see
+    /// [`execute_upgrade`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
-        timelock::get_pending_upgrade(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_upgrade(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+        }
+        result
     }
 
-    /// Return the pending sweep proposal, if any.
+    /// Return the outstanding timelocked sweep proposal, if any.
+    ///
+    /// Returns `None` when no sweep proposal is staged.  A `Some` value
+    /// includes the recipient address, the amount, and the `execute_after`
+    /// deadline (see [`execute_sweep`]).
+    ///
+    /// No auth required; this is a read-only view.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
-        timelock::get_pending_sweep(&env)
+        Self::bump_instance_ttl(&env);
+        let result = timelock::get_pending_sweep(&env);
+        if result.is_some() {
+            Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+        }
+        result
     }
 
     /// Require the caller to be the current admin.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), VaultError> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone())?;
+        let admin = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::Admin)
+            .ok_or(VaultError::NotInitialized)?;
         if caller != &admin {
             return Err(VaultError::Unauthorized);
         }
@@ -788,6 +921,7 @@ impl CalloraVault {
     /// # Errors
     /// - `VaultError::NotInitialized` if the contract has not been initialized.
     pub fn get_admin(env: Env) -> Result<Address, VaultError> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&StorageKey::Admin)
@@ -795,26 +929,20 @@ impl CalloraVault {
     }
 
     /// Initiate a two-step admin transfer (current admin only).
-    ///
-    /// Stores `new_admin` as a pending admin. The transfer is not complete
-    /// until `accept_admin` is called by `new_admin`.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not the current admin.
-    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), VaultError> {
+    pub fn set_admin(
+        env: Env,
+        caller: Address,
+        new_admin: Address,
+    ) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         env.storage()
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
     /// Accept a pending admin transfer (pending admin only).
-    ///
-    /// Promotes the pending admin to the current admin and clears the pending slot.
-    ///
-    /// # Errors
-    /// - `VaultError::NoAdminTransferPending` if there is no pending admin.
     pub fn accept_admin(env: Env) -> Result<(), VaultError> {
         let new_admin: Address = env
             .storage()
@@ -822,28 +950,109 @@ impl CalloraVault {
             .get(&StorageKey::PendingAdmin)
             .ok_or(VaultError::NoAdminTransferPending)?;
         new_admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&StorageKey::Admin, &new_admin);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().set(&StorageKey::Admin, &new_admin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         Ok(())
     }
 
-    /// Propose pausing the vault (admin only, timelocked).
-    ///
-    /// Snapshots the proposal deadline `proposed_at + window`. Execution
-    /// becomes available after [`Self::execute_pause`] once the ledger
-    /// clock reaches `execute_after`.
-    ///
-    /// Re-proposing while a previous pause proposal is still live replaces
-    /// the proposal **and restarts the timer** — useful when the admin
-    /// re-baselines a stale proposal.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
+    /// Transfer ownership (two-step) — initiate.
+    pub fn transfer_ownership(env: Env, caller: Address, new_owner: Address) {
+        Self::require_owner_auth(&env, &caller);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingOwner, &new_owner);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (events::event_ownership_nominated(&env), caller),
+            new_owner,
+        );
+    }
+
+    /// Accept pending ownership (new owner only).
+    pub fn accept_ownership(env: Env) {
+        let new_owner: Address = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::PendingOwner)
+            .expect("no pending ownership transfer");
+        new_owner.require_auth();
+        env.storage().instance().set(&DataKey::Owner, &new_owner);
+        env.storage().instance().remove(&DataKey::PendingOwner);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (events::event_ownership_accepted(&env), new_owner),
+            (),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Idempotency key pruning
+    // -----------------------------------------------------------------------
+
+    /// Owner-only: remove processed request markers to reclaim storage.
+    pub fn prune_processed_requests(
+        env: Env,
+        caller: Address,
+        ids: Vec<Symbol>,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        for id in ids.iter() {
+            let key = StorageKey::ProcessedRequest(id.clone());
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                env.events().publish(
+                    (events::event_request_id_pruned(&env), caller.clone()),
+                    id.clone(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Timelock window
+    // -----------------------------------------------------------------------
+
+    pub fn set_timelock_window(
+        env: Env,
+        caller: Address,
+        window: u64,
+    ) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        if window < timelock::MIN_TIMELOCK_SECONDS
+            || window > timelock::MAX_TIMELOCK_SECONDS
+        {
+            return Err(VaultError::InvalidTimelockWindow);
+        }
+        timelock::set_timelock_window(&env, window);
+        env.events().publish(
+            (events::event_timelock_window_changed(&env), caller),
+            (timelock::get_timelock_window(&env), window),
+        );
+        Ok(())
+    }
+
+    pub fn get_timelock_window(env: Env) -> u64 {
+        timelock::get_timelock_window(&env)
+    }
+
+    pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
+        timelock::get_pending_pause(&env)
+    }
+
+    pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
+        timelock::get_pending_upgrade(&env)
+    }
+
+    pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
+        timelock::get_pending_sweep(&env)
+    }
+
+    // -----------------------------------------------------------------------
+    // Propose/Execute/Cancel — pause
+    // -----------------------------------------------------------------------
+
     pub fn propose_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposed_at = env.ledger().timestamp();
@@ -852,74 +1061,59 @@ impl CalloraVault {
             .ok_or(VaultError::TimelockOverflow)?;
         timelock::set_pending_pause(
             &env,
-            &timelock::PendingPause {
-                proposed_at,
-                execute_after,
-            },
+            &timelock::PendingPause { proposed_at, execute_after },
         );
-        env.events()
-            .publish((events::event_pause_proposed(&env), caller), (proposed_at, execute_after));
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
+        env.events().publish(
+            (events::event_pause_proposed(&env), caller),
+            (proposed_at, execute_after),
+        );
         Ok(())
     }
 
-    /// Execute a pause proposal after the configured window has elapsed (admin only).
-    ///
-    /// On success, sets `StorageKey::Paused` to `true` and consumes the
-    /// pending proposal so it cannot be replayed. Emits the standard
-    /// `vault_paused` event.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::ProposalNotFound` if no pause proposal exists.
-    /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_pause(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events()
-            .publish((events::event_pause_executed(&env), caller), env.ledger().timestamp());
+            .publish((events::event_pause_executed(&env), caller.clone()), env.ledger().timestamp());
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Cancel an outstanding pause proposal (admin only).
-    ///
-    /// Removes the proposal without applying it. Always emits the
-    /// `pause_cancelled` event for audit traceability, even when no
-    /// proposal exists, so consumers can never confuse "no event" with
-    /// "wasn't called".
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
     pub fn cancel_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_pause(&env);
         timelock::clear_pending_pause(&env);
         env.events().publish(
-            (
-                events::event_pause_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_pause_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Propose upgrading the vault WASM (admin only, timelocked).
-    ///
-    /// After the configured window elapses, `execute_upgrade` performs the
-    /// on-chain deployer update. Re-proposing replaces the stored wasm
-    /// hash **and restarts the timer**.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
+    // -----------------------------------------------------------------------
+    // Propose/Execute/Cancel — upgrade
+    // -----------------------------------------------------------------------
+
     pub fn propose_upgrade(
         env: Env,
         caller: Address,
@@ -942,25 +1136,20 @@ impl CalloraVault {
             (events::event_upgrade_proposed(&env), caller),
             (new_wasm_hash, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Execute an upgrade proposal after the configured window has elapsed (admin only).
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::ProposalNotFound` if no upgrade proposal exists.
-    /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
     pub fn execute_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_upgrade(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
         let wasm_hash = proposal.wasm_hash.clone();
         let _admin = Self::get_admin(env.clone())?;
-        env.deployer().update_current_contract_wasm(wasm_hash.clone());
+        env.deployer()
+            .update_current_contract_wasm(wasm_hash.clone());
         env.storage()
             .instance()
             .set(&StorageKey::ContractVersion, &wasm_hash);
@@ -971,28 +1160,19 @@ impl CalloraVault {
         );
         env.events()
             .publish((events::event_upgraded(&env), caller), wasm_hash);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Cancel an outstanding upgrade proposal (admin only).
-    ///
-    /// Always emits `upgrade_cancelled` for audit traceability, even when
-    /// no proposal is pending; the bool data payload reports whether a
-    /// proposal was actually consumed.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
     pub fn cancel_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_upgrade(&env);
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
-            (
-                events::event_upgrade_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_upgrade_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1002,9 +1182,17 @@ impl CalloraVault {
     /// funds and emits the standard `distribute` event. Re-proposing
     /// replaces the recipient+amount **and restarts the timer**.
     ///
+    /// `amount` is checked against the vault's configured `min_deposit` floor,
+    /// the same per-call minimum enforced on `deposit`/`deduct`/`batch_deduct`.
+    /// This closes the one remaining value-moving path that previously had no
+    /// floor, so sub-unit/dust sweeps are rejected consistently everywhere the
+    /// vault moves USDC.
+    ///
     /// # Errors
     /// - `VaultError::Unauthorized` if caller is not admin.
     /// - `VaultError::AmountNotPositive` if `amount <= 0`.
+    /// - `VaultError::BelowMinTransferAmount` if `amount` is below the vault's
+    ///   configured minimum transfer unit (`min_deposit`).
     /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
     pub fn propose_sweep(
         env: Env,
@@ -1016,45 +1204,36 @@ impl CalloraVault {
         if amount <= 0 {
             return Err(VaultError::AmountNotPositive);
         }
+        let min_amount: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDeposit)
+            .ok_or(VaultError::NotInitialized)?;
+        if amount < min_amount {
+            return Err(VaultError::BelowMinTransferAmount);
+        }
         let proposed_at = env.ledger().timestamp();
         let window = timelock::get_timelock_window(&env);
         let execute_after = timelock::saturating_deadline(proposed_at, window)
             .ok_or(VaultError::TimelockOverflow)?;
         timelock::set_pending_sweep(
             &env,
-            &timelock::PendingSweep {
-                to: to.clone(),
-                amount,
-                proposed_at,
-                execute_after,
-            },
+            &timelock::PendingSweep { to: to.clone(), amount, proposed_at, execute_after },
         );
         env.events().publish(
             (events::event_sweep_proposed(&env), caller),
             (to, amount, proposed_at, execute_after),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Execute a sweep proposal after the configured window has elapsed (admin only).
-    ///
-    /// Performs the on-ledger transfer of `amount` USDC to the snapshotted
-    /// recipient. The proposal is consumed atomically so a successful
-    /// execute cannot be replayed.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::ProposalNotFound` if no sweep proposal exists.
-    /// - `VaultError::TimelockNotExpired` if `now < execute_after`.
-    /// - `VaultError::InsufficientBalance` if vault holds less than `amount`.
     pub fn execute_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
-        let proposal = timelock::get_pending_sweep(&env)
-            .ok_or(VaultError::ProposalNotFound)?;
+        let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
-
         let usdc_addr: Address = env
             .storage()
             .instance()
@@ -1070,43 +1249,50 @@ impl CalloraVault {
             &proposal.amount,
         );
         let executed_at = env.ledger().timestamp();
+        timelock::clear_pending_sweep(&env);
         env.events().publish(
             (events::event_sweep_executed(&env), caller),
             (proposal.to.clone(), proposal.amount, executed_at),
         );
         env.events().publish(
-            (events::event_distribute(&env), proposal.to.clone()),
+            (events::event_distribute(&env), proposal.to),
             proposal.amount,
         );
         timelock::clear_pending_sweep(&env);
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Cancel an outstanding sweep proposal (admin only).
-    ///
-    /// Always emits `sweep_cancelled` for audit traceability, even when
-    /// no proposal is pending; the bool data payload reports whether a
-    /// proposal was actually consumed.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
     pub fn cancel_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_sweep(&env);
         timelock::clear_pending_sweep(&env);
         env.events().publish(
-            (
-                events::event_sweep_cancelled(&env),
-                caller.clone(),
-            ),
+            (events::event_sweep_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Garbage-collect processed request markers from persistent storage.
-    /// Only the owner can call this.
-    /// Emits a `request_id_pruned` event for each removed ID.
+    /// Remove processed request-ID markers from persistent storage (owner only).
+    ///
+    /// Idempotency markers written by [`deduct`] and [`batch_deduct`] live in
+    /// persistent storage indefinitely. This function lets the owner reclaim
+    /// that storage once markers are no longer needed for duplicate detection.
+    /// IDs not present in storage are silently skipped.
+    ///
+    /// # Authorization
+    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
+    ///
+    /// # Parameters
+    /// - `ids` — list of request IDs whose markers should be removed.
+    ///
+    /// # Events
+    /// Emits a `request_id_pruned` event for each successfully removed ID.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] if `caller` is not the owner.
     pub fn prune_processed_requests(
         env: Env,
         caller: Address,
@@ -1126,14 +1312,134 @@ impl CalloraVault {
             }
         }
 
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
+    /// Return `true` if `caller` is on the depositor allowlist.
+    ///
+    /// The vault owner may always deposit regardless of this flag.
+    /// Non-owner callers must be explicitly added to the allowlist to call
+    /// [`deposit`]. No auth required; this is a read-only view.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Depositor(caller))
             .unwrap_or(false)
+    }
+
+    /// Add a single address to the deposit allowlist (owner-only).
+    ///
+    /// If the address is already present, this function is idempotent and will
+    /// succeed without error. The `allowlist_add` event is emitted even for
+    /// duplicate adds to maintain audit trail clarity.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the vault owner (verified via `require_owner`)
+    /// - `depositor` — Address to add to the allowlist
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or `VaultError::Unauthorized` if caller is not owner.
+    ///
+    /// # Events
+    /// Emits `("allowlist_add", caller, depositor)` on every successful call,
+    /// including duplicates.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// vault.add_address(&owner, &backend_service_1)?;
+    /// vault.add_address(&owner, &backend_service_2)?;
+    /// ```
+    pub fn add_address(
+        env: Env,
+        caller: Address,
+        depositor: Address,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        let mut allowlist = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env));
+        
+        // Idempotent: only add if not already present
+        if !allowlist.contains(&depositor) {
+            allowlist.push_back(depositor.clone());
+            env.storage()
+                .instance()
+                .set(&StorageKey::AllowedDepositors, &allowlist);
+        }
+        
+        env.events().publish(
+            (events::event_allowlist_add(&env), caller, depositor),
+            ()
+        );
+        
+        Ok(())
+    }
+
+    /// Remove all addresses from the deposit allowlist (owner-only).
+    ///
+    /// This function is idempotent — calling it on an empty allowlist succeeds
+    /// without error.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the vault owner (verified via `require_owner`)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or `VaultError::Unauthorized` if caller is not owner.
+    ///
+    /// # Events
+    /// Emits `("allowlist_clear", caller)` on every successful call, even when
+    /// the allowlist is already empty.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// vault.clear_all(&owner)?;
+    /// // Subsequent calls succeed (idempotent):
+    /// vault.clear_all(&owner)?;
+    /// ```
+    pub fn clear_all(
+        env: Env,
+        caller: Address,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        
+        env.storage()
+            .instance()
+            .remove(&StorageKey::AllowedDepositors);
+        
+        env.events().publish(
+            (events::event_allowlist_clear(&env), caller),
+            ()
+        );
+        
+        Ok(())
+    }
+
+    /// Return the current deposit allowlist.
+    ///
+    /// No authentication required — this is a public read-only view function.
+    /// Addresses are returned in insertion order.
+    ///
+    /// # Returns
+    /// `Vec<Address>` containing all addresses currently in the allowlist.
+    /// Returns an empty vector if no allowlist has been configured.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let allowed = vault.get_allowlist();
+    /// assert_eq!(allowed.len(), 3);
+    /// ```
+    pub fn get_allowlist(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// Set or update the reserve cap for a token (owner only).
@@ -1168,6 +1474,7 @@ impl CalloraVault {
             (events::event_reserve_cap_set(&env), caller, token),
             (prev, cap),
         );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -1175,15 +1482,21 @@ impl CalloraVault {
     ///
     /// Returns `i128::MAX` when no cap has been configured (effectively unlimited).
     pub fn get_reserve_cap(env: Env, token: Address) -> i128 {
+        Self::bump_instance_ttl(&env);
         limits::get(&env, &token)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Module declarations
+// ---------------------------------------------------------------------------
+
 pub mod capabilities;
 mod cold_storage;
-mod events;
+pub mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod timelock;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]
@@ -1193,34 +1506,29 @@ pub mod rate_limit;
 // Test modules
 // ---------------------------------------------------------------------------
 
-// #[cfg(test)]
-// mod test;
+#[cfg(test)]
+mod test;
 
-// NOTE: The following test modules expect a richer contract API (DeductItem,
-// Option<Symbol> request IDs, get_meta, DEFAULT_MIN_DEPOSIT, etc.) that the
-// current simplified vault does not expose. They are commented out until the
-// vault API is migrated.
-//
-// #[cfg(test)]
-// mod test_settler_validation;
+#[cfg(test)]
+mod test_views;
 
-// #[cfg(test)]
-// mod test_views;
+#[cfg(test)]
+mod test_idempotency;
 
-// #[cfg(test)]
-// mod test_idempotency;
+#[cfg(test)]
+mod test_error_codes;
 
-// #[cfg(test)]
-// mod test_error_codes;
-
-// #[cfg(test)]
-// mod test_reentrancy;
+#[cfg(test)]
+mod test_reentrancy;
 
 #[cfg(test)]
 mod test_sweep_idle_balance;
 
 #[cfg(test)]
 mod test_access_control_matrix;
+
+#[cfg(test)]
+mod test_rustdoc_coverage;
 
 // #[cfg(test)]
 // mod test_gas_budget;

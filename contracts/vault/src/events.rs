@@ -4,6 +4,7 @@
 //! ensuring byte-identity is preserved and preventing accidental topic name drift
 //! across call sites.
 
+#![allow(dead_code)]
 use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
@@ -200,16 +201,18 @@ pub fn event_upgrade_completed(env: &Env) -> Symbol {
     Symbol::new(env, "upgrade_completed")
 }
 
-/// Returns the Symbol for the `"allowlist_add"` event topic.
+/// Emitted when an address is added to the deposit allowlist.
 ///
-/// Emitted when the owner adds an address to the vault deposit allowlist.
+/// Topics: ("allowlist_add", caller: Address, depositor: Address)
+/// Data: ()
 pub fn event_allowlist_add(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_add")
 }
 
-/// Returns the Symbol for the `"allowlist_clear"` event topic.
+/// Emitted when the deposit allowlist is cleared.
 ///
-/// Emitted when the owner clears the entire vault deposit allowlist.
+/// Topics: ("allowlist_clear", caller: Address)
+/// Data: ()
 pub fn event_allowlist_clear(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_clear")
 }
@@ -606,5 +609,75 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_swept(&env);
         assert_eq!(sym, Symbol::new(&env, "swept"));
+    }
+
+    #[test]
+    fn test_event_pause_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_proposed"));
+    }
+
+    #[test]
+    fn test_event_pause_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_executed"));
+    }
+
+    #[test]
+    fn test_event_pause_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_cancelled"));
+    }
+
+    #[test]
+    fn test_event_upgrade_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_proposed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_executed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_cancelled"));
+    }
+
+    #[test]
+    fn test_event_sweep_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_proposed"));
+    }
+
+    #[test]
+    fn test_event_sweep_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_executed"));
+    }
+
+    #[test]
+    fn test_event_sweep_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_cancelled"));
+    }
+
+    #[test]
+    fn test_event_timelock_window_changed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_timelock_window_changed(&env);
+        assert_eq!(sym, Symbol::new(&env, "tl_window_changed"));
     }
 }

@@ -1,14 +1,17 @@
-use soroban_sdk::{token, Address, Env, Symbol};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use soroban_sdk::{testutils::Address as _, token, Address, Env};
 
 // Import all contract clients and types
-use callora_vault::CalloraVaultClient;
-use callora_settlement::{CalloraSettlementClient, GlobalPool};
 use callora_revenue_pool::RevenuePoolClient;
+use callora_settlement::{CalloraSettlementClient, GlobalPool};
+use callora_vault::CalloraVaultClient;
 
 /// Test helpers for creating test assets and contracts
-fn create_usdc<'a>(env: &'a Env, admin: &Address) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
+fn create_usdc<'a>(
+    env: &'a Env,
+    admin: &Address,
+) -> (Address, token::Client<'a>, token::StellarAssetClient<'a>) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     let address = contract_address.address();
     let client = token::Client::new(env, &address);
@@ -67,8 +70,11 @@ fn create_revenue_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 fn cross_contract_conservation_fuzz() {
     // Use a deterministic seed for CI; change to a random value for local testing
     const SEED: u64 = 0x_dead_beef_1234;
-    std::println!("Running cross-contract invariant test with seed: 0x{:x}", SEED);
-    
+    std::println!(
+        "Running cross-contract invariant test with seed: 0x{:x}",
+        SEED
+    );
+
     let mut rng = StdRng::seed_from_u64(SEED);
     const STEPS: usize = 200;
 
@@ -121,7 +127,7 @@ fn cross_contract_conservation_fuzz() {
             0..=39 => {
                 let amount = rng.gen_range(1i128..10_000i128);
                 usdc_admin_client.mint(&depositor, &amount);
-                usdc_client.approve(&depositor, &vault_address, &amount, &(amount * 2));
+                usdc_client.approve(&depositor, &vault_address, &amount, &200u32);
                 let result = vault_client.try_deposit(&depositor, &amount);
                 if result.is_ok() {
                     total_deposited = total_deposited.checked_add(amount).unwrap();
@@ -132,7 +138,7 @@ fn cross_contract_conservation_fuzz() {
             // 35% chance: Deduct to settlement contract
             40..=74 => {
                 let amount = rng.gen_range(1i128..5_000i128);
-                let result = vault_client.try_deduct(&owner, &amount, &None);
+                let result = vault_client.try_deduct(&owner, &amount, &123u64);
                 if result.is_ok() {
                     expected_vault_internal = expected_vault_internal.checked_sub(amount).unwrap();
                     expected_onchain_vault = expected_onchain_vault.checked_sub(amount).unwrap();
@@ -142,8 +148,17 @@ fn cross_contract_conservation_fuzz() {
                     if to_pool {
                         settlement_client.receive_payment(&vault_address, &amount, &true, &None);
                     } else {
-                        let dev = if rng.gen_bool(0.5) { developer_1.clone() } else { developer_2.clone() };
-                        settlement_client.receive_payment(&vault_address, &amount, &false, &Some(dev));
+                        let dev = if rng.gen_bool(0.5) {
+                            developer_1.clone()
+                        } else {
+                            developer_2.clone()
+                        };
+                        settlement_client.receive_payment(
+                            &vault_address,
+                            &amount,
+                            &false,
+                            &Some(dev),
+                        );
                     }
                 }
             }
@@ -160,7 +175,8 @@ fn cross_contract_conservation_fuzz() {
             // 5% chance: Transfer directly to revenue pool
             95..=99 => {
                 let amount = rng.gen_range(1i128..1_000i128);
-                let result = usdc_client.try_transfer(&vault_address, &revenue_pool_address, &amount);
+                let result =
+                    usdc_client.try_transfer(&vault_address, &revenue_pool_address, &amount);
                 if result.is_ok() {
                     revenue_pool_client.receive_payment(&admin, &amount, &true);
                     expected_onchain_vault = expected_onchain_vault.checked_sub(amount).unwrap();
@@ -209,27 +225,24 @@ fn assert_invariant(
     // Invariant 1: Vault internal balance
     let observed_vault_internal = vault_client.balance();
     assert_eq!(
-        observed_vault_internal,
-        expected_vault_internal,
+        observed_vault_internal, expected_vault_internal,
         "Invariant 1 failed at step {}: Vault internal balance mismatch (expected={}, got={})",
-        step,
-        expected_vault_internal,
-        observed_vault_internal
+        step, expected_vault_internal, observed_vault_internal
     );
 
     // Invariant 2: Vault on-chain balance
     let observed_onchain_vault = usdc_client.balance(vault_address);
     assert_eq!(
-        observed_onchain_vault,
-        expected_onchain_vault,
+        observed_onchain_vault, expected_onchain_vault,
         "Invariant 2 failed at step {}: Vault on-chain balance mismatch (expected={}, got={})",
-        step,
-        expected_onchain_vault,
-        observed_onchain_vault
+        step, expected_onchain_vault, observed_onchain_vault
     );
 
     // Invariant 3: Calculate total of all settlement balances and compare
-    let GlobalPool { total_balance: global_pool_balance, .. } = settlement_client.get_global_pool();
+    let GlobalPool {
+        total_balance: global_pool_balance,
+        ..
+    } = settlement_client.get_global_pool();
     let dev_balances = settlement_client.get_all_developer_balances(admin);
     let mut settlement_total = global_pool_balance;
     for dev_balance in dev_balances.iter() {

@@ -9,7 +9,7 @@
 //! If any test in this file fails, the corresponding row in
 //! `docs/EVENT_TOPICS.md` must be updated to reflect the new topic string.
 
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::{Env, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
 // Vault contract topics
@@ -313,7 +313,7 @@ fn topic_counts_match_catalog_documentation() {
 #[test]
 fn all_topic_strings_are_valid_identifiers() {
     let env = Env::default();
-    let all: Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
+    let all: std::vec::Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
         .iter()
         .map(|(s, c)| ("vault", *s, *c))
         .chain(
@@ -349,7 +349,7 @@ fn all_topic_strings_are_valid_identifiers() {
 fn no_duplicate_topics_per_contract() {
     let env = Env::default();
 
-    let mut vault_syms: Vec<Symbol> = Vec::new(&env);
+    let mut vault_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
     for (_, ctor) in VAULT_TOPICS {
         vault_syms.push_back(ctor(&env));
     }
@@ -364,7 +364,7 @@ fn no_duplicate_topics_per_contract() {
         }
     }
 
-    let mut settlement_syms: Vec<Symbol> = Vec::new(&env);
+    let mut settlement_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
     for (_, ctor) in SETTLEMENT_TOPICS {
         settlement_syms.push_back(ctor(&env));
     }
@@ -378,7 +378,7 @@ fn no_duplicate_topics_per_contract() {
         }
     }
 
-    let mut rp_syms: Vec<Symbol> = Vec::new(&env);
+    let mut rp_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
     for (_, ctor) in REVENUE_POOL_TOPICS {
         rp_syms.push_back(ctor(&env));
     }
@@ -399,7 +399,7 @@ fn no_duplicate_topics_per_contract() {
 fn topic_constructors_are_deterministic() {
     let env = Env::default();
 
-    let all: Vec<fn(&Env) -> Symbol> = VAULT_TOPICS
+    let all: std::vec::Vec<fn(&Env) -> Symbol> = VAULT_TOPICS
         .iter()
         .map(|(_, c)| *c)
         .chain(SETTLEMENT_TOPICS.iter().map(|(_, c)| *c))

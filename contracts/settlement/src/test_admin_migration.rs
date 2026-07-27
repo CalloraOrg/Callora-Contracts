@@ -20,7 +20,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let client = CalloraSettlementClient::new(&env, &contract);
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &token);
-    client.receive_payment(&vault, &500, &false, &Some(from.clone()), &token);
+    client.receive_payment(&vault, &500, &false, &Some(from.clone()), &token, &100);
     (env, contract, admin, vault, from, to, token)
 }
 

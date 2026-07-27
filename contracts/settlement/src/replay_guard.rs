@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use crate::{CalloraSettlement, CalloraSettlementClient};
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
+    use soroban_sdk::{vec, Env};
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
@@ -205,7 +205,7 @@ mod tests {
         let d2 = dev(&env);
         let t = token(&env);
 
-        let items = vec![&env, (d1.clone(), 100i128), (d2.clone(), 200i128)];
+        let items = soroban_sdk::vec![&env, (d1.clone(), 100i128), (d2.clone(), 200i128)];
 
         client.batch_receive_payment(&vault, &items, &t, &10u32);
         assert_eq!(client.get_developer_balance(&d1, &t), 100);
