@@ -13,7 +13,7 @@ members = [
     "contracts/checkpoint",
     "contracts/helpers",
     "contracts/revenue_pool/fuzz",
-    "contracts/tests",
+    "contracts/tests", "contracts/errors",
 ]
 default-members = [
     "contracts/vault",
