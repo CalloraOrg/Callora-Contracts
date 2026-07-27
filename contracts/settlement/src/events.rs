@@ -210,6 +210,15 @@ pub fn emit_balance_credited(env: &Env, developer: &Address, payload: BalanceCre
     );
 }
 
+/// Emit a structured `deposit` event for a developer credit.
+///
+/// Topics: `("deposit", developer)`
+/// Data: `DepositEvent { developer, token, amount }`
+pub fn emit_deposit(env: &Env, developer: &Address, data: DepositEvent) {
+    let topics = (Symbol::new(env, "deposit"), developer.clone());
+    env.events().publish(topics, data);
+}
+
 /// Emit `"deposit"` alongside each developer credit (both single and batch).
 ///
 /// Topics: `(deposit, developer)`

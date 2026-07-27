@@ -202,6 +202,16 @@ impl CalloraSettlement {
                     token: token.clone(),
                 },
             );
+
+            events::emit_deposit(
+    &env,
+    &dev_address,           // or `&dev` inside the batch loop
+    DepositEvent {
+        developer: dev_address.clone(),  // or dev.clone()
+        token: token.clone(),
+        amount,
+    },
+);
             events::emit_deposit(
                 &env,
                 &dev_address,
