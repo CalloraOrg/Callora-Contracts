@@ -568,7 +568,8 @@ impl RevenuePool {
     /// * `ERR_INSUFFICIENT_BALANCE` — pool holds less than `amount`.
     ///
     /// # Events
-    /// Emits `distribute` with `to` as topic and `amount` as data.
+    /// Emits `distribute_started` and `distribute_completed` with a versioned
+    /// payload around the transfer. The legacy `distribute` event is preserved.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -594,9 +595,19 @@ impl RevenuePool {
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let lifecycle = events::DistributionLifecycleEvent::new(
+            &env,
+            amount,
+            events::DistributionMode::Single,
+            0,
+            1,
+        );
+        events::emit_distribute_started(&env, &caller, &to, &lifecycle);
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
-            .publish((events::event_distribute(&env), to), amount);
+            .publish((events::event_distribute(&env), to.clone()), amount);
+        events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
     }
 
     /// Distribute USDC to multiple developer wallets in a single atomic transaction.
@@ -626,9 +637,9 @@ impl RevenuePool {
     /// * `"invalid recipient: cannot distribute to the contract itself"`.
     ///
     /// # Events
-    /// Emits one [`events::event_batch_distribute`] event per payment leg with
-    /// the recipient's address as topic and the amount as data. Events are
-    /// published only after all validation passes **and** all transfers succeed.
+    /// Emits structured `distribute_started` and `distribute_completed` events
+    /// around each transfer. The legacy [`events::event_batch_distribute`] event
+    /// is preserved for every payment leg.
     ///
     /// # Atomicity
     /// The function is **all-or-nothing**: either every payment succeeds and every
@@ -689,12 +700,24 @@ impl RevenuePool {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+        let mut batch_index = 0_u32;
         for payment in payments.iter() {
             let (to, amount) = payment;
             Self::validate_recipient(&to, &contract_address);
+
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                batch_index,
+                n,
+            );
+            events::emit_distribute_started(&env, &caller, &to, &lifecycle);
             usdc.transfer(&contract_address, &to, &amount);
             env.events()
-                .publish((events::event_batch_distribute(&env), to), amount);
+                .publish((events::event_batch_distribute(&env), to.clone()), amount);
+            events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            batch_index = batch_index.saturating_add(1);
         }
 
         Ok(())
