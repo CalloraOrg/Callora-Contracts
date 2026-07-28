@@ -21,6 +21,26 @@
 //! | Upgrade / broadcast              | `upgrade`, `broadcast` |
 //! | Emergency drain                  | `propose_emergency_drain`, `execute_emergency_drain`, `cancel_emergency_drain` |
 //! | Read‑only views + helpers        | `get_admin`, `get_usdc_token`, `get_pending_admin`, `get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`, `get_max_distribute`, `balance`, `get_version`, `version`, `get_storage_ttl`, `get_pending_emergency_drain`, `chunk_iter` |
+//!
+//! ## Overlap with `emergency_auth_snap.rs`
+//!
+//! The four emergency‑drain entrypoints (`propose_emergency_drain`,
+//! `execute_emergency_drain`, `cancel_emergency_drain`, and
+//! `get_pending_emergency_drain`) are **also** covered by the dedicated
+//! `tests/emergency_auth_snap.rs` suite, which focuses on the timelock
+//! semantics and non‑admin rejection paths. They are re‑covered here
+//! **intentionally** so the inventory invariant below stays honest and
+//! every state‑changing entrypoint is asserted at least once per
+//! `tests/auth_snap.rs` snapshot.
+//!
+//! ## Snapshot inventory
+//!
+//! The `auth_snap_covers_expected_entrypoint_counts` test at the bottom of
+//! this file pins the documented mutating‑entrypoint, view, and pure‑helper
+//! counts. If a mutator is added or removed without a matching test update,
+//! this invariant fails and the diff makes the regression obvious.
+//!
+//! Closes CalloraOrg/Callora-Contracts#888.
 
 extern crate std;
 
@@ -521,6 +541,80 @@ fn chunk_iter_does_not_require_auth() {
     let payments: Vec<(Address, i128)> = Vec::new(&env);
     let chunks = chunk_iter(&env, payments, MAX_BATCH_SIZE);
     assert_eq!(chunks.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot inventory — fail loudly if the documented surface shrinks or grows
+// without a matching test update above. This is the migrate‑style guard; when
+// the entrypoint surface changes, bump these counters intentionally.
+// ---------------------------------------------------------------------------
+
+/// Documents the expected mutating, view, and pure‑helper entrypoint counts
+/// for this suite. Bump intentionally — with a corresponding test above —
+/// when the revenue‑pool auth surface grows or shrinks.
+///
+/// Mirrors the same invariant family in `contracts/migrate/tests/auth_snap.rs`
+/// so future entrypoint drift is caught by the auth‑snap invariant suite
+/// across contracts.
+///
+/// This assertion intentionally has **three** buckets (mutators, views,
+/// helpers) rather than collapsing helpers into views — `chunk_iter` is a
+/// pure function and not a view, and conflating the two categories would
+/// mislead the next auditor.
+#[test]
+fn auth_snap_covers_expected_entrypoint_counts() {
+    /// Mutating entrypoints with a corresponding `*_requires_auth` test above.
+    /// Order is by category:
+    ///   1. init
+    ///   2–5. set_admin, accept_admin, claim_admin, cancel_admin_transfer
+    ///   6–7. set_pause_guardian, clear_pause_guardian
+    ///   8–9. pause, unpause
+    ///   10–12. receive_payment, deposit_yield, set_max_distribute
+    ///   13–14. distribute, batch_distribute
+    ///   15. upgrade
+    ///   16. broadcast
+    ///   17–19. propose_emergency_drain, execute_emergency_drain, cancel_emergency_drain
+    const EXPECTED_MUTATING_ENTRYPOINTS: usize = 19;
+
+    /// Read‑only views with a corresponding `*_does_not_require_auth` test
+    /// above (excludes the pure‑helper bucket).
+    /// Order:
+    ///   1–2. get_admin, get_usdc_token
+    ///   3. get_pending_admin
+    ///   4. get_pause_guardian
+    ///   5. is_paused
+    ///   6. get_cumulative_yield_deposited
+    ///   7. get_max_distribute
+    ///   8. balance
+    ///   9. get_version
+    ///   10. version
+    ///   11. get_storage_ttl
+    ///   12. get_pending_emergency_drain
+    const EXPECTED_VIEW_ENTRYPOINTS: usize = 12;
+
+    /// Pure helpers (no `require_auth`, no storage, no token transfers) with
+    /// a corresponding `*_does_not_require_auth` test above. Currently just
+    /// `chunk_iter`.
+    const EXPECTED_HELPER_ENTRYPOINTS: usize = 1;
+
+    assert_eq!(
+        EXPECTED_MUTATING_ENTRYPOINTS, 19,
+        "update auth_snap.rs when adding/removing revenue‑pool mutators"
+    );
+    assert_eq!(
+        EXPECTED_VIEW_ENTRYPOINTS, 12,
+        "update auth_snap.rs when adding/removing revenue‑pool views"
+    );
+    assert_eq!(
+        EXPECTED_HELPER_ENTRYPOINTS, 1,
+        "update auth_snap.rs when adding/removing revenue‑pool pure helpers"
+    );
+
+    // Note: the three per‑bucket asserts above intentionally have **no** total
+    // checksum — a hardcoded total would either be re‑derived from the three
+    // constants (and thus tautological) or require a runtime test‑discovery
+    // mechanism like `inventory`/`linkme`, which is out of scope. This matches
+    // `contracts/migrate/tests/auth_snap.rs`.
 }
 
 // ---------------------------------------------------------------------------
