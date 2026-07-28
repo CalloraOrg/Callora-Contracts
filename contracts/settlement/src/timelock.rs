@@ -2,7 +2,7 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::{PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD, StorageKey};
+use crate::{StorageKey, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD};
 
 /// Mandatory delay between proposing and executing a balance migration.
 pub const DEVELOPER_MIGRATION_TIMELOCK_SECONDS: u64 = 86_400;
@@ -25,9 +25,11 @@ pub(crate) fn get_pending_migration(
 ) -> Option<PendingDeveloperMigration> {
     let key = StorageKey::PendingDeveloperMigration(from.clone());
     if env.storage().persistent().has(&key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
     }
     env.storage().persistent().get(&key)
 }
