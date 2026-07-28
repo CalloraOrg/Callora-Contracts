@@ -8,12 +8,21 @@
 //!
 //! ## Event Overview
 //!
-//! | Topic                | Trigger                                                       |
-//! |----------------------|---------------------------------------------------------------|
-//! | `"admin_init"`       | Contract initialized with the first admin (`init`)           |
-//! | `"admin_nominated"`  | Current admin proposes a successor (`set_admin`)             |
-//! | `"admin_changed"`    | Pending admin accepts the role and becomes the new admin     |
-//! | `"admin_cancelled"`  | Current admin revokes a pending nomination                   |
+//! | Topic                       | Trigger                                                       |
+//! |-----------------------------|---------------------------------------------------------------|
+//! | `"admin_init"`              | Contract initialized with the first admin (`init`)           |
+//! | `"admin_nominated"`         | Current admin proposes a successor (`set_admin`)             |
+//! | `"admin_changed"`           | Pending admin accepts the role and becomes the new admin     |
+//! | `"admin_cancelled"`         | Current admin revokes a pending nomination                   |
+//! | `"account_limits_set"`      | Admin sets per-account caps for a specific account           |
+//! | `"account_limits_cleared"`  | Admin clears per-account caps (fallback to global defaults)  |
+//! | `"default_limits_set"`      | Admin sets the global default caps                           |
+//! | `"bet_consumed"`            | Account consumed one bet slot                                |
+//! | `"bet_released"`            | Account released one bet slot                                |
+//! | `"position_consumed"`       | Account consumed one position slot                           |
+//! | `"position_released"`       | Account released one position slot                           |
+//! | `"subscription_consumed"`   | Account consumed one subscription slot                       |
+//! | `"subscription_released"`   | Account released one subscription slot                       |
 //!
 //! ## Topic Shape
 //!
@@ -82,6 +91,109 @@ pub fn event_admin_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "admin_cancelled")
 }
 
+// ---------------------------------------------------------------------------
+// Per-account limits event topics
+// ---------------------------------------------------------------------------
+
+/// Returns the Symbol for the `"account_limits_set"` event topic.
+///
+/// Emitted when the admin sets (or overwrites) per-account caps via
+/// [`crate::limits::set_account_limits`].
+///
+/// Topics: `(account_limits_set, admin: Address)`
+/// Data:   `(account: Address, AccountLimits)`
+pub fn event_account_limits_set(env: &Env) -> Symbol {
+    Symbol::new(env, "account_limits_set")
+}
+
+/// Returns the Symbol for the `"account_limits_cleared"` event topic.
+///
+/// Emitted when the admin clears per-account caps via
+/// [`crate::limits::clear_account_limits`].
+///
+/// Topics: `(account_limits_cleared, admin: Address)`
+/// Data:   `account: Address`
+pub fn event_account_limits_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "account_limits_cleared")
+}
+
+/// Returns the Symbol for the `"default_limits_set"` event topic.
+///
+/// Emitted when the admin sets the global default caps via
+/// [`crate::limits::set_default_limits`].
+///
+/// Topics: `(default_limits_set, admin: Address)`
+/// Data:   `AccountLimits`
+pub fn event_default_limits_set(env: &Env) -> Symbol {
+    Symbol::new(env, "default_limits_set")
+}
+
+/// Returns the Symbol for the `"bet_consumed"` event topic.
+///
+/// Emitted when an account successfully consumes one bet slot via
+/// [`crate::limits::consume_bet`].
+///
+/// Topics: `(bet_consumed, account: Address)`
+/// Data:   `(new_count: u32, cap: u32)`
+pub fn event_bet_consumed(env: &Env) -> Symbol {
+    Symbol::new(env, "bet_consumed")
+}
+
+/// Returns the Symbol for the `"bet_released"` event topic.
+///
+/// Emitted when an account successfully releases one bet slot via
+/// [`crate::limits::release_bet`].
+///
+/// Topics: `(bet_released, account: Address)`
+/// Data:   `new_count: u32`
+pub fn event_bet_released(env: &Env) -> Symbol {
+    Symbol::new(env, "bet_released")
+}
+
+/// Returns the Symbol for the `"position_consumed"` event topic.
+///
+/// Emitted when an account successfully consumes one position slot via
+/// [`crate::limits::consume_position`].
+///
+/// Topics: `(position_consumed, account: Address)`
+/// Data:   `(new_count: u32, cap: u32)`
+pub fn event_position_consumed(env: &Env) -> Symbol {
+    Symbol::new(env, "position_consumed")
+}
+
+/// Returns the Symbol for the `"position_released"` event topic.
+///
+/// Emitted when an account successfully releases one position slot via
+/// [`crate::limits::release_position`].
+///
+/// Topics: `(position_released, account: Address)`
+/// Data:   `new_count: u32`
+pub fn event_position_released(env: &Env) -> Symbol {
+    Symbol::new(env, "position_released")
+}
+
+/// Returns the Symbol for the `"subscription_consumed"` event topic.
+///
+/// Emitted when an account successfully consumes one subscription slot via
+/// [`crate::limits::consume_subscription`].
+///
+/// Topics: `(subscription_consumed, account: Address)`
+/// Data:   `(new_count: u32, cap: u32)`
+pub fn event_subscription_consumed(env: &Env) -> Symbol {
+    Symbol::new(env, "subscription_consumed")
+}
+
+/// Returns the Symbol for the `"subscription_released"` event topic.
+///
+/// Emitted when an account successfully releases one subscription slot via
+/// [`crate::limits::release_subscription`].
+///
+/// Topics: `(subscription_released, account: Address)`
+/// Data:   `new_count: u32`
+pub fn event_subscription_released(env: &Env) -> Symbol {
+    Symbol::new(env, "subscription_released")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +239,105 @@ mod tests {
         assert_eq!(
             event_admin_cancelled(&env),
             Symbol::new(&env, "admin_cancelled")
+        );
+    }
+
+    /// Snapshot: proves `event_account_limits_set` maps to exactly
+    /// `"account_limits_set"`.
+    #[test]
+    fn test_event_account_limits_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_account_limits_set(&env),
+            Symbol::new(&env, "account_limits_set")
+        );
+    }
+
+    /// Snapshot: proves `event_account_limits_cleared` maps to exactly
+    /// `"account_limits_cleared"`.
+    #[test]
+    fn test_event_account_limits_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_account_limits_cleared(&env),
+            Symbol::new(&env, "account_limits_cleared")
+        );
+    }
+
+    /// Snapshot: proves `event_default_limits_set` maps to exactly
+    /// `"default_limits_set"`.
+    #[test]
+    fn test_event_default_limits_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_default_limits_set(&env),
+            Symbol::new(&env, "default_limits_set")
+        );
+    }
+
+    /// Snapshot: proves `event_bet_consumed` maps to exactly
+    /// `"bet_consumed"`.
+    #[test]
+    fn test_event_bet_consumed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_bet_consumed(&env),
+            Symbol::new(&env, "bet_consumed")
+        );
+    }
+
+    /// Snapshot: proves `event_bet_released` maps to exactly
+    /// `"bet_released"`.
+    #[test]
+    fn test_event_bet_released_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_bet_released(&env),
+            Symbol::new(&env, "bet_released")
+        );
+    }
+
+    /// Snapshot: proves `event_position_consumed` maps to exactly
+    /// `"position_consumed"`.
+    #[test]
+    fn test_event_position_consumed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_position_consumed(&env),
+            Symbol::new(&env, "position_consumed")
+        );
+    }
+
+    /// Snapshot: proves `event_position_released` maps to exactly
+    /// `"position_released"`.
+    #[test]
+    fn test_event_position_released_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_position_released(&env),
+            Symbol::new(&env, "position_released")
+        );
+    }
+
+    /// Snapshot: proves `event_subscription_consumed` maps to exactly
+    /// `"subscription_consumed"`.
+    #[test]
+    fn test_event_subscription_consumed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_subscription_consumed(&env),
+            Symbol::new(&env, "subscription_consumed")
+        );
+    }
+
+    /// Snapshot: proves `event_subscription_released` maps to exactly
+    /// `"subscription_released"`.
+    #[test]
+    fn test_event_subscription_released_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_subscription_released(&env),
+            Symbol::new(&env, "subscription_released")
         );
     }
 }
