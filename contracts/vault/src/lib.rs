@@ -17,6 +17,11 @@
 //! defaults to 48 h (`172_800`). Valid bounds are 1 h – 30 d. All three slots
 //! are independent so multiple proposals can coexist concurrently.
 //!
+//! Successful executions also share a global admin cool-off window. This
+//! prevents several independently matured proposals from being executed in
+//! rapid succession. The window defaults to one hour and is configurable with
+//! `set_admin_cooldown` within the bounds exposed by [`admin`].
+//!
 ///
 /// ## Pause Circuit Breaker
 ///
@@ -51,6 +56,7 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
 };
 
+pub mod admin;
 pub mod timelock;
 pub mod views;
 
@@ -150,6 +156,10 @@ pub enum VaultError {
     InvalidTimelockWindow = 40,
     /// Caller is not in the allowlist and is not the owner (code 44).
     CallerNotInAllowlist = 44,
+    /// A critical admin action is still inside the global cool-off window (code 49).
+    AdminCooldownActive = 49,
+    /// Admin cool-off window is outside the accepted bounds (code 50).
+    InvalidAdminCooldown = 50,
 }
 
 #[contracttype]
@@ -193,6 +203,10 @@ pub enum StorageKey {
     ContractVersion,
     /// Vector of addresses allowed to deposit (owner-managed allowlist).
     AllowedDepositors,
+    /// Global cool-off window between critical admin executions.
+    AdminCooldown,
+    /// Audit record for the most recently executed critical admin action.
+    LastCriticalAdminAction,
 }
 
 /// Ledgers per day at a 5-second close cadence.
@@ -1091,6 +1105,50 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
+    // Critical admin action cooldown
+    // -----------------------------------------------------------------------
+
+    /// Return the global cool-off window between critical admin executions.
+    ///
+    /// The secure one-hour default is returned until an admin explicitly sets
+    /// a value. This read-only view requires no authorization.
+    pub fn get_admin_cooldown(env: Env) -> u64 {
+        admin::get_cooldown(&env)
+    }
+
+    /// Configure the global cool-off window between critical admin executions.
+    ///
+    /// # Authorization
+    /// `caller` must be the current admin and must authorize this invocation.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] when `caller` is not the current admin.
+    /// - [`VaultError::NotInitialized`] when the vault has no configured admin.
+    /// - [`VaultError::InvalidAdminCooldown`] when `seconds` is outside
+    ///   [`admin::MIN_COOLDOWN_SECONDS`]..=[`admin::MAX_COOLDOWN_SECONDS`].
+    pub fn set_admin_cooldown(env: Env, caller: Address, seconds: u64) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        admin::set_cooldown(&env, seconds)?;
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return seconds remaining before another critical admin action may run.
+    pub fn admin_cooldown_remaining(env: Env) -> u64 {
+        admin::remaining(&env)
+    }
+
+    /// Return whether a critical admin action may execute now.
+    pub fn is_admin_action_ready(env: Env) -> bool {
+        admin::is_ready(&env)
+    }
+
+    /// Return the most recently executed critical admin action, if any.
+    pub fn get_last_critical_admin_action(env: Env) -> Option<admin::CriticalAdminAction> {
+        admin::last_action(&env)
+    }
+
+    // -----------------------------------------------------------------------
     // Timelock window
     // -----------------------------------------------------------------------
 
@@ -1165,6 +1223,7 @@ impl CalloraVault {
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
+        admin::guard(&env, Symbol::new(&env, "pause"))?;
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events().publish(
@@ -1225,6 +1284,7 @@ impl CalloraVault {
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
+        admin::guard(&env, Symbol::new(&env, "upgrade"))?;
         let wasm_hash = proposal.wasm_hash.clone();
         let _admin = Self::get_admin(env.clone())?;
         env.deployer()
@@ -1327,6 +1387,7 @@ impl CalloraVault {
         if usdc.balance(&env.current_contract_address()) < proposal.amount {
             return Err(VaultError::InsufficientBalance);
         }
+        admin::guard(&env, Symbol::new(&env, "sweep"))?;
         usdc.transfer(
             &env.current_contract_address(),
             &proposal.to,
