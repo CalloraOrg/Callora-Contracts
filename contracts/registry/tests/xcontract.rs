@@ -186,7 +186,7 @@ fn balance_gate_token_panic_leaves_registry_clean() {
     let oid = offering_id(&env, "token-panic");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -215,7 +215,7 @@ fn balance_gate_catalog_panic_after_balance_read_leaves_registry_clean() {
     let oid = offering_id(&env, "gate-panic");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -244,7 +244,7 @@ fn balance_gate_success_commits_registry_state() {
     let oid = offering_id(&env, "gate-ok");
     let meta = metadata(&env);
 
-    client.register_offering_with_balance_gate(
+    client.register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -270,7 +270,7 @@ fn balance_gate_insufficient_balance_does_not_call_catalog() {
     let oid = offering_id(&env, "low-balance");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -281,7 +281,7 @@ fn balance_gate_insufficient_balance_does_not_call_catalog() {
     assert!(
         matches!(
             result,
-            Ok(Err(RegistryError::InsufficientDeveloperBalance))
+            Err(Ok(RegistryError::InsufficientDeveloperBalance))
         ),
         "expected InsufficientDeveloperBalance, got {:?}",
         result

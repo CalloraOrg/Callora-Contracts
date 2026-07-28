@@ -129,7 +129,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0);
+            .ok_or(RegistryError::NotInitialized)?;
         env.storage()
             .instance()
             .set(
@@ -195,7 +195,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0);
+            .ok_or(RegistryError::NotInitialized)?;
         env.storage()
             .instance()
             .set(
@@ -231,7 +231,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0))
+            .ok_or(RegistryError::NotInitialized)?)
     }
 
     /// Fetch a registered offering record.
