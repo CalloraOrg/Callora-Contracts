@@ -145,7 +145,7 @@ fn test_second_action_within_window_rejected() {
     client.unpause(&admin);
     assert!(!client.is_paused());
 
-    // A second pause within the window is rejected.
+    // A second pause is now blocked by the cooldown window.
     let res = client.try_pause(&admin);
     assert_eq!(res, Err(Ok(HotError::CooldownActive)));
 }
@@ -153,7 +153,11 @@ fn test_second_action_within_window_rejected() {
 #[test]
 fn test_action_allowed_after_window_elapses() {
     let (env, admin, _signer, client) = setup(Some(300));
+    // Pause, then unpause so the contract is not paused; this arms both cooldowns at t=0.
     client.pause(&admin);
+    client.unpause(&admin);
+
+    // Attempting pause immediately is blocked by the cooldown.
     let res = client.try_pause(&admin);
     assert_eq!(res, Err(Ok(HotError::CooldownActive)));
 
@@ -192,8 +196,10 @@ fn test_per_action_isolation() {
 fn test_shorter_cooldown_takes_effect_for_next_check() {
     let (env, admin, _signer, client) = setup(Some(1000));
     client.pause(&admin);
+    // Unpause so the contract is not paused (arms both cooldowns at t=0).
+    client.unpause(&admin);
 
-    // Shorten the window; the pending pause becomes available sooner.
+    // Shorten the window; the pending cooldown becomes available sooner.
     client.set_cooldown(&admin, &10);
     advance(&env, 10);
     let pause = Symbol::new(&env, ACTION_PAUSE);
