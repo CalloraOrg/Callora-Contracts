@@ -638,8 +638,7 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
     let seq_init = env.ledger().sequence();
 
     // Advance to just before the original write-path bump would expire.
-    env.ledger()
-        .set_sequence_number(seq_init + BUMP_AMOUNT - 1);
+    env.ledger().set_sequence_number(seq_init + BUMP_AMOUNT - 1);
     let _ = client.get_checkpoint(&id); // read-path bump
 
     // Advance past where the *original* bump would have expired.
@@ -648,7 +647,10 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
         .set_sequence_number(seq_after_read + LIFETIME_THRESHOLD + 10);
 
     let record = client.get_checkpoint(&id);
-    assert_eq!(record.balance, 42, "read-path bump must keep the record alive");
+    assert_eq!(
+        record.balance, 42,
+        "read-path bump must keep the record alive"
+    );
 }
 
 // ===========================================================================

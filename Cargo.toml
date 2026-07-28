@@ -34,7 +34,7 @@ default-members = [
     "contracts/freeze",
     "contracts/helpers",
     "contracts/cold",
-    "contracts/hot",    "contracts/admin",
+    "contracts/hot",
     "contracts/validators",
     "contracts/yield",
 ]

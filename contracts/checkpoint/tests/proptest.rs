@@ -1,6 +1,8 @@
 extern crate std;
 
-use callora_checkpoint::{CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use callora_checkpoint::{
+    CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+};
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol, Vec as SorobanVec};
@@ -12,17 +14,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Clone, Debug)]
 enum CheckpointAction {
-    CreateSingle {
-        balance: i128,
-    },
-    CreateBatch {
-        count: u32,
-        balance: i128,
-    },
-    QueryRange {
-        start_id: u64,
-        limit: u32,
-    },
+    CreateSingle { balance: i128 },
+    CreateBatch { count: u32, balance: i128 },
+    QueryRange { start_id: u64, limit: u32 },
     QueryLatest,
 }
 
@@ -152,9 +146,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    for i in 0..ids.len() {
+            if let Ok(ids) = result {
+                for i in 0..ids.len() {
                         expected_id += 1;
                         let assigned_id = ids.get(i).unwrap();
                         prop_assert_eq!(
@@ -476,10 +469,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    expected_id = *ids.last().unwrap();
-                }
+            if let Ok(ids) = result {
+                expected_id = *ids.last().unwrap();
             }
 
             let latest = client.get_latest_checkpoint();
