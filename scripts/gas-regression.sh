@@ -45,8 +45,10 @@ cargo build --workspace 2>&1 | tail -5
 log "Running gas measurement tests..."
 mkdir -p "${REPO_ROOT}/target"
 
-cargo test -p callora-vault -- gas_budget --nocapture 2>/dev/null \
-  | grep '^{"contract"' \
+{
+  cargo test -p callora-vault -- gas_budget --nocapture 2>/dev/null
+  cargo test -p callora-migrate -- gas_budget --nocapture 2>/dev/null
+} | grep '^{"contract"' \
   > "${MEASUREMENTS_PATH}" || true
 
 if [[ ! -s "${MEASUREMENTS_PATH}" ]]; then
