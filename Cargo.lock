@@ -299,6 +299,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-reflector"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-registry"
 version = "0.1.0"
 dependencies = [
