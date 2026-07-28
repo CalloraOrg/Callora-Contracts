@@ -3,6 +3,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod admin;
 pub mod catalog;
 pub mod errors;
 pub mod events;
@@ -25,6 +26,7 @@ pub enum StorageKey {
     Catalog,
     RegisteredCount,
     Offering(String),
+    LastAdminAction,
 }
 
 #[contracttype]
@@ -103,6 +105,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        admin::require_cooldown(&env)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -139,6 +142,7 @@ impl CalloraRegistry {
             (events::event_offering_registered(&env), offering_id),
             record,
         );
+        admin::update_cooldown(&env);
         Ok(())
     }
 
@@ -161,6 +165,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        admin::require_cooldown(&env)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -203,6 +208,7 @@ impl CalloraRegistry {
             (events::event_offering_registered(&env), offering_id),
             record,
         );
+        admin::update_cooldown(&env);
         Ok(())
     }
 
