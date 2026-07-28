@@ -23,7 +23,7 @@ members = [
     "contracts/errors",
     "contracts/registry",
     "contracts/hot",
-    "contracts/admin",
+    "contracts/yield",
 ]
 default-members = [
     "contracts/revenue_pool",
@@ -35,6 +35,7 @@ default-members = [
     "contracts/cold",
     "contracts/hot",    "contracts/admin",
     "contracts/validators",
+    "contracts/yield",
 ]
 
 [workspace.dependencies]
