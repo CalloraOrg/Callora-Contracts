@@ -22,6 +22,7 @@ members = [
     "contracts/errors",
     "contracts/registry",
     "contracts/hot",
+    "contracts/admin",
 ]
 default-members = [
     "contracts/revenue_pool",
@@ -30,12 +31,12 @@ default-members = [
     "contracts/freeze",
     "contracts/helpers",
     "contracts/cold",
-    "contracts/hot",
+    "contracts/hot",    "contracts/admin",
     "contracts/validators",
 ]
 
 
-[workspace.dependencies]
+[workspace.dependencies]	
 soroban-sdk = "22"
 
 [dev-dependencies]
