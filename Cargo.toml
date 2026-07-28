@@ -40,7 +40,6 @@ members = [
     "contracts/whitelist",
     "contracts/yield",
     "contracts/emergency",
-    "contracts/rescue",
 ]
 default-members = [
     "contracts/admin",
@@ -58,6 +57,7 @@ default-members = [
     "contracts/validators",
     "contracts/vault",
     "contracts/yield",
+    "contracts/emergency",
 ]
 
 [workspace.dependencies]
