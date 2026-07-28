@@ -4,11 +4,11 @@
 //!
 //! Provides a focused, admin-gated **circuit-breaker** that halts all
 //! state-changing operations on the `hot` contract while allowing read-only
-//! views to continue serving. Two entrypoints are exposed:
+//! views to continue serving. Three functions are exposed:
 //!
+//! * [`is_paused`] — read the current flag (no auth, no side-effects).
 //! * [`do_pause`] — set the paused flag to `true` (enforces cool-off).
 //! * [`do_unpause`] — clear the paused flag to `false` (enforces cool-off).
-//! * [`is_paused`] — read the current flag (no auth, no side-effects).
 //!
 //! Both state-changing functions are cool-off-guarded (via
 //! [`crate::admin::guard`]) and require the caller to already have passed the
@@ -131,6 +131,12 @@ mod tests {
         (env, admin, client)
     }
 
+    /// Advance ledger timestamp by `secs` seconds.
+    fn advance(env: &Env, secs: u64) {
+        let now = env.ledger().timestamp();
+        env.ledger().set_timestamp(now + secs);
+    }
+
     // -----------------------------------------------------------------------
     // is_paused
     // -----------------------------------------------------------------------
@@ -164,9 +170,8 @@ mod tests {
     fn test_pause_already_paused_returns_error() {
         let (_env, admin, client) = setup_with(60);
         client.pause(&admin);
-        // Advance past cooldown so the guard does not trigger first.
-        // But AlreadyPaused is checked before guard, so even without advancing
-        // we should get AlreadyPaused, not CooldownActive.
+        // AlreadyPaused is checked before the cooldown guard; even without
+        // advancing time we get AlreadyPaused, not CooldownActive.
         let res = client.try_pause(&admin);
         assert_eq!(res, Err(Ok(HotError::AlreadyPaused)));
     }
@@ -174,23 +179,15 @@ mod tests {
     #[test]
     fn test_pause_blocked_by_cooldown() {
         let (env, admin, client) = setup_with(300);
-        // First pause succeeds.
-        client.pause(&admin);
-        // Unpause so the paused-flag guard doesn't fire.
-        client.unpause(&admin);
-        // Advance past unpause cooldown but NOT past pause cooldown.
-        // pause window: 300s from t=0
-        // unpause window: 300s from t=0 (distinct action)
-        // We need to be past unpause but not past pause:
-        // Actually both fired at t=0, advance 300s to clear both, then
-        // re-pause, re-unpause, and try to re-pause immediately.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 300);
+        // Arm the pause cooldown, then clear the paused flag via unpause.
         client.pause(&admin);
         client.unpause(&admin);
-        // Both actions fired at t=300. advance only 299s — pause still cooling.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 299);
+        // Advance past both cooldowns (both fired at t=0), then re-arm them.
+        advance(&env, 300);
+        client.pause(&admin);
+        client.unpause(&admin);
+        // Both cooldowns fired at t=300; advance only 299 s — pause still cooling.
+        advance(&env, 299);
         let res = client.try_pause(&admin);
         assert_eq!(res, Err(Ok(HotError::CooldownActive)));
     }
@@ -227,32 +224,24 @@ mod tests {
     #[test]
     fn test_unpause_blocked_by_cooldown() {
         let (env, admin, client) = setup_with(300);
+        // Arm both cooldowns at t=0, then advance past both.
         client.pause(&admin);
         client.unpause(&admin);
-        // Advance past pause cooldown (fired at t=0, +300 clears it),
-        // but unpause also fired at t=0 so it is also clear. Re-pause, re-unpause,
-        // then try again immediately.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 300);
+        advance(&env, 300);
+        // Re-pause at t=300 (pause cooldown clear). Now advance 300 more so
+        // the pause cooldown clears again, then unpause — arming the unpause
+        // cooldown at t=600.
         client.pause(&admin);
-        client.unpause(&admin);
-        // Both at t=300. advance 299 — unpause still cooling.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 299);
-        // re-pause (pause cooldown at t=300+300=600, now is 300+299=599 — still cooling)
-        // Actually pause is also cooling. We need pause to clear first.
-        // Advance 1 more second so pause clears (t=600) but unpause is still t=300+300=600 — both clear.
-        // Let me use a design where only unpause is tested: pause then immediately try unpause twice.
-        // Reset: pause was cleared, unpause was cleared at t=600.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 1); // t=600
-        client.pause(&admin); // fires at t=600
-        // unpause cooldown: fired at t=300, window=300 => ready at 600 => currently at 600 => ready
-        client.unpause(&admin); // fires at t=600 — this arms a new unpause window
-        // immediately try again — unpause cooling
+        advance(&env, 300); // t=600; pause cooldown from t=300 is now clear
+        client.unpause(&admin); // unpause fires at t=600
+        // The contract is now unpaused. Re-pause immediately (pause cooldown
+        // cleared at t=600, so this succeeds).
+        client.pause(&admin); // pause fires at t=600
+        // Now: contract is paused, unpause cooldown armed at t=600 (window=300).
+        // Advance only 299 s — unpause still cooling.
+        advance(&env, 299); // t=899
         let res = client.try_unpause(&admin);
-        // Contract is not paused now, so NotPaused fires before CooldownActive
-        assert_eq!(res, Err(Ok(HotError::NotPaused)));
+        assert_eq!(res, Err(Ok(HotError::CooldownActive)));
     }
 
     // -----------------------------------------------------------------------
@@ -265,10 +254,8 @@ mod tests {
         assert!(!client.is_paused());
         client.pause(&admin);
         assert!(client.is_paused());
-
-        // Advance 1 second so unpause cooldown clears.
-        env.ledger()
-            .set_timestamp(env.ledger().timestamp() + 1);
+        // Advance 1 second so the unpause cooldown clears.
+        advance(&env, 1);
         client.unpause(&admin);
         assert!(!client.is_paused());
     }
