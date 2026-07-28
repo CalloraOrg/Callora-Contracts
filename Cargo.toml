@@ -11,6 +11,7 @@ members = [
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/helpers",
+    "contracts/upgrade",
     "contracts/revenue_pool/fuzz",
 ]
 default-members = [
@@ -18,6 +19,7 @@ default-members = [
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/helpers",
+    "contracts/upgrade",
 ]
 
 
@@ -28,6 +30,7 @@ soroban-sdk = "22"
 callora-vault = { path = "contracts/vault" }
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
+callora-upgrade = { path = "contracts/upgrade" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
