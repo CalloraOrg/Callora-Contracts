@@ -1,7 +1,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::testutils::{storage::Instance as _, Address as _, Events as _, Ledger as _};
 use soroban_sdk::token;
 use soroban_sdk::BytesN;
 use soroban_sdk::TryFromVal;
@@ -1275,6 +1275,30 @@ fn batch_distribute_self_recipient_panics() {
 // TTL bump tests (Issue #342)
 // Tests that state persists after simulated ledger advance and views don't trigger TTL bump
 // ---------------------------------------------------------------------------
+
+#[test]
+fn view_getters_bump_instance_ttl_on_read_path() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    client.init(&admin, &usdc);
+
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + LIFETIME_THRESHOLD - 1);
+
+    let initial_ttl = env.storage().instance().get_ttl();
+    assert!(initial_ttl < BUMP_AMOUNT, "TTL should be near expiry before bump");
+
+    let _ = client.get_admin();
+    let _ = client.get_usdc_token();
+    let _ = client.is_paused();
+
+    let bumped_ttl = env.storage().instance().get_ttl();
+    assert!(bumped_ttl > initial_ttl, "view getters should bump instance TTL");
+}
 
 #[test]
 fn state_persists_after_ledger_advance() {
