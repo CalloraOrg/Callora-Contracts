@@ -147,6 +147,15 @@ impl RevenuePool {
         }
     }
 
+    /// Extend instance storage TTL on hot read paths so frequently-queried
+    /// getters do not silently archive while only being read.
+    #[inline]
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+    }
+
     fn require_not_paused(env: &Env) {
         if env
             .storage()
@@ -174,6 +183,7 @@ impl RevenuePool {
     /// # Errors
     /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn get_admin(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         Self::admin(&env)
     }
 
@@ -182,6 +192,7 @@ impl RevenuePool {
     /// # Errors
     /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn get_usdc_token(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
@@ -282,6 +293,7 @@ impl RevenuePool {
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
@@ -339,6 +351,7 @@ impl RevenuePool {
 
     /// Return the configured pause guardian, or `None` if unset.
     pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
@@ -404,6 +417,7 @@ impl RevenuePool {
 
     /// Return `true` if the revenue pool is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&Symbol::new(&env, PAUSED_KEY))
@@ -486,6 +500,7 @@ impl RevenuePool {
 
     /// Return the cumulative USDC yield deposited via `deposit_yield`. Defaults to 0.
     pub fn get_cumulative_yield_deposited(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, CUMULATIVE_YIELD_DEPOSITED_KEY))
@@ -498,6 +513,7 @@ impl RevenuePool {
 
     /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
     pub fn get_max_distribute(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
@@ -710,6 +726,7 @@ impl RevenuePool {
     /// # Errors
     /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn balance(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         let usdc_addr: Address = env
             .storage()
             .instance()
@@ -749,6 +766,7 @@ impl RevenuePool {
 
     /// Return the stored WASM version hash, or `None` if never upgraded.
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, VERSION_KEY))
