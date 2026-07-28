@@ -15,7 +15,7 @@ All inline `Symbol::new(&env, "...")` event topic literals have been extracted f
 
 - [`contracts/vault/src/events.rs`](contracts/vault/src/events.rs) — 23 topics
 - [`contracts/settlement/src/events.rs`](contracts/settlement/src/events.rs) — 8 topics
-- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 10 topics
+- [`contracts/revenue_pool/src/events.rs`](contracts/revenue_pool/src/events.rs) — 12 topics
 
 Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
 a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
@@ -565,6 +565,44 @@ Emitted when the nominee accepts the admin role (step 2 of 2).
 
 ---
 
+### `pause_guardian_set`
+
+Emitted when the admin sets or replaces the emergency pause guardian.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_set"`                   |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | `guardian` — address allowed to pause    |
+
+```json
+{
+  "topics": ["pause_guardian_set", "GADMIN..."],
+  "data": "GGUARDIAN..."
+}
+```
+
+---
+
+### `pause_guardian_cleared`
+
+Emitted when the admin clears the emergency pause guardian role.
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_guardian_cleared"`               |
+| topic 1 | topics   | Address | `caller` — current admin                 |
+| data    | data     | Address | previous guardian address                |
+
+```json
+{
+  "topics": ["pause_guardian_cleared", "GADMIN..."],
+  "data": "GOLD_GUARDIAN..."
+}
+```
+
+---
+
 ### `receive_payment`
 
 Emitted when the admin logs an inbound payment from the vault.
@@ -675,6 +713,415 @@ three payments, three `batch_distribute` events are emitted in order.
 
 ---
 
+
+
+---
+
+### `pause_set`
+
+Emitted by both `pause()` (data = `true`) and `unpause()` (data = `false`) to signal
+a change in the pool's pause state. Only the admin may trigger either function.
+
+| Index   | Location | Type    | Description                                      |
+|---------|----------|---------|--------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"pause_set"`                                    |
+| topic 1 | topics   | Address | `caller` -- the admin who called pause/unpause   |
+| data    | data     | bool    | `true` = pool is now paused; `false` = unpaused  |
+
+```json
+{ "topics": ["pause_set", "GADMIN..."], "data": true }
+```
+
+> While paused, `distribute` and `batch_distribute` are blocked.
+> Admin rotation (`set_admin`, `claim_admin`) remains available.
+
+---
+
+### `admin_cancelled`
+
+Emitted when the current admin cancels a pending two-step admin transfer via
+`cancel_admin_transfer()`. Both the current and the pending admin are recorded as topics
+so indexers can link the cancellation to the in-flight handover without a data decode.
+
+| Index   | Location | Type    | Description                                        |
+|---------|-----------|---------|----------------------------------------------------|
+| topic 0 | topics    | Symbol  | `"admin_cancelled"`                                |
+| topic 1 | topics    | Address | `current_admin` -- admin who issued the cancel     |
+| topic 2 | topics    | Address | `pending_admin` -- nominee whose claim is revoked  |
+| data    | data      | ()      | empty                                              |
+
+```json
+{
+  "topics": ["admin_cancelled", "GCURRENT_ADMIN...", "GPENDING_ADMIN..."],
+  "data": null
+}
+```
+
+> After this event `get_pending_admin()` returns `None`. The current admin remains
+> unchanged and may initiate a new transfer at any time.
+
+---
+
+### `upgrade_started`, `upgrade_completed`, `upgraded`
+
+A successful `upgrade()` call publishes three events in this order:
+
+1. `upgrade_started` — published *before* the host swaps the contract WASM.
+2. `upgrade_completed` — published *after* the WASM swap and the
+   `ContractVersion` storage write.
+3. `upgraded` — legacy single-event shape retained for backwards
+   compatibility with off-chain subscribers written against the
+   pre-lifecycle schema. New indexers should subscribe to the structured
+   pair above.
+
+Receipt of `upgrade_started` without a matching `upgrade_completed` at the
+same `(ledger, timestamp)` means the host trapped between the two emits;
+the WASM swap and `ContractVersion` write were rolled back.
+
+#### `upgrade_started` and `upgrade_completed`
+
+| Index   | Location | Type           | Description                                                  |
+|---------|----------|----------------|--------------------------------------------------------------|
+| topic 0 | topics   | Symbol         | `"upgrade_started"` or `"upgrade_completed"`                 |
+| topic 1 | topics   | Address        | `caller` -- the address that authorized `upgrade()`          |
+| data    | data     | `UpgradeEvent` | structured payload (see below)                               |
+
+`UpgradeEvent` fields:
+
+| Field           | Type                  | Description                                                                 |
+|-----------------|-----------------------|-----------------------------------------------------------------------------|
+| `caller`        | `Address`             | Same as topic 1; included in data for indexers that store the payload only. |
+| `previous_wasm` | `Option<BytesN<32>>`  | Hash recorded by the prior `upgrade()`. `None` on the first upgrade.        |
+| `new_wasm`      | `BytesN<32>`          | Hash being deployed by this call.                                           |
+| `ledger`        | `u32`                 | `env.ledger().sequence()` captured before the WASM swap.                    |
+| `timestamp`     | `u64`                 | `env.ledger().timestamp()` captured before the WASM swap.                   |
+
+```json
+{
+  "topics": ["upgrade_completed", "GADMIN..."],
+  "data": {
+    "caller": "GADMIN...",
+    "previous_wasm": "a1b2c3d4...",
+    "new_wasm": "f0e1d2c3...",
+    "ledger": 1234567,
+    "timestamp": 1700000000
+  }
+}
+```
+
+### `upgraded` (legacy)
+
+| Index   | Location | Type       | Description                                       |
+|---------|----------|------------|---------------------------------------------------|
+| topic 0 | topics   | Symbol     | `"upgraded"`                                      |
+| topic 1 | topics   | Address    | `caller` -- admin who executed the upgrade        |
+| data    | data     | BytesN<32> | `new_wasm_hash` -- hash of the deployed WASM blob |
+
+```json
+{
+  "topics": ["upgraded", "GADMIN..."],
+  "data": "a1b2c3d4e5f6..."
+}
+```
+
+> `get_version()` returns the new hash immediately after the transaction. Only
+> one WASM version is stored; calling `upgrade()` again overwrites the
+> previous value (which is then visible to consumers as the next event's
+> `previous_wasm`).
+---
+
+
+### `treasury_transfer_started`
+
+Emitted when the admin nominates a new treasury via `set_treasury()`. The nominee
+must call `accept_treasury()` before it becomes authorized to call `deposit_yield()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_transfer_started"`                 |
+| topic 1 | topics   | Address | `caller` -- current admin that nominated the treasury |
+| data[0] | data     | Address | `old_treasury` -- currently active treasury   |
+| data[1] | data     | Address | `new_treasury` -- nominated treasury          |
+
+---
+
+### `treasury_transfer_completed`
+
+Emitted when the pending treasury accepts the nomination via `accept_treasury()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_transfer_completed"`               |
+| topic 1 | topics   | Address | `new_treasury` -- accepting treasury          |
+| data    | data     | Address | `old_treasury` -- previously active treasury  |
+
+---
+
+### `treasury_cancelled`
+
+Emitted when the admin cancels a pending treasury nomination via
+`cancel_treasury_transfer()`.
+
+| Index   | Location | Type    | Description                                  |
+|---------|----------|---------|----------------------------------------------|
+| topic 0 | topics   | Symbol  | `"treasury_cancelled"`                        |
+| topic 1 | topics   | Address | `caller` -- current admin that cancelled      |
+| data    | data     | Address | `pending_treasury` -- cancelled nominee       |
+
+---
+
+### `yield_deposited`
+
+Emitted when the treasury deposits accumulated protocol yield into the revenue pool
+via `deposit_yield()`. The cumulative tracker is updated atomically with the transfer.
+
+| Index   | Location | Type    | Description                                            |
+|---------|----------|---------|--------------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"yield_deposited"`                                    |
+| topic 1 | topics   | Address | `treasury` -- configured treasury that called `deposit_yield` |
+| data[0] | data     | i128    | `amount` -- USDC deposited in this call (stroops)       |
+| data[1] | data     | Symbol  | `source` -- short label, e.g. `"fees"` or `"yield"`    |
+| data[2] | data     | i128    | `cumulative_yield_deposited` -- running total after deposit |
+
+```json
+{
+  "topics": ["yield_deposited", "GTREASURY..."],
+  "data": [5000000, "fees", 42000000]
+}
+```
+
+> `cumulative_yield_deposited` equals `get_cumulative_yield_deposited()` immediately
+> after the emitting transaction. It never decreases and panics on `i128` overflow.
+
+---
+
+### `admin_broadcast`
+
+Emitted when the admin publishes an emergency message via `broadcast()`.
+No tokens are moved; this is an out-of-band signaling channel for indexers and frontends.
+
+| Index   | Location | Type             | Description                                    |
+|---------|----------|------------------|------------------------------------------------|
+| topic 0 | topics   | Symbol           | `"admin_broadcast"`                            |
+| topic 1 | topics   | Address          | `caller` -- must be current admin               |
+| data    | data     | `AdminBroadcast`   | struct with `severity` and `message` fields    |
+
+`AdminBroadcast` struct fields:
+
+| Field      | Type     | Description                                      |
+|------------|----------|--------------------------------------------------|
+| `severity` | Severity | One of `Info`, `Warn`, or `Crit`                 |
+| `message`  | String   | Broadcast text; max 256 characters, never empty  |
+
+```json
+{
+  "topics": ["admin_broadcast", "GADMIN..."],
+  "data": { "severity": "Crit", "message": "Emergency: pausing distribution pending audit." }
+}
+```
+
+> Indexers SHOULD alert on `severity = Crit`. The `message` field is capped at
+> 256 characters; longer strings are rejected before the event is emitted.
+
+---
+
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain via
+`propose_emergency_drain()`. The drain cannot be executed until the 24-hour
+timelock has elapsed.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_proposed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that proposed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details (see below)                 |
+
+`PendingEmergencyDrain` fields:
+
+| Field           | Type      | Description                                              |
+|-----------------|-----------|----------------------------------------------------------|
+| `to`            | `Address` | Destination address for the drained USDC                 |
+| `amount`        | `i128`    | Amount of USDC to drain                                  |
+| `proposed_at`   | `u64`     | Ledger timestamp when the proposal was created           |
+| `execute_after` | `u64`     | Earliest timestamp at which the drain may be executed    |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> Only one emergency drain may be pending at a time. Re-proposing replaces
+> the previous proposal and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a pending emergency drain after the
+timelock has expired via `execute_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_executed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that executed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details at time of execution         |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, the pending drain is cleared. The USDC has been
+> transferred to `to`.
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain via
+`cancel_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_cancelled"`                |
+| topic 1 | topics   | Address                 | `admin` — current admin that cancelled       |
+| data    | data     | `PendingEmergencyDrain` | proposal details of the cancelled drain       |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, `get_pending_emergency_drain()` returns `None`.
+
+---
+
+### `swept`
+
+Emitted when the vault owner sweeps surplus USDC to a sibling contract via
+`sweep_idle_balance()`. Tokens are moved and `meta.balance` is decremented
+atomically in the same transaction.
+
+| Index   | Location | Type               | Description                                         |
+|---------|----------|--------------------|-----------------------------------------------------|
+| topic 0 | topics   | Symbol             | `"swept"`                                           |
+| topic 1 | topics   | Address            | `owner` — vault owner who called `sweep_idle_balance` |
+| topic 2 | topics   | SweepDestination   | `Settlement` or `RevenuePool` variant               |
+| data    | data     | (i128, i128)       | `(amount, new_balance)` after sweep                 |
+
+```json
+{
+  "topics": ["swept", "GOWNER...", "Settlement"],
+  "data": [300000, 700000]
+}
+```
+
+**`SweepDestination` encoding:**
+- `Settlement` — USDC was forwarded to the address stored under `StorageKey::Settlement`.
+- `RevenuePool` — USDC was forwarded to the address stored under `StorageKey::RevenuePool`.
+
+**Preconditions (no event emitted if these fail):**
+- Vault must not be paused (`VaultError::Paused`).
+- Caller must be the vault owner (`VaultError::Unauthorized`).
+- `amount > 0` (`VaultError::AmountNotPositive`).
+- `amount ≤ meta.balance` (`VaultError::InsufficientBalance`).
+- For `Settlement`: `set_settlement` must have been called (`VaultError::SettlementNotSet`).
+- For `RevenuePool`: a revenue pool must be configured (`VaultError::NotInitialized`).
+
+**Indexer note:** After this event, `balance()` returns `new_balance`. The USDC
+has left the vault on-ledger; `sweep_idle_balance` does **not** call
+`settlement.receive_payment()` — it is a raw token transfer only.
+
+---
+
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain of USDC to a
+designated address via `propose_emergency_drain()`. No tokens are moved yet;
+the drain becomes executable after `EMERGENCY_DRAIN_TIMELOCK_SECONDS` (24 hours).
+
+| Index   | Location | Type                  | Description                                    |
+|---------|----------|-----------------------|-------------------------------------------------|
+| topic 0 | topics   | Symbol                | `"emergency_drain_proposed"`                    |
+| topic 1 | topics   | Address                | `admin` — current admin who proposed the drain  |
+| data    | data     | `PendingEmergencyDrain`| struct with `to`, `amount`, `proposed_at`, `execute_after` |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
+
+> Re-proposing while a drain is already pending replaces the prior proposal
+> and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a previously proposed emergency drain after
+its timelock has expired via `execute_emergency_drain()`. The proposed USDC
+amount is transferred from the contract to the destination address, and the
+proposal is consumed to prevent replay.
+
+| Index   | Location | Type    | Description                                          |
+|---------|----------|---------|-------------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_executed"`                          |
+| topic 1 | topics   | Address | `admin` — current admin who executed the drain        |
+| data    | data     | `(Address, i128, u64, u64)` | `(to, amount, proposed_at, executed_at)` |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": ["GTREASURY...", 5000000, 1700000000, 1700086400]
+}
+```
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain proposal via
+`cancel_emergency_drain()` before it is executed. No tokens are moved.
+
+| Index   | Location | Type                   | Description                                     |
+|---------|----------|------------------------|--------------------------------------------------|
+| topic 0 | topics   | Symbol                 | `"emergency_drain_cancelled"`                    |
+| topic 1 | topics   | Address                 | `admin` — current admin who cancelled the drain  |
+| data    | data     | `PendingEmergencyDrain` | the cancelled proposal, unchanged                |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
+
+---
+
 ## Contract: `callora-settlement` (v0.1.0)
 
 Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
@@ -703,6 +1150,32 @@ no events are emitted and state is rolled back.
 - `to_pool = true` with `developer = Some(_)` â€” `"developer address must be None when to_pool=true"`.
 - `to_pool = false` with `developer = None` â€” `"developer address required when to_pool=false"`.
 - Arithmetic overflow on pool or developer balance â€” `"pool balance overflow"` / `"developer balance overflow"`.
+
+---
+
+### `initialized`
+
+Emitted once by `init()` when the settlement contract is first configured.
+
+| Index   | Location | Type    | Description                                     |
+|---------|----------|---------|-------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"initialized"`                                 |
+| topic 1 | topics   | Address | `admin` — initial admin address                 |
+| topic 2 | topics   | Address | `vault_address` — initial authorized vault      |
+| data    | data     | GlobalPool | pool snapshot at init time (`total_balance=0`) |
+
+```json
+{
+  "topics": ["initialized", "GADMIN...", "GVAULT..."],
+  "data": { "total_balance": 0, "last_updated": 1700000000 }
+}
+```
+
+**Indexer guidance.**
+- `initialized` is emitted exactly once per contract lifetime; a second `init`
+  call panics with `AlreadyInitialized` before reaching this emit.
+- Use this event to index the contract's admin and vault addresses from genesis
+  without querying `get_admin()` / `get_vault()` separately.
 
 ---
 
@@ -807,7 +1280,41 @@ after the matching `payment_received` event.
 
 ---
 
-### `vault_changed`
+### `deposit`
+
+Emitted alongside every `balance_credited` event, once per developer credit in
+both `receive_payment()` (`to_pool = false`) and `batch_receive_payment()`.
+It provides a compact deposit-centric view for indexers that don't need the
+full `PaymentReceivedEvent` context.
+
+| Index       | Location | Type    | Description                                          |
+|-------------|----------|---------|------------------------------------------------------|
+| topic 0     | topics   | Symbol  | `"deposit"`                                          |
+| topic 1     | topics   | Address | `developer` — address receiving the credit           |
+| `developer` | data     | Address | same as topic 1; duplicated for data-only indexers   |
+| `token`     | data     | Address | token contract address for this deposit              |
+| `amount`    | data     | i128    | deposit amount in USDC micro-units; invariant `> 0`  |
+
+```json
+{
+  "topics": ["deposit", "GDEV..."],
+  "data": {
+    "developer": "GDEV...",
+    "token": "GUSDC...",
+    "amount": 2500000
+  }
+}
+```
+
+**Indexer guidance.**
+- `deposit` is always emitted **after** `balance_credited` for the same
+  developer credit within the same transaction.
+- `deposit` is **never** emitted for pool credits (`to_pool = true`).
+- For batch credits, `N` items produce exactly `N` `deposit` events.
+- The `token` field identifies which asset was deposited; required for
+  multi-asset environments.
+
+---
 
 Emitted by `set_vault()` when the admin updates the registered vault address.
 
@@ -920,6 +1427,7 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
+| `swept`                  | vault           | `sweep_idle_balance()`                   |
 | `init`                   | revenue-pool    | `init()`                                 |
 | `admin_changed`          | revenue-pool    | `set_admin()`                            |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
@@ -928,6 +1436,17 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `receive_payment`        | revenue-pool    | `receive_payment()`                      |
 | `distribute`             | revenue-pool    | `distribute()`                           |
 | `batch_distribute`       | revenue-pool    | each payment in `batch_distribute()`     |
+| `pause_set`              | revenue-pool    | `pause()` / `unpause()`                  |
+| `admin_cancelled`        | revenue-pool    | `cancel_admin_transfer()`                |
+| `upgraded`               | revenue-pool    | `upgrade()`                              |
+| `treasury_transfer_started` | revenue-pool | `set_treasury()`                         |
+| `treasury_transfer_completed` | revenue-pool | `accept_treasury()`                      |
+| `treasury_cancelled`   | revenue-pool    | `cancel_treasury_transfer()`             |
+| `yield_deposited`        | revenue-pool    | `deposit_yield()`                        |
+| `admin_broadcast`        | revenue-pool    | `broadcast()`                            |
+| `emergency_drain_proposed` | revenue-pool  | `propose_emergency_drain()`              |
+| `emergency_drain_executed` | revenue-pool  | `execute_emergency_drain()`              |
+| `emergency_drain_cancelled` | revenue-pool | `cancel_emergency_drain()`               |
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
@@ -946,3 +1465,6 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.0.1   | revenue-pool  | Added `admin_changed` event on `set_admin` for explicit old/new admin intent |
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
+| 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |
+| 0.2.0   | revenue-pool  | Added `emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled` events |
+| 0.2.0   | settlement    | Added `developer_min_balance_changed` event on `set_developer_min_balance()` (Issue #633) |

@@ -1,0 +1,14 @@
+{
+  "contract": "callora-registry",
+  "version": "0.1.0",
+  "description": "Offering registry for the Callora API marketplace. Publishes metadata through a catalog contract and tracks registered offerings.",
+  "crate": "callora-registry",
+  "source": "contracts/registry/src/lib.rs",
+  "cross_contract": {
+    "catalog": "OfferingCatalog::put_offering — invoked before persisting registry state",
+    "token_balance": "token::Client::balance — optional gate in register_offering_with_balance_gate"
+  },
+  "testing": {
+    "xcontract": "contracts/registry/tests/xcontract.rs covers catalog and token callee panic/revert safety"
+  }
+}

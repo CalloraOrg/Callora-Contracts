@@ -37,6 +37,7 @@ Implemented a strict separation of concerns:
 - Overflow protection with `checked_add`
 - Balance check before transfers
 - Authorization enforcement
+- Recipient address-shape validation (`distribute` rejects non-account `Address` values)
 
 ### 4. Extensive Test Coverage ✅
 

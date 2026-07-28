@@ -29,8 +29,8 @@ The **Owner** has the highest level of privilege. They are responsible for the m
 The **Admin** role is designed for tactical system management. By default, the Admin is the Owner upon initialization.
 
 - **Management**: The current Admin can transfer the role via `set_admin`.
-- **Primary Power**: Can call `distribute` and `set_settlement`.
-- **Use Case**: Used by settlement services or automated distribution logic.
+- **Primary Power**: Can call `distribute`, `set_settlement`, and `nuclear_pause`.
+- **Use Case**: Used by settlement services, automated distribution logic, or a Stellar multisig emergency council. When Admin is a multisig account, `require_auth` enforces native threshold and signer-weight policy for `nuclear_pause`.
 
 ### 3. Authorized Caller
 
@@ -39,6 +39,7 @@ An **Authorized Caller** is an account (typically a backend service or matching 
 - **Management**: Set by the **Owner** via `set_authorized_caller`.
 - **Permission**: Required to call deduction entrypoints.
 - **Implicit Permission**: The **Owner** is always an implicit Authorized Caller.
+- **Security Validation**: Fuzz target `fuzz/targets/set_auth.rs` stresses auth/nonce invariants for `set_authorized_caller`.
 
 ### 4. Allowed Depositor
 

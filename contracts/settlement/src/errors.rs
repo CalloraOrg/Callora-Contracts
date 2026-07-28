@@ -23,6 +23,20 @@ use soroban_sdk::contracterror;
 /// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
 /// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
 /// | 15   | ReasonTooLong                | Reason `Symbol` exceeds the allowed length           |
+/// | 16   | MigrationSameAddress         | Migration source and target are identical            |
+/// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
+/// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
+/// | 19   | TimelockOverflow             | Timelock timestamp addition overflowed                |
+/// | 20   | MigrationNotFound            | No migration is pending for the source                |
+/// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
+/// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
+/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
+/// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
+/// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
+/// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
+/// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
+/// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
+/// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -42,4 +56,18 @@ pub enum SettlementError {
     DailyWithdrawCapExceeded = 13,
     GasExhaustionRisk = 14,
     ReasonTooLong = 15,
+    MigrationSameAddress = 16,
+    InvalidMigrationTarget = 17,
+    NoDeveloperBalance = 18,
+    TimelockOverflow = 19,
+    MigrationNotFound = 20,
+    TimelockNotExpired = 21,
+    MigrationBalanceChanged = 22,
+    OverDraft = 23,
+    InvalidClaimWindow = 24,
+    ClaimWindowClosed = 25,
+    MinBalanceViolation = 26,
+    ReplayDetected = 27,
+    BatchEmpty = 28,
+    BatchTooLarge = 29,
 }

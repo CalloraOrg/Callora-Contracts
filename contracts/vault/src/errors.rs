@@ -42,6 +42,10 @@ use soroban_sdk::contracterror;
 /// | 32   | StaleNonce                     | Rotation nonce does not match the stored current nonce   |
 /// | 33   | NewRevenuePoolSameAsCurrent    | Proposed revenue pool matches the current revenue pool   |
 /// | 34   | NoRevenuePoolTransferPending   | No revenue-pool transfer is pending                      |
+/// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
+/// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
+/// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
+/// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -114,4 +118,32 @@ pub enum VaultError {
     NewRevenuePoolSameAsCurrent = 33,
     /// No revenue pool transfer is pending (code 34).
     NoRevenuePoolTransferPending = 34,
+    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
+    Slippage = 35,
+    /// Rate limit exceeded for the developer (code 36).
+    RateLimited = 36,
+    /// Operation is rejected because the vault is paused (code 37).
+    PausedState = 37,
+    /// Hot BPS must be between 1 and 10000 (code 38).
+    InvalidHotBps = 38,
+    /// Rebalance threshold must be between 1 and 10000 (code 39).
+    InvalidRebalanceThreshold = 39,
+    /// Cold signer set cannot be empty (code 40).
+    ColdSignersEmpty = 40,
+    /// Cold threshold must be between 1 and signer count (code 41).
+    InvalidColdThreshold = 41,
+    /// Duplicate address found in cold signer set (code 42).
+    DuplicateColdSigner = 42,
+    /// Deposit would exceed the configured reserve cap (code 43).
+    ExceedsReserveCap = 43,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    ///
+    /// # When returned
+    /// - `deposit()` when a non-owner address attempts to deposit and the caller
+    ///   is not present in the configured allowlist.
+    ///
+    /// # Security note
+    /// Returned instead of panicking to provide machine-readable feedback to
+    /// integrators and prevent information leakage.
+    CallerNotInAllowlist = 44,
 }

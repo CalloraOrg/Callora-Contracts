@@ -31,6 +31,9 @@ fn error_code_docs_list_every_revenue_pool_code() {
     ];
 
     for line in expected_lines {
-        assert!(docs.contains(line), "missing revenue-pool docs line: {line}");
+        assert!(
+            docs.contains(line),
+            "missing revenue-pool docs line: {line}"
+        );
     }
 }

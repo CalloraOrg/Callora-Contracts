@@ -159,6 +159,12 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 - **Excessive Single-Leg Distribution:** A compromised admin could still try to distribute a huge amount in a single `distribute()` or individual `batch_distribute` leg, increasing the blast radius for a compromised admin key.
   - *Mitigation:* `callora-revenue-pool` now exposes a configurable `max_distribute` cap. Every `distribute` and every individual `batch_distribute` payment leg is validated against this cap. The cap is admin-gated, must be positive, and defaults to `i128::MAX` until configured.
 
+- **Emergency Pause Delegation:** The admin can configure a `pause_guardian` for operational emergencies where the pool needs to be stopped quickly without sharing full admin power.
+  - *Mitigation:* `pause_guardian` is scoped to `pause` only. It cannot unpause, distribute funds, rotate admin, update caps, clear or replace itself, or upgrade the contract. `set_pause_guardian` and `clear_pause_guardian` are admin-only and emit dedicated events for monitoring.
+
+- **Emergency Drain (Multisig + Timelock):** The admin can move the entire pool balance to a treasury address as a last-resort evacuation. Without controls, this could be exploited by a compromised admin key.
+  - *Mitigation:* `propose_emergency_drain` stores a `PendingEmergencyDrain` snapshot. `execute_emergency_drain` is only callable after `EMERGENCY_DRAIN_TIMELOCK_SECONDS` (86 400 s = 24 h) have elapsed, giving operators a window to call `cancel_emergency_drain` before funds move. A new proposal replaces any existing one, resetting the clock. When the admin is a Stellar multisig account, `require_auth` enforces the native multi-signature threshold automatically — no additional multi-sig logic is required in the contract. Every state change emits an audit event (`emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled`).
+
 ### Input Validation
 
 - [ ] All amounts validated to be > 0
@@ -266,4 +272,3 @@ As part of the authorization matrix hardening for the `callora-settlement` contr
 - Comprehensive negative tests have been added to `contracts/settlement/src/test.rs` covering `receive_payment`, `set_admin`, `set_vault`, and `get_all_developer_balances`.
 - Overflow regression tests now assert `receive_payment` panics with `"pool balance overflow"` and `"developer balance overflow"` when credits would exceed `i128::MAX`.
 - Admin rotation (two-step) has been verified to correctly gate access during the transition period.
-

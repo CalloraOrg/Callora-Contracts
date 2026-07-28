@@ -1,0 +1,24 @@
+[package]
+name = "callora-migrate-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "migrate"
+path = "targets/main.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "22", features = ["testutils"] }
+callora-settlement = { path = "../../settlement" }
+
+[profile.release]
+panic = "abort"
+overflow-checks = true

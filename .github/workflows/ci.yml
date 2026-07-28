@@ -19,6 +19,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -32,10 +33,13 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check format (workspace crates)
-        run: cargo fmt --package callora-vault --package callora-settlement --package callora-revenue-pool --package callora-distribute -- --check
+        run: cargo fmt --workspace -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Build settlement WASM for tests
+        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       - name: Test (all workspace members)
         run: cargo test --workspace
@@ -48,6 +52,8 @@ jobs:
 
       - name: Install Rust Nightly
         uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -59,6 +65,9 @@ jobs:
           key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-nightly-
+
+      - name: Build settlement WASM for tests
+        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       - name: Test (with proptest long runs)
         run: cargo test --workspace -- --nocapture
@@ -90,3 +99,15 @@ jobs:
         run: |
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh
+
+  event-shape:
+    name: Event shape vs schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check revenue_pool event shape matches EVENT_SCHEMA.md
+        shell: bash
+        run: |
+          chmod +x scripts/check-event-shape.sh
+          ./scripts/check-event-shape.sh

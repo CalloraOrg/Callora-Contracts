@@ -11,6 +11,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Authorized Caller**: Optional address permitted to trigger `deduct` operations.
 - **Pending Owner**: Nominee awaiting acceptance of the owner role.
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
+- **Admin / Multisig Admin**: Current admin address. If this address is a Stellar multisig account, native thresholds and signer weights are enforced by `require_auth`.
 - **Pending Revenue Pool**: Proposed revenue pool address awaiting acceptance.
 
 ### Authorization Matrix
@@ -35,6 +36,7 @@ The Callora Vault implements role-based access control for deposit operations to
 | `accept_revenue_pool` | ❌ | ❌ | ❌ | ❌ | ✅ |
 | `cancel_revenue_pool` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `pause` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `nuclear_pause` | ❌ | ❌ | ❌ | ❌ | Admin only |
 | `unpause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ### Security Model
@@ -42,6 +44,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Cancellation Safety**: Provides `cancel_ownership_transfer` and `cancel_admin_transfer` functions to abort mistaken nominations before acceptance.
 - **Restricted Depositors**: Only owner and explicitly allowed depositors can increase vault balance.
+- **Multisig-Guarded Nuclear Pause**: `nuclear_pause(caller)` accepts only the current admin address and calls `caller.require_auth()`, so deployments that set admin to a Stellar multisig account get native threshold enforcement for the emergency pause.
 - **Nonce-Bound Authorized-Caller Rotation**: `set_authorized_caller` requires the caller to supply the current monotonic nonce (see below), preventing a leaked owner signature from being replayed to reinstate a stale `authorized_caller`.
 
 ### Authorized-Caller Replay Protection
@@ -94,6 +97,11 @@ Allows the current admin to cancel a pending admin transfer before the nominee a
 ### Overview
 The Callora Settlement contract tracks individual developer balances and global protocol revenue. It enforces strict access control for incoming payments and administrative updates.
 
+Developer address compliance recoveries use `propose_balance_migration` and
+`execute_balance_migration`. Both calls require authorization by the current
+admin address, including its native Stellar multisig thresholds, and execution
+is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MIGRATION.md).
+
 ### Roles
 - **Admin**: Primary authority over contract configuration and sensitive data.
 - **Vault**: The registered vault contract authorized to send payments.
@@ -111,11 +119,14 @@ The Callora Settlement contract tracks individual developer balances and global 
 | `propose_vault` | ✅ | ❌ | ❌ | ❌ |
 | `accept_vault` | ✅ | ✅ | ❌ | ❌ |
 | `set_vault` (alias of `propose_vault`) | ✅ | ❌ | ❌ | ❌ |
+| `set_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
+| `clear_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
 | `get_all_developer_balances` | ✅ | ❌ | ❌ | ❌ |
 
 ### Security Model
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Two-Step Vault Rotation**: Prevents accidentally misrouting settlement credits by requiring the proposed vault to accept (or the admin to finalize).
+- **Per-Developer Claim Windows**: Admins may configure inclusive ledger timestamp windows that restrict when each developer can claim accrued settlement balance. Developers without a configured window remain unrestricted.
 - **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
 - **Cancellation Safety**: The admin can invoke `cancel_admin_transfer` to clear a mistaken nomination.
 
@@ -129,20 +140,28 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 ### Roles
 - **Admin**: Handles revenue distributions and nominates administrative successions.
 - **Pending Admin**: A nominated account that has to explicitly accept the role to become the Admin.
+- **Pause Guardian**: Optional emergency role that may pause the revenue pool without receiving any distribution, unpause, upgrade, or admin-management authority.
 
 ### Authorization Matrix
 
-| Function | Admin | Pending Admin | Others |
-|----------|-------|---------------|--------|
-| `distribute` | ✅ | ❌ | ❌ |
-| `batch_distribute` | ✅ | ❌ | ❌ |
-| `set_admin` | ✅ | ❌ | ❌ |
-| `accept_admin` | ❌ | ✅ | ❌ |
-| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ |
-| `cancel_admin_transfer` | ✅ | ❌ | ❌ |
+| Function | Admin | Pending Admin | Pause Guardian | Others |
+|----------|-------|---------------|----------------|--------|
+| `distribute` | ✅ | ❌ | ❌ | ❌ |
+| `batch_distribute` | ✅ | ❌ | ❌ | ❌ |
+| `pause` | ✅ | ❌ | ✅ | ❌ |
+| `unpause` | ✅ | ❌ | ❌ | ❌ |
+| `set_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `clear_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
+| `set_admin` | ✅ | ❌ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ | ❌ |
+| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
 
 ### Cancellation Safety
 The current admin can call `cancel_admin_transfer` to abort a pending admin nomination.
+
+### Pause Guardian Safety
+The current admin can call `set_pause_guardian` to delegate emergency pause authority to a narrow role, and `clear_pause_guardian` to remove that role. The pause guardian can only call `pause`; it cannot unpause, distribute funds, rotate admin, change caps, clear or replace itself, or upgrade the contract.
 
 ---
 
@@ -175,3 +194,9 @@ Run tests with:
 ```bash
 cargo build --workspace --release --target=wasm32-unknown-unknown
 ```
+-| `set_allowed_depositor` | ✅ | ❌ | ❌ | ❌ | ❌ |
+-| `clear_allowed_depositors` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `add_address` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `clear_all` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `get_allowlist` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
++| `is_authorized_depositor` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |

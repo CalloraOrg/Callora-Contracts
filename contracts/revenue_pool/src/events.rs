@@ -44,6 +44,20 @@ pub fn event_admin_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "admin_cancelled")
 }
 
+/// Returns the Symbol for the `"pause_guardian_set"` event topic.
+///
+/// Emitted when the admin sets or replaces the emergency pause guardian.
+pub fn event_pause_guardian_set(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_set")
+}
+
+/// Returns the Symbol for the `"pause_guardian_cleared"` event topic.
+///
+/// Emitted when the admin clears the emergency pause guardian.
+pub fn event_pause_guardian_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_guardian_cleared")
+}
+
 /// Returns the Symbol for the `"pause_set"` event topic.
 ///
 /// Emitted by both `pause` (with data `true`) and `unpause` (with data `false`)
@@ -66,6 +80,30 @@ pub fn event_receive_payment(env: &Env) -> Symbol {
 /// revenue pool via `deposit_yield`.
 pub fn event_yield_deposited(env: &Env) -> Symbol {
     Symbol::new(env, "yield_deposited")
+}
+
+/// Returns the Symbol for the `"treasury_transfer_started"` event topic.
+///
+/// Emitted when the admin nominates a new treasury via [`RevenuePool::set_treasury`].
+/// The nominee must call [`RevenuePool::accept_treasury`] to complete the transfer.
+pub fn event_treasury_transfer_started(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_transfer_started")
+}
+
+/// Returns the Symbol for the `"treasury_transfer_completed"` event topic.
+///
+/// Emitted when the pending treasury accepts the nomination via
+/// [`RevenuePool::accept_treasury`], completing the two-step handover.
+pub fn event_treasury_transfer_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_transfer_completed")
+}
+
+/// Returns the Symbol for the `"treasury_cancelled"` event topic.
+///
+/// Emitted when the admin cancels a pending treasury nomination via
+/// [`RevenuePool::cancel_treasury_transfer`].
+pub fn event_treasury_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "treasury_cancelled")
 }
 
 /// Returns the Symbol for the `"set_max_distribute"` event topic.
@@ -102,6 +140,30 @@ pub fn event_upgraded(env: &Env) -> Symbol {
 /// Emitted when the admin broadcasts an emergency message.
 pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
+}
+
+/// Returns the Symbol for the `"emergency_drain_proposed"` event topic.
+///
+/// Emitted when the admin proposes a timelocked emergency drain via
+/// [`RevenuePool::propose_emergency_drain`].
+pub fn event_emergency_drain_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_proposed")
+}
+
+/// Returns the Symbol for the `"emergency_drain_executed"` event topic.
+///
+/// Emitted when the admin executes a pending emergency drain after the
+/// timelock has expired via [`RevenuePool::execute_emergency_drain`].
+pub fn event_emergency_drain_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_executed")
+}
+
+/// Returns the Symbol for the `"emergency_drain_cancelled"` event topic.
+///
+/// Emitted when the admin cancels a pending emergency drain via
+/// [`RevenuePool::cancel_emergency_drain`].
+pub fn event_emergency_drain_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_cancelled")
 }
 
 #[cfg(test)]
@@ -156,6 +218,26 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves event_pause_guardian_set still maps to exactly the bytes for "pause_guardian_set".
+    #[test]
+    fn test_event_pause_guardian_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_set(&env),
+            Symbol::new(&env, "pause_guardian_set")
+        );
+    }
+
+    /// Snapshot: proves event_pause_guardian_cleared still maps to exactly the bytes for "pause_guardian_cleared".
+    #[test]
+    fn test_event_pause_guardian_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_pause_guardian_cleared(&env),
+            Symbol::new(&env, "pause_guardian_cleared")
+        );
+    }
+
     /// Snapshot: proves event_pause_set still maps to exactly the bytes for "pause_set".
     #[test]
     fn test_event_pause_set_bytes() {
@@ -173,13 +255,30 @@ mod tests {
         );
     }
 
-    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
     #[test]
-    fn test_event_yield_deposited_bytes() {
+    fn test_event_treasury_transfer_started_bytes() {
         let env = Env::default();
         assert_eq!(
-            event_yield_deposited(&env),
-            Symbol::new(&env, "yield_deposited")
+            event_treasury_transfer_started(&env),
+            Symbol::new(&env, "treasury_transfer_started")
+        );
+    }
+
+    #[test]
+    fn test_event_treasury_transfer_completed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_treasury_transfer_completed(&env),
+            Symbol::new(&env, "treasury_transfer_completed")
+        );
+    }
+
+    #[test]
+    fn test_event_treasury_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_treasury_cancelled(&env),
+            Symbol::new(&env, "treasury_cancelled")
         );
     }
 
@@ -190,6 +289,16 @@ mod tests {
         assert_eq!(
             event_set_max_distribute(&env),
             Symbol::new(&env, "set_max_distribute")
+        );
+    }
+
+    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
+    #[test]
+    fn test_event_yield_deposited_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_yield_deposited(&env),
+            Symbol::new(&env, "yield_deposited")
         );
     }
 
@@ -221,6 +330,39 @@ mod tests {
     #[test]
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
-        assert_eq!(event_admin_broadcast(&env), Symbol::new(&env, "admin_broadcast"));
+        assert_eq!(
+            event_admin_broadcast(&env),
+            Symbol::new(&env, "admin_broadcast")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_proposed still maps to exactly the bytes for "emergency_drain_proposed".
+    #[test]
+    fn test_event_emergency_drain_proposed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_proposed(&env),
+            Symbol::new(&env, "emergency_drain_proposed")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_executed still maps to exactly the bytes for "emergency_drain_executed".
+    #[test]
+    fn test_event_emergency_drain_executed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_executed(&env),
+            Symbol::new(&env, "emergency_drain_executed")
+        );
+    }
+
+    /// Snapshot: proves event_emergency_drain_cancelled still maps to exactly the bytes for "emergency_drain_cancelled".
+    #[test]
+    fn test_event_emergency_drain_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_cancelled(&env),
+            Symbol::new(&env, "emergency_drain_cancelled")
+        );
     }
 }

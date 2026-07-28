@@ -23,6 +23,20 @@ Cost estimations are derived by running transaction simulations through `soroban
 | `batch_deduct` | Medium–High | One read, one write, N events (one per item). Bulk process. | ~ 3.5M + (100k per item) |
 | `init` | Highest | First write (create instance), one event; requires auth. | ~ 4.5M |
 
+## Metadata Validation Note
+
+`callora-vault::set_metadata` and `update_metadata` now run a bounded O(n)
+visible-ASCII validation pass before storage. The input is already capped at
+256 bytes, so the incremental cost is a single linear scan plus a fixed buffer
+copy. This keeps the impact small while rejecting zero-width, bidi-override,
+and confusable metadata strings before they reach state.
+
+Release WASM size comparison for `callora-vault` using
+`cargo build --target wasm32-unknown-unknown --release -p callora-vault`:
+baseline `upstream/main` was 69,465 bytes; this change builds to 69,505 bytes
+(+40 bytes). The branch therefore has a minor size impact, though the baseline
+artifact is already above the repository's nominal 65,536-byte size target.
+
 *\*These are purely structural estimates. Actual costs fluctuate and must be simulated per deployment.*
 
 ## Obtaining Exact Numbers
