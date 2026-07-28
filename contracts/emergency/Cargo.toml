@@ -1,0 +1,19 @@
+[package]
+name = "callora-emergency"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Emergency migration contract — data reshape + upgrade guard for the GrantFox FWC26 campaign."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

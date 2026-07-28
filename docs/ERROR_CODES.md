@@ -104,3 +104,37 @@ must not be reassigned once released.
 |------|---------|----------|---------|
 | 1 | `BatchEmpty` | Revenue Pool | `batch_distribute` received an empty `payments` vector |
 | 2 | `BatchTooLarge` | Revenue Pool | `batch_distribute` exceeded `MAX_BATCH_SIZE` |
+
+## Upgrade
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Upgrade | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
+| 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
+| 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
+| 5 | `UpgradeNotAllowed` | Upgrade | Upgrade operation is currently disabled |
+| 6 | `MigrationPending` | Upgrade | A migration or upgrade is already pending |
+| 7 | `TimelockNotExpired` | Upgrade | Required timelock delay has not elapsed |
+| 8 | `SameWasmHash` | Upgrade | New WASM hash is identical to current WASM hash |
+| 9 | `SameVersion` | Upgrade | Proposed version matches current version |
+| 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
+| 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
+| 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
+| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
+| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
+| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
+| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
+
+## Freeze
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Freeze | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Freeze | `init` was called more than once |
+| 3 | `Unauthorized` | Freeze | Caller is not authorized for the operation |
+| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
+| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
+| 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+

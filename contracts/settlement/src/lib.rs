@@ -11,8 +11,6 @@ pub mod replay_guard;
 pub mod timelock;
 mod types;
 
-#[cfg(any(test, feature = "testutils"))]
-use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 pub use errors::SettlementError;
@@ -70,6 +68,11 @@ impl CalloraSettlement {
     ///
     /// This entrypoint is intended for accounting-only updates and does not
     /// credit any developer or pool balance. The vault must authorize the call.
+    ///
+    /// # Arithmetic safety
+    /// The cumulative total is incremented via `checked_add`. An overflow
+    /// panics with [`SettlementError::PoolOverflow`] rather than wrapping
+    /// silently.
     pub fn record_deduction(env: Env, amount: i128, _request_id: u64) {
         let vault = Self::get_vault(env.clone());
         vault.require_auth();
@@ -78,7 +81,9 @@ impl CalloraSettlement {
             .instance()
             .get::<_, i128>(&StorageKey::TotalReceived)
             .unwrap_or(0);
-        let new_total = total.checked_add(amount).unwrap();
+        let new_total = total
+            .checked_add(amount)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow));
         env.storage()
             .instance()
             .set(&StorageKey::TotalReceived, &new_total);
@@ -1295,6 +1300,8 @@ mod test_events;
 mod test_invariant;
 #[cfg(test)]
 mod test_multi_asset;
+#[cfg(test)]
+mod test_overflow_safe_math;
 #[cfg(test)]
 mod test_ttl_bump;
 #[cfg(test)]

@@ -29,8 +29,8 @@
 //!    rejected immediately.
 //!
 //! 6. **Overflow-safe timestamps**: If the proposal timestamp would overflow
-//!    when the timelock offset is added, the call panics with
-//!    `"timelock overflow"` rather than silently wrapping.
+//!    when the timelock offset is added, the call fails with
+//!    `RevenuePoolError::Overflow` rather than silently wrapping.
 
 use soroban_sdk::{contracttype, Address};
 
