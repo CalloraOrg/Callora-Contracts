@@ -189,14 +189,6 @@ pub struct VaultProposedEvent {
     pub proposed_vault: Address,
 }
 
-
-#[contracttype]
-pub struct DepositEvent {
-    pub developer: Address,
-    pub token: Address,
-    pub amount: i128,
-}
-
 /// Emitted when the proposed vault is accepted via `accept_vault()`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -246,4 +238,3 @@ pub struct AdminMigrationEvent {
     pub amount: i128,
     pub executed_at: u64,
 }
-
