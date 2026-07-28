@@ -13,5 +13,8 @@ doctest = false
 callora-settlement = { path = "../settlement" }
 soroban-sdk = { workspace = true }
 
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
 [features]
 testutils = ["soroban-sdk/testutils", "callora-settlement/testutils"]
