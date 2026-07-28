@@ -66,102 +66,6 @@ pub use callora_validators as validators;
 mod errors;
 pub use errors::VaultError;
 
-/// Typed error codes for the Callora Vault contract.
-///
-/// These error codes are returned instead of string panics to enable
-/// machine-readable error handling by integrators using @stellar/stellar-sdk.
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub enum VaultError {
-    /// Vault has not been initialized yet (code 1).
-    NotInitialized = 1,
-    /// Vault has already been initialized (code 2).
-    AlreadyInitialized = 2,
-    /// Caller is not authorized for this operation (code 3).
-    Unauthorized = 3,
-    /// Vault is currently paused (code 4).
-    Paused = 4,
-    /// Insufficient balance for the requested operation (code 5).
-    InsufficientBalance = 5,
-    /// Amount must be positive (code 6).
-    AmountNotPositive = 6,
-    /// Deduct amount exceeds the configured maximum (code 7).
-    ExceedsMaxDeduct = 7,
-    /// Deposit amount is below the configured minimum (code 8).
-    BelowMinDeposit = 8,
-    /// Arithmetic overflow detected (code 9).
-    Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
-    /// Min deposit must be positive (code 11).
-    MinDepositNotPositive = 11,
-    /// Max deduct must be positive (code 12).
-    MaxDeductNotPositive = 12,
-    /// Min deposit cannot exceed max deduct (code 13).
-    MinDepositExceedsMaxDeduct = 13,
-    /// USDC token address cannot be the vault address (code 14).
-    UsdcTokenCannotBeVault = 14,
-    /// Revenue pool address cannot be the vault address (code 15).
-    RevenuePoolCannotBeVault = 15,
-    /// Authorized caller address cannot be the vault address (code 16).
-    AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
-    /// Vault is already paused (code 18).
-    AlreadyPaused = 18,
-    /// Vault is not paused (code 19).
-    NotPaused = 19,
-    /// Settlement address has not been configured (code 20).
-    SettlementNotSet = 20,
-    /// Batch deduct requires at least one item (code 21).
-    BatchEmpty = 21,
-    /// Batch size exceeds maximum allowed (code 22).
-    BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
-    /// No admin transfer is pending (code 25).
-    NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
-    /// Price parsing error or non‑positive price (code 28).
-    PriceParseError = 28,
-    /// Duplicate request ID detected (code 29).
-    DuplicateRequestId = 29,
-    /// Offering ID is empty or contains invalid characters (code 30).
-    OfferingIdInvalid = 30,
-    /// Metadata string is empty or contains invalid characters (code 31).
-    MetadataInvalid = 31,
-    /// Supplied nonce does not match the stored authorized-caller rotation nonce (code 30).
-    StaleNonce = 32,
-    /// New revenue pool must be different from current revenue pool (code 33).
-    NewRevenuePoolSameAsCurrent = 33,
-    /// No revenue pool transfer is pending (code 34).
-    NoRevenuePoolTransferPending = 34,
-    /// Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit (code 35).
-    Slippage = 35,
-    /// Rate limit exceeded for the developer (code 36).
-    RateLimited = 36,
-    /// No pending timelock proposal for the requested action (code 37).
-    ProposalNotFound = 37,
-    /// Action attempted before the timelock window has elapsed (code 38).
-    TimelockNotExpired = 38,
-    /// `proposed_at + window` overflowed `u64` (code 39).
-    TimelockOverflow = 39,
-    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 40).
-    InvalidTimelockWindow = 40,
-    /// Caller is not in the allowlist and is not the owner (code 44).
-    CallerNotInAllowlist = 44,
-    /// A critical admin action is still inside the global cool-off window (code 49).
-    AdminCooldownActive = 49,
-    /// Admin cool-off window is outside the accepted bounds (code 50).
-    InvalidAdminCooldown = 50,
-}
-
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -174,6 +78,7 @@ pub enum DataKey {
     MaxDeduct,
     Settlement,
     Paused,
+    PendingOwner,
     Depositor(Address),
     AllowedDepositorsList,
 }
@@ -207,6 +112,8 @@ pub enum StorageKey {
     AdminCooldown,
     /// Audit record for the most recently executed critical admin action.
     LastCriticalAdminAction,
+    /// Settlement contract address.
+    Settlement,
 }
 
 /// Ledgers per day at a 5-second close cadence.
@@ -267,6 +174,8 @@ pub mod settlement {
             _token: &Address,
             _nonce: &u32,
         ) {
+        }
+        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {
         }
     }
 }
@@ -345,13 +254,14 @@ impl CalloraVault {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
         }
-        if min_deposit <= 0 {
+        let min_dep_val = min_deposit.unwrap_or(0);
+        if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
         }
         if max_deduct <= 0 {
             return Err(VaultError::MaxDeductNotPositive);
         }
-        if min_deposit > max_deduct {
+        if min_dep_val > max_deduct {
             return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
 
@@ -367,7 +277,7 @@ impl CalloraVault {
             .set(&DataKey::AuthorizedCaller, &authorized_caller);
         env.storage()
             .instance()
-            .set(&DataKey::MinDeposit, &min_deposit);
+            .set(&DataKey::MinDeposit, &min_dep_val);
 
         if let Some(pool) = revenue_pool {
             env.storage().instance().set(&DataKey::RevenuePool, &pool);
@@ -383,10 +293,12 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_init(&env), owner.clone()), initial_balance);
+        Ok(())
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
         caller.require_auth();
+        Self::require_not_paused(env.clone())?;
         if env
             .storage()
             .instance()
@@ -438,6 +350,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_deposit(&env), caller), (amount, new_bal));
+        Ok(())
     }
 
     pub fn deduct(
@@ -501,7 +414,13 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Settlement)
             .unwrap_or_else(|| panic!("Settlement not set"));
 
-        usdc.transfer(&env.current_contract_address(), &settlement_addr, &amount);
+        let usdc_addr = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+        let usdc_client = token::Client::new(&env, &usdc_addr);
+        usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
@@ -557,7 +476,14 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::Settlement)
             .unwrap_or_else(|| panic!("Settlement not set"));
 
-        usdc.transfer(
+        let usdc_addr = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+        let usdc_client = token::Client::new(&env, &usdc_addr);
+        let total_amount: i128 = items.iter().map(|item| item.0).sum();
+        usdc_client.transfer(
             &env.current_contract_address(),
             &settlement_addr,
             &total_amount,
@@ -582,6 +508,7 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::Balance, &running_bal);
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -695,6 +622,7 @@ impl CalloraVault {
             (events::event_set_authorized_caller(&env), caller.clone()),
             caller,
         );
+        Ok(())
     }
 
     pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -714,6 +642,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
+        Ok(())
     }
 
     pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -733,6 +662,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_vault_unpaused(&env), caller), ());
+        Ok(())
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -832,6 +762,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_set_max_deduct(&env), caller), max_deduct);
+        Ok(())
     }
 
     /// Return the configured settlement contract address.
@@ -1055,7 +986,8 @@ impl CalloraVault {
 
     /// Transfer ownership (two-step) — initiate.
     pub fn transfer_ownership(env: Env, caller: Address, new_owner: Address) {
-        Self::require_owner_auth(&env, &caller);
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone()).unwrap();
         env.storage()
             .instance()
             .set(&DataKey::PendingOwner, &new_owner);
@@ -1149,39 +1081,6 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
-    // Timelock window
-    // -----------------------------------------------------------------------
-
-    pub fn set_timelock_window(env: Env, caller: Address, window: u64) -> Result<(), VaultError> {
-        Self::require_admin(&env, &caller)?;
-        if window < timelock::MIN_TIMELOCK_SECONDS || window > timelock::MAX_TIMELOCK_SECONDS {
-            return Err(VaultError::InvalidTimelockWindow);
-        }
-        timelock::set_timelock_window(&env, window);
-        env.events().publish(
-            (events::event_timelock_window_changed(&env), caller),
-            (timelock::get_timelock_window(&env), window),
-        );
-        Ok(())
-    }
-
-    pub fn get_timelock_window(env: Env) -> u64 {
-        timelock::get_timelock_window(&env)
-    }
-
-    pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
-        timelock::get_pending_pause(&env)
-    }
-
-    pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
-        timelock::get_pending_upgrade(&env)
-    }
-
-    pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
-        timelock::get_pending_sweep(&env)
-    }
-
-    // -----------------------------------------------------------------------
     // Propose/Execute/Cancel — pause
     // -----------------------------------------------------------------------
 
@@ -1197,18 +1096,6 @@ impl CalloraVault {
                 proposed_at,
                 execute_after,
             },
-        );
-        env.events().publish(
-            (events::event_pause_proposed(&env), caller),
-            (proposed_at, execute_after),
-        );
-        env.events().publish(
-            (events::event_pause_proposed(&env), caller),
-            (proposed_at, execute_after),
-        );
-        env.events().publish(
-            (events::event_pause_proposed(&env), caller),
-            (proposed_at, execute_after),
         );
         env.events().publish(
             (events::event_pause_proposed(&env), caller),
@@ -1316,23 +1203,6 @@ impl CalloraVault {
     }
 
     /// Propose sweeping (distributing) on-ledger USDC surplus to a recipient (admin only, timelocked).
-    ///
-    /// After the configured window elapses, `execute_sweep` transfers the
-    /// funds and emits the standard `distribute` event. Re-proposing
-    /// replaces the recipient+amount **and restarts the timer**.
-    ///
-    /// `amount` is checked against the vault's configured `min_deposit` floor,
-    /// the same per-call minimum enforced on `deposit`/`deduct`/`batch_deduct`.
-    /// This closes the one remaining value-moving path that previously had no
-    /// floor, so sub-unit/dust sweeps are rejected consistently everywhere the
-    /// vault moves USDC.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::AmountNotPositive` if `amount <= 0`.
-    /// - `VaultError::BelowMinTransferAmount` if `amount` is below the vault's
-    ///   configured minimum transfer unit (`min_deposit`).
-    /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
     pub fn propose_sweep(
         env: Env,
         caller: Address,
@@ -1403,7 +1273,6 @@ impl CalloraVault {
             (events::event_distribute(&env), proposal.to),
             proposal.amount,
         );
-        timelock::clear_pending_sweep(&env);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -1416,47 +1285,6 @@ impl CalloraVault {
             (events::event_sweep_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
-        Self::bump_instance_ttl(&env);
-        Ok(())
-    }
-
-    /// Remove processed request-ID markers from persistent storage (owner only).
-    ///
-    /// Idempotency markers written by [`deduct`] and [`batch_deduct`] live in
-    /// persistent storage indefinitely. This function lets the owner reclaim
-    /// that storage once markers are no longer needed for duplicate detection.
-    /// IDs not present in storage are silently skipped.
-    ///
-    /// # Authorization
-    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
-    ///
-    /// # Parameters
-    /// - `ids` — list of request IDs whose markers should be removed.
-    ///
-    /// # Events
-    /// Emits a `request_id_pruned` event for each successfully removed ID.
-    ///
-    /// # Errors
-    /// - [`VaultError::Unauthorized`] if `caller` is not the owner.
-    pub fn prune_processed_requests(
-        env: Env,
-        caller: Address,
-        ids: Vec<Symbol>,
-    ) -> Result<(), VaultError> {
-        caller.require_auth();
-        Self::require_owner(env.clone(), caller.clone())?;
-
-        for id in ids.iter() {
-            let key = StorageKey::ProcessedRequest(id.clone());
-            if env.storage().persistent().has(&key) {
-                env.storage().persistent().remove(&key);
-                env.events().publish(
-                    (events::event_request_id_pruned(&env), caller.clone()),
-                    id.clone(),
-                );
-            }
-        }
-
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -1485,17 +1313,30 @@ impl CalloraVault {
         Self::bump_instance_ttl(env);
     }
 
+    /// Extend persistent storage TTL for a given key.
+    #[inline]
+    pub(crate) fn bump_persistent_key(env: &Env, key: &StorageKey) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+
     #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
-        let meta = Self::get_meta(env.clone())?;
-        let auth = match &meta.authorized_caller {
-            Some(ac) => caller == ac || *caller == meta.owner,
-            None => *caller == meta.owner,
-        };
-        if !auth {
-            return Err(VaultError::Unauthorized);
+        let owner = Self::get_owner(env.clone());
+        if *caller == owner {
+            return Ok(());
         }
-        Ok(())
+        let auth_caller: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AuthorizedCaller);
+        if let Some(ac) = auth_caller {
+            if *caller == ac {
+                return Ok(());
+            }
+        }
+        Err(VaultError::Unauthorized)
     }
 
     /// Return `true` if `request_id` has already been processed (marker present
@@ -1550,8 +1391,8 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VaultError::NotInitialized)?;
-        let meta = Self::get_meta(env)?;
-        if *caller != admin && *caller != meta.owner {
+        let owner = Self::get_owner(env.clone());
+        if *caller != admin && *caller != owner {
             return Err(VaultError::Unauthorized);
         }
         Ok(())
