@@ -109,3 +109,15 @@ must not be reassigned once released.
 | 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
 | 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
 
+## Freeze
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Freeze | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Freeze | `init` was called more than once |
+| 3 | `Unauthorized` | Freeze | Caller is not authorized for the operation |
+| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
+| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
+| 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+
