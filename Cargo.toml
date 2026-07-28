@@ -15,6 +15,7 @@ members = [
     "contracts/upgrade",
     "contracts/settlement/fuzz",
     "contracts/checkpoint",
+    "contracts/emergency",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/validators",
