@@ -12,6 +12,7 @@ members = [
     "contracts/cold",
     "contracts/distribute",
     "contracts/checkpoint",
+    "contracts/upgrade",
     "contracts/settlement/fuzz",
     "contracts/checkpoint",
     "contracts/freeze",
@@ -42,9 +43,7 @@ members = [
 default-members = [
     "contracts/admin",
     "contracts/checkpoint",
-    "contracts/cold",
-    "contracts/distribute",
-    "contracts/fee",
+    "contracts/upgrade",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/cold",
