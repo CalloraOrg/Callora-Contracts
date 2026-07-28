@@ -112,6 +112,8 @@ individual events through the ladder as indexer needs arise.
 | `set_max_distribute` | `event_set_max_distribute` | admin | `(old_max, max_distribute)` |
 | `distribute` | `event_distribute` | — | — |
 | `batch_distribute` | `event_batch_distribute` | — | — |
+| `distribute_started` | `event_distribute_started` | caller, recipient | `DistributionLifecycleEvent` |
+| `distribute_completed` | `event_distribute_completed` | caller, recipient | `DistributionLifecycleEvent` |
 | `upgraded` | `event_upgraded` | — | new WASM hash |
 | `admin_broadcast` | `event_admin_broadcast` | caller | `AdminBroadcast { severity, message }` |
 
