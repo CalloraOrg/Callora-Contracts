@@ -9,6 +9,7 @@ resolver = "2"
 members = [
     "contracts/admin",
     "contracts/checkpoint",
+    "contracts/checkpoint/fuzz",
     "contracts/cold",
     "contracts/distribute",
     "contracts/emergency",
