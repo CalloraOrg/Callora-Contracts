@@ -146,9 +146,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    for i in 0..ids.len() {
+            if let Ok(ids) = result {
+                for i in 0..ids.len() {
                         expected_id += 1;
                         let assigned_id = ids.get(i).unwrap();
                         prop_assert_eq!(
@@ -470,10 +469,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    expected_id = *ids.last().unwrap();
-                }
+            if let Ok(ids) = result {
+                expected_id = *ids.last().unwrap();
             }
 
             let latest = client.get_latest_checkpoint();

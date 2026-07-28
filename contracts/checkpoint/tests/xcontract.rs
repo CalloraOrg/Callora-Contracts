@@ -91,7 +91,7 @@ impl CheckpointCaller {
 
     pub fn call_accept_admin(env: Env, checkpoint: Address, caller: Address) {
         let client = CalloraCheckpointClient::new(&env, &checkpoint);
-        let _ = client.accept_admin(&caller);
+        client.accept_admin(&caller);
     }
 }
 

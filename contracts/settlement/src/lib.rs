@@ -11,8 +11,6 @@ pub mod replay_guard;
 pub mod timelock;
 mod types;
 
-#[cfg(any(test, feature = "testutils"))]
-use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 pub use errors::SettlementError;
