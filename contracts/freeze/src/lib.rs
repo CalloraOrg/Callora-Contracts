@@ -1,246 +1,78 @@
+//! Freeze (circuit-breaker) harness for Callora contracts.
+//!
+//! # What “freeze” means here
+//! There is no standalone `freeze` WASM today. Freeze maps to the revenue-pool
+//! **pause circuit-breaker** (`pause` / `unpause` / `is_paused`), which blocks
+//! `distribute` and `batch_distribute` while active. Vault exposes an analogous
+//! pause surface; this crate targets the compiling revenue-pool entrypoints.
+//!
+//! # Fuzzing
+//! See `fuzz/targets/main.rs` — a `cargo-fuzz` target that feeds malformed
+//! operation sequences into freeze/unfreeze and asserts safety invariants.
+
 #![no_std]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 pub mod errors;
-#[cfg(test)]
-mod test;
+pub use errors::ContractError;
 
-use crate::errors::FreezeError;
-use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
-};
-
-/// Storage keys used by the freeze contract instance.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StorageKey {
-    /// Address of the contract administrator.
-    Admin,
-    /// Optional designated freeze operator address.
-    FreezeOperator,
-    /// Boolean flag indicating whether global freeze is active.
-    IsFrozen,
+/// One step in a freeze/unfreeze fuzz sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FreezeOp {
+    /// Attempt pause as admin.
+    FreezeAsAdmin,
+    /// Attempt pause as configured guardian.
+    FreezeAsGuardian,
+    /// Attempt pause as an unauthorized outsider.
+    FreezeAsOutsider,
+    /// Attempt unpause as admin.
+    UnfreezeAsAdmin,
+    /// Attempt unfreeze as outsider (must fail).
+    UnfreezeAsOutsider,
+    /// Attempt distribute while possibly frozen (malformed amount allowed).
+    Distribute { amount: i128 },
+    /// Toggle / clear guardian mid-sequence.
+    SetGuardian,
+    /// Clear guardian.
+    ClearGuardian,
 }
 
-#[contract]
-pub struct CalloraFreeze;
-
-#[contractimpl]
-impl CalloraFreeze {
-    /// Initializes the Callora Freeze contract with an administrator address.
-    ///
-    /// **What**: Registers the administrative owner for the freeze control module and establishes initial unfrozen contract state.
-    ///
-    /// **How**: Validates cryptographic signature authorization from the `admin` address parameter, checks instance storage to ensure initialization has not already occurred, sets the stored `Admin` key, and sets `IsFrozen` state to `false`.
-    ///
-    /// **Why**: Contract initialization must be atomic, single-execution, and restricted to the protocol owner to establish access control boundaries prior to accepting freeze/unfreeze state updates.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    /// * `admin` - Address designated as the protocol freeze administrator.
-    ///
-    /// # Errors
-    /// * `AlreadyInitialized` (code 2) - If `init` has previously been invoked.
-    pub fn init(env: Env, admin: Address) -> Result<(), FreezeError> {
-        admin.require_auth();
-
-        if env.storage().instance().has(&StorageKey::Admin) {
-            return Err(FreezeError::AlreadyInitialized);
+impl FreezeOp {
+    /// Decode a raw fuzzer byte into an operation (covers all variants).
+    pub fn from_byte(b: u8, amount_lo: u8, amount_hi: u8) -> Self {
+        let amount = i128::from(u16::from_be_bytes([amount_lo, amount_hi]));
+        match b % 8 {
+            0 => Self::FreezeAsAdmin,
+            1 => Self::FreezeAsGuardian,
+            2 => Self::FreezeAsOutsider,
+            3 => Self::UnfreezeAsAdmin,
+            4 => Self::UnfreezeAsOutsider,
+            5 => Self::Distribute { amount },
+            6 => Self::SetGuardian,
+            _ => Self::ClearGuardian,
         }
-
-        env.storage().instance().set(&StorageKey::Admin, &admin);
-        env.storage().instance().set(&StorageKey::IsFrozen, &false);
-
-        env.events().publish(
-            (symbol_short!("init"), admin),
-            false,
-        );
-
-        Ok(())
     }
 
-    /// Triggers an emergency freeze on the contract.
-    ///
-    /// **What**: Activates global contract freeze state to halt sensitive operations across protected system modules.
-    ///
-    /// **How**: Demands cryptographic signature from `caller`, verifies that `caller` matches either the stored `Admin` address or the designated `FreezeOperator`, confirms that `IsFrozen` is currently `false`, updates `IsFrozen` storage key to `true`, and emits a `frozen` event containing the caller address and reason `Symbol`.
-    ///
-    /// **Why**: Emergency pauses allow governance or automated security monitors (circuit breakers) to rapidly halt system operations during detected security threats, exploits, or market anomalies.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    /// * `caller` - Address initiating the emergency freeze action (admin or freeze operator).
-    /// * `reason` - `Symbol` identifier documenting the justification for the freeze action.
-    ///
-    /// # Errors
-    /// * `NotInitialized` (code 1) - If the contract has not yet been initialized.
-    /// * `Unauthorized` (code 3) - If caller is neither the admin nor the active freeze operator.
-    /// * `AlreadyFrozen` (code 4) - If global freeze is already active.
-    pub fn freeze(env: Env, caller: Address, reason: Symbol) -> Result<(), FreezeError> {
-        caller.require_auth();
-        Self::require_admin_or_operator(&env, &caller)?;
-
-        if Self::is_frozen(env.clone()) {
-            return Err(FreezeError::AlreadyFrozen);
-        }
-
-        env.storage().instance().set(&StorageKey::IsFrozen, &true);
-
-        env.events().publish(
-            (Symbol::new(&env, "frozen"), caller),
-            reason,
-        );
-
-        Ok(())
-    }
-
-    /// Lifts an emergency freeze to restore normal operations.
-    ///
-    /// **What**: Deactivates contract freeze status and returns system entrypoints to active processing.
-    ///
-    /// **How**: Enforces cryptographic authentication for `caller`, checks that `caller` matches the stored `Admin` address, asserts that `IsFrozen` is currently `true`, mutates `IsFrozen` key to `false`, and emits an `unfrozen` event.
-    ///
-    /// **Why**: Unfreezing is restricted strictly to the protocol administrator (excluding standard operators) to ensure thorough security review and remediation before operational recovery.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    /// * `caller` - Administrator address authorizing unfreeze recovery.
-    ///
-    /// # Errors
-    /// * `NotInitialized` (code 1) - If the contract has not yet been initialized.
-    /// * `Unauthorized` (code 3) - If caller is not the primary admin.
-    /// * `NotFrozen` (code 5) - If the contract is not currently frozen.
-    pub fn unfreeze(env: Env, caller: Address) -> Result<(), FreezeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-
-        if !Self::is_frozen(env.clone()) {
-            return Err(FreezeError::NotFrozen);
-        }
-
-        env.storage().instance().set(&StorageKey::IsFrozen, &false);
-
-        env.events().publish(
-            (Symbol::new(&env, "unfrozen"), caller),
-            (),
-        );
-
-        Ok(())
-    }
-
-    /// Sets or revokes a designated freeze operator address.
-    ///
-    /// **What**: Grants or revokes emergency freeze authority to a designated operator account.
-    ///
-    /// **How**: Validates cryptographic signature from `caller`, confirms `caller` is the admin, updates or removes the `FreezeOperator` storage key, and emits an `operator_set` event.
-    ///
-    /// **Why**: Delegated operators (such as automated automated risk bots or security multisigs) need freeze capability without holding full administrative privileges or unfreeze authority.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    /// * `caller` - Admin address managing operator role assignment.
-    /// * `operator` - Optional address to assign as freeze operator (`None` revokes operator status).
-    ///
-    /// # Errors
-    /// * `NotInitialized` (code 1) - If contract is not initialized.
-    /// * `Unauthorized` (code 3) - If caller is not the primary admin.
-    pub fn set_freeze_operator(
-        env: Env,
-        caller: Address,
-        operator: Option<Address>,
-    ) -> Result<(), FreezeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-
-        if let Some(ref op) = operator {
-            env.storage().instance().set(&StorageKey::FreezeOperator, op);
-        } else {
-            env.storage().instance().remove(&StorageKey::FreezeOperator);
-        }
-
-        env.events().publish(
-            (Symbol::new(&env, "op_set"), caller),
-            operator,
-        );
-
-        Ok(())
-    }
-
-    /// Queries the primary administrator address.
-    ///
-    /// **What**: Returns the configured admin account responsible for governance and unfreeze permissions.
-    ///
-    /// **How**: Reads the `Admin` key from instance storage and returns `Result<Address, FreezeError>`.
-    ///
-    /// **Why**: Integrators, frontends, and monitoring scripts require read access to contract governance parameters.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    ///
-    /// # Errors
-    /// * `NotInitialized` (code 1) - If contract has not been initialized.
-    pub fn get_admin(env: Env) -> Result<Address, FreezeError> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(FreezeError::NotInitialized)
-    }
-
-    /// Queries the currently assigned freeze operator address, if any.
-    ///
-    /// **What**: Retrieves the delegated operator account holding emergency freeze capability.
-    ///
-    /// **How**: Inspects instance storage for the `FreezeOperator` key and returns `Option<Address>`.
-    ///
-    /// **Why**: Public view entrypoint allows auditing access rights and verifying operational bot addresses.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    pub fn get_freeze_operator(env: Env) -> Option<Address> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::FreezeOperator)
-    }
-
-    /// Queries whether emergency freeze is currently active.
-    ///
-    /// **What**: Returns a boolean status indicating whether the global freeze is currently enforced.
-    ///
-    /// **How**: Reads the `IsFrozen` boolean flag from instance storage, defaulting to `false` if uninitialized.
-    ///
-    /// **Why**: Interfacing contracts and SDK clients query this flag to guard state-changing entrypoints during emergency incidents.
-    ///
-    /// # Arguments
-    /// * `env` - Soroban environment handle.
-    pub fn is_frozen(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&StorageKey::IsFrozen)
-            .unwrap_or(false)
-    }
-
-    /// Internal helper validating that caller matches the primary admin address.
-    fn require_admin(env: &Env, caller: &Address) -> Result<(), FreezeError> {
-        let admin = Self::get_admin(env.clone())?;
-        if caller != &admin {
-            return Err(FreezeError::Unauthorized);
-        }
-        Ok(())
-    }
-
-    /// Internal helper validating that caller is either admin or the active freeze operator.
-    fn require_admin_or_operator(env: &Env, caller: &Address) -> Result<(), FreezeError> {
-        let admin = Self::get_admin(env.clone())?;
-        if caller == &admin {
-            return Ok(());
-        }
-
-        if let Some(operator) = Self::get_freeze_operator(env.clone()) {
-            if caller == &operator {
-                return Ok(());
+    /// Decode a byte slice into a bounded operation list.
+    pub fn decode_sequence(data: &[u8], max_ops: usize) -> Vec<Self> {
+        let mut ops = Vec::new();
+        let mut i = 0;
+        while i < data.len() && ops.len() < max_ops {
+            let b = data[i];
+            let lo = data.get(i + 1).copied().unwrap_or(0);
+            let hi = data.get(i + 2).copied().unwrap_or(0);
+            ops.push(Self::from_byte(b, lo, hi));
+            i = i.saturating_add(3);
+            if i == 0 {
+                break;
             }
         }
-
-        Err(FreezeError::Unauthorized)
+        ops
     }
 }
 
+/// Maximum operations executed per fuzz / unit-test invocation.
+pub const MAX_FREEZE_OPS: usize = 64;

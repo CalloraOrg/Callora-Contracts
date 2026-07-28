@@ -4,7 +4,51 @@
 //! ensuring byte-identity is preserved and preventing accidental topic name drift
 //! across call sites.
 
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
+
+/// Schema version for structured distribution lifecycle event payloads.
+pub const DISTRIBUTION_EVENT_VERSION: u32 = 1;
+
+/// Identifies which distribution entry point emitted a lifecycle event.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DistributionMode {
+    Single,
+    Batch,
+}
+
+/// Stable, versioned payload shared by distribution lifecycle events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DistributionLifecycleEvent {
+    pub version: u32,
+    pub amount: i128,
+    pub mode: DistributionMode,
+    pub batch_index: u32,
+    pub batch_size: u32,
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+}
+
+impl DistributionLifecycleEvent {
+    pub fn new(
+        env: &Env,
+        amount: i128,
+        mode: DistributionMode,
+        batch_index: u32,
+        batch_size: u32,
+    ) -> Self {
+        Self {
+            version: DISTRIBUTION_EVENT_VERSION,
+            amount,
+            mode,
+            batch_index,
+            batch_size,
+            ledger_sequence: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        }
+    }
+}
 
 /// Returns the Symbol for the `"init"` event topic.
 ///
@@ -83,16 +127,25 @@ pub fn event_yield_deposited(env: &Env) -> Symbol {
 }
 
 /// Returns the Symbol for the `"treasury_transfer_started"` event topic.
+///
+/// Emitted when the admin nominates a new treasury via [`RevenuePool::set_treasury`].
+/// The nominee must call [`RevenuePool::accept_treasury`] to complete the transfer.
 pub fn event_treasury_transfer_started(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_started")
 }
 
 /// Returns the Symbol for the `"treasury_transfer_completed"` event topic.
+///
+/// Emitted when the pending treasury accepts the nomination via
+/// [`RevenuePool::accept_treasury`], completing the two-step handover.
 pub fn event_treasury_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_transfer_completed")
 }
 
 /// Returns the Symbol for the `"treasury_cancelled"` event topic.
+///
+/// Emitted when the admin cancels a pending treasury nomination via
+/// [`RevenuePool::cancel_treasury_transfer`].
 pub fn event_treasury_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "treasury_cancelled")
 }
@@ -117,6 +170,42 @@ pub fn event_distribute(env: &Env) -> Symbol {
 /// validation has passed.
 pub fn event_batch_distribute(env: &Env) -> Symbol {
     Symbol::new(env, "batch_distribute")
+}
+
+/// Returns the Symbol for the `"distribute_started"` lifecycle event topic.
+pub fn event_distribute_started(env: &Env) -> Symbol {
+    Symbol::new(env, "distribute_started")
+}
+
+/// Returns the Symbol for the `"distribute_completed"` lifecycle event topic.
+pub fn event_distribute_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "distribute_completed")
+}
+
+/// Emits a structured event immediately before a validated distribution transfer.
+pub fn emit_distribute_started(
+    env: &Env,
+    caller: &Address,
+    recipient: &Address,
+    payload: &DistributionLifecycleEvent,
+) {
+    env.events().publish(
+        (event_distribute_started(env), caller, recipient),
+        payload.clone(),
+    );
+}
+
+/// Emits a structured event after a distribution transfer succeeds.
+pub fn emit_distribute_completed(
+    env: &Env,
+    caller: &Address,
+    recipient: &Address,
+    payload: &DistributionLifecycleEvent,
+) {
+    env.events().publish(
+        (event_distribute_completed(env), caller, recipient),
+        payload.clone(),
+    );
 }
 
 /// Returns the Symbol for the `"upgraded"` event topic.
@@ -283,6 +372,16 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
+    #[test]
+    fn test_event_yield_deposited_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_yield_deposited(&env),
+            Symbol::new(&env, "yield_deposited")
+        );
+    }
+
     /// Snapshot: proves event_distribute still maps to exactly the bytes for "distribute".
     #[test]
     fn test_event_distribute_bytes() {
@@ -298,6 +397,33 @@ mod tests {
             event_batch_distribute(&env),
             Symbol::new(&env, "batch_distribute")
         );
+    }
+
+    #[test]
+    fn test_distribution_lifecycle_event_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_distribute_started(&env),
+            Symbol::new(&env, "distribute_started")
+        );
+        assert_eq!(
+            event_distribute_completed(&env),
+            Symbol::new(&env, "distribute_completed")
+        );
+    }
+
+    #[test]
+    fn test_distribution_lifecycle_payload_is_versioned() {
+        let env = Env::default();
+        let payload = DistributionLifecycleEvent::new(&env, 42, DistributionMode::Batch, 1, 3);
+
+        assert_eq!(payload.version, DISTRIBUTION_EVENT_VERSION);
+        assert_eq!(payload.amount, 42);
+        assert_eq!(payload.mode, DistributionMode::Batch);
+        assert_eq!(payload.batch_index, 1);
+        assert_eq!(payload.batch_size, 3);
+        assert_eq!(payload.ledger_sequence, env.ledger().sequence());
+        assert_eq!(payload.timestamp, env.ledger().timestamp());
     }
 
     /// Snapshot: proves event_upgraded still maps to exactly the bytes for "upgraded".

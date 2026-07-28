@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 4750be08fe0cc1ba7cbcd23ab5746214e9291523d14a6ff6ebd9ed665d28dcee # shrinks to seeds = [6433548184891969566]
+cc 9bc2c6ac4ca99e601e475ba620938dbda2c2e38374099c6a6c35b1e4379d3df1 # shrinks to recipients = [0], amounts = [1]

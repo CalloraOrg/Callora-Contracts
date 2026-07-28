@@ -1,9 +1,9 @@
 extern crate std;
 
-use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
+use crate::{CalloraSettlement, CalloraSettlementClient, StorageKey};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::token as token_mod;
-use soroban_sdk::{Address, Env, Symbol};
+use soroban_sdk::{Address, Env};
 
 fn create_token<'a>(
     env: &'a Env,
@@ -45,6 +45,7 @@ fn test_two_tokens_independent_balances() {
         &false,
         &Some(developer.clone()),
         &token_a,
+        &1u32,
     );
     // Credit token_b to developer
     client.receive_payment(
@@ -53,6 +54,7 @@ fn test_two_tokens_independent_balances() {
         &false,
         &Some(developer.clone()),
         &token_b,
+        &2u32,
     );
 
     // Balances are independent per token
@@ -91,8 +93,22 @@ fn test_two_tokens_two_developers() {
     client.init(&admin, &vault);
 
     // dev1 gets token_a, dev2 gets token_b
-    client.receive_payment(&vault, &100i128, &false, &Some(dev1.clone()), &token_a);
-    client.receive_payment(&vault, &200i128, &false, &Some(dev2.clone()), &token_b);
+    client.receive_payment(
+        &vault,
+        &100i128,
+        &false,
+        &Some(dev1.clone()),
+        &token_a,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &200i128,
+        &false,
+        &Some(dev2.clone()),
+        &token_b,
+        &1u32,
+    );
 
     assert_eq!(client.get_developer_balance(&dev1, &token_a), 100i128);
     assert_eq!(client.get_developer_balance(&dev2, &token_b), 200i128);
@@ -121,38 +137,56 @@ fn test_withdraw_asserts_token() {
     client.init(&admin, &vault);
 
     // Credit both tokens to developer
-    client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &token_a);
-    client.receive_payment(&vault, &300i128, &false, &Some(developer.clone()), &token_b);
+    client.receive_payment(
+        &vault,
+        &500i128,
+        &false,
+        &Some(developer.clone()),
+        &token_a,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &300i128,
+        &false,
+        &Some(developer.clone()),
+        &token_b,
+        &2u32,
+    );
 
     // Fund the settlement contract with both tokens so withdrawal succeeds.
     token_a_sac.mint(&addr, &1000i128);
     token_b_sac.mint(&addr, &1000i128);
 
-    // Withdraw token_a — succeeds, uses token_a's contract
+    // withdraw_developer_balance always moves the currently-configured USDC
+    // token; switching that configuration is how an operator moves which
+    // per-developer balance a withdrawal draws from.
     client.set_usdc_token(&admin, &token_a);
+
+    // Withdraw token_a — succeeds, uses token_a's contract
     let result =
         client.try_withdraw_developer_balance(&developer, &200i128, &Some(recipient.clone()));
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_a), 300i128);
     assert_eq!(token_b_client.balance(&recipient), 0i128); // token_b not touched
 
-    // Withdraw token_b — succeeds, uses token_b's contract
     client.set_usdc_token(&admin, &token_b);
+
+    // Withdraw token_b — succeeds, uses token_b's contract
     let result =
         client.try_withdraw_developer_balance(&developer, &100i128, &Some(recipient.clone()));
     assert!(result.is_ok());
     assert_eq!(client.get_developer_balance(&developer, &token_b), 200i128);
 
-    // Cannot withdraw token_a balance when passing token_b (wrong token assertion)
-    // token_a balance is 300, trying to withdraw 300 but passing token_b address
-    // This should check balance for token_b (which is 200) and reject.
-    client.set_usdc_token(&admin, &token_b);
+    // Configured token is still token_b (200 remaining); withdrawing 300
+    // exceeds that balance and is rejected.
     let result =
         client.try_withdraw_developer_balance(&developer, &300i128, &Some(recipient.clone()));
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_b
 
-    // Cannot withdraw token_b balance when passing token_a (301 > token_a's 300 balance)
     client.set_usdc_token(&admin, &token_a);
+
+    // Configured token is token_a (300 remaining); withdrawing 301 exceeds it.
     let result =
         client.try_withdraw_developer_balance(&developer, &301i128, &Some(recipient.clone()));
     assert!(result.is_err()); // InsufficientDeveloperBalance for token_a
@@ -321,7 +355,7 @@ fn test_batch_receive_payment_with_token() {
     items.push_back((dev1.clone(), 100i128));
     items.push_back((dev2.clone(), 200i128));
 
-    client.batch_receive_payment(&vault, &items, &token);
+    client.batch_receive_payment(&vault, &items, &token, &1u32);
 
     assert_eq!(client.get_developer_balance(&dev1, &token), 100i128);
     assert_eq!(client.get_developer_balance(&dev2, &token), 200i128);

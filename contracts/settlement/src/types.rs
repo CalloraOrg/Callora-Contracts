@@ -10,6 +10,18 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// non-cursor-based query (gas guard).
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 
+/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+
+/// Number of ledgers to extend instance storage TTL by (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
+
+/// Minimum threshold of remaining ledgers before persistent storage TTL is extended.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
+
+/// Number of ledgers to extend persistent storage TTL by.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
+
 /// Persistent storage keys for settlement contract.
 ///
 /// # Migration note
@@ -20,6 +32,8 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
+    HighWaterMark(Address),
+    PoolHighWaterMark,
     Vault,
     PendingAdmin,
     PendingVault,
@@ -45,6 +59,9 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    /// Cumulative total of every amount ever credited via `receive_payment` /
+    /// `batch_receive_payment`, regardless of routing (pool or developer).
+    TotalReceived,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -62,6 +79,19 @@ pub enum Severity {
 pub struct AdminBroadcast {
     pub severity: Severity,
     pub message: soroban_sdk::String,
+}
+
+/// Storage TTL entry for a given storage key category, returned by
+/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
 }
 
 /// Developer balance record in settlement contract.
@@ -142,6 +172,15 @@ pub struct BalanceCreditedEvent {
     pub token: Address,
 }
 
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
 /// Emitted when a new vault address is proposed via `propose_vault()`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -186,6 +225,7 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when the admin proposes or executes a timelock'd developer balance
@@ -197,13 +237,4 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
-}
-
-/// Emitted when a deposit is made for a developer.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DepositEvent {
-    pub developer: Address,
-    pub token: Address,
-    pub amount: i128,
 }

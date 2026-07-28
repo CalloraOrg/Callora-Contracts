@@ -2,7 +2,7 @@
 
 use soroban_sdk::{contracttype, Address, Env};
 
-use crate::StorageKey;
+use crate::{StorageKey, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD};
 
 /// Mandatory delay between proposing and executing a balance migration.
 pub const DEVELOPER_MIGRATION_TIMELOCK_SECONDS: u64 = 86_400;
@@ -18,14 +18,20 @@ pub struct PendingDeveloperMigration {
     pub execute_after: u64,
 }
 
-/// Read a pending migration without mutating contract state.
+/// Read a pending migration and refresh its storage lifetime.
 pub(crate) fn get_pending_migration(
     env: &Env,
     from: &Address,
 ) -> Option<PendingDeveloperMigration> {
-    env.storage()
-        .persistent()
-        .get(&StorageKey::PendingDeveloperMigration(from.clone()))
+    let key = StorageKey::PendingDeveloperMigration(from.clone());
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+    env.storage().persistent().get(&key)
 }
 
 /// Persist a pending migration and refresh its storage lifetime.

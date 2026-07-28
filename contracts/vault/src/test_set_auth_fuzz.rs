@@ -17,7 +17,7 @@ fn fuzz_like_set_authorized_caller_auth_and_nonce_invariants() {
 
     env.mock_all_auths();
     let usdc = create_usdc(&env, &owner);
-    client.init(&owner, &usdc, &None, &None, &None, &None, &None);
+    client.init(&owner, &usdc, &Some(0), &Some(owner.clone()), &Some(1), &None, &None);
 
     // Deterministic pseudo-fuzz matrix over auth mode / nonce mode / caller kind.
     for auth_enabled in [false, true] {
@@ -56,7 +56,7 @@ fn fuzz_like_set_authorized_caller_auth_and_nonce_invariants() {
                 }
 
                 if set_to_vault_address {
-                    assert_eq!(result, Err(Ok(VaultError::AuthorizedCallerCannotBeVault)));
+                    assert_eq!(result, Err(Ok(VaultError::AuthorizedCallerCannotBeVault);
                     assert_eq!(after_meta.authorized_caller, before_meta.authorized_caller);
                     assert_eq!(after_nonce, before_nonce);
                     continue;
@@ -66,7 +66,7 @@ fn fuzz_like_set_authorized_caller_auth_and_nonce_invariants() {
                     assert!(result.is_ok());
                     assert_eq!(after_nonce, before_nonce.wrapping_add(1));
                 } else {
-                    assert_eq!(result, Err(Ok(VaultError::StaleNonce)));
+                    assert_eq!(result, Err(Ok(VaultError::StaleNonce);
                     assert_eq!(after_nonce, before_nonce);
                 }
             }
