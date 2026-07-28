@@ -1,0 +1,86 @@
+use soroban_sdk::contracterror;
+
+/// Typed, machine-readable error codes for the Callora Distribute contract.
+///
+/// Numeric discriminants are part of the contract interface and must remain
+/// stable over time.  Callers and indexers may branch on these `u32` codes
+/// instead of parsing panic strings.
+///
+/// | Code | Variant                  | Meaning                                            |
+/// |------|--------------------------|----------------------------------------------------|
+/// | 1    | NotInitialized           | A function was called before `init`                |
+/// | 2    | AlreadyInitialized       | `init` was called more than once                   |
+/// | 3    | Unauthorized             | Caller is not the admin or authorized caller       |
+/// | 4    | Paused                   | Contract is currently paused                       |
+/// | 5    | AccountLimitExceeded     | Account would exceed per-account state cap         |
+/// | 6    | AccountStateEmpty        | Cannot close a state entry that does not exist     |
+/// | 7    | BatchEmpty               | Batch operation received an empty items list       |
+/// | 8    | BatchTooLarge            | Batch exceeds `MAX_BATCH_SIZE`                     |
+/// | 9    | Overflow                 | Arithmetic overflow detected                       |
+/// | 10   | CapNotPositive           | Global cap must be greater than zero                |
+/// | 11   | NewAdminSameAsCurrent    | Nominated admin is the same as current admin       |
+/// | 12   | NoAdminTransferPending   | No admin transfer is pending to cancel             |
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum DistributeError {
+    /// A function was called before `init` (code 1).
+    NotInitialized = 1,
+    /// `init` was called more than once (code 2).
+    AlreadyInitialized = 2,
+    /// Caller is not the admin or an authorized caller (code 3).
+    Unauthorized = 3,
+    /// Contract is currently paused (code 4).
+    Paused = 4,
+    /// Account would exceed the per-account state cap (code 5).
+    AccountLimitExceeded = 5,
+    /// Cannot close a state entry that does not exist — count is zero (code 6).
+    AccountStateEmpty = 6,
+    /// Batch operation received an empty items list (code 7).
+    BatchEmpty = 7,
+    /// Batch exceeds `MAX_BATCH_SIZE` (code 8).
+    BatchTooLarge = 8,
+    /// Arithmetic overflow detected (code 9).
+    Overflow = 9,
+    /// Global cap must be greater than zero (code 10).
+    CapNotPositive = 10,
+    /// Nominated admin is the same as current admin (code 11).
+    NewAdminSameAsCurrent = 11,
+    /// No admin transfer is pending to cancel (code 12).
+    NoAdminTransferPending = 12,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that every error discriminant is unique and sequential.
+    #[test]
+    fn error_codes_are_unique_and_sequential() {
+        let codes: [u32; 12] = [
+            DistributeError::NotInitialized as u32,
+            DistributeError::AlreadyInitialized as u32,
+            DistributeError::Unauthorized as u32,
+            DistributeError::Paused as u32,
+            DistributeError::AccountLimitExceeded as u32,
+            DistributeError::AccountStateEmpty as u32,
+            DistributeError::BatchEmpty as u32,
+            DistributeError::BatchTooLarge as u32,
+            DistributeError::Overflow as u32,
+            DistributeError::CapNotPositive as u32,
+            DistributeError::NewAdminSameAsCurrent as u32,
+            DistributeError::NoAdminTransferPending as u32,
+        ];
+        let mut seen = [false; 13];
+        for (i, &code) in codes.iter().enumerate() {
+            assert_eq!(
+                code,
+                (i + 1) as u32,
+                "code for variant {i} should be {}",
+                i + 1
+            );
+            assert!(!seen[code as usize], "duplicate discriminant {code}");
+            seen[code as usize] = true;
+        }
+    }
+}
