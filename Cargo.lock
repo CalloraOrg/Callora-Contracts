@@ -340,6 +340,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-storage"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-validators"
 version = "0.1.0"
 dependencies = [
