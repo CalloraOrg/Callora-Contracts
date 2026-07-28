@@ -259,6 +259,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-cold"
 version = "0.0.1"
 dependencies = [
@@ -288,6 +296,13 @@ dependencies = [
 [[package]]
 name = "callora-distribute"
 version = "0.0.1"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-fee"
+version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
@@ -358,6 +373,13 @@ version = "0.0.0"
 dependencies = [
  "callora-settlement",
  "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-upgrade"
+version = "0.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
