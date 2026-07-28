@@ -85,11 +85,7 @@ impl EmergencyMigration {
     /// # Errors
     /// * [`MigrationError::AlreadyInitialized`] — called more than once.
     /// * [`MigrationError::InvalidInitialVersion`] — `initial_version > u32::MAX - 1024`.
-    pub fn init(
-        env: Env,
-        admin: Address,
-        initial_version: u32,
-    ) -> Result<(), MigrationError> {
+    pub fn init(env: Env, admin: Address, initial_version: u32) -> Result<(), MigrationError> {
         admin.require_auth();
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(MigrationError::AlreadyInitialized);
@@ -170,9 +166,7 @@ impl EmergencyMigration {
             last_updated: legacy.last_updated,
             reserved: 0,
         };
-        env.storage()
-            .instance()
-            .set(&StorageKey::Current, &current);
+        env.storage().instance().set(&StorageKey::Current, &current);
         env.storage()
             .instance()
             .set(&StorageKey::Version, &target_version);
@@ -354,7 +348,9 @@ mod tests {
         let (admin, contract) = setup(&env);
         let client = EmergencyMigrationClient::new(&env, &contract);
         let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
-        assert!(client.try_authorize_upgrade(&admin, &7, &zero_hash).is_err());
+        assert!(client
+            .try_authorize_upgrade(&admin, &7, &zero_hash)
+            .is_err());
     }
 
     #[test]

@@ -1149,39 +1149,6 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
-    // Timelock window
-    // -----------------------------------------------------------------------
-
-    pub fn set_timelock_window(env: Env, caller: Address, window: u64) -> Result<(), VaultError> {
-        Self::require_admin(&env, &caller)?;
-        if window < timelock::MIN_TIMELOCK_SECONDS || window > timelock::MAX_TIMELOCK_SECONDS {
-            return Err(VaultError::InvalidTimelockWindow);
-        }
-        timelock::set_timelock_window(&env, window);
-        env.events().publish(
-            (events::event_timelock_window_changed(&env), caller),
-            (timelock::get_timelock_window(&env), window),
-        );
-        Ok(())
-    }
-
-    pub fn get_timelock_window(env: Env) -> u64 {
-        timelock::get_timelock_window(&env)
-    }
-
-    pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
-        timelock::get_pending_pause(&env)
-    }
-
-    pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
-        timelock::get_pending_upgrade(&env)
-    }
-
-    pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
-        timelock::get_pending_sweep(&env)
-    }
-
-    // -----------------------------------------------------------------------
     // Propose/Execute/Cancel — pause
     // -----------------------------------------------------------------------
 
@@ -1519,9 +1486,11 @@ impl CalloraVault {
     fn mark_request_processed(env: &Env, request_id: &Symbol) {
         let key = StorageKey::ProcessedRequest(request_id.clone());
         env.storage().persistent().set(&key, &true);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            REQUEST_ID_BUMP_THRESHOLD,
+            REQUEST_ID_BUMP_AMOUNT,
+        );
     }
 
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
@@ -1719,11 +1688,7 @@ impl CalloraVault {
         // to rescue::rescue_funds for the USDC token.
         let usdc_addr: Option<Address> = env.storage().instance().get(&DataKey::UsdcToken);
         let protected_balance: Option<i128> = if usdc_addr.as_ref() == Some(&token_address) {
-            let bal: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::Balance)
-                .unwrap_or(0);
+            let bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
             Some(bal)
         } else {
             None

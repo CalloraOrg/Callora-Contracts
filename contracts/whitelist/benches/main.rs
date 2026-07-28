@@ -46,9 +46,7 @@ fn bench_clear_all(c: &mut Criterion) {
 
 fn bench_add_address_multiple(c: &mut Criterion) {
     let (env, owner, _depositor, client) = setup();
-    let addresses: Vec<Address> = (0..10)
-        .map(|_| Address::generate(&env))
-        .collect();
+    let addresses: Vec<Address> = (0..10).map(|_| Address::generate(&env)).collect();
     c.bench_function("whitelist/add_address_10", |b| {
         b.iter(|| {
             for addr in addresses.iter() {

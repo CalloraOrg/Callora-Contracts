@@ -40,7 +40,9 @@
 //! | `migrate`             | `emergency_migrated`| `(topic)`       | `target_version`     |
 //! | `authorize_upgrade`   | `upgrade_authorised`| `(topic, hash)` | `target_version`     |
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
+};
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -147,11 +149,7 @@ impl EmergencyMigrate {
     /// # Errors
     ///
     /// Returns [`EmergencyError::AlreadyInitialized`] if already initialised.
-    pub fn init(
-        env: Env,
-        admin: Address,
-        initial_version: u32,
-    ) -> Result<(), EmergencyError> {
+    pub fn init(env: Env, admin: Address, initial_version: u32) -> Result<(), EmergencyError> {
         admin.require_auth();
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(EmergencyError::AlreadyInitialized);
@@ -244,17 +242,13 @@ impl EmergencyMigrate {
             reserved: 0,
         };
 
-        env.storage()
-            .instance()
-            .set(&StorageKey::Current, &current);
+        env.storage().instance().set(&StorageKey::Current, &current);
         env.storage()
             .instance()
             .set(&StorageKey::Version, &target_version);
 
-        env.events().publish(
-            (event_emergency_migrated(&env),),
-            target_version,
-        );
+        env.events()
+            .publish((event_emergency_migrated(&env),), target_version);
 
         Ok(current)
     }
@@ -303,14 +297,13 @@ impl EmergencyMigrate {
             return Err(EmergencyError::VersionMismatch);
         }
 
-        env.storage()
-            .instance()
-            .set(&StorageKey::AuthorisedUpgrade, &(target_version, wasm_hash.clone()));
-
-        env.events().publish(
-            (event_upgrade_authorised(&env), wasm_hash),
-            target_version,
+        env.storage().instance().set(
+            &StorageKey::AuthorisedUpgrade,
+            &(target_version, wasm_hash.clone()),
         );
+
+        env.events()
+            .publish((event_upgrade_authorised(&env), wasm_hash), target_version);
 
         Ok(())
     }
@@ -338,8 +331,7 @@ impl EmergencyMigrate {
     /// - Both the stored version and the authorised version match, **and** the
     ///   supplied hash matches the authorised hash.
     pub fn is_upgrade_authorised(env: Env, wasm_hash: BytesN<32>) -> bool {
-        let stored_version: Option<u32> =
-            env.storage().instance().get(&StorageKey::Version);
+        let stored_version: Option<u32> = env.storage().instance().get(&StorageKey::Version);
         let authorisation: Option<(u32, BytesN<32>)> =
             env.storage().instance().get(&StorageKey::AuthorisedUpgrade);
 
@@ -718,9 +710,9 @@ mod tests {
         // Check that the emergency_migrated event was emitted.
         let all_events = env.events().all();
         let expected_topic = Symbol::new(&env, "emergency_migrated");
-        let has_migrated_event = all_events.into_iter().any(|(_addr, topics, _data)| {
-            topics.contains(&expected_topic.to_val())
-        });
+        let has_migrated_event = all_events
+            .into_iter()
+            .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
         assert!(has_migrated_event);
     }
 
@@ -735,9 +727,9 @@ mod tests {
 
         let all_events = env.events().all();
         let expected_topic = Symbol::new(&env, "upgrade_authorised");
-        let has_auth_event = all_events.into_iter().any(|(_addr, topics, _data)| {
-            topics.contains(&expected_topic.to_val())
-        });
+        let has_auth_event = all_events
+            .into_iter()
+            .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
         assert!(has_auth_event);
     }
 

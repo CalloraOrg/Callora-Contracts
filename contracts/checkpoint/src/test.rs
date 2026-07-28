@@ -2,8 +2,8 @@ use crate::{
     CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD,
     MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
-use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::testutils::storage::Persistent;
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
 /// Helper: initialise a fresh checkpoint contract and return `(env, admin, client)`.
@@ -552,14 +552,14 @@ fn test_get_checkpoint_bumps_ttl_on_read() {
     // the threshold, but the entry has not yet expired.
     let seq = env.ledger().sequence();
     env.as_contract(&client.address, || {
-        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
     });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
 
-    let ttl_before = env.as_contract(&client.address, || {
-        env.storage().persistent().get_ttl(&key)
-    });
+    let ttl_before = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert!(
         ttl_before < LIFETIME_THRESHOLD,
         "sanity: TTL should be below the bump threshold before the read"
@@ -569,9 +569,7 @@ fn test_get_checkpoint_bumps_ttl_on_read() {
     let record = client.get_checkpoint(&id);
     assert_eq!(record.balance, 1000);
 
-    let ttl_after = env.as_contract(&client.address, || {
-        env.storage().persistent().get_ttl(&key)
-    });
+    let ttl_after = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert_eq!(
         ttl_after, BUMP_AMOUNT,
         "buffer #26: get_checkpoint must bump TTL back to BUMP_AMOUNT"
@@ -591,7 +589,9 @@ fn test_get_checkpoints_range_bumps_ttl_for_every_returned_record() {
 
     let seq = env.ledger().sequence();
     env.as_contract(&client.address, || {
-        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
     });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
@@ -601,9 +601,7 @@ fn test_get_checkpoints_range_bumps_ttl_for_every_returned_record() {
 
     for id in 1..=3u64 {
         let key = StorageKey::Checkpoint(id);
-        let ttl = env.as_contract(&client.address, || {
-            env.storage().persistent().get_ttl(&key)
-        });
+        let ttl = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
         assert_eq!(
             ttl, BUMP_AMOUNT,
             "buffer #26: get_checkpoints_range must bump TTL for checkpoint {id}"
@@ -624,7 +622,9 @@ fn test_get_latest_checkpoint_bumps_ttl_on_read() {
 
     let seq = env.ledger().sequence();
     env.as_contract(&client.address, || {
-        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
     });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
@@ -632,9 +632,7 @@ fn test_get_latest_checkpoint_bumps_ttl_on_read() {
     let latest = client.get_latest_checkpoint().unwrap();
     assert_eq!(latest.id, id);
 
-    let ttl = env.as_contract(&client.address, || {
-        env.storage().persistent().get_ttl(&key)
-    });
+    let ttl = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert_eq!(
         ttl, BUMP_AMOUNT,
         "buffer #26: get_latest_checkpoint must bump TTL of the returned record"
@@ -657,16 +655,19 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
 
     // Advance to just before the original write-path bump would expire.
     env.as_contract(&client.address, || {
-        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
     });
-    env.ledger()
-        .set_sequence_number(seq_init + BUMP_AMOUNT - 1);
+    env.ledger().set_sequence_number(seq_init + BUMP_AMOUNT - 1);
     let _ = client.get_checkpoint(&id); // read-path bump
 
     // Advance past where the *original* bump would have expired.
     let seq_after_read = env.ledger().sequence();
     env.as_contract(&client.address, || {
-        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
     });
     env.ledger()
         .set_sequence_number(seq_after_read + LIFETIME_THRESHOLD + 10);

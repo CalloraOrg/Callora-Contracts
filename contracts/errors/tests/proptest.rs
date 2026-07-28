@@ -210,7 +210,9 @@ fn build_trace(seed: u64) -> std::vec::Vec<ErrorsAction> {
                         rng.gen_u32()
                     },
                 },
-                2 => ErrorsAction::RegisterErrorWrongAdmin { code: rng.gen_u32() },
+                2 => ErrorsAction::RegisterErrorWrongAdmin {
+                    code: rng.gen_u32(),
+                },
                 _ => ErrorsAction::DoubleInit,
             }
         })

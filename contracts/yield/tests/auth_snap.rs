@@ -109,7 +109,17 @@ fn place_bet_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
     let res = client.try_place_bet(&alice);
@@ -121,9 +131,19 @@ fn clear_bet_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
-    
+
     mock_auth!(&env, &alice, client, "place_bet", &alice);
     client.place_bet(&alice);
 
@@ -136,7 +156,17 @@ fn open_position_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
     let res = client.try_open_position(&alice);
@@ -148,7 +178,17 @@ fn close_position_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
     mock_auth!(&env, &alice, client, "open_position", &alice);
     client.open_position(&alice);
@@ -162,7 +202,17 @@ fn subscribe_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
     let res = client.try_subscribe(&alice);
@@ -174,7 +224,17 @@ fn unsubscribe_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 5u32, 5u32, 5u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        5u32,
+        5u32,
+        5u32
+    );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
     mock_auth!(&env, &alice, client, "subscribe", &alice);
     client.subscribe(&alice);
@@ -252,7 +312,17 @@ fn authenticated_happy_path() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(&env, &admin, client, "set_account_limits", &admin, &alice, 3u32, 3u32, 3u32);
+    mock_auth!(
+        &env,
+        &admin,
+        client,
+        "set_account_limits",
+        &admin,
+        &alice,
+        3u32,
+        3u32,
+        3u32
+    );
     client.set_account_limits(&admin, &alice, &3u32, &3u32, &3u32);
     mock_auth!(&env, &alice, client, "place_bet", &alice);
     client.place_bet(&alice);
@@ -260,7 +330,7 @@ fn authenticated_happy_path() {
     client.place_bet(&alice);
     mock_auth!(&env, &alice, client, "place_bet", &alice);
     client.place_bet(&alice);
-    
+
     mock_auth!(&env, &alice, client, "place_bet", &alice);
     let try_res = client.try_place_bet(&alice);
     assert_eq!(try_res, Err(Ok(callora_yield::YieldLimitError::BetsAtCap)));

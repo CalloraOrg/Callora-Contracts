@@ -175,7 +175,10 @@ mod tests {
             .instance()
             .get(&StorageKey::Paused)
             .unwrap_or(false);
-        assert!(from_contract_key, "pause.rs must write to StorageKey::Paused");
+        assert!(
+            from_contract_key,
+            "pause.rs must write to StorageKey::Paused"
+        );
 
         // Read via the module's own is_paused helper.
         assert!(is_paused(&env));
@@ -206,4 +209,3 @@ mod tests {
         assert!(!is_paused(&env));
     }
 }
-

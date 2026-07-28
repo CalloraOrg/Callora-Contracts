@@ -127,10 +127,8 @@ impl CalloraVault {
         //    `max_fee_bps == u16::MAX` (sentinel = no limit) or when the
         //    balance is zero (division-by-zero guard).
         if max_fee_bps < u16::MAX && meta.balance > 0 {
-            let calculated_fee_bps = amount
-                .checked_mul(10_000)
-                .ok_or(VaultError::Overflow)?
-                / meta.balance;
+            let calculated_fee_bps =
+                amount.checked_mul(10_000).ok_or(VaultError::Overflow)? / meta.balance;
             if calculated_fee_bps > max_fee_bps as i128 {
                 return Err(VaultError::Slippage);
             }

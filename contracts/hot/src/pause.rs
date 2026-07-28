@@ -234,11 +234,11 @@ mod tests {
         client.pause(&admin);
         advance(&env, 300); // t=600; pause cooldown from t=300 is now clear
         client.unpause(&admin); // unpause fires at t=600
-        // The contract is now unpaused. Re-pause immediately (pause cooldown
-        // cleared at t=600, so this succeeds).
+                                // The contract is now unpaused. Re-pause immediately (pause cooldown
+                                // cleared at t=600, so this succeeds).
         client.pause(&admin); // pause fires at t=600
-        // Now: contract is paused, unpause cooldown armed at t=600 (window=300).
-        // Advance only 299 s — unpause still cooling.
+                              // Now: contract is paused, unpause cooldown armed at t=600 (window=300).
+                              // Advance only 299 s — unpause still cooling.
         advance(&env, 299); // t=899
         let res = client.try_unpause(&admin);
         assert_eq!(res, Err(Ok(HotError::CooldownActive)));

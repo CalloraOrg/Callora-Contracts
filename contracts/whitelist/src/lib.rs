@@ -190,11 +190,7 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
-    pub fn add_address(
-        env: Env,
-        caller: Address,
-        address: Address,
-    ) -> Result<(), WhitelistError> {
+    pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
         caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
@@ -255,9 +251,7 @@ impl CalloraWhitelist {
         }
 
         if list.is_empty() {
-            env.storage()
-                .instance()
-                .remove(&StorageKey::WhitelistList);
+            env.storage().instance().remove(&StorageKey::WhitelistList);
         } else {
             env.storage()
                 .instance()
@@ -286,9 +280,7 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
-        env.storage()
-            .instance()
-            .remove(&StorageKey::WhitelistList);
+        env.storage().instance().remove(&StorageKey::WhitelistList);
 
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -501,10 +493,7 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(
-            result.unwrap_err(),
-            WhitelistError::NoAdminTransferPending
-        );
+        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
     }
 
     // -----------------------------------------------------------------------
