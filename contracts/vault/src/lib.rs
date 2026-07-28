@@ -1037,6 +1037,8 @@ impl CalloraVault {
             .instance()
             .set(&StorageKey::PendingAdmin, &new_admin);
         Self::bump_instance_ttl(&env);
+        env.events()
+            .publish((events::event_admin_nominated(&env), caller), new_admin);
         Ok(())
     }
 
@@ -1050,6 +1052,8 @@ impl CalloraVault {
         new_admin.require_auth();
         env.storage().instance().set(&StorageKey::Admin, &new_admin);
         env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_accepted(&env), new_admin), ());
         Ok(())
     }
 
