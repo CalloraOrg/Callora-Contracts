@@ -20,6 +20,8 @@ members = [
     "contracts/whitelist",
     "contracts/cold",
     "contracts/errors",
+    "contracts/registry",
+    "contracts/hot",
 ]
 default-members = [
     "contracts/revenue_pool",

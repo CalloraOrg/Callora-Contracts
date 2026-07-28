@@ -340,13 +340,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-upgrade"
-version = "0.0.0"
-dependencies = [
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-validators"
 version = "0.1.0"
 dependencies = [
@@ -358,14 +351,6 @@ dependencies = [
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-yield"
-version = "0.0.1"
-dependencies = [
- "callora-revenue-pool",
  "soroban-sdk",
 ]
 
@@ -707,6 +692,10 @@ dependencies = [
  "libc",
  "windows-sys",
 ]
+
+[[package]]
+name = "errors"
+version = "0.1.0"
 
 [[package]]
 name = "escape-bytes"
