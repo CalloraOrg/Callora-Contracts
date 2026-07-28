@@ -145,7 +145,7 @@ fn test_second_action_within_window_rejected() {
     client.unpause(&admin);
     assert!(!client.is_paused());
 
-    // A second pause within the window is rejected.
+    // A second pause is now blocked by the cooldown window.
     let res = client.try_pause(&admin);
     assert_eq!(res, Err(Ok(HotError::CooldownActive)));
 }
@@ -153,7 +153,11 @@ fn test_second_action_within_window_rejected() {
 #[test]
 fn test_action_allowed_after_window_elapses() {
     let (env, admin, _signer, client) = setup(Some(300));
+    // Pause, then unpause so the contract is not paused; this arms both cooldowns at t=0.
     client.pause(&admin);
+    client.unpause(&admin);
+
+    // Attempting pause immediately is blocked by the cooldown.
     let res = client.try_pause(&admin);
     assert_eq!(res, Err(Ok(HotError::CooldownActive)));
 
@@ -192,8 +196,10 @@ fn test_per_action_isolation() {
 fn test_shorter_cooldown_takes_effect_for_next_check() {
     let (env, admin, _signer, client) = setup(Some(1000));
     client.pause(&admin);
+    // Unpause so the contract is not paused (arms both cooldowns at t=0).
+    client.unpause(&admin);
 
-    // Shorten the window; the pending pause becomes available sooner.
+    // Shorten the window; the pending cooldown becomes available sooner.
     client.set_cooldown(&admin, &10);
     advance(&env, 10);
     let pause = Symbol::new(&env, ACTION_PAUSE);
@@ -277,4 +283,48 @@ fn test_new_admin_controls_cooldown_after_rotation() {
     // New admin can.
     client.set_cooldown(&new_admin, &120);
     assert_eq!(client.get_cooldown(), 120);
+}
+
+// ===========================================================================
+// Benchmark setup smoke-test (validates benches/main.rs entrypoints)
+// ===========================================================================
+
+#[test]
+fn test_bench_setup_exercises_all_hot_entrypoints() {
+    let (env, admin, _signer, client) = setup(Some(60));
+
+    // Views
+    assert!(!client.is_paused());
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_signer(), client.get_signer());
+    assert_eq!(client.get_cooldown(), 60);
+    assert_eq!(client.get_pending_admin(), None);
+
+    let pause = Symbol::new(&env, ACTION_PAUSE);
+    assert_eq!(client.cooldown_remaining(&pause), 0);
+    assert!(client.is_ready(&pause));
+
+    // Critical action with cooldown
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    advance(&env, 61);
+    assert!(client.is_ready(&pause));
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+
+    advance(&env, 61);
+    let new_signer = Address::generate(&env);
+    client.rotate_signer(&admin, &new_signer);
+    assert_eq!(client.get_signer(), new_signer);
+
+    // Admin config (no cooldown)
+    client.set_cooldown(&admin, &120);
+    assert_eq!(client.get_cooldown(), 120);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
 }

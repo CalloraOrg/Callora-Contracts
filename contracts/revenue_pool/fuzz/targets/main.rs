@@ -89,7 +89,7 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
     (addr.clone(), RevenuePoolClient::new(env, &addr))
 }
 
-type CatchResult<T> = std::result::Result
+type CatchResult<T> = std::result::Result<
     std::result::Result<T, std::result::Result<soroban_sdk::Error, InvokeError>>,
     Box<dyn std::any::Any + Send>,
 >;
@@ -159,11 +159,20 @@ fuzz_target!(|data: &[u8]| {
                         balance_before - amount,
                         "distribute conservation violated"
                     );
-                    assert!(amount <= max_distribute, "distribute exceeded max_distribute");
+                    assert!(
+                        amount <= max_distribute,
+                        "distribute exceeded max_distribute"
+                    );
                 } else {
-                    assert_eq!(balance_before, balance_after, "rejected distribute mutated balance");
+                    assert_eq!(
+                        balance_before, balance_after,
+                        "rejected distribute mutated balance"
+                    );
                 }
-                assert!(pool.balance() >= 0, "balance went negative after distribute");
+                assert!(
+                    pool.balance() >= 0,
+                    "balance went negative after distribute"
+                );
             }
 
             // -----------------------------------------------------------
@@ -196,7 +205,10 @@ fuzz_target!(|data: &[u8]| {
                         "rejected batch_distribute mutated balance"
                     );
                 }
-                assert!(pool.balance() >= 0, "balance went negative after batch_distribute");
+                assert!(
+                    pool.balance() >= 0,
+                    "balance went negative after batch_distribute"
+                );
             }
 
             // -----------------------------------------------------------
@@ -210,7 +222,10 @@ fuzz_target!(|data: &[u8]| {
                 if is_success(&result) {
                     max_distribute = new_max;
                 }
-                assert!(pool.get_max_distribute() > 0, "max_distribute became non-positive");
+                assert!(
+                    pool.get_max_distribute() > 0,
+                    "max_distribute became non-positive"
+                );
             }
 
             // -----------------------------------------------------------
@@ -246,7 +261,10 @@ fuzz_target!(|data: &[u8]| {
                         "deposit_yield conservation violated"
                     );
                 } else {
-                    assert_eq!(balance_before, balance_after, "rejected deposit_yield mutated balance");
+                    assert_eq!(
+                        balance_before, balance_after,
+                        "rejected deposit_yield mutated balance"
+                    );
                 }
             }
 
@@ -278,8 +296,15 @@ fuzz_target!(|data: &[u8]| {
                 }));
                 env.mock_all_auths();
 
-                assert_eq!(bal, pool.balance(), "unauthenticated distribute changed balance");
-                assert!(!is_success(&result), "unauthenticated distribute unexpectedly succeeded");
+                assert_eq!(
+                    bal,
+                    pool.balance(),
+                    "unauthenticated distribute changed balance"
+                );
+                assert!(
+                    !is_success(&result),
+                    "unauthenticated distribute unexpectedly succeeded"
+                );
             }
 
             // -----------------------------------------------------------
@@ -297,8 +322,15 @@ fuzz_target!(|data: &[u8]| {
                 }));
                 env.mock_all_auths();
 
-                assert_eq!(bal, pool.balance(), "unauthenticated batch_distribute changed balance");
-                assert!(!is_success(&result), "unauthenticated batch_distribute unexpectedly succeeded");
+                assert_eq!(
+                    bal,
+                    pool.balance(),
+                    "unauthenticated batch_distribute changed balance"
+                );
+                assert!(
+                    !is_success(&result),
+                    "unauthenticated batch_distribute unexpectedly succeeded"
+                );
             }
 
             // -----------------------------------------------------------
@@ -322,9 +354,20 @@ fuzz_target!(|data: &[u8]| {
         // -----------------------------------------------------------------
         // Post-step global invariants
         // -----------------------------------------------------------------
-        assert!(pool.balance() >= 0, "invariant: negative balance after op {op}");
-        assert_eq!(pool.get_admin(), admin, "invariant: admin changed after op {op}");
-        assert_eq!(pool.get_usdc_token(), usdc_addr, "invariant: usdc_token changed after op {op}");
+        assert!(
+            pool.balance() >= 0,
+            "invariant: negative balance after op {op}"
+        );
+        assert_eq!(
+            pool.get_admin(),
+            admin,
+            "invariant: admin changed after op {op}"
+        );
+        assert_eq!(
+            pool.get_usdc_token(),
+            usdc_addr,
+            "invariant: usdc_token changed after op {op}"
+        );
 
         if pool.is_paused() {
             let dev = devs[0].clone();
@@ -332,7 +375,10 @@ fuzz_target!(|data: &[u8]| {
             let d = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 pool.try_distribute(&admin, &dev, &small)
             }));
-            assert!(!is_success(&d), "invariant: distribute succeeded while paused (op {op})");
+            assert!(
+                !is_success(&d),
+                "invariant: distribute succeeded while paused (op {op})"
+            );
         }
     }
 

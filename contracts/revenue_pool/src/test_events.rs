@@ -1,18 +1,18 @@
 //! Focused event tests for revenue_pool structured events
 //!
-//! Tests ensuring all 21 lifecycle events are properly structured.
+//! Tests ensuring all 23 lifecycle events are properly structured.
 
 extern crate std;
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal};
+use soroban_sdk::{token, Address, Env, IntoVal, Symbol, TryFromVal};
 
 #[test]
 fn all_event_constructors_return_correct_symbols() {
     let env = Env::default();
 
-    // Test all 21 event constructor functions return correct string symbols
+    // Test all 23 event constructor functions return correct string symbols
     assert_eq!(events::event_init(&env), Symbol::new(&env, "init"));
     assert_eq!(
         events::event_admin_changed(&env),
@@ -74,6 +74,14 @@ fn all_event_constructors_return_correct_symbols() {
         events::event_batch_distribute(&env),
         Symbol::new(&env, "batch_distribute")
     );
+    assert_eq!(
+        events::event_distribute_started(&env),
+        Symbol::new(&env, "distribute_started")
+    );
+    assert_eq!(
+        events::event_distribute_completed(&env),
+        Symbol::new(&env, "distribute_completed")
+    );
     assert_eq!(events::event_upgraded(&env), Symbol::new(&env, "upgraded"));
     assert_eq!(
         events::event_admin_broadcast(&env),
@@ -120,6 +128,65 @@ fn init_event_structure_validation() {
     // Verify event data contains usdc address
     let data: Address = event.2.into_val(&env);
     assert_eq!(data, usdc_addr);
+}
+
+#[test]
+fn distribute_lifecycle_events_have_stable_topics_and_payloads() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(admin.clone());
+    let pool_addr = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &pool_addr);
+
+    client.init(&admin, &asset.address());
+    token::StellarAssetClient::new(&env, &asset.address()).mint(&pool_addr, &1_000_000);
+    client.distribute(&admin, &developer, &1_000_000);
+
+    let lifecycle_events: std::vec::Vec<_> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|event| {
+            event
+                .1
+                .get(0)
+                .and_then(|value| Symbol::try_from_val(&env, &value).ok())
+                .map(|topic| {
+                    topic == Symbol::new(&env, "distribute_started")
+                        || topic == Symbol::new(&env, "distribute_completed")
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+
+    assert_eq!(lifecycle_events.len(), 2);
+    assert_eq!(lifecycle_events[0].1.len(), 3);
+    assert_eq!(
+        Symbol::try_from_val(&env, &lifecycle_events[0].1.get(0).unwrap()).unwrap(),
+        Symbol::new(&env, "distribute_started")
+    );
+    assert_eq!(
+        Symbol::try_from_val(&env, &lifecycle_events[1].1.get(0).unwrap()).unwrap(),
+        Symbol::new(&env, "distribute_completed")
+    );
+
+    for event in lifecycle_events {
+        let caller = Address::try_from_val(&env, &event.1.get(1).unwrap()).unwrap();
+        let recipient = Address::try_from_val(&env, &event.1.get(2).unwrap()).unwrap();
+        let payload = events::DistributionLifecycleEvent::try_from_val(&env, &event.2).unwrap();
+
+        assert_eq!(caller, admin);
+        assert_eq!(recipient, developer);
+        assert_eq!(payload.version, events::DISTRIBUTION_EVENT_VERSION);
+        assert_eq!(payload.amount, 1_000_000);
+        assert_eq!(payload.mode, events::DistributionMode::Single);
+        assert_eq!(payload.batch_index, 0);
+        assert_eq!(payload.batch_size, 1);
+        assert_eq!(payload.ledger_sequence, env.ledger().sequence());
+        assert_eq!(payload.timestamp, env.ledger().timestamp());
+    }
 }
 
 #[test]

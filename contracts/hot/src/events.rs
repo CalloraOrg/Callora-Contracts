@@ -47,6 +47,22 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"paused"` event topic.
+///
+/// Emitted by [`crate::pause::do_pause`] when the circuit-breaker is
+/// activated. Topic carries the `caller` address; data is `()`.
+pub fn event_paused(env: &Env) -> Symbol {
+    Symbol::new(env, "paused")
+}
+
+/// Returns the Symbol for the `"unpaused"` event topic.
+///
+/// Emitted by [`crate::pause::do_unpause`] when the circuit-breaker is
+/// deactivated. Topic carries the `caller` address; data is `()`.
+pub fn event_unpaused(env: &Env) -> Symbol {
+    Symbol::new(env, "unpaused")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +107,19 @@ mod tests {
             event_admin_accepted(&env),
             Symbol::new(&env, "admin_accepted")
         );
+    }
+
+    /// Snapshot: proves event_paused still maps to exactly the bytes for "paused".
+    #[test]
+    fn test_event_paused_bytes() {
+        let env = Env::default();
+        assert_eq!(event_paused(&env), Symbol::new(&env, "paused"));
+    }
+
+    /// Snapshot: proves event_unpaused still maps to exactly the bytes for "unpaused".
+    #[test]
+    fn test_event_unpaused_bytes() {
+        let env = Env::default();
+        assert_eq!(event_unpaused(&env), Symbol::new(&env, "unpaused"));
     }
 }

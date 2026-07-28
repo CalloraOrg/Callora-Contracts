@@ -185,14 +185,7 @@ fn register_offering_with_gate_increments_count() {
     let oid = offering_id(&env, "gate-inc");
     let meta = metadata(&env);
 
-    client.register_offering_with_gate(
-        &admin,
-        &developer,
-        &token_addr,
-        &100i128,
-        &oid,
-        &meta,
-    );
+    client.register_offering_with_gate(&admin, &developer, &token_addr, &100i128, &oid, &meta);
     assert_eq!(client.registered_count(), 1);
     assert!(client.is_offering_registered(&oid));
 }
@@ -253,14 +246,7 @@ fn balance_gate_exact_match_allows_registration() {
     let oid = offering_id(&env, "exact");
     let meta = metadata(&env);
 
-    client.register_offering_with_gate(
-        &admin,
-        &developer,
-        &token_addr,
-        &500i128,
-        &oid,
-        &meta,
-    );
+    client.register_offering_with_gate(&admin, &developer, &token_addr, &500i128, &oid, &meta);
     assert!(client.is_offering_registered(&oid));
     assert_eq!(client.registered_count(), 1);
 }
@@ -295,10 +281,7 @@ fn balance_gate_one_below_min_rejects() {
         &meta,
     );
     assert!(
-        matches!(
-            result,
-            Err(Ok(RegistryError::InsufficientDeveloperBalance))
-        ),
+        matches!(result, Err(Ok(RegistryError::InsufficientDeveloperBalance))),
         "expected InsufficientDeveloperBalance, got {:?}",
         result
     );
@@ -331,9 +314,15 @@ fn register_offering_requires_caller_auth() {
     let registry_id = env.register(CalloraRegistry, ());
 
     env.as_contract(&registry_id, || {
-        env.storage().instance().set(&callora_registry::StorageKey::Admin, &admin);
-        env.storage().instance().set(&callora_registry::StorageKey::Catalog, &catalog);
-        env.storage().instance().set(&callora_registry::StorageKey::RegisteredCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::Catalog, &catalog);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::RegisteredCount, &0u32);
     });
 
     let client = CalloraRegistryClient::new(&env, &registry_id);
@@ -342,7 +331,10 @@ fn register_offering_requires_caller_auth() {
     let meta = metadata(&env);
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
-    assert!(result.is_err(), "register_offering must require caller auth");
+    assert!(
+        result.is_err(),
+        "register_offering must require caller auth"
+    );
 }
 
 #[test]
@@ -354,9 +346,15 @@ fn register_offering_with_gate_requires_caller_auth() {
     let registry_id = env.register(CalloraRegistry, ());
 
     env.as_contract(&registry_id, || {
-        env.storage().instance().set(&callora_registry::StorageKey::Admin, &admin);
-        env.storage().instance().set(&callora_registry::StorageKey::Catalog, &catalog);
-        env.storage().instance().set(&callora_registry::StorageKey::RegisteredCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::Admin, &admin);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::Catalog, &catalog);
+        env.storage()
+            .instance()
+            .set(&callora_registry::StorageKey::RegisteredCount, &0u32);
     });
 
     let client = CalloraRegistryClient::new(&env, &registry_id);
