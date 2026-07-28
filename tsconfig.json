@@ -2,13 +2,14 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "CommonJS",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    "jsx": "react",
     "outDir": "./dist",
     "rootDir": "."
   },
-  "include": ["scripts/**/*", "tests/**/*"]
+  "include": ["scripts/**/*", "src/**/*", "tests/**/*"]
 }

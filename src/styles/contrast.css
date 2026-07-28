@@ -1,0 +1,11 @@
+.status-indicator {
+  border-width: 1px;
+  border-style: solid;
+}
+
+@media (prefers-contrast: more) {
+  .status-indicator {
+    border-color: var(--status-contrast-border, #000000) !important;
+    color: var(--status-contrast-text, #000000) !important;
+  }
+}
