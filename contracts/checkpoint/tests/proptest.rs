@@ -148,14 +148,13 @@ proptest! {
 
             if let Ok(ids) = result {
                 for i in 0..ids.len() {
-                        expected_id += 1;
-                        let assigned_id = ids.get(i).unwrap();
-                        prop_assert_eq!(
-                            assigned_id, expected_id,
-                            "IDs not sequential: got {}, expected {}",
-                            assigned_id, expected_id
-                        );
-                    }
+                    expected_id += 1;
+                    let assigned_id = ids.get(i).unwrap();
+                    prop_assert_eq!(
+                        assigned_id, expected_id,
+                        "IDs not sequential: got {}, expected {}",
+                        assigned_id, expected_id
+                    );
                 }
             }
 
@@ -280,7 +279,7 @@ proptest! {
 
         // Result length should never exceed effective_limit
         prop_assert!(
-            result.len() as u32 <= effective_limit,
+            result.len() <= effective_limit,
             "result len {} > effective_limit {}",
             result.len(),
             effective_limit
@@ -470,7 +469,7 @@ proptest! {
             }));
 
             if let Ok(ids) = result {
-                expected_id = *ids.last().unwrap();
+                expected_id = ids.last().unwrap();
             }
 
             let latest = client.get_latest_checkpoint();
