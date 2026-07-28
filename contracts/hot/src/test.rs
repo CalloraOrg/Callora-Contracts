@@ -278,3 +278,47 @@ fn test_new_admin_controls_cooldown_after_rotation() {
     client.set_cooldown(&new_admin, &120);
     assert_eq!(client.get_cooldown(), 120);
 }
+
+// ===========================================================================
+// Benchmark setup smoke-test (validates benches/main.rs entrypoints)
+// ===========================================================================
+
+#[test]
+fn test_bench_setup_exercises_all_hot_entrypoints() {
+    let (env, admin, _signer, client) = setup(Some(60));
+
+    // Views
+    assert!(!client.is_paused());
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_signer(), client.get_signer());
+    assert_eq!(client.get_cooldown(), 60);
+    assert_eq!(client.get_pending_admin(), None);
+
+    let pause = Symbol::new(&env, ACTION_PAUSE);
+    assert_eq!(client.cooldown_remaining(&pause), 0);
+    assert!(client.is_ready(&pause));
+
+    // Critical action with cooldown
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    advance(&env, 61);
+    assert!(client.is_ready(&pause));
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+
+    advance(&env, 61);
+    let new_signer = Address::generate(&env);
+    client.rotate_signer(&admin, &new_signer);
+    assert_eq!(client.get_signer(), new_signer);
+
+    // Admin config (no cooldown)
+    client.set_cooldown(&admin, &120);
+    assert_eq!(client.get_cooldown(), 120);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
