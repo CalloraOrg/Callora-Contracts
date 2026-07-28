@@ -63,6 +63,8 @@ must not be reassigned once released.
 | 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
 | 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
 | 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
+| 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
+| 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
 
 ## Settlement
 
