@@ -1,5 +1,5 @@
 [package]
-name = "callora-hot"
+name = "callora-fee"
 version = "0.1.0"
 edition = "2021"
 publish = false
@@ -13,8 +13,3 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-criterion = "0.5"
-
-[[bench]]
-name = "main"
-harness = false

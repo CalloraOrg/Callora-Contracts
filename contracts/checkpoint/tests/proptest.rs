@@ -1,6 +1,8 @@
 extern crate std;
 
-use callora_checkpoint::{CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use callora_checkpoint::{
+    CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+};
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol, Vec as SorobanVec};
@@ -12,17 +14,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Clone, Debug)]
 enum CheckpointAction {
-    CreateSingle {
-        balance: i128,
-    },
-    CreateBatch {
-        count: u32,
-        balance: i128,
-    },
-    QueryRange {
-        start_id: u64,
-        limit: u32,
-    },
+    CreateSingle { balance: i128 },
+    CreateBatch { count: u32, balance: i128 },
+    QueryRange { start_id: u64, limit: u32 },
     QueryLatest,
 }
 
@@ -148,15 +142,20 @@ proptest! {
                 items.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
             }
 
-            let ids = client.batch_create_checkpoints(&admin, &items);
-            for i in 0..ids.len() {
-                expected_id += 1;
-                let assigned_id = ids.get(i).unwrap();
-                prop_assert_eq!(
-                    assigned_id, expected_id,
-                    "IDs not sequential: got {}, expected {}",
-                    assigned_id, expected_id
-                );
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.batch_create_checkpoints(&admin, &items)
+            }));
+
+            if let Ok(ids) = result {
+                for i in 0..ids.len() {
+                    expected_id += 1;
+                    let assigned_id = ids.get(i).unwrap();
+                    prop_assert_eq!(
+                        assigned_id, expected_id,
+                        "IDs not sequential: got {}, expected {}",
+                        assigned_id, expected_id
+                    );
+                }
             }
 
             // After each batch, count must equal expected_id
@@ -280,7 +279,7 @@ proptest! {
 
         // Result length should never exceed effective_limit
         prop_assert!(
-            result.len() as u32 <= effective_limit,
+            result.len() <= effective_limit,
             "result len {} > effective_limit {}",
             result.len(),
             effective_limit

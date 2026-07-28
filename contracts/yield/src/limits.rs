@@ -52,9 +52,7 @@
 //! ([`YieldLimitError::Overflow`] / [`YieldLimitError::CounterUnderflow`]) so
 //! production code paths never invoke `unwrap()`.
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, BytesN, Env,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 use crate::errors::YieldLimitError;
 use crate::events;
@@ -215,7 +213,10 @@ impl AccountState {
     /// # Errors
     /// - [`YieldLimitError::CounterUnderflow`] — counter is already 0.
     pub fn sub_bet(&mut self) -> Result<(), YieldLimitError> {
-        self.bets = self.bets.checked_sub(1).ok_or(YieldLimitError::CounterUnderflow)?;
+        self.bets = self
+            .bets
+            .checked_sub(1)
+            .ok_or(YieldLimitError::CounterUnderflow)?;
         Ok(())
     }
 
@@ -306,10 +307,7 @@ pub fn read_default_limits(env: &Env) -> AccountLimits {
 ///
 /// # Errors
 /// - [`YieldLimitError::InvalidLimit`] — any cap exceeds [`MAX_CAP`].
-pub fn write_default_limits(
-    env: &Env,
-    caps: &AccountLimits,
-) -> Result<(), YieldLimitError> {
+pub fn write_default_limits(env: &Env, caps: &AccountLimits) -> Result<(), YieldLimitError> {
     if !caps.is_valid() {
         return Err(YieldLimitError::InvalidLimit);
     }
@@ -460,8 +458,7 @@ impl CalloraYieldLimits {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_init(&env), admin), ());
+        env.events().publish((events::event_init(&env), admin), ());
         Ok(())
     }
 
@@ -487,11 +484,7 @@ impl CalloraYieldLimits {
     /// transfer is accepted the admin role remains effectively unchanged,
     /// which is safe because every other admin-gated path still requires a
     /// fresh `require_auth` round-trip through the nominated address.
-    pub fn set_admin(
-        env: Env,
-        caller: Address,
-        new_admin: Address,
-    ) -> Result<(), YieldLimitError> {
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), YieldLimitError> {
         require_admin(&env, &caller)?;
         env.storage()
             .instance()
@@ -516,9 +509,7 @@ impl CalloraYieldLimits {
             return Err(YieldLimitError::Unauthorized);
         }
         env.storage().instance().set(&StorageKey::Admin, &caller);
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         env.events()
             .publish((events::event_admin_accepted(&env), caller.clone()), ());
         env.storage()
@@ -535,9 +526,7 @@ impl CalloraYieldLimits {
             .instance()
             .get::<_, Address>(&StorageKey::PendingAdmin)
             .ok_or(YieldLimitError::Unauthorized)?;
-        env.storage()
-            .instance()
-            .remove(&StorageKey::PendingAdmin);
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
         env.events()
             .publish((events::event_admin_cancelled(&env), caller), pending);
         env.storage()
@@ -566,11 +555,7 @@ impl CalloraYieldLimits {
         };
         write_default_limits(&env, &caps)?;
         env.events().publish(
-            (
-                events::event_default_limits_set(&env),
-                caller,
-                caps.clone(),
-            ),
+            (events::event_default_limits_set(&env), caller, caps.clone()),
             caps,
         );
         Ok(())
@@ -614,11 +599,7 @@ impl CalloraYieldLimits {
         require_admin(&env, &caller)?;
         clear_account_limits(&env, &account);
         env.events().publish(
-            (
-                events::event_account_limits_cleared(&env),
-                caller,
-                account,
-            ),
+            (events::event_account_limits_cleared(&env), caller, account),
             (),
         );
         Ok(())
@@ -762,7 +743,11 @@ impl CalloraYieldLimits {
     // -----------------------------------------------------------------
 
     /// Replace the WASM and persist the new hash (admin only).
-    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) -> Result<(), YieldLimitError> {
+    pub fn upgrade(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<(), YieldLimitError> {
         require_admin(&env, &caller)?;
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());

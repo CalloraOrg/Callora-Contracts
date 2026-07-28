@@ -65,9 +65,11 @@ pub fn get_page(
 
         let key = StorageKey::DeveloperBalance(address.clone(), usdc_token.clone());
         if env.storage().persistent().has(&key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
         }
 
         let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);

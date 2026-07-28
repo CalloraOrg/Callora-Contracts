@@ -672,7 +672,10 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
         .set_sequence_number(seq_after_read + LIFETIME_THRESHOLD + 10);
 
     let record = client.get_checkpoint(&id);
-    assert_eq!(record.balance, 42, "read-path bump must keep the record alive");
+    assert_eq!(
+        record.balance, 42,
+        "read-path bump must keep the record alive"
+    );
 }
 
 // ===========================================================================
