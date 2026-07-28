@@ -3,7 +3,7 @@ name = "callora-yield"
 version = "0.0.1"
 edition = "2021"
 publish = false
-description = "Cross-contract safety harness for revenue-pool yield deposits (`deposit_yield`)."
+description = "Cross-contract safety harness for revenue-pool yield deposits (`deposit_yield`) plus per-account state caps (Issue #842 / task b#017)."
 
 [lib]
 crate-type = ["rlib"]

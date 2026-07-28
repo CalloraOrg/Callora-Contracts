@@ -15,6 +15,8 @@ use soroban_sdk::contracterror;
 /// | 5    | InvalidCooldown     | Proposed cooldown value is outside the accepted range        |
 /// | 6    | NoPendingAdmin      | No admin transfer is currently pending                       |
 /// | 7    | Overflow            | Arithmetic overflow detected                                 |
+/// | 8    | AlreadyPaused       | Contract is already paused; `pause` is a no-op               |
+/// | 9    | NotPaused           | Contract is not paused; `unpause` is a no-op                 |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -33,4 +35,8 @@ pub enum HotError {
     NoPendingAdmin = 6,
     /// Arithmetic overflow detected (code 7).
     Overflow = 7,
+    /// Contract is already paused; `pause` is redundant (code 8).
+    AlreadyPaused = 8,
+    /// Contract is not currently paused; `unpause` is redundant (code 9).
+    NotPaused = 9,
 }
