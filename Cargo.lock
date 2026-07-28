@@ -256,6 +256,7 @@ dependencies = [
 name = "callora-contracts-e2e"
 version = "0.0.0"
 dependencies = [
+ "callora-distribute",
  "callora-revenue-pool",
  "callora-settlement",
  "soroban-sdk",
@@ -268,6 +269,13 @@ dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
  "rand 0.8.7",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-distribute"
+version = "0.0.1"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -351,6 +359,14 @@ dependencies = [
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-yield"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
  "soroban-sdk",
 ]
 

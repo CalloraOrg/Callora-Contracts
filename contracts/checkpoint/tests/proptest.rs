@@ -148,22 +148,15 @@ proptest! {
                 items.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
             }
 
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                client.batch_create_checkpoints(&admin, &items)
-            }));
-
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    for i in 0..ids.len() {
-                        expected_id += 1;
-                        let assigned_id = ids.get(i).unwrap();
-                        prop_assert_eq!(
-                            assigned_id, expected_id,
-                            "IDs not sequential: got {}, expected {}",
-                            assigned_id, expected_id
-                        );
-                    }
-                }
+            let ids = client.batch_create_checkpoints(&admin, &items);
+            for i in 0..ids.len() {
+                expected_id += 1;
+                let assigned_id = ids.get(i).unwrap();
+                prop_assert_eq!(
+                    assigned_id, expected_id,
+                    "IDs not sequential: got {}, expected {}",
+                    assigned_id, expected_id
+                );
             }
 
             // After each batch, count must equal expected_id
@@ -476,10 +469,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    expected_id = *ids.last().unwrap();
-                }
+            if let Ok(ids) = result {
+                expected_id = ids.last().unwrap();
             }
 
             let latest = client.get_latest_checkpoint();
