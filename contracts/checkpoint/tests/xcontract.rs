@@ -89,13 +89,9 @@ impl CheckpointCaller {
         }
     }
 
-    pub fn call_accept_admin(
-        env: Env,
-        checkpoint: Address,
-        caller: Address,
-    ) {
+    pub fn call_accept_admin(env: Env, checkpoint: Address, caller: Address) {
         let client = CalloraCheckpointClient::new(&env, &checkpoint);
-        let _ = client.accept_admin(&caller);
+        client.accept_admin(&caller);
     }
 
     pub fn batch_create_catch_revert(
@@ -209,11 +205,9 @@ fn test_xcontract_batch_create_success() {
         ],
     );
 
-    let ids = ctx.caller_client.call_batch_create_checkpoints(
-        &ctx.checkpoint_id,
-        &ctx.admin,
-        &items,
-    );
+    let ids =
+        ctx.caller_client
+            .call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
     assert_eq!(ids.len(), 2);
     assert_eq!(ids.get(0).unwrap(), 1);
     assert_eq!(ids.get(1).unwrap(), 2);
@@ -291,16 +285,14 @@ fn test_xcontract_create_checkpoint_negative_balance() {
     let token = Address::generate(&ctx.env);
     let metadata = Symbol::new(&ctx.env, "negative");
 
-    let result = ctx
-        .caller_client
-        .try_call_create_checkpoint(
-            &ctx.checkpoint_id,
-            &ctx.admin,
-            &subject,
-            &token,
-            &(-1i128),
-            &metadata,
-        );
+    let result = ctx.caller_client.try_call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &(-1i128),
+        &metadata,
+    );
     match result {
         Err(Ok(CheckpointError::AmountNegative)) => {}
         other => panic!("expected Err(Ok(AmountNegative)), got {other:?}"),
@@ -316,16 +308,14 @@ fn test_xcontract_create_checkpoint_unauthorized() {
     let token = Address::generate(&ctx.env);
     let metadata = Symbol::new(&ctx.env, "unauth");
 
-    let result = ctx
-        .caller_client
-        .try_call_create_checkpoint(
-            &ctx.checkpoint_id,
-            &non_admin,
-            &subject,
-            &token,
-            &100i128,
-            &metadata,
-        );
+    let result = ctx.caller_client.try_call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &non_admin,
+        &subject,
+        &token,
+        &100i128,
+        &metadata,
+    );
     match result {
         Err(Ok(CheckpointError::Unauthorized)) => {}
         other => panic!("expected Err(Ok(Unauthorized)), got {other:?}"),
@@ -392,9 +382,9 @@ fn test_xcontract_batch_create_empty() {
     let ctx = setup();
     let items: Vec<(Address, Address, i128, Symbol)> = Vec::new(&ctx.env);
 
-    let result = ctx
-        .caller_client
-        .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
+    let result =
+        ctx.caller_client
+            .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
     match result {
         Err(Ok(CheckpointError::BatchEmpty)) => {}
         other => panic!("expected Err(Ok(BatchEmpty)), got {other:?}"),
@@ -413,9 +403,9 @@ fn test_xcontract_batch_create_too_large() {
         items.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
     }
 
-    let result = ctx
-        .caller_client
-        .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
+    let result =
+        ctx.caller_client
+            .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
     match result {
         Err(Ok(CheckpointError::BatchTooLarge)) => {}
         other => panic!("expected Err(Ok(BatchTooLarge)), got {other:?}"),
@@ -437,9 +427,9 @@ fn test_xcontract_batch_create_negative_balance() {
         ],
     );
 
-    let result = ctx
-        .caller_client
-        .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
+    let result =
+        ctx.caller_client
+            .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
     match result {
         Err(Ok(CheckpointError::AmountNegative)) => {}
         other => panic!("expected Err(Ok(AmountNegative)), got {other:?}"),
@@ -472,20 +462,15 @@ fn test_xcontract_create_then_panic_rolls_back_checkpoint() {
     let token = Address::generate(&ctx.env);
     let metadata = Symbol::new(&ctx.env, "panic_rollback");
 
-    let result = ctx
-        .caller_client
-        .try_call_create_checkpoint_and_panic(
-            &ctx.checkpoint_id,
-            &ctx.admin,
-            &subject,
-            &token,
-            &1000i128,
-            &metadata,
-        );
-    assert!(
-        result.is_err(),
-        "expected panic from the calling contract"
+    let result = ctx.caller_client.try_call_create_checkpoint_and_panic(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &1000i128,
+        &metadata,
     );
+    assert!(result.is_err(), "expected panic from the calling contract");
 
     assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 0);
 }
@@ -498,13 +483,16 @@ fn test_xcontract_accept_admin_panics_wrong_caller() {
 
     // Admin sets pending admin
     ctx.checkpoint_client.set_admin(&ctx.admin, &pending_admin);
-    assert_eq!(ctx.checkpoint_client.get_pending_admin(), Some(pending_admin.clone()));
+    assert_eq!(
+        ctx.checkpoint_client.get_pending_admin(),
+        Some(pending_admin.clone())
+    );
 
     // Cross-contract call from wrong caller panics in callee
     let result = ctx
         .caller_client
         .try_call_accept_admin(&ctx.checkpoint_id, &wrong_caller);
-    
+
     assert!(
         result.is_err(),
         "expected panic propagation from checkpoint"
@@ -512,7 +500,10 @@ fn test_xcontract_accept_admin_panics_wrong_caller() {
 
     // Verify state was rolled back / unchanged
     assert_eq!(ctx.checkpoint_client.get_admin(), ctx.admin);
-    assert_eq!(ctx.checkpoint_client.get_pending_admin(), Some(pending_admin));
+    assert_eq!(
+        ctx.checkpoint_client.get_pending_admin(),
+        Some(pending_admin)
+    );
 }
 
 #[test]
@@ -533,13 +524,15 @@ fn test_xcontract_callee_revert_maintains_state() {
     );
 
     // The caller contract catches the revert
-    let caught_revert = ctx
-        .caller_client
-        .batch_create_catch_revert(&ctx.checkpoint_id, &ctx.admin, &items);
+    let caught_revert =
+        ctx.caller_client
+            .batch_create_catch_revert(&ctx.checkpoint_id, &ctx.admin, &items);
 
-    assert!(caught_revert, "expected caller to catch the revert from callee");
+    assert!(
+        caught_revert,
+        "expected caller to catch the revert from callee"
+    );
 
     // Callee state should be completely unchanged
     assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), initial_count);
 }
-
