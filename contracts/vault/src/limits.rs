@@ -16,6 +16,17 @@ use soroban_sdk::{Address, Env};
 
 use crate::{StorageKey, VaultError, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD};
 
+/// Default maximum deduction cap — effectively unlimited.
+pub const DEFAULT_MAX_DEDUCT: i128 = i128::MAX;
+
+/// Check whether `amount` exceeds `max_deduct`. Returns `Err(ExceedsMaxDeduct)` if so.
+pub fn check_max_deduct(amount: i128, max_deduct: i128) -> Result<(), VaultError> {
+    if amount > max_deduct {
+        return Err(VaultError::ExceedsMaxDeduct);
+    }
+    Ok(())
+}
+
 /// Store a per-token reserve cap and return the previous value.
 ///
 /// # Arguments

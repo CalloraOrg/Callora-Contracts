@@ -1,0 +1,18 @@
+[package]
+name = "callora-yield"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "Cross-contract safety harness for revenue-pool yield deposits (`deposit_yield`) plus per-account state caps (Issue #842 / task b#017)."
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+callora-revenue-pool = { path = "../revenue_pool" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-revenue-pool = { path = "../revenue_pool" }

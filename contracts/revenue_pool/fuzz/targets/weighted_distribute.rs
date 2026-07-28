@@ -141,10 +141,7 @@ fuzz_target!(|data: &[u8]| {
     } else {
         // Rejection: on any expected-invalid input the pool must be unchanged.
         // (The call may either panic or return a typed Err — both are acceptable.)
-        let succeeded = result
-            .as_ref()
-            .map(|r| r.is_ok())
-            .unwrap_or(false);
+        let succeeded = result.as_ref().map(|r| r.is_ok()).unwrap_or(false);
         if succeeded {
             // If it somehow succeeded, balance arithmetic must still hold.
             // This path fires if our expected_valid logic is too conservative,

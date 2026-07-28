@@ -29,6 +29,10 @@ fn settlement_error_codes_are_stable_and_unique() {
         (21, SettlementError::TimelockNotExpired),
         (22, SettlementError::MigrationBalanceChanged),
         (23, SettlementError::OverDraft),
+        (24, SettlementError::InvalidClaimWindow),
+        (25, SettlementError::ClaimWindowClosed),
+        (26, SettlementError::MinBalanceViolation),
+        (27, SettlementError::ReplayDetected),
     ];
 
     let mut seen = BTreeSet::new();
@@ -40,7 +44,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 23);
+    assert_eq!(seen.len(), 27);
 }
 
 #[test]
@@ -70,6 +74,10 @@ fn error_code_docs_list_every_settlement_code() {
         "| 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |",
         "| 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |",
         "| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |",
+        "| 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |",
+        "| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |",
+        "| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |",
+        "| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |",
     ];
 
     for line in expected_lines {

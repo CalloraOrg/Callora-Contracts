@@ -45,6 +45,9 @@ use soroban_sdk::contracterror;
 /// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
+/// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
+/// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
+/// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -123,4 +126,30 @@ pub enum VaultError {
     RateLimited = 36,
     /// Operation is rejected because the vault is paused (code 37).
     PausedState = 37,
+    /// Hot BPS must be between 1 and 10000 (code 38).
+    InvalidHotBps = 38,
+    /// Rebalance threshold must be between 1 and 10000 (code 39).
+    InvalidRebalanceThreshold = 39,
+    /// Cold signer set cannot be empty (code 40).
+    ColdSignersEmpty = 40,
+    /// Cold threshold must be between 1 and signer count (code 41).
+    InvalidColdThreshold = 41,
+    /// Duplicate address found in cold signer set (code 42).
+    DuplicateColdSigner = 42,
+    /// Deposit would exceed the configured reserve cap (code 43).
+    ExceedsReserveCap = 43,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    ///
+    /// # When returned
+    /// - `deposit()` when a non-owner address attempts to deposit and the caller
+    ///   is not present in the configured allowlist.
+    ///
+    /// # Security note
+    /// Returned instead of panicking to provide machine-readable feedback to
+    /// integrators and prevent information leakage.
+    CallerNotInAllowlist = 44,
+    /// A critical admin action is still inside the global cool-off window (code 49).
+    AdminCooldownActive = 49,
+    /// Admin cool-off window is outside the accepted bounds (code 50).
+    InvalidAdminCooldown = 50,
 }

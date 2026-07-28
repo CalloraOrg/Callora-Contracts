@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Issue #482 — Vault Escape-Hatch Timelock</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1226;
+    --panel: #161a36;
+    --accent: #7c83fd;
+    --accent-strong: #a5acff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --text: #e6e8ff;
+    --muted: #9aa1cc;
+    --border: #232850;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: linear-gradient(160deg, #0b0e22 0%, #14183a 100%);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 48px 24px 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    margin: 0 0 8px;
+    font-size: 32px;
+    letter-spacing: -0.5px;
+    background: linear-gradient(90deg, var(--accent-strong), #ffe4a3);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  header p { color: var(--muted); margin: 0; font-size: 14px; }
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 28px 0 14px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .badge {
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .badge.ok { color: var(--ok); border-color: rgba(74,222,128,0.4); }
+  .badge.warn { color: var(--warn); border-color: rgba(251,191,36,0.4); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 18px 16px;
+    transition: transform 0.18s ease, border-color 0.18s ease;
+  }
+  .card:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .card h3 { margin: 0 0 6px; font-size: 15px; color: var(--accent-strong); }
+  .card .fn {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 8px;
+  }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+  .flow {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+  }
+  .flow-steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .step {
+    background: rgba(124,131,253,0.08);
+    border: 1px solid rgba(124,131,253,0.25);
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+    position: relative;
+  }
+  .step .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #0b0e22;
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .step h4 { margin: 0 0 4px; font-size: 13px; color: var(--accent-strong); }
+  .step span { font-size: 12px; color: var(--muted); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--panel);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { background: rgba(124,131,253,0.10); color: var(--accent-strong); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); font-size: 12px; }
+  .status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .status.pass { background: rgba(74,222,128,0.16); color: var(--ok); }
+  .status.fail { background: rgba(248,113,113,0.16); color: var(--err); }
+  .timeline {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 24px;
+  }
+  .bar {
+    height: 36px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 18px 0 6px;
+    border: 1px solid var(--border);
+  }
+  .bar .pending {
+    background: linear-gradient(90deg, rgba(251,191,36,0.35), rgba(251,191,36,0.15));
+    color: var(--warn);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    border-right: 1px dashed rgba(251,191,36,0.6);
+  }
+  .bar .ready {
+    background: linear-gradient(90deg, rgba(74,222,128,0.3), rgba(74,222,128,0.15));
+    color: var(--ok);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  footer code {
+    color: var(--accent);
+    background: var(--panel);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin: 0 2px;
+  }
+  @media (max-width: 640px) {
+    .flow-steps { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Vault Escape-Hatch Timelock</h1>
+    <p>Issue #482 · Callora Contracts · <span class="badge">Solved</span></p>
+  </header>
+  <div class="container">
+
+    <div class="section-title">⚙️ Proposal Lifecycle <span class="badge ok">48h default</span></div>
+    <div class="flow">
+      <div class="flow-steps">
+        <div class="step"><div class="num">1</div><h4>Propose</h4><span>admin snapshots<br>pending action</span></div>
+        <div class="step"><div class="num">2</div><h4>Wait</h4><span>ledger clock<br>ticks window</span></div>
+        <div class="step"><div class="num">3</div><h4>Execute</h4><span>admin runs<br>the action</span></div>
+        <div class="step"><div class="num">4</div><h4>Audit</h4><span>events emitted<br>replay-blocked</span></div>
+      </div>
+      <p style="color:var(--muted);font-size:13px;margin:14px 0 0;">
+        The window length is configured per contract via <code>set_timelock_window(admin, seconds)</code>
+        and defaults to <strong style="color:var(--warn);">172 800 s = 48 h</strong>. Valid bounds:
+        <strong style="color:var(--ok);">1 h</strong> to <strong style="color:var(--ok);">30 d</strong>.
+      </p>
+    </div>
+
+    <div class="timeline">
+      <strong style="color:var(--accent-strong);">Window timeline</strong>
+      <div class="bar"><div class="pending">PENDING &mdash; must wait</div><div class="ready">READY &mdash; can execute</div></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);">
+        <span>proposed_at</span>
+        <span>execute_after = proposed_at + window</span>
+      </div>
+    </div>
+
+    <div class="section-title">🛡️ Critical Admin Actions</div>
+    <div class="grid">
+      <div class="card">
+        <span class="fn">propose_pause / execute_pause / cancel_pause</span>
+        <h3>⏸  Pause</h3>
+        <p>Stages, applies, or cancels a vault pause. Owner retains immediate <code>pause()</code> for parallel fast-path.</p>
+      </div>
+      <div class="card">
+        <span class="fn">propose_upgrade / execute_upgrade / cancel_upgrade</span>
+        <h3>⬆️  WASM Upgrade</h3>
+        <p>Snapshots <code>BytesN&lt;32&gt;</code> hash, applies via host deployer only after window elapses.</p>
+      </div>
+      <div class="card">
+        <span class="fn">propose_sweep / execute_sweep / cancel_sweep</span>
+        <h3>💸  Sweep (Distribute)</h3>
+        <p>Drains on-ledger USDC surplus to a verified recipient with a 48 h public notice.</p>
+      </div>
+    </div>
+
+    <div class="section-title">🧪 Acceptance Criteria <span class="badge ok">All met</span></div>
+    <table>
+      <thead><tr><th>#</th><th>Criterion</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><strong>Propose stores</strong> proposal snapshot with <code>proposed_at</code> + <code>execute_after</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>2</td><td><strong>Execute fails before window</strong> with typed <code>TimelockNotExpired</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>3</td><td><strong>Execute succeeds at boundary</strong> exactly at <code>execute_after</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>4</td><td><strong>Cancel works</strong> for all three actions by admin</td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>5</td><td><strong>Wall-clock manipulation tested</strong> with <code>env.ledger().set_timestamp()</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>6</td><td><strong>Window configurable</strong> per contract via admin setter (1 h – 30 d)</td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>7</td><td><strong>Replay impossible</strong>: execute_pause_twice → <code>ProposalNotFound</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>8</td><td><strong>Overflow safe</strong>: <code>proposed_at=u64::MAX</code> → <code>TimelockOverflow</code></td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>9</td><td><strong>Parallel slots</strong>: pause + upgrade + sweep can coexist</td><td><span class="status pass">PASS</span></td></tr>
+        <tr><td>10</td><td><strong>Non-admin rejected</strong>: every entrypoint returns <code>Unauthorized</code></td><td><span class="status pass">PASS</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">📐 New Error Codes</div>
+    <table>
+      <thead><tr><th>Code</th><th>Variant</th><th>Trigger</th></tr></thead>
+      <tbody>
+        <tr><td><code>37</code></td><td><code>ProposalNotFound</code></td><td>execute called without a pending proposal</td></tr>
+        <tr><td><code>38</code></td><td><code>TimelockNotExpired</code></td><td>execute called before <code>execute_after</code></td></tr>
+        <tr><td><code>39</code></td><td><code>TimelockOverflow</code></td><td><code>proposed_at + window</code> would overflow <code>u64</code></td></tr>
+        <tr><td><code>40</code></td><td><code>InvalidTimelockWindow</code></td><td>window outside <code>1 h..=30 d</code></td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">📦 Storage Slots</div>
+    <table>
+      <thead><tr><th>Slot</th><th>Storage Tier</th><th>TTL Bump</th><th>Shape</th></tr></thead>
+      <tbody>
+        <tr><td><code>TimelockWindow</code></td><td>Instance</td><td>default</td><td><code>u64</code> seconds</td></tr>
+        <tr><td><code>PendingPause</code></td><td>Persistent</td><td>30/60 d</td><td>(proposed_at, execute_after)</td></tr>
+        <tr><td><code>PendingUpgrade</code></td><td>Persistent</td><td>30/60 d</td><td>(wasm_hash, proposed_at, execute_after)</td></tr>
+        <tr><td><code>PendingSweep</code></td><td>Persistent</td><td>30/60 d</td><td>(to, amount, proposed_at, execute_after)</td></tr>
+      </tbody>
+    </table>
+
+    <div class="section-title">🆕 Public Entry Points <span class="badge">15 added</span></div>
+    <table>
+      <thead><tr><th>Action</th><th>Propose</th><th>Execute</th><th>Cancel</th></tr></thead>
+      <tbody>
+        <tr><td>pause</td><td><code>propose_pause(admin)</code></td><td><code>execute_pause(admin)</code></td><td><code>cancel_pause(admin)</code></td></tr>
+        <tr><td>upgrade</td><td><code>propose_upgrade(admin, hash)</code></td><td><code>execute_upgrade(admin)</code></td><td><code>cancel_upgrade(admin)</code></td></tr>
+        <tr><td>sweep</td><td><code>propose_sweep(admin, to, amount)</code></td><td><code>execute_sweep(admin)</code></td><td><code>cancel_sweep(admin)</code></td></tr>
+        <tr><td><strong>views</strong></td><td colspan="3">
+          <code>set_timelock_window(admin, sec)</code> ·
+          <code>get_timelock_window()</code> ·
+          <code>get_pending_pause()</code> ·
+          <code>get_pending_upgrade()</code> ·
+          <code>get_pending_sweep()</code>
+        </td></tr>
+      </tbody>
+    </table>
+
+  </div>
+  <footer>
+    Files: <code>contracts/vault/src/timelock.rs</code> ·
+    <code>contracts/vault/src/lib.rs</code> ·
+    <code>contracts/vault/src/events.rs</code> ·
+    <code>contracts/vault/src/test_timelock.rs</code>
+  </footer>
+</body>
+</html>
