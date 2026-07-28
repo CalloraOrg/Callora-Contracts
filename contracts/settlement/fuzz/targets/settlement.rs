@@ -122,9 +122,7 @@ fuzz_target!(|data: &[u8]| {
     for chunk in data.chunks(BYTES_PER_INPUT).take(input_count) {
         let dev_idx = (chunk[0] as usize) % DEV_POOL_SIZE;
         let to_mode = chunk[1];
-        let amount = i128::from(i64::from_le_bytes(
-            chunk[2..10].try_into().unwrap(),
-        ));
+        let amount = i128::from(i64::from_le_bytes(chunk[2..10].try_into().unwrap()));
 
         let to = match to_mode {
             0 => None,
@@ -206,11 +204,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     // ── Per-outcome consistency & conservation ─────────────────────────
-    assert_eq!(
-        outcomes.len(),
-        n,
-        "Outcome count must match input count"
-    );
+    assert_eq!(outcomes.len(), n, "Outcome count must match input count");
 
     let mut expected_dev_deltas: std::vec::Vec<i128> = vec![0i128; DEV_POOL_SIZE];
 
@@ -280,8 +274,7 @@ fuzz_target!(|data: &[u8]| {
     let actual_contract_delta = contract_usdc_after - contract_usdc_before;
     let expected_contract_delta: i128 = expected_dev_deltas.iter().sum();
     assert_eq!(
-        actual_contract_delta,
-        expected_contract_delta,
+        actual_contract_delta, expected_contract_delta,
         "Contract USDC conservation violation: actual delta \
          {actual_contract_delta} != expected {expected_contract_delta}"
     );
@@ -290,8 +283,7 @@ fuzz_target!(|data: &[u8]| {
     for i in 0..DEV_POOL_SIZE {
         let actual_delta = dev_balances_after[i] - dev_balances_before[i];
         assert_eq!(
-            actual_delta,
-            expected_dev_deltas[i],
+            actual_delta, expected_dev_deltas[i],
             "Developer {i} balance conservation violation: \
              actual delta {actual_delta} != expected {}",
             expected_dev_deltas[i]

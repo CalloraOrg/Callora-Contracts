@@ -115,7 +115,12 @@ impl Trace {
             self.seed
         );
         for s in &self.steps {
-            out.push_str(&std::format!("  [{}] {} — {}\n", s.index, s.label, s.detail));
+            out.push_str(&std::format!(
+                "  [{}] {} — {}\n",
+                s.index,
+                s.label,
+                s.detail
+            ));
         }
         panic!("{out}");
     }
@@ -336,10 +341,7 @@ fn run_property_trace(seed: u64) {
 
             x if x == OpKind::OwnerDeposit as u8 => {
                 let result = client.try_deposit(&owner, &1);
-                assert!(
-                    result.is_ok(),
-                    "owner must always be able to deposit"
-                );
+                assert!(result.is_ok(), "owner must always be able to deposit");
                 trace.push(step, "owner_deposit", "ok");
             }
 
@@ -373,11 +375,7 @@ fn run_property_trace(seed: u64) {
                         );
                     }
                 } else {
-                    trace.push(
-                        step,
-                        "non_allowed_deposit (skip)",
-                        "everyone is allowed",
-                    );
+                    trace.push(step, "non_allowed_deposit (skip)", "everyone is allowed");
                 }
             }
 

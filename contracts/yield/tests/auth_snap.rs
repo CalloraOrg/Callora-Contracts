@@ -159,10 +159,7 @@ fn open_position_requires_auth() {
 
     env.set_auths(&[]);
     let res = client.try_open_position(&alice);
-    assert!(
-        res.is_err(),
-        "open_position must require auth on caller"
-    );
+    assert!(res.is_err(), "open_position must require auth on caller");
 }
 
 #[test]
@@ -177,10 +174,7 @@ fn close_position_requires_auth() {
 
     env.set_auths(&[]);
     let res = client.try_close_position(&alice);
-    assert!(
-        res.is_err(),
-        "close_position must require auth on caller"
-    );
+    assert!(res.is_err(), "close_position must require auth on caller");
 }
 
 #[test]

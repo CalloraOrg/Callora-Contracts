@@ -45,7 +45,10 @@ fn freeze_blocks_distribute_even_with_valid_amount() {
 
     pool.pause(&admin);
     let before = usdc.balance(&pool_addr);
-    assert!(catch_unwind(AssertUnwindSafe(|| pool.distribute(&admin, &recipient, &100))).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(
+        || pool.distribute(&admin, &recipient, &100)
+    ))
+    .is_err());
     assert_eq!(usdc.balance(&pool_addr), before);
 }
 

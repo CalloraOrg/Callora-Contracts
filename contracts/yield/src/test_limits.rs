@@ -29,9 +29,7 @@ fn setup_admin<'a>(env: &'a Env) -> (Address, Address, CalloraYieldLimitsClient<
 }
 
 /// Same as `setup_admin`, but additionally register a fresh user account.
-fn setup_with_user<'a>(
-    env: &'a Env,
-) -> (Address, Address, CalloraYieldLimitsClient<'a>, Address) {
+fn setup_with_user<'a>(env: &'a Env) -> (Address, Address, CalloraYieldLimitsClient<'a>, Address) {
     let (contract, admin, client) = setup_admin(env);
     let user = Address::generate(env);
     (contract, admin, client, user)
@@ -212,10 +210,7 @@ fn account_limits_default_to_global_default() {
     let (_, _, client) = setup_admin(&env);
     let bob = Address::generate(&env);
     let caps = client.get_account_limits(&bob);
-    assert_eq!(
-        caps.max_bets,
-        client.get_default_limits().max_bets
-    );
+    assert_eq!(caps.max_bets, client.get_default_limits().max_bets);
 }
 
 #[test]
