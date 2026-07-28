@@ -104,25 +104,23 @@ must not be reassigned once released.
 |------|---------|----------|---------|
 | 1 | `BatchEmpty` | Revenue Pool | `batch_distribute` received an empty `payments` vector |
 | 2 | `BatchTooLarge` | Revenue Pool | `batch_distribute` exceeded `MAX_BATCH_SIZE` |
-
-## Upgrade
-
-| Code | Variant | Contract | Meaning |
-|------|---------|----------|---------|
-| 1 | `NotInitialized` | Upgrade | Contract has not been initialized yet |
-| 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
-| 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
-| 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
-| 5 | `UpgradeNotAllowed` | Upgrade | Upgrade operation is currently disabled |
-| 6 | `MigrationPending` | Upgrade | A migration or upgrade is already pending |
-| 7 | `TimelockNotExpired` | Upgrade | Required timelock delay has not elapsed |
-| 8 | `SameWasmHash` | Upgrade | New WASM hash is identical to current WASM hash |
-| 9 | `SameVersion` | Upgrade | Proposed version matches current version |
-| 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
-| 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
-| 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
-| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
-| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
-| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
-| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
-
+| 3 | `NotInitialized` | Revenue Pool | A function was called before `init` |
+| 4 | `AlreadyInitialized` | Revenue Pool | `init` was called more than once |
+| 5 | `Unauthorized` | Revenue Pool | Caller is not authorized for the operation |
+| 6 | `Paused` | Revenue Pool | Distribution is blocked while the pool is paused |
+| 7 | `AlreadyPaused` | Revenue Pool | `pause` was called while the pool was already paused |
+| 8 | `NotPaused` | Revenue Pool | `unpause` was called while the pool was not paused |
+| 9 | `InvalidUsdcToken` | Revenue Pool | USDC address conflicts with the pool or admin address |
+| 10 | `NoAdminTransferPending` | Revenue Pool | No admin transfer is pending |
+| 11 | `NoPauseGuardian` | Revenue Pool | No pause guardian is configured |
+| 12 | `AmountNotPositive` | Revenue Pool | Amount must be greater than zero |
+| 13 | `AmountExceedsMaxDistribute` | Revenue Pool | Amount exceeds the configured per-leg cap |
+| 14 | `InvalidRecipient` | Revenue Pool | Recipient is the revenue pool contract |
+| 15 | `InsufficientBalance` | Revenue Pool | Pool USDC balance is below the requested amount |
+| 16 | `DuplicateRecipient` | Revenue Pool | A batch contains the same recipient more than once |
+| 17 | `Overflow` | Revenue Pool | Checked arithmetic detected an overflow |
+| 18 | `MaxDistributeNotPositive` | Revenue Pool | Distribution cap must be greater than zero |
+| 19 | `MessageEmpty` | Revenue Pool | Admin broadcast message is empty |
+| 20 | `MessageTooLong` | Revenue Pool | Admin broadcast message exceeds the length limit |
+| 21 | `NoPendingEmergencyDrain` | Revenue Pool | No emergency drain proposal is pending |
+| 22 | `TimelockNotExpired` | Revenue Pool | Emergency drain timelock has not elapsed |
