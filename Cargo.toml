@@ -19,6 +19,7 @@ members = [
     "contracts/migrate",
     "contracts/tests",
     "contracts/whitelist",
+    "contracts/stake",
     "contracts/cold",
     "contracts/errors",
     "contracts/registry",
