@@ -7,10 +7,10 @@ publish = false
 [workspace]
 resolver = "2"
 members = [
+    "contracts/fee",
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/settlement/fuzz",
-    "contracts/checkpoint",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/validators",
@@ -24,6 +24,7 @@ members = [
     "contracts/hot",
 ]
 default-members = [
+    "contracts/fee",
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/checkpoint",
