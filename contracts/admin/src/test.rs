@@ -773,3 +773,740 @@ fn full_rotation_event_log_contains_exactly_three_events() {
         "full rotation must emit exactly three events (init + nominated + changed)"
     );
 }
+
+// ===========================================================================
+// Per-account limits — auth
+// ===========================================================================
+
+/// `set_account_limits` with `mock_all_auths` rejects a non-admin caller.
+///
+/// Host-level `require_auth()` panics without auth setup, matching the Soroban
+/// convention used across the admin contract. This test uses `mock_all_auths()`
+/// so the non-admin error surfaces as `Err(Unauthorized)`.
+#[test]
+fn limits_set_account_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    let res = limits::set_account_limits(&env, &alice, &alice, 5, 5, 5);
+    assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
+}
+
+/// `set_account_limits` returns `NotInitialized` when no admin is set.
+#[test]
+fn limits_set_account_requires_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let caller = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let res = limits::set_account_limits(&env, &caller, &target, 5, 5, 5);
+    assert_eq!(res, Err(errors::AdminLimitError::NotInitialized));
+}
+
+/// `set_default_limits` returns `NotInitialized` when no admin is set.
+#[test]
+fn limits_set_default_requires_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let caller = Address::generate(&env);
+
+    let res = limits::set_default_limits(&env, &caller, 5, 5, 5);
+    assert_eq!(res, Err(errors::AdminLimitError::NotInitialized));
+}
+
+/// `clear_account_limits` returns `NotInitialized` when no admin is set.
+#[test]
+fn limits_clear_account_requires_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let caller = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let res = limits::clear_account_limits(&env, &caller, &target);
+    assert_eq!(res, Err(errors::AdminLimitError::NotInitialized));
+}
+
+/// `set_default_limits` rejects a non-admin caller even when authorized.
+#[test]
+fn limits_set_default_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let intruder = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    let res = limits::set_default_limits(&env, &intruder, 5, 5, 5);
+    assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
+}
+
+/// `clear_account_limits` rejects a non-admin caller.
+#[test]
+fn limits_clear_account_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let intruder = Address::generate(&env);
+    let target = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    let res = limits::clear_account_limits(&env, &intruder, &target);
+    assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
+}
+
+// ===========================================================================
+// Per-account limits — views (uninitialized)
+// ===========================================================================
+
+/// Views work without admin initialization (they have no auth requirement).
+#[test]
+fn limits_views_work_without_admin_init() {
+    let env = Env::default();
+    let alice = Address::generate(&env);
+
+    // get_default_limits returns DEFAULT_LIMITS
+    assert_eq!(limits::get_default_limits(&env), limits::DEFAULT_LIMITS);
+
+    // get_account_limits returns DEFAULT_LIMITS
+    let caps = limits::get_account_limits(&env, &alice);
+    assert_eq!(caps, limits::DEFAULT_LIMITS);
+
+    // get_account_usage returns zero
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.bets, 0);
+    assert_eq!(usage.positions, 0);
+    assert_eq!(usage.subscriptions, 0);
+
+    // can_* checks return true (default caps are non-zero)
+    assert!(limits::can_place_bet(&env, &alice));
+    assert!(limits::can_open_position(&env, &alice));
+    assert!(limits::can_subscribe(&env, &alice));
+}
+
+// ===========================================================================
+// Per-account limits — set / get caps
+// ===========================================================================
+
+/// `set_account_limits` persists caps and they are readable via
+/// `get_account_limits`.
+#[test]
+fn limits_set_account_persists_and_is_readable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    let res = limits::set_account_limits(&env, &admin, &alice, 2, 3, 4);
+    assert_eq!(res, Ok(()));
+
+    let caps = limits::get_account_limits(&env, &alice);
+    assert_eq!(caps.max_bets, 2);
+    assert_eq!(caps.max_positions, 3);
+    assert_eq!(caps.max_subscriptions, 4);
+}
+
+/// `set_account_limits` emits an `account_limits_set` event.
+#[test]
+fn limits_set_account_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    limits::set_account_limits(&env, &admin, &alice, 5, 6, 7).unwrap();
+
+    let matches = events_with_topic(&env, "account_limits_set");
+    assert_eq!(matches.len(), 1);
+}
+
+/// `set_default_limits` persists and `get_default_limits` reads it back.
+#[test]
+fn limits_set_default_persists() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    limits::set_default_limits(&env, &admin, 10, 20, 30).unwrap();
+
+    let caps = limits::get_default_limits(&env);
+    assert_eq!(caps.max_bets, 10);
+    assert_eq!(caps.max_positions, 20);
+    assert_eq!(caps.max_subscriptions, 30);
+}
+
+/// `set_default_limits` emits a `default_limits_set` event.
+#[test]
+fn limits_set_default_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    limits::set_default_limits(&env, &admin, 10, 20, 30).unwrap();
+
+    let matches = events_with_topic(&env, "default_limits_set");
+    assert_eq!(matches.len(), 1);
+}
+
+/// `set_account_limits` rejects caps exceeding `MAX_CAP`.
+#[test]
+fn limits_set_account_rejects_invalid_caps() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    let bad_bets = limits::set_account_limits(
+        &env, &admin, &alice,
+        limits::MAX_CAP + 1, 0, 0,
+    );
+    assert_eq!(bad_bets, Err(errors::AdminLimitError::InvalidLimit));
+
+    let bad_positions = limits::set_account_limits(
+        &env, &admin, &alice,
+        0, limits::MAX_CAP + 1, 0,
+    );
+    assert_eq!(bad_positions, Err(errors::AdminLimitError::InvalidLimit));
+
+    let bad_subs = limits::set_account_limits(
+        &env, &admin, &alice,
+        0, 0, limits::MAX_CAP + 1,
+    );
+    assert_eq!(bad_subs, Err(errors::AdminLimitError::InvalidLimit));
+}
+
+/// `clear_account_limits` removes per-account override so `get_account_limits`
+/// falls back to the default.
+#[test]
+fn limits_clear_account_falls_back_to_default() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    // Set a per-account override then set a new global default.
+    limits::set_account_limits(&env, &admin, &alice, 1, 1, 1).unwrap();
+    limits::set_default_limits(&env, &admin, 11, 12, 13).unwrap();
+
+    // Per-account still shows the override.
+    assert_eq!(limits::get_account_limits(&env, &alice).max_bets, 1);
+
+    // Clear and verify fallback to global.
+    limits::clear_account_limits(&env, &admin, &alice).unwrap();
+    let caps = limits::get_account_limits(&env, &alice);
+    assert_eq!(caps.max_bets, 11);
+    assert_eq!(caps.max_positions, 12);
+    assert_eq!(caps.max_subscriptions, 13);
+}
+
+/// `clear_account_limits` emits an `account_limits_cleared` event.
+#[test]
+fn limits_clear_account_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    limits::set_account_limits(&env, &admin, &alice, 1, 1, 1).unwrap();
+    limits::clear_account_limits(&env, &admin, &alice).unwrap();
+
+    let cleared = events_with_topic(&env, "account_limits_cleared");
+    assert_eq!(cleared.len(), 1);
+}
+
+// ===========================================================================
+// Per-account limits — consume operations
+// ===========================================================================
+
+/// `consume_bet` panics via `require_auth()` when the caller has not
+/// authorized. Uses `catch_unwind` matching the existing admin test pattern.
+#[test]
+fn limits_consume_bet_requires_account_auth() {
+    let env = Env::default();
+    let alice = Address::generate(&env);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        limits::consume_bet(&env, &alice);
+    }));
+    assert!(
+        res.is_err(),
+        "consume_bet must require auth and panic when caller does not authorize"
+    );
+}
+
+/// `consume_bet` succeeds when under cap.
+#[test]
+fn limits_consume_bet_succeeds_under_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
+
+    // First two succeed.
+    assert_eq!(limits::consume_bet(&env, &alice), Ok(()));
+    assert_eq!(limits::consume_bet(&env, &alice), Ok(()));
+
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.bets, 2);
+}
+
+/// `consume_bet` emits `bet_consumed` event.
+#[test]
+fn limits_consume_bet_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
+
+    limits::consume_bet(&env, &alice).unwrap();
+
+    let matches = events_with_topic(&env, "bet_consumed");
+    assert_eq!(matches.len(), 1);
+
+    let (topics, _data) = &matches[0];
+    assert_eq!(topics.len(), 2);
+    let topic1: Address = topics.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, alice);
+}
+
+/// `consume_bet` fails when at cap.
+#[test]
+fn limits_consume_bet_fails_at_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 2, 3, 3).unwrap();
+
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+
+    // No state change on failure.
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.bets, 2);
+}
+
+/// `consume_bet` fails when the account is fully disabled (cap 0).
+#[test]
+fn limits_consume_bet_fails_when_fully_disabled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 0, 0, 0).unwrap();
+
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+}
+
+/// `consume_position` succeeds under cap.
+#[test]
+fn limits_consume_position_succeeds_under_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
+
+    limits::consume_position(&env, &alice).unwrap();
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.positions, 1);
+}
+
+/// `consume_position` fails at cap.
+#[test]
+fn limits_consume_position_fails_at_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 1, 3).unwrap();
+
+    limits::consume_position(&env, &alice).unwrap();
+    assert_eq!(
+        limits::consume_position(&env, &alice),
+        Err(errors::AdminLimitError::PositionsAtCap)
+    );
+}
+
+/// `consume_subscription` succeeds under cap and emits event.
+#[test]
+fn limits_consume_subscription_succeeds_and_emits() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 2).unwrap();
+
+    limits::consume_subscription(&env, &alice).unwrap();
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.subscriptions, 1);
+
+    let matches = events_with_topic(&env, "subscription_consumed");
+    assert_eq!(matches.len(), 1);
+}
+
+/// `consume_subscription` fails at cap.
+#[test]
+fn limits_consume_subscription_fails_at_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 2).unwrap();
+
+    limits::consume_subscription(&env, &alice).unwrap();
+    limits::consume_subscription(&env, &alice).unwrap();
+    assert_eq!(
+        limits::consume_subscription(&env, &alice),
+        Err(errors::AdminLimitError::SubscriptionsAtCap)
+    );
+}
+
+// ===========================================================================
+// Per-account limits — release operations
+// ===========================================================================
+
+/// `release_bet` panics via `require_auth()` when the caller has not
+/// authorized. Uses `catch_unwind` matching the existing admin test pattern.
+#[test]
+fn limits_release_bet_requires_account_auth() {
+    let env = Env::default();
+    let alice = Address::generate(&env);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        limits::release_bet(&env, &alice);
+    }));
+    assert!(
+        res.is_err(),
+        "release_bet must require auth and panic when caller does not authorize"
+    );
+}
+
+/// `release_bet` decrements the counter and emits event.
+#[test]
+fn limits_release_bet_decrements_and_emits() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
+
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::release_bet(&env, &alice).unwrap();
+
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.bets, 1);
+
+    let matches = events_with_topic(&env, "bet_released");
+    assert_eq!(matches.len(), 1);
+}
+
+/// `release_bet` fails when counter is zero.
+#[test]
+fn limits_release_bet_fails_on_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let alice = Address::generate(&env);
+
+    assert_eq!(
+        limits::release_bet(&env, &alice),
+        Err(errors::AdminLimitError::CounterUnderflow)
+    );
+}
+
+/// `release_position` decrements the counter.
+#[test]
+fn limits_release_position_decrements() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
+
+    limits::consume_position(&env, &alice).unwrap();
+    limits::consume_position(&env, &alice).unwrap();
+    limits::release_position(&env, &alice).unwrap();
+
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.positions, 1);
+}
+
+/// `release_position` fails on underflow.
+#[test]
+fn limits_release_position_fails_on_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let alice = Address::generate(&env);
+
+    assert_eq!(
+        limits::release_position(&env, &alice),
+        Err(errors::AdminLimitError::CounterUnderflow)
+    );
+}
+
+/// `release_subscription` decrements and emits.
+#[test]
+fn limits_release_subscription_decrements_and_emits() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
+
+    limits::consume_subscription(&env, &alice).unwrap();
+    limits::release_subscription(&env, &alice).unwrap();
+
+    let usage = limits::get_account_usage(&env, &alice);
+    assert_eq!(usage.subscriptions, 0);
+
+    let matches = events_with_topic(&env, "subscription_released");
+    assert_eq!(matches.len(), 1);
+}
+
+/// `release_subscription` fails on underflow.
+#[test]
+fn limits_release_subscription_fails_on_underflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let alice = Address::generate(&env);
+
+    assert_eq!(
+        limits::release_subscription(&env, &alice),
+        Err(errors::AdminLimitError::CounterUnderflow)
+    );
+}
+
+// ===========================================================================
+// Per-account limits — can_* dry-run checks
+// ===========================================================================
+
+/// `can_place_bet` returns `true` when under cap.
+#[test]
+fn limits_can_place_bet_returns_true_under_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 2, 2, 2).unwrap();
+
+    assert!(limits::can_place_bet(&env, &alice));
+    limits::consume_bet(&env, &alice).unwrap();
+    assert!(limits::can_place_bet(&env, &alice));
+    limits::consume_bet(&env, &alice).unwrap();
+    assert!(!limits::can_place_bet(&env, &alice));
+}
+
+/// `can_open_position` returns `false` when at cap.
+#[test]
+fn limits_can_open_position_returns_false_at_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 2, 1, 2).unwrap();
+
+    limits::consume_position(&env, &alice).unwrap();
+    assert!(!limits::can_open_position(&env, &alice));
+}
+
+/// `can_subscribe` returns `false` when at cap.
+#[test]
+fn limits_can_subscribe_returns_false_at_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 2, 2, 1).unwrap();
+
+    limits::consume_subscription(&env, &alice).unwrap();
+    assert!(!limits::can_subscribe(&env, &alice));
+}
+
+/// `can_*` checks don't require auth or admin init.
+#[test]
+fn limits_can_checks_no_auth_required() {
+    let env = Env::default();
+    let alice = Address::generate(&env);
+
+    assert!(limits::can_place_bet(&env, &alice));
+    assert!(limits::can_open_position(&env, &alice));
+    assert!(limits::can_subscribe(&env, &alice));
+}
+
+// ===========================================================================
+// Per-account limits — isolated accounts
+// ===========================================================================
+
+/// Multiple accounts have independent counters.
+#[test]
+fn limits_accounts_are_independent() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 2, 2, 2).unwrap();
+    limits::set_account_limits(&env, &admin, &bob, 4, 4, 4).unwrap();
+
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &bob).unwrap();
+    limits::consume_bet(&env, &bob).unwrap();
+
+    let alice_usage = limits::get_account_usage(&env, &alice);
+    let bob_usage = limits::get_account_usage(&env, &bob);
+    assert_eq!(alice_usage.bets, 1);
+    assert_eq!(bob_usage.bets, 2);
+
+    // Bob still has room, alice only has one more slot.
+    assert!(limits::can_place_bet(&env, &alice));
+    assert!(limits::can_place_bet(&env, &bob));
+    limits::consume_bet(&env, &bob).unwrap();
+    assert!(limits::can_place_bet(&env, &bob));
+}
+
+/// Setting limits after usage has accumulated correctly enforces new caps.
+#[test]
+fn limits_set_after_usage_enforces_new_caps() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    // Let alice accumulate under generous caps.
+    limits::set_account_limits(&env, &admin, &alice, 10, 10, 10).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+
+    // Tighten the cap below current usage.
+    limits::set_account_limits(&env, &admin, &alice, 1, 10, 10).unwrap();
+
+    // alice already has 3 bets > new cap of 1 — next consume must fail.
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+}
+
+// ===========================================================================
+// Per-account limits — default caps fallback
+// ===========================================================================
+
+/// When no per-account caps are set, accounts use the global default.
+#[test]
+fn limits_falls_back_to_default_when_no_override() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    // Set a non-trivial global default.
+    limits::set_default_limits(&env, &admin, 3, 3, 3).unwrap();
+
+    // Consume up to the default cap.
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+}
+
+/// Changing the global default doesn't affect accounts with explicit overrides.
+#[test]
+fn limits_default_change_does_not_affect_overrides() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+
+    limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
+    limits::set_default_limits(&env, &admin, 1, 1, 1).unwrap();
+
+    // alice should still have her override of 5.
+    let caps = limits::get_account_limits(&env, &alice);
+    assert_eq!(caps.max_bets, 5);
+}
+
+// ===========================================================================
+// Per-account limits — consume → release → consume cycle
+// ===========================================================================
+
+/// A full consume/release cycle returns to zero and allows re-consumption.
+#[test]
+fn limits_consume_release_cycle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let alice = Address::generate(&env);
+    admin::init(&env, &admin);
+    limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
+
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+
+    limits::release_bet(&env, &alice).unwrap();
+    limits::release_bet(&env, &alice).unwrap();
+
+    // Now we can consume again.
+    assert!(limits::can_place_bet(&env, &alice));
+    limits::consume_bet(&env, &alice).unwrap();
+    limits::consume_bet(&env, &alice).unwrap();
+    assert_eq!(
+        limits::consume_bet(&env, &alice),
+        Err(errors::AdminLimitError::BetsAtCap)
+    );
+}
+
+/// `AccountLimits::uniform` constructor simplifies test setup.
+#[test]
+fn limits_account_limits_uniform_constructor() {
+    let caps = limits::AccountLimits::uniform(7);
+    assert_eq!(caps.max_bets, 7);
+    assert_eq!(caps.max_positions, 7);
+    assert_eq!(caps.max_subscriptions, 7);
+}
