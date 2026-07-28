@@ -287,6 +287,58 @@ fn test_xcontract_create_checkpoint_negative_balance() {
 }
 
 #[test]
+fn test_xcontract_callee_error_preserves_checkpoint_counter() {
+    let ctx = setup();
+    let subject = Address::generate(&ctx.env);
+    let token = Address::generate(&ctx.env);
+    let metadata = Symbol::new(&ctx.env, "callee_err");
+
+    let first_id = ctx.caller_client.call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &100i128,
+        &metadata,
+    );
+    assert_eq!(first_id, 1);
+
+    let result = ctx.caller_client.try_call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &(-1i128),
+        &metadata,
+    );
+    match result {
+        Err(Ok(CheckpointError::AmountNegative)) => {}
+        other => panic!("expected Err(Ok(AmountNegative)), got {other:?}"),
+    }
+
+    assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 1);
+    assert_eq!(ctx.checkpoint_client.get_latest_checkpoint_id(), 1);
+    let missing = ctx
+        .caller_client
+        .try_call_get_checkpoint(&ctx.checkpoint_id, &2);
+    match missing {
+        Err(Ok(CheckpointError::CheckpointNotFound)) => {}
+        other => panic!("expected Err(Ok(CheckpointNotFound)), got {other:?}"),
+    }
+
+    let recovered_id = ctx.caller_client.call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &200i128,
+        &metadata,
+    );
+    assert_eq!(recovered_id, 2);
+    assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 2);
+}
+
+#[test]
 fn test_xcontract_create_checkpoint_unauthorized() {
     let ctx = setup();
     let non_admin = Address::generate(&ctx.env);
@@ -423,6 +475,51 @@ fn test_xcontract_batch_create_negative_balance() {
     assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 0);
 }
 
+#[test]
+fn test_xcontract_batch_callee_error_rolls_back_partial_writes() {
+    let ctx = setup();
+    let subject = Address::generate(&ctx.env);
+    let token = Address::generate(&ctx.env);
+    let meta = Symbol::new(&ctx.env, "batch_err");
+
+    let items = Vec::from_array(
+        &ctx.env,
+        [
+            (subject.clone(), token.clone(), 100i128, meta.clone()),
+            (subject.clone(), token.clone(), -50i128, meta.clone()),
+            (subject.clone(), token.clone(), 200i128, meta.clone()),
+        ],
+    );
+
+    let result =
+        ctx.caller_client
+            .try_call_batch_create_checkpoints(&ctx.checkpoint_id, &ctx.admin, &items);
+    match result {
+        Err(Ok(CheckpointError::AmountNegative)) => {}
+        other => panic!("expected Err(Ok(AmountNegative)), got {other:?}"),
+    }
+
+    assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 0);
+    let missing = ctx
+        .caller_client
+        .try_call_get_checkpoint(&ctx.checkpoint_id, &1);
+    match missing {
+        Err(Ok(CheckpointError::CheckpointNotFound)) => {}
+        other => panic!("expected Err(Ok(CheckpointNotFound)), got {other:?}"),
+    }
+
+    let recovered_id = ctx.caller_client.call_create_checkpoint(
+        &ctx.checkpoint_id,
+        &ctx.admin,
+        &subject,
+        &token,
+        &100i128,
+        &meta,
+    );
+    assert_eq!(recovered_id, 1);
+    assert_eq!(ctx.checkpoint_client.get_checkpoint_count(), 1);
+}
+
 // ===========================================================================
 // Panic-propagation tests  (checkpoint panics / calling contract panics)
 // ===========================================================================
@@ -439,6 +536,31 @@ fn test_xcontract_accept_admin_panics_when_no_transfer_pending() {
         result.is_err(),
         "expected panic propagation from checkpoint"
     );
+}
+
+#[test]
+fn test_xcontract_callee_panic_preserves_admin_transfer_state() {
+    let ctx = setup();
+    let pending_admin = Address::generate(&ctx.env);
+    let wrong_caller = Address::generate(&ctx.env);
+
+    ctx.checkpoint_client.set_admin(&ctx.admin, &pending_admin);
+
+    let result = ctx
+        .caller_client
+        .try_call_accept_admin(&ctx.checkpoint_id, &wrong_caller);
+    assert!(result.is_err(), "expected panic from checkpoint callee");
+
+    assert_eq!(ctx.checkpoint_client.get_admin(), ctx.admin);
+    assert_eq!(
+        ctx.checkpoint_client.get_pending_admin(),
+        Some(pending_admin.clone())
+    );
+
+    ctx.caller_client
+        .call_accept_admin(&ctx.checkpoint_id, &pending_admin);
+    assert_eq!(ctx.checkpoint_client.get_admin(), pending_admin);
+    assert_eq!(ctx.checkpoint_client.get_pending_admin(), None);
 }
 
 #[test]
