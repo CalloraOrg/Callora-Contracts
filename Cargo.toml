@@ -7,6 +7,7 @@ publish = false
 [workspace]
 resolver = "2"
 members = [
+    "contracts/distribute",
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/settlement/fuzz",

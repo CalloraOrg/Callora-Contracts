@@ -234,6 +234,44 @@ const REVENUE_POOL_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Distribute contract topics
+// ---------------------------------------------------------------------------
+
+const DISTRIBUTE_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
+    ("init", |e| callora_distribute::events::event_init(e)),
+    ("admin_changed", |e| {
+        callora_distribute::events::event_admin_changed(e)
+    }),
+    ("admin_transfer_started", |e| {
+        callora_distribute::events::event_admin_transfer_started(e)
+    }),
+    ("admin_transfer_completed", |e| {
+        callora_distribute::events::event_admin_transfer_completed(e)
+    }),
+    ("admin_cancelled", |e| {
+        callora_distribute::events::event_admin_cancelled(e)
+    }),
+    ("pause_set", |e| {
+        callora_distribute::events::event_pause_set(e)
+    }),
+    ("set_max_distribute", |e| {
+        callora_distribute::events::event_set_max_distribute(e)
+    }),
+    ("distribute", |e| {
+        callora_distribute::events::event_distribute(e)
+    }),
+    ("distribute_started", |e| {
+        callora_distribute::events::event_distribute_started(e)
+    }),
+    ("distribute_completed", |e| {
+        callora_distribute::events::event_distribute_completed(e)
+    }),
+    ("upgraded", |e| {
+        callora_distribute::events::event_upgraded(e)
+    }),
+];
+
+// ---------------------------------------------------------------------------
 // Catalog integrity tests
 // ---------------------------------------------------------------------------
 
@@ -279,6 +317,20 @@ fn revenue_pool_topics_match_catalog() {
     }
 }
 
+/// Verify every distribute event constructor produces the expected Symbol bytes.
+#[test]
+fn distribute_topics_match_catalog() {
+    let env = Env::default();
+    for (expected, ctor) in DISTRIBUTE_TOPICS {
+        let sym = ctor(&env);
+        assert_eq!(
+            sym,
+            Symbol::new(&env, expected),
+            "distribute topic mismatch: expected \"{expected}\""
+        );
+    }
+}
+
 /// Catalog count guard: if this test fails, a new topic was added to
 /// `events.rs` but the corresponding row in `docs/EVENT_TOPICS.md` was
 /// not updated.
@@ -302,8 +354,13 @@ fn topic_counts_match_catalog_documentation() {
         "revenue_pool topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
-        VAULT_TOPICS.len() + SETTLEMENT_TOPICS.len() + REVENUE_POOL_TOPICS.len(),
-        73,
+        DISTRIBUTE_TOPICS.len(),
+        11,
+        "distribute topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        VAULT_TOPICS.len() + SETTLEMENT_TOPICS.len() + REVENUE_POOL_TOPICS.len() + DISTRIBUTE_TOPICS.len(),
+        84,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }
@@ -325,6 +382,11 @@ fn all_topic_strings_are_valid_identifiers() {
             REVENUE_POOL_TOPICS
                 .iter()
                 .map(|(s, c)| ("revenue_pool", *s, *c)),
+        )
+        .chain(
+            DISTRIBUTE_TOPICS
+                .iter()
+                .map(|(s, c)| ("distribute", *s, *c)),
         )
         .collect();
 
@@ -391,6 +453,20 @@ fn no_duplicate_topics_per_contract() {
             );
         }
     }
+
+    let mut distribute_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in DISTRIBUTE_TOPICS {
+        distribute_syms.push_back(ctor(&env));
+    }
+    for i in 0..distribute_syms.len() {
+        for j in (i + 1)..distribute_syms.len() {
+            assert_ne!(
+                distribute_syms.get(i).unwrap(),
+                distribute_syms.get(j).unwrap(),
+                "distribute has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
 }
 
 /// Cross-contract stability: calling the same constructor twice returns
@@ -404,6 +480,7 @@ fn topic_constructors_are_deterministic() {
         .map(|(_, c)| *c)
         .chain(SETTLEMENT_TOPICS.iter().map(|(_, c)| *c))
         .chain(REVENUE_POOL_TOPICS.iter().map(|(_, c)| *c))
+        .chain(DISTRIBUTE_TOPICS.iter().map(|(_, c)| *c))
         .collect();
 
     for ctor in all {

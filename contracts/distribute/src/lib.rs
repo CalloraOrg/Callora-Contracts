@@ -1,0 +1,451 @@
+#![no_std]
+
+pub mod events;
+
+use soroban_sdk::{
+    contract, contractimpl, token, Address, BytesN, Env, Symbol,
+};
+
+// ---------------------------------------------------------------------------
+// Storage key constants
+// ---------------------------------------------------------------------------
+
+const ADMIN_KEY: &str = "admin";
+const USDC_KEY: &str = "usdc";
+const PAUSED_KEY: &str = "paused";
+const PENDING_ADMIN_KEY: &str = "pending_admin";
+const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+const VERSION_KEY: &str = "version";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Default per-leg distribution cap — effectively unlimited until explicitly set.
+pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
+
+/// TTL bump constants for instance storage archival risk mitigation.
+pub const BUMP_AMOUNT: u32 = 10_000;
+pub const LIFETIME_THRESHOLD: u32 = 1_000;
+
+// ---------------------------------------------------------------------------
+// Error strings
+// ---------------------------------------------------------------------------
+
+const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+const ERR_NOT_INITIALIZED: &str = "contract not initialized";
+const ERR_PAUSED: &str = "contract is paused";
+const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
+const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
+
+#[contract]
+pub struct Distribute;
+
+#[contractimpl]
+impl Distribute {
+    // -----------------------------------------------------------------------
+    // Initialisation
+    // -----------------------------------------------------------------------
+
+    /// Initialize the distribute contract with an admin and the USDC token address.
+    ///
+    /// Can only be called once. Rejects `usdc_token == contract address`.
+    ///
+    /// # Panics
+    /// * `"contract already initialized"` — called more than once.
+    /// * `"invalid config: usdc_token cannot be the contract itself"` — bad token address.
+    /// * `"invalid config: usdc_token cannot be the admin address"` — token/admin aliasing.
+    ///
+    /// # Events
+    /// Emits `init` with `admin` as topic and `usdc_token` as data.
+    pub fn init(env: Env, admin: Address, usdc_token: Address) {
+        if env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
+            panic!("contract already initialized");
+        }
+        let contract_addr = env.current_contract_address();
+        if usdc_token == contract_addr {
+            panic!("invalid config: usdc_token cannot be the contract itself");
+        }
+        if usdc_token == admin {
+            panic!("invalid config: usdc_token cannot be the admin address");
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
+        inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_init(&env), admin), usdc_token);
+    }
+
+    // -----------------------------------------------------------------------
+    // Admin helpers (internal)
+    // -----------------------------------------------------------------------
+
+    fn admin(env: &Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(env, ADMIN_KEY))
+            .expect(ERR_NOT_INITIALIZED)
+    }
+
+    fn require_admin(env: &Env, caller: &Address) {
+        if *caller != Self::admin(env) {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+    }
+
+    fn require_not_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
+            .unwrap_or(false)
+        {
+            panic!("{}", ERR_PAUSED);
+        }
+    }
+
+    fn is_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
+            .unwrap_or(false)
+    }
+
+    fn validate_recipient(recipient: &Address, contract_self: &Address) {
+        if recipient == contract_self {
+            panic!("invalid recipient: cannot distribute to the contract itself");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Admin view
+    // -----------------------------------------------------------------------
+
+    /// Return the current admin address.
+    ///
+    /// # Panics
+    /// * `"contract not initialized"` — called before `init`.
+    pub fn get_admin(env: Env) -> Address {
+        Self::admin(&env)
+    }
+
+    /// Return the USDC token address configured for this contract.
+    ///
+    /// # Panics
+    /// * `"contract not initialized"` — called before `init`.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect(ERR_NOT_INITIALIZED)
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-step admin rotation
+    // -----------------------------------------------------------------------
+
+    /// Nominate a new admin. Only the current admin may call.
+    /// The nominee must call `claim_admin` to complete.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `admin_changed` with `(current, new_admin)` and
+    /// `admin_transfer_started` with `new_admin`.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
+        caller.require_auth();
+        let current = Self::admin(&env);
+        if caller != current {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_admin_changed(&env), current.clone()),
+            (current.clone(), new_admin.clone()),
+        );
+        env.events().publish(
+            (events::event_admin_transfer_started(&env), current),
+            new_admin,
+        );
+    }
+
+    /// Complete the admin transfer. Only the pending admin may call.
+    ///
+    /// # Panics
+    /// * `"no pending admin"` — no transfer is in progress.
+    /// * `"unauthorized: caller is not pending admin"` — wrong caller.
+    ///
+    /// # Events
+    /// Emits `admin_transfer_completed` with the new admin as topic.
+    pub fn accept_admin(env: Env, caller: Address) {
+        caller.require_auth();
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .expect("no pending admin");
+        if caller != pending {
+            panic!("unauthorized: caller is not pending admin");
+        }
+        inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_admin_transfer_completed(&env), pending), ());
+    }
+
+    /// Alias for `accept_admin`.
+    pub fn claim_admin(env: Env, caller: Address) {
+        Self::accept_admin(env, caller);
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `"no admin transfer pending"` — no transfer in progress.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let current = Self::admin(&env);
+        if caller != current {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .expect("no admin transfer pending");
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), current, pending), ());
+    }
+
+    /// Return the pending admin address, or `None` if no transfer is in progress.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+    }
+
+    // -----------------------------------------------------------------------
+    // Pause / unpause
+    // -----------------------------------------------------------------------
+
+    /// Activate the circuit-breaker. Blocks `distribute`.
+    /// Only the admin may call.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `"contract already paused"` — contract is already paused.
+    ///
+    /// # Events
+    /// Emits `pause_set` with `caller` as topic and `true` as data.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        assert!(!Self::is_paused(&env), "contract already paused");
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_set(&env), caller), true);
+    }
+
+    /// Deactivate the circuit-breaker. Only the admin may call.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `"contract not paused"` — contract is not currently paused.
+    ///
+    /// # Events
+    /// Emits `pause_set` with `caller` as topic and `false` as data.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        assert!(Self::is_paused(&env), "contract not paused");
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_set(&env), caller), false);
+    }
+
+    /// Return `true` if the contract is currently paused.
+    pub fn get_paused(env: Env) -> bool {
+        Self::is_paused(&env)
+    }
+
+    // -----------------------------------------------------------------------
+    // Distribution cap
+    // -----------------------------------------------------------------------
+
+    /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
+    pub fn get_max_distribute(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+    }
+
+    /// Set the maximum amount distributable per leg. Must be positive. Admin only.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `"max_distribute must be positive"` — value ≤ 0.
+    ///
+    /// # Events
+    /// Emits `set_max_distribute` with `(old_max, new_max)`.
+    pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        assert!(max_distribute > 0, "max_distribute must be positive");
+        let old_max = Self::get_max_distribute(env.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_set_max_distribute(&env), Self::admin(&env)),
+            (old_max, max_distribute),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Distribution
+    // -----------------------------------------------------------------------
+
+    /// Distribute USDC from this contract to a single recipient.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `ERR_PAUSED` — contract is paused.
+    /// * `ERR_AMOUNT_NOT_POSITIVE` — amount ≤ 0.
+    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` — amount exceeds the cap.
+    /// * `"invalid recipient: cannot distribute to the contract itself"`.
+    /// * `ERR_INSUFFICIENT_BALANCE` — contract holds less than `amount`.
+    ///
+    /// # Events
+    /// Emits `distribute_started` with `to` as topic and `amount` as data.
+    /// Emits `distribute` with `to` as topic and `amount` as data (legacy).
+    /// Emits `distribute_completed` with `to` as topic and `amount` as data.
+    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+        if amount <= 0 {
+            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+        }
+        let max_distribute = Self::get_max_distribute(env.clone());
+        if amount > max_distribute {
+            panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
+        }
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect(ERR_NOT_INITIALIZED);
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+        Self::validate_recipient(&to, &contract_address);
+        if usdc.balance(&contract_address) < amount {
+            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_distribute_started(&env), to.clone()),
+            amount,
+        );
+        usdc.transfer(&contract_address, &to, &amount);
+        env.events().publish((events::event_distribute(&env), to.clone()), amount);
+        env.events().publish(
+            (events::event_distribute_completed(&env), to),
+            amount,
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Balance view
+    // -----------------------------------------------------------------------
+
+    /// Return this contract's on-ledger USDC balance.
+    ///
+    /// # Panics
+    /// * `ERR_NOT_INITIALIZED` — called before `init`.
+    pub fn balance(env: Env) -> i128 {
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect(ERR_NOT_INITIALIZED);
+        let usdc = token::Client::new(&env, &usdc_addr);
+        usdc.balance(&env.current_contract_address())
+    }
+
+    // -----------------------------------------------------------------------
+    // Upgrade
+    // -----------------------------------------------------------------------
+
+    /// Admin-gated contract upgrade. Replaces the WASM and persists the version.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_upgraded(&env), Self::admin(&env)),
+            new_wasm_hash,
+        );
+    }
+
+    /// Return the stored WASM version hash, or `None` if never upgraded.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, VERSION_KEY))
+    }
+
+    /// Return the crate version string baked in at compile time.
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
+}
+
+#[cfg(test)]
+mod test;
+
+#[cfg(test)]
+extern crate std;
