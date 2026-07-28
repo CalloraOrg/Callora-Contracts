@@ -39,7 +39,7 @@ members = [
     "contracts/vault",
     "contracts/whitelist",
     "contracts/yield",
-    "contracts/emergency",
+    "contracts/checkpoint",
 ]
 default-members = [
     "contracts/admin",

@@ -301,13 +301,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-emergency"
-version = "0.1.0"
-dependencies = [
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-fee"
 version = "0.1.0"
 dependencies = [
