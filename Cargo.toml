@@ -24,6 +24,7 @@ members = [
     "contracts/registry",
     "contracts/hot",
     "contracts/yield",
+    "contracts/checkpoint",
 ]
 default-members = [
     "contracts/fee",
