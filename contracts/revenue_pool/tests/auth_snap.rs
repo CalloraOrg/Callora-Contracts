@@ -12,6 +12,7 @@
 //!
 //! | Category                         | Entrypoints covered |
 //! |----------------------------------|---------------------|
+//! | Initialization                   | `init` |
 //! | Admin rotation                   | `set_admin`, `accept_admin`, `claim_admin`, `cancel_admin_transfer` |
 //! | Pause guardian                   | `set_pause_guardian`, `clear_pause_guardian` |
 //! | Circuit breaker                  | `pause`, `unpause` |
@@ -82,6 +83,20 @@ fn setup_pool(
 // Auth‑requiring entrypoints — each test verifies that calling the entrypoint
 // WITHOUT authorization fails.
 // ---------------------------------------------------------------------------
+
+/// Verify that `init` requires auth on the configured admin.
+#[test]
+fn init_requires_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc, _, _) = create_usdc(&env, &admin);
+
+    env.set_auths(&[]);
+    let res = client.try_init(&admin, &usdc);
+    assert!(res.is_err(), "init must require auth");
+}
 
 /// Verify that `set_admin` requires auth on `caller`.
 #[test]
@@ -351,23 +366,6 @@ fn cancel_emergency_drain_requires_auth() {
 // Read‑only entrypoints — each test verifies that calling without auth
 // **succeeds** (no require_auth panic).
 // ---------------------------------------------------------------------------
-
-/// `init` is a one‑time setup call — it does **not** require auth.
-#[test]
-fn init_does_not_require_auth() {
-    let env = Env::default();
-
-    // Contract and token registration need auth in the test harness.
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let (_, client) = create_pool(&env);
-    let (usdc, _, _) = create_usdc(&env, &admin);
-
-    // Strip auth — init itself must not require it.
-    env.set_auths(&[]);
-    let res = client.try_init(&admin, &usdc);
-    assert!(res.is_ok(), "init must not require auth");
-}
 
 /// `get_admin` is a view — it must not require auth.
 #[test]
