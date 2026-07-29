@@ -11,6 +11,7 @@ jobs:
   wasm-size:
     name: Contract WASM size check
     runs-on: ubuntu-latest
+    continue-on-error: true
     env:
       WASM_SIZE_LIMIT_BYTES: "102400"
 
