@@ -926,3 +926,86 @@ fn test_batch_create_checkpoints_overflow_protection() {
     assert_eq!(client.get_checkpoint_count(), 3);
     assert_eq!(client.get_latest_checkpoint_id(), 3);
 }
+
+// ===========================================================================
+// Fuzz-discovered edge-case tests
+// ===========================================================================
+
+#[test]
+fn test_fuzz_discovered_batch_empty_and_oversized_limits() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "limits");
+
+    // 1. Empty batch
+    let empty_items = Vec::new(&env);
+    let res_empty = client.try_batch_create_checkpoints(&admin, &empty_items);
+    assert!(res_empty.is_err(), "expected error for empty batch");
+
+    // 2. Oversized batch (> MAX_BATCH_SIZE 50)
+    let mut oversized = Vec::new(&env);
+    for _ in 0..51 {
+        oversized.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
+    }
+    let res_oversized = client.try_batch_create_checkpoints(&admin, &oversized);
+    assert!(res_oversized.is_err(), "expected error for batch > 50");
+    assert_eq!(client.get_checkpoint_count(), 0);
+}
+
+#[test]
+fn test_fuzz_discovered_batch_atomic_rollback_on_negative_item() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "rollback");
+
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject.clone(), token.clone(), 100i128, meta.clone()),
+            (subject.clone(), token.clone(), -50i128, meta.clone()), // invalid item
+            (subject.clone(), token.clone(), 200i128, meta.clone()),
+        ],
+    );
+
+    let res = client.try_batch_create_checkpoints(&admin, &items);
+    assert!(res.is_err(), "expected error due to negative balance");
+    assert_eq!(client.get_checkpoint_count(), 0, "count mutated despite error");
+    assert_eq!(client.get_latest_checkpoint_id(), 0);
+}
+
+#[test]
+fn test_fuzz_discovered_range_query_limit_zero() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "limit_zero");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let res = client.try_get_checkpoints_range(&1u64, &0u32);
+    assert!(res.is_err(), "expected error for page size 0");
+}
+
+#[test]
+fn test_fuzz_discovered_ttl_range_invalid_order() {
+    let (env, admin, client) = setup();
+
+    let res = client.try_bump_checkpoints_ttl_range(&admin, &10u64, &5u64);
+    assert!(res.is_err(), "expected error for start_id > end_id");
+}
+
+#[test]
+fn test_fuzz_discovered_unauthenticated_auth_gate() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "unauth");
+
+    env.set_auths(&[]);
+
+    let res = client.try_create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    assert!(res.is_err(), "expected auth failure when unauthenticated");
+}
+

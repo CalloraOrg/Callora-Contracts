@@ -1,0 +1,23 @@
+[package]
+name = "callora-checkpoint-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[[bin]]
+name = "checkpoint"
+path = "targets/main.rs"
+test = false
+doc = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+callora-checkpoint = { path = ".." }
+soroban-sdk = { version = "22", features = ["testutils"] }
+
+[profile.release]
+panic = "abort"
+overflow-checks = true

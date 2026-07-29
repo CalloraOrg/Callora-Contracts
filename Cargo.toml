@@ -13,6 +13,7 @@ members = [
     "contracts/settlement",
     "contracts/settlement/fuzz",
     "contracts/checkpoint",
+    "contracts/checkpoint/fuzz",
     "contracts/cold",
     "contracts/distribute",
     "contracts/emergency",
