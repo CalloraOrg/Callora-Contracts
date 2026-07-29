@@ -22,6 +22,7 @@
 pub mod errors;
 pub mod events;
 pub mod limits;
+pub mod pause;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
@@ -126,11 +127,10 @@ impl CalloraDistribute {
     }
 
     /// Return `true` if the contract is currently paused.
+    ///
+    /// Delegates to [`pause::is_paused`] for the actual storage read.
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get::<_, bool>(&StorageKey::Paused)
-            .unwrap_or(false)
+        pause::is_paused(&env)
     }
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
@@ -339,14 +339,16 @@ impl CalloraDistribute {
 
     /// Pause the contract, blocking `open`, `close`, `batch_open`, `batch_close`.
     ///
+    /// Delegates storage write to [`pause::pause`].
+    ///
     /// Admin only.
     pub fn pause(env: Env, caller: Address) -> Result<(), DistributeError> {
         caller.require_auth();
         Self::require_admin(&env, &caller)?;
-        if Self::is_paused(env.clone()) {
+        if pause::is_paused(&env) {
             return Err(DistributeError::Paused);
         }
-        env.storage().instance().set(&StorageKey::Paused, &true);
+        pause::pause(&env, &caller);
         env.events()
             .publish((events::event_paused(&env), caller), ());
         Ok(())
@@ -354,14 +356,16 @@ impl CalloraDistribute {
 
     /// Unpause the contract, restoring `open` / `close` operations.
     ///
+    /// Delegates storage write to [`pause::resume`].
+    ///
     /// Admin only.
     pub fn unpause(env: Env, caller: Address) -> Result<(), DistributeError> {
         caller.require_auth();
         Self::require_admin(&env, &caller)?;
-        if !Self::is_paused(env.clone()) {
+        if !pause::is_paused(&env) {
             return Err(DistributeError::Paused);
         }
-        env.storage().instance().set(&StorageKey::Paused, &false);
+        pause::resume(&env, &caller);
         env.events()
             .publish((events::event_unpaused(&env), caller), ());
         Ok(())
@@ -492,12 +496,7 @@ impl CalloraDistribute {
     }
 
     fn require_not_paused(env: &Env) -> Result<(), DistributeError> {
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&StorageKey::Paused)
-            .unwrap_or(false)
-        {
+        if pause::is_paused(env) {
             return Err(DistributeError::Paused);
         }
         Ok(())
