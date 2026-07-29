@@ -22,7 +22,7 @@
 //! - Re-running after `StorageVersion == 2` is a safe no-op.
 //! - No `unwrap()` in production paths.
 
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol};
 
 /// Ledger-bump threshold for instance storage (~30 days at 5s/ledger).
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
@@ -42,6 +42,8 @@ pub enum StorageKey {
     Admin,
     /// Storage-layout version marker (`u32`).
     StorageVersion,
+    /// Authorised upgrade WASM hash (tuple of `(u32, BytesN<32>)`).
+    AuthorisedUpgrade,
 }
 
 // ─── Public query ─────────────────────────────────────────────────────────────
@@ -102,6 +104,47 @@ pub fn migrate_v1_to_v2(env: &Env, caller: &Address) {
         .publish((Symbol::new(env, "mig_v1_v2_done"),), STORAGE_VERSION_V2);
 }
 
+/// Authorise a contract upgrade for the current migration version.
+///
+/// This is a guard only; it does not call `update_current_contract_wasm`.
+/// The deployment tool must consume the returned authorisation state and
+/// perform the platform upgrade in a separate transaction.
+///
+/// # Arguments
+///
+/// * `caller` — Must be the stored admin; `caller.require_auth()` is invoked.
+/// * `target_version` — Must match the stored migration version.
+/// * `wasm_hash` — The WASM hash to authorise for deployment.
+///
+/// # Panics
+///
+/// | Condition | Error |
+/// |-----------|-------|
+/// | Caller is not the admin | contract panic (`require_auth` failure) |
+/// | `target_version` ≠ stored version | contract panic |
+pub fn authorize_upgrade(
+    env: &Env,
+    caller: &Address,
+    target_version: u32,
+    wasm_hash: BytesN<32>,
+) {
+    caller.require_auth();
+    require_admin(env, caller);
+
+    let version = storage_version(env);
+    if target_version != version {
+        panic!("authorize_upgrade: version mismatch");
+    }
+
+    env.storage().instance().set(
+        &StorageKey::AuthorisedUpgrade,
+        &(target_version, wasm_hash.clone()),
+    );
+
+    env.events()
+        .publish((Symbol::new(env, "upg_authorised"), wasm_hash), target_version);
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Panic with a contract error if the admin key is absent or if `caller` is
@@ -131,11 +174,72 @@ fn require_admin(env: &Env, caller: &Address) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
 
     /// Verify the module-level constants have the expected values.
     #[test]
     fn constants_have_expected_values() {
         assert_eq!(STORAGE_VERSION_V1, 1);
         assert_eq!(STORAGE_VERSION_V2, 2);
+    }
+
+    #[test]
+    fn test_migrate_v1_to_v2() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        
+        assert_eq!(storage_version(&env), STORAGE_VERSION_V1);
+        
+        migrate_v1_to_v2(&env, &admin);
+        
+        assert_eq!(storage_version(&env), STORAGE_VERSION_V2);
+        
+        migrate_v1_to_v2(&env, &admin);
+        assert_eq!(storage_version(&env), STORAGE_VERSION_V2);
+    }
+
+    #[test]
+    #[should_panic(expected = "require_admin: caller is not the admin")]
+    fn test_migrate_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let imposter = Address::generate(&env);
+        
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        
+        migrate_v1_to_v2(&env, &imposter);
+    }
+
+    #[test]
+    fn test_authorize_upgrade() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        
+        let hash = BytesN::from_array(&env, &[1u8; 32]);
+        authorize_upgrade(&env, &admin, STORAGE_VERSION_V1, hash.clone());
+        
+        let stored: (u32, BytesN<32>) = env.storage().instance().get(&StorageKey::AuthorisedUpgrade).unwrap();
+        assert_eq!(stored.0, STORAGE_VERSION_V1);
+        assert_eq!(stored.1, hash);
+    }
+
+    #[test]
+    #[should_panic(expected = "authorize_upgrade: version mismatch")]
+    fn test_authorize_upgrade_mismatch() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        
+        let hash = BytesN::from_array(&env, &[1u8; 32]);
+        authorize_upgrade(&env, &admin, STORAGE_VERSION_V2, hash.clone());
     }
 }
