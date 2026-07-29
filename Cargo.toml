@@ -8,7 +8,10 @@ publish = false
 resolver = "2"
 
 members = [
-    "contracts/admin",
+    "contracts/distribute",
+    "contracts/revenue_pool",
+    "contracts/settlement",
+    "contracts/settlement/fuzz",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",

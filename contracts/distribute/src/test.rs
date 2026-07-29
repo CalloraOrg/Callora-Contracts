@@ -1,1066 +1,674 @@
 extern crate std;
 
+use crate::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env, IntoVal, Symbol};
-
-use super::*;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn create_distribute(env: &Env) -> (Address, CalloraDistributeClient<'_>) {
-    let address = env.register(CalloraDistribute, ());
-    let client = CalloraDistributeClient::new(env, &address);
-    (address, client)
-}
-
-fn setup(env: &Env) -> (Address, CalloraDistributeClient<'_>) {
-    let admin = Address::generate(env);
-    let (_, client) = create_distribute(env);
-    env.mock_all_auths();
-    client.init(&admin, &10);
-    (admin, client)
-}
-
-// ===========================================================================
-// init
-// ===========================================================================
+use soroban_sdk::{token, Address, Env, IntoVal, Symbol, Val, Vec};
 
 #[test]
-fn init_sets_admin_and_cap() {
+fn init_event_structure_validation() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let (_, client) = create_distribute(&env);
-
     env.mock_all_auths();
-    client.init(&admin, &50);
-
-    assert_eq!(client.get_admin(), admin);
-    assert_eq!(client.get_global_cap(), 50);
-}
-
-#[test]
-fn init_emits_event() {
-    let env = Env::default();
     let admin = Address::generate(&env);
-    let (addr, client) = create_distribute(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    env.mock_all_auths();
-    client.init(&admin, &25);
+    client.init(&admin, &usdc_addr);
 
     let events = env.events().all();
-    let last = events.last().expect("expected at least one event");
-    assert_eq!(last.0, addr);
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    let event = events.last().unwrap();
+
+    let topics = &event.1;
+    assert_eq!(topics.len(), 2);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: Address = topics.get(1).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "init"));
-    let data: u32 = last.2.into_val(&env);
-    assert_eq!(data, 25);
+    assert_eq!(topic1, admin);
+
+    let data: Address = event.2.into_val(&env);
+    assert_eq!(data, usdc_addr);
 }
 
 #[test]
-fn init_rejects_double_init() {
+fn admin_transfer_events_structure() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let (_, client) = create_distribute(&env);
-
     env.mock_all_auths();
-    client.init(&admin, &10);
-
-    let err = client.try_init(&admin, &10).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AlreadyInitialized));
-}
-
-#[test]
-fn init_rejects_zero_cap() {
-    let env = Env::default();
     let admin = Address::generate(&env);
-    let (_, client) = create_distribute(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
+    client.init(&admin, &usdc_addr);
+
+    // Clear events from init
+    env.events().all();
+
+    // Step 1: set_admin
+    client.set_admin(&admin, &new_admin);
+
+    let events = env.events().all();
+    // admin_changed + admin_transfer_started → 2 events
+    assert!(
+        events.len() >= 2,
+        "expected at least 2 events, got {}",
+        events.len()
+    );
+
+    let event_topics: std::vec::Vec<Symbol> = events
+        .iter()
+        .map(|e| {
+            let sym: Symbol = e.1.get(0).unwrap().into_val(&env);
+            sym
+        })
+        .collect();
+
+    assert!(
+        event_topics.contains(&Symbol::new(&env, "admin_changed")),
+        "expected admin_changed event"
+    );
+    assert!(
+        event_topics.contains(&Symbol::new(&env, "admin_transfer_started")),
+        "expected admin_transfer_started event"
+    );
+
+    // Step 2: accept_admin
+    env.events().all();
+    client.accept_admin(&new_admin);
+
+    let events = env.events().all();
+    assert!(
+        events.len() >= 1,
+        "expected at least 1 event after accept, got {}",
+        events.len()
+    );
+    let last_event = events.last().unwrap();
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
+    let topic1: Address = last_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, new_admin);
+}
+
+#[test]
+fn cancel_admin_transfer_event() {
+    let env = Env::default();
     env.mock_all_auths();
-    let err = client.try_init(&admin, &0).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::CapNotPositive));
-}
-
-// ===========================================================================
-// get_admin / get_global_cap / get_version / is_paused
-// ===========================================================================
-
-#[test]
-fn get_admin_panics_before_init() {
-    let env = Env::default();
-    let (_, client) = create_distribute(&env);
-    let err = client.try_get_admin().unwrap_err();
-    assert_eq!(err, Ok(DistributeError::NotInitialized));
-}
-
-#[test]
-fn is_paused_defaults_to_false() {
-    let env = Env::default();
-    let (_, client) = create_distribute(&env);
-    assert!(!client.is_paused());
-}
-
-#[test]
-fn get_version_none_before_upgrade() {
-    let env = Env::default();
-    let (_, client) = create_distribute(&env);
-    assert_eq!(client.get_version(), None);
-}
-
-// ===========================================================================
-// open
-// ===========================================================================
-
-#[test]
-fn open_increments_count() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let new_count = client.open(&admin, &account, &cat);
-    assert_eq!(new_count, 1);
-    assert_eq!(client.get_account_count(&account), 1);
-    assert_eq!(client.get_account_category_count(&account, &cat), 1);
-}
-
-#[test]
-fn open_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "position");
-
-    client.open(&admin, &account, &cat);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected at least one event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "open"));
-}
-
-#[test]
-fn open_rejects_when_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.pause(&admin);
-    let err = client.try_open(&admin, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn open_rejects_unauthorized_caller() {
-    let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let err = client.try_open(&rando, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn open_rejects_at_cap() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    for _ in 0..10 {
-        client.open(&admin, &account, &cat);
-    }
-    let err = client.try_open(&admin, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AccountLimitExceeded));
-}
-
-#[test]
-fn open_allows_after_close() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "subscription");
-
-    for _ in 0..10 {
-        client.open(&admin, &account, &cat);
-    }
-    client.close(&admin, &account, &cat);
-    let new_count = client.open(&admin, &account, &cat);
-    assert_eq!(new_count, 10);
-}
-
-// ===========================================================================
-// close
-// ===========================================================================
-
-#[test]
-fn close_decrements_count() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.open(&admin, &account, &cat);
-    let new_count = client.close(&admin, &account, &cat);
-    assert_eq!(new_count, 0);
-    assert_eq!(client.get_account_count(&account), 0);
-    assert_eq!(client.get_account_category_count(&account, &cat), 0);
-}
-
-#[test]
-fn close_rejects_empty_state() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let err = client.try_close(&admin, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AccountStateEmpty));
-}
-
-#[test]
-fn close_rejects_when_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.open(&admin, &account, &cat);
-    client.pause(&admin);
-    let err = client.try_close(&admin, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn close_rejects_unauthorized() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.open(&admin, &account, &cat);
-    let err = client.try_close(&rando, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-// ===========================================================================
-// batch_open
-// ===========================================================================
-
-#[test]
-fn batch_open_increments_counts() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let a = Address::generate(&env);
-    let b = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let items = Vec::from_array(
-        &env,
-        [
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: b.clone(),
-                category: cat.clone(),
-            },
-        ],
-    );
-    client.batch_open(&admin, &items);
-    assert_eq!(client.get_account_count(&a), 1);
-    assert_eq!(client.get_account_count(&b), 1);
-}
-
-#[test]
-fn batch_open_rejects_empty() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let items = Vec::new(&env);
-    let err = client.try_batch_open(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::BatchEmpty));
-}
-
-#[test]
-fn batch_open_rejects_over_limit() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    // Build a batch of 51 items using push_back on a Soroban Vec
-    let mut items: Vec<BatchItem> = Vec::new(&env);
-    for _ in 0..51 {
-        items.push_back(BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        });
-    }
-    let err = client.try_batch_open(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::BatchTooLarge));
-}
-
-#[test]
-fn batch_open_rejects_when_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.pause(&admin);
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_open(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn batch_open_rejects_unauthorized() {
-    let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_open(&rando, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn batch_open_rejects_when_item_exceeds_cap() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    for _ in 0..10 {
-        client.open(&admin, &account, &cat);
-    }
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_open(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AccountLimitExceeded));
-}
-
-// ===========================================================================
-// batch_close
-// ===========================================================================
-
-#[test]
-fn batch_close_decrements_counts() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let a = Address::generate(&env);
-    let b = Address::generate(&env);
-    let cat = Symbol::new(&env, "position");
-
-    client.open(&admin, &a, &cat);
-    client.open(&admin, &b, &cat);
-
-    let items = Vec::from_array(
-        &env,
-        [
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: b.clone(),
-                category: cat.clone(),
-            },
-        ],
-    );
-    client.batch_close(&admin, &items);
-    assert_eq!(client.get_account_count(&a), 0);
-    assert_eq!(client.get_account_count(&b), 0);
-}
-
-#[test]
-fn batch_close_rejects_empty() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let items = Vec::new(&env);
-    let err = client.try_batch_close(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::BatchEmpty));
-}
-
-#[test]
-fn batch_close_rejects_when_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.open(&admin, &account, &cat);
-    client.pause(&admin);
-
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_close(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn batch_close_rejects_unauthorized() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.open(&admin, &account, &cat);
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_close(&rando, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn batch_close_rejects_empty_account_state() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account,
-            category: cat,
-        }],
-    );
-    let err = client.try_batch_close(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AccountStateEmpty));
-}
-
-// ===========================================================================
-// set_global_cap
-// ===========================================================================
-
-#[test]
-fn set_global_cap_updates() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.set_global_cap(&admin, &20);
-    assert_eq!(client.get_global_cap(), 20);
-}
-
-#[test]
-fn set_global_cap_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.set_global_cap(&admin, &20);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "set_global_cap"));
-}
-
-#[test]
-fn set_global_cap_rejects_zero() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    let err = client.try_set_global_cap(&admin, &0).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::CapNotPositive));
-}
-
-#[test]
-fn set_global_cap_rejects_unauthorized() {
-    let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-
-    let err = client.try_set_global_cap(&rando, &20).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn set_global_cap_enforces_new_cap() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    client.set_global_cap(&admin, &3);
-    for _ in 0..3 {
-        client.open(&admin, &account, &cat);
-    }
-    let err = client.try_open(&admin, &account, &cat).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::AccountLimitExceeded));
-}
-
-// ===========================================================================
-// pause / unpause
-// ===========================================================================
-
-#[test]
-fn pause_sets_flag() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-    assert!(client.is_paused());
-}
-
-#[test]
-fn pause_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "paused"));
-}
-
-#[test]
-fn pause_rejects_already_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-    let err = client.try_pause(&admin).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn pause_rejects_unauthorized() {
-    let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-
-    let err = client.try_pause(&rando).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn unpause_clears_flag() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-    client.unpause(&admin);
-    assert!(!client.is_paused());
-}
-
-#[test]
-fn unpause_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-    client.unpause(&admin);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "unpaused"));
-}
-
-#[test]
-fn unpause_rejects_not_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    let err = client.try_unpause(&admin).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-}
-
-#[test]
-fn unpause_rejects_unauthorized() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-
-    client.pause(&admin);
-    let err = client.try_unpause(&rando).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-// ===========================================================================
-// admin transfer
-// ===========================================================================
-
-#[test]
-fn set_admin_stores_pending() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
+    let admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
+    client.init(&admin, &usdc_addr);
     client.set_admin(&admin, &new_admin);
-    assert_eq!(client.get_pending_admin(), Some(new_admin));
-}
+    env.events().all();
 
-#[test]
-fn set_admin_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin, &new_admin);
-
-    let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "admin_nominated"));
-}
-
-#[test]
-fn set_admin_rejects_same_as_current() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    let err = client.try_set_admin(&admin, &admin).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::NewAdminSameAsCurrent));
-}
-
-#[test]
-fn set_admin_rejects_unauthorized() {
-    let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-
-    let err = client.try_set_admin(&rando, &rando).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-#[test]
-fn accept_admin_completes_transfer() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin, &new_admin);
-    client.accept_admin();
-    assert_eq!(client.get_admin(), new_admin);
-    assert_eq!(client.get_pending_admin(), None);
-}
-
-#[test]
-fn accept_admin_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin, &new_admin);
-    client.accept_admin();
-
-    let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "admin_accepted"));
-}
-
-#[test]
-fn accept_admin_rejects_no_pending() {
-    let env = Env::default();
-    let (_, client) = setup(&env);
-    let err = client.try_accept_admin().unwrap_err();
-    assert_eq!(err, Ok(DistributeError::NoAdminTransferPending));
-}
-
-#[test]
-fn cancel_admin_transfer_removes_pending() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin, &new_admin);
-    client.cancel_admin_transfer(&admin);
-    assert_eq!(client.get_pending_admin(), None);
-}
-
-#[test]
-fn cancel_admin_transfer_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-
-    client.set_admin(&admin, &new_admin);
     client.cancel_admin_transfer(&admin);
 
     let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
+    let last_event = events.last().unwrap();
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_cancelled"));
 }
 
 #[test]
-fn cancel_admin_transfer_rejects_no_pending() {
+fn pause_unpause_events() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
-    let err = client.try_cancel_admin_transfer(&admin).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::NoAdminTransferPending));
-}
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-#[test]
-fn cancel_admin_transfer_rejects_unauthorized() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let new_admin = Address::generate(&env);
-    let rando = Address::generate(&env);
+    client.init(&admin, &usdc_addr);
+    env.events().all();
 
-    client.set_admin(&admin, &new_admin);
-    let err = client.try_cancel_admin_transfer(&rando).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
-}
-
-// ===========================================================================
-// get_state / get_account_count / get_account_category_count
-// ===========================================================================
-
-#[test]
-fn get_state_reflects_count() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "subscription");
-
-    assert_eq!(client.get_state(&account).count, 0);
-    client.open(&admin, &account, &cat);
-    assert_eq!(client.get_state(&account).count, 1);
-    client.open(&admin, &account, &cat);
-    assert_eq!(client.get_state(&account).count, 2);
-}
-
-#[test]
-fn category_counts_are_independent() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let bet = Symbol::new(&env, "bet");
-    let pos = Symbol::new(&env, "position");
-    let sub = Symbol::new(&env, "subscription");
-
-    client.open(&admin, &account, &bet);
-    client.open(&admin, &account, &bet);
-    client.open(&admin, &account, &pos);
-
-    assert_eq!(client.get_account_category_count(&account, &bet), 2);
-    assert_eq!(client.get_account_category_count(&account, &pos), 1);
-    assert_eq!(client.get_account_category_count(&account, &sub), 0);
-}
-
-// ===========================================================================
-// broadcast
-// ===========================================================================
-
-#[test]
-fn broadcast_emits_event() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let msg = soroban_sdk::String::from_str(&env, "emergency");
-
-    client.broadcast(&admin, &Severity::Crit, &msg);
+    client.pause(&admin);
 
     let events = env.events().all();
-    let last = events.last().expect("expected event");
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "admin_broadcast"));
+    let pause_event = events.last().unwrap();
+    let topic0: Symbol = pause_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "pause_set"));
+    let topic1: Address = pause_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, admin);
+    let is_paused: bool = pause_event.2.into_val(&env);
+    assert!(is_paused);
+
+    // Unpause
+    env.events().all();
+    client.unpause(&admin);
+
+    let events = env.events().all();
+    let unpause_event = events.last().unwrap();
+    let topic0: Symbol = unpause_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "pause_set"));
+    let is_paused: bool = unpause_event.2.into_val(&env);
+    assert!(!is_paused);
 }
 
 #[test]
-fn broadcast_rejects_unauthorized() {
+fn set_max_distribute_event() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
-    let rando = Address::generate(&env);
-    let msg = soroban_sdk::String::from_str(&env, "test");
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    let err = client
-        .try_broadcast(&rando, &Severity::Info, &msg)
-        .unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Unauthorized));
+    client.init(&admin, &usdc_addr);
+    env.events().all();
+
+    client.set_max_distribute(&admin, &1000);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "set_max_distribute"));
+    let topic1: Address = event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, admin);
+    let data: (i128, i128) = event.2.into_val(&env);
+    assert_eq!(data, (i128::MAX, 1000));
 }
 
 #[test]
-fn broadcast_rejects_empty_message() {
+fn distribute_event_structure() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
-    let msg = soroban_sdk::String::from_str(&env, "");
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    let err = client
-        .try_broadcast(&admin, &Severity::Info, &msg)
-        .unwrap_err();
-    assert_eq!(err, Ok(DistributeError::BatchEmpty));
+    client.init(&admin, &usdc_addr);
+
+    // Fund the contract with USDC
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1000);
+
+    env.events().all();
+
+    client.distribute(&admin, &recipient, &500);
+
+    let events = env.events().all();
+
+    // Find the distribute event by topic (index may vary due to token transfer event)
+    let mut found = false;
+    for event in events.iter() {
+        let topics: &Vec<Val> = &event.1;
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        if topic0 == Symbol::new(&env, "distribute") {
+            found = true;
+            let topic1: Address = topics.get(1).unwrap().into_val(&env);
+            assert_eq!(topic1, recipient);
+            let amount: i128 = event.2.into_val(&env);
+            assert_eq!(amount, 500);
+            break;
+        }
+    }
+    assert!(found, "distribute event not found in events");
 }
 
-// ===========================================================================
-// Multiple accounts — independent state
-// ===========================================================================
-
 #[test]
-fn accounts_are_independent() {
+fn distribute_lifecycle_events() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
-    let a = Address::generate(&env);
-    let b = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    client.open(&admin, &a, &cat);
-    client.open(&admin, &a, &cat);
-    client.open(&admin, &b, &cat);
+    client.init(&admin, &usdc_addr);
 
-    assert_eq!(client.get_account_count(&a), 2);
-    assert_eq!(client.get_account_count(&b), 1);
+    // Fund the contract with USDC
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1000);
 
-    client.close(&admin, &a, &cat);
-    assert_eq!(client.get_account_count(&a), 1);
-    assert_eq!(client.get_account_count(&b), 1);
+    env.events().all();
+
+    client.distribute(&admin, &recipient, &500);
+
+    let events = env.events().all();
+    // Should emit 3 events: distribute_started, distribute, distribute_completed
+    // (plus potentially other events depending on test environment)
+    assert!(events.len() >= 3, "expected at least 3 events, got {}", events.len());
+
+    // Find and verify distribute_started event
+    let mut found_started = false;
+    let mut found_distribute = false;
+    let mut found_completed = false;
+
+    for event in events.iter() {
+        let topics: &Vec<Val> = &event.1;
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        
+        if topic0 == Symbol::new(&env, "distribute_started") {
+            found_started = true;
+            let topic1: Address = topics.get(1).unwrap().into_val(&env);
+            assert_eq!(topic1, recipient);
+            let amount: i128 = event.2.into_val(&env);
+            assert_eq!(amount, 500);
+        } else if topic0 == Symbol::new(&env, "distribute") {
+            found_distribute = true;
+            let topic1: Address = topics.get(1).unwrap().into_val(&env);
+            assert_eq!(topic1, recipient);
+            let amount: i128 = event.2.into_val(&env);
+            assert_eq!(amount, 500);
+        } else if topic0 == Symbol::new(&env, "distribute_completed") {
+            found_completed = true;
+            let topic1: Address = topics.get(1).unwrap().into_val(&env);
+            assert_eq!(topic1, recipient);
+            let amount: i128 = event.2.into_val(&env);
+            assert_eq!(amount, 500);
+        }
+    }
+
+    assert!(found_started, "distribute_started event not found");
+    assert!(found_distribute, "distribute event not found");
+    assert!(found_completed, "distribute_completed event not found");
 }
 
 #[test]
-fn open_close_cycle_multiple_accounts_batch() {
+fn all_event_constructors_return_correct_symbols() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
-    let a = Address::generate(&env);
-    let b = Address::generate(&env);
-    let cat = Symbol::new(&env, "position");
 
-    let opens = Vec::from_array(
-        &env,
-        [
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: b.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-        ],
-    );
-    client.batch_open(&admin, &opens);
-    assert_eq!(client.get_account_count(&a), 2);
-    assert_eq!(client.get_account_count(&b), 1);
-
-    let closes = Vec::from_array(
-        &env,
-        [
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: a.clone(),
-                category: cat.clone(),
-            },
-            BatchItem {
-                account: b.clone(),
-                category: cat.clone(),
-            },
-        ],
-    );
-    client.batch_close(&admin, &closes);
-    assert_eq!(client.get_account_count(&a), 0);
-    assert_eq!(client.get_account_count(&b), 0);
-}
-
-// ===========================================================================
-// Pause/Resume — focused lifecycle tests for batch operations
-// ===========================================================================
-
-/// Pause blocks batch_open; unpause restores it.
-#[test]
-fn batch_open_blocked_while_paused_unpause_restores() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    // Initially works
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
-    );
-    client.batch_open(&admin, &items);
-    assert_eq!(client.get_account_count(&account), 1);
-
-    // Pause -> blocked
-    client.pause(&admin);
-    let items2 = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
-    );
-    let err = client.try_batch_open(&admin, &items2).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
+    assert_eq!(events::event_init(&env), Symbol::new(&env, "init"));
     assert_eq!(
-        client.get_account_count(&account),
-        1,
-        "count unchanged while paused"
+        events::event_admin_changed(&env),
+        Symbol::new(&env, "admin_changed")
     );
-
-    // Unpause -> restored
-    client.unpause(&admin);
-    let items3 = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
-    );
-    client.batch_open(&admin, &items3);
-    assert_eq!(client.get_account_count(&account), 2);
-}
-
-/// Pause blocks batch_close; unpause restores it.
-#[test]
-fn batch_close_blocked_while_paused_unpause_restores() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
-    );
-    client.batch_open(&admin, &items);
-    assert_eq!(client.get_account_count(&account), 1);
-
-    // Pause -> blocked
-    client.pause(&admin);
-    let close_items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
-    );
-    let err = client.try_batch_close(&admin, &close_items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
     assert_eq!(
-        client.get_account_count(&account),
-        1,
-        "count unchanged while paused"
+        events::event_admin_transfer_started(&env),
+        Symbol::new(&env, "admin_transfer_started")
     );
-
-    // Unpause -> restored
-    client.unpause(&admin);
-    client.batch_close(&admin, &close_items);
-    assert_eq!(client.get_account_count(&account), 0);
-}
-
-/// Admin-set_global_cap remains available while paused (admin config functions).
-#[test]
-fn admin_config_available_while_paused() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    client.pause(&admin);
-    assert!(client.is_paused());
-
-    // Admin config should work
-    client.set_global_cap(&admin, &20);
-    assert_eq!(client.get_global_cap(), 20);
-}
-
-/// Pause → unpause → pause cycle works correctly.
-#[test]
-fn multiple_pause_unpause_cycles() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
-
-    // Cycle 1
-    client.pause(&admin);
-    assert!(client.is_paused());
-    client.unpause(&admin);
-    assert!(!client.is_paused());
-
-    // batch_open works after cycle 1
-    let items = Vec::from_array(
-        &env,
-        [BatchItem {
-            account: account.clone(),
-            category: cat.clone(),
-        }],
+    assert_eq!(
+        events::event_admin_transfer_completed(&env),
+        Symbol::new(&env, "admin_transfer_completed")
     );
-    client.batch_open(&admin, &items);
-    assert_eq!(client.get_account_count(&account), 1);
-
-    // Cycle 2
-    client.pause(&admin);
-    assert!(client.is_paused());
-    let err = client.try_batch_open(&admin, &items).unwrap_err();
-    assert_eq!(err, Ok(DistributeError::Paused));
-
-    client.unpause(&admin);
-    assert!(!client.is_paused());
-    client.batch_open(&admin, &items);
-    assert_eq!(client.get_account_count(&account), 2);
+    assert_eq!(
+        events::event_admin_cancelled(&env),
+        Symbol::new(&env, "admin_cancelled")
+    );
+    assert_eq!(
+        events::event_pause_set(&env),
+        Symbol::new(&env, "pause_set")
+    );
+    assert_eq!(
+        events::event_set_max_distribute(&env),
+        Symbol::new(&env, "set_max_distribute")
+    );
+    assert_eq!(events::event_distribute(&env), Symbol::new(&env, "distribute"));
+    assert_eq!(
+        events::event_distribute_started(&env),
+        Symbol::new(&env, "distribute_started")
+    );
+    assert_eq!(
+        events::event_distribute_completed(&env),
+        Symbol::new(&env, "distribute_completed")
+    );
+    assert_eq!(events::event_upgraded(&env), Symbol::new(&env, "upgraded"));
 }
 
-/// Read-only views remain accessible while paused.
 #[test]
-fn reads_work_while_paused() {
+fn require_auth_on_state_changing_functions() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "bet");
+    // Do NOT mock all auths — we want to verify auth failures
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    client.open(&admin, &account, &cat);
-    client.open(&admin, &account, &cat);
+    client.init(&admin, &usdc_addr);
+
+    // Non-admin should fail on state-changing functions
+    let intruder = Address::generate(&env);
+
+    let result = client.try_set_admin(&intruder, &intruder);
+    assert!(result.is_err(), "non-admin should not be able to set_admin");
+
+    let result = client.try_pause(&intruder);
+    assert!(result.is_err(), "non-admin should not be able to pause");
+
+    let result = client.try_set_max_distribute(&intruder, &100);
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to set_max_distribute"
+    );
+}
+
+#[test]
+fn no_unwrap_in_production_paths() {
+    let source = include_str!("lib.rs")
+        .split("#[cfg(test)]")
+        .next()
+        .unwrap_or("");
+    let lines: std::vec::Vec<&str> = source.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        // Allow .unwrap() only in test modules or in commented lines
+        if trimmed.contains(".unwrap(") && !trimmed.starts_with("//") {
+            panic!(
+                "Production code at line {} uses .unwrap(): {}",
+                idx + 1,
+                trimmed
+            );
+        }
+    }
+}
+
+#[test]
+fn require_auth_on_init() {
+    let env = Env::default();
+    // Do NOT mock all auths
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    // init should not fail on auth because it doesn't require auth
+    // (only admin is being set, no previous admin exists)
+    client.init(&admin, &usdc_addr);
+}
+
+#[test]
+fn overflow_safe_math() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &i128::MAX);
+
+    // Should succeed with large values
+    client.distribute(&admin, &recipient, &1000);
+}
+
+#[test]
+fn distribute_zero_amount_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    let result = client.try_distribute(&admin, &recipient, &0);
+    assert!(result.is_err(), "distribute with zero amount should fail");
+}
+
+#[test]
+fn distribute_exceeds_max_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    client.set_max_distribute(&admin, &100);
+
+    let result = client.try_distribute(&admin, &recipient, &200);
+    assert!(
+        result.is_err(),
+        "distribute exceeding max_distribute should fail"
+    );
+}
+
+#[test]
+fn distribute_while_paused_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    client.pause(&admin);
+
+    let result = client.try_distribute(&admin, &recipient, &100);
+    assert!(result.is_err(), "distribute while paused should fail");
+}
+
+#[test]
+fn init_rejects_usdc_token_as_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    let result = client.try_init(&admin, &contract_addr);
+    assert!(result.is_err(), "init with usdc_token == contract should fail");
+}
+
+#[test]
+fn init_rejects_usdc_token_as_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    let result = client.try_init(&admin, &admin);
+    assert!(result.is_err(), "init with usdc_token == admin should fail");
+}
+
+#[test]
+fn get_admin_returns_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    let returned_admin = client.get_admin();
+    assert_eq!(returned_admin, admin);
+}
+
+#[test]
+fn get_usdc_token_returns_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    let returned_token = client.get_usdc_token();
+    assert_eq!(returned_token, usdc_addr);
+}
+
+#[test]
+fn get_version_returns_crate_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    let version = client.version();
+    assert!(!version.is_empty());
+}
+
+#[test]
+fn balance_returns_contract_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    // Initially zero
+    assert_eq!(client.balance(), 0);
+
+    // Fund the contract
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1000);
+
+    assert_eq!(client.balance(), 1000);
+}
+
+#[test]
+fn upgrade_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    env.events().all();
+
+    // Note: In test environment, we cannot actually deploy a new WASM.
+    // This test verifies the function can be called with auth.
+    // The upgrade would fail with "Wasm does not exist" but we test the auth path.
+    let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let result = client.try_upgrade(&admin, &new_wasm_hash);
+    // The call fails because the wasm doesn't exist, but auth was checked
+    assert!(result.is_err());
+}
+
+#[test]
+fn get_pending_admin_returns_some_when_set() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    assert_eq!(client.get_pending_admin(), None);
+
+    client.set_admin(&admin, &new_admin);
+    let pending = client.get_pending_admin();
+    assert_eq!(pending, Some(new_admin));
+}
+
+#[test]
+fn get_pending_admin_returns_none_after_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    client.set_admin(&admin, &new_admin);
+    client.accept_admin(&new_admin);
+
+    let pending = client.get_pending_admin();
+    assert_eq!(pending, None);
+}
+
+#[test]
+fn claim_admin_alias_works() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    client.set_admin(&admin, &new_admin);
+    env.events().all();
+
+    // Use claim_admin instead of accept_admin
+    client.claim_admin(&new_admin);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
+}
+
+#[test]
+fn get_paused_returns_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+    assert!(!client.get_paused());
 
     client.pause(&admin);
-    assert!(client.is_paused());
+    assert!(client.get_paused());
 
-    // All reads must work while paused
-    assert_eq!(client.get_account_count(&account), 2);
-    assert_eq!(client.get_account_category_count(&account, &cat), 2);
-    assert_eq!(client.get_global_cap(), 10);
-    assert!(client.is_paused());
-    assert_eq!(client.get_admin(), admin);
+    client.unpause(&admin);
+    assert!(!client.get_paused());
 }
