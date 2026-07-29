@@ -97,6 +97,11 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - The on-ledger USDC decrease at the vault equals the internal balance decrease
   (both equal `amount`), because the deducted USDC is always transferred to the
   settlement address.
+- **Formal conservation proof**: `contracts/vault/proofs/deduct.rs` contains a
+  Kani harness for the successful `deduct` transition. It models the tracked
+  vault balance and settlement credit as one combined accounting total and
+  proves that `balance + settlement_credit` is unchanged when `amount` is moved
+  from the vault to settlement.
 
 ---
 
@@ -485,66 +490,289 @@ The settlement, vault, and revenue-pool test suites provide practical evidence f
 
 Together with the explicit pre-/post-conditions above, these tests help auditors and maintainers validate that **cross-contract routing, accounting, and payout actions remain reachable only by the intended principals**.
 
+
 ---
 
-## Revenue Pool On-Ledger Coverage Invariant
+## Cross-Contract Value Conservation
 
-**Invariant**: For every reachable state of [`RevenuePool`](contracts/revenue_pool/src/lib.rs#L45), the on-ledger USDC balance of the contract is always **greater than or equal to** the sum of all approved-but-not-yet-distributed payments (the "scheduled" or "pending" total).
+**Invariant**: For every vault deduction operation across the Callora protocol (vault, settlement, and revenue pool contracts), the absolute value of the change in vault balance must exactly equal the sum of changes in all destination accounting buckets. No token unit may duplicate or disappear into unallocated state.
 
-- **On-ledger balance**: `usdc.balance(&current_contract_address)` queried via [`balance(env)`](contracts/revenue_pool/src/lib.rs#L546)
-- **Pending total**: A virtual sum tracked off-chain by the backend. In the invariant test, this is simulated as a local `scheduled` variable.
-- **Guarantee**: The admin can always distribute the full set of pending payments without encountering an `ERR_INSUFFICIENT_BALANCE` panic, assuming no concurrent external USDC transfers out of the pool.
+### Mathematical Formulation
 
-### Functions That Modify the Balance
+```text
+abs(Δ vault_balance) = Δ settlement_pool + Δ settlement_developer_balances + Δ revenue_pool
+```
 
-| Function | Effect on balance | Effect on pending |
-|---|---|---|
-| [`receive_payment`](contracts/revenue_pool/src/lib.rs#L272) | None (event-only) | None |
-| [`distribute`](contracts/revenue_pool/src/lib.rs#L341) | Decreases by `amount` | Decreases by `amount` (on success) |
-| [`batch_distribute`](contracts/revenue_pool/src/lib.rs#L455) | Decreases by `sum(amounts)` | Decreases by `sum(amounts)` (on success) |
-| External USDC transfer in | Increases | None |
-| External USDC transfer out | Decreases | None (only admin-distribute paths are intended) |
+Where:
+- **Δ vault_balance**: Change in `VaultMeta.balance` (typically negative for deductions)
+- **Δ settlement_pool**: Change in `GlobalPool.total_balance` in the settlement contract
+- **Δ settlement_developer_balances**: Sum of changes across all individual developer balances in settlement
+- **Δ revenue_pool**: Change in on-ledger USDC balance held by the revenue pool contract
 
-### Pre-conditions
+### Accounting Buckets
 
-- `distribute` / `batch_distribute`:
-  - `caller == admin` (authorized)
-  - `amount > 0`
-  - `amount <= max_distribute`
-  - Pool is not paused
-  - `usdc.balance(&self) >= amount` (or `>= sum(amounts)` for batch)
-- `schedule` (off-chain backend action, simulated in test):
-  - Must be accompanied by a corresponding USDC deposit (or must not exceed available balance)
+1. **Vault Balance** (`VaultMeta.balance`)
+   - Storage: `StorageKey::MetaKey` in vault contract
+   - Accessor: [`balance(env: Env) -> i128`](contracts/vault/src/lib.rs)
+   - Modified by: `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`
 
-### Post-conditions
+2. **Settlement Global Pool** (`GlobalPool.total_balance`)
+   - Storage: `StorageKey::GlobalPool` in settlement contract
+   - Accessor: [`get_global_pool(env: Env) -> GlobalPool`](contracts/settlement/src/lib.rs)
+   - Modified by: `receive_payment(..., to_pool=true, ...)`
 
-- After a successful `distribute` or `batch_distribute`:
-  - `balance' = balance - amount`
-  - `pending' = pending - amount`
-  - The invariant `balance' >= pending'` holds if it held before.
-- After an external USDC deposit (fund):
-  - `balance' = balance + amount`
-  - `pending' = pending`
-  - The invariant holds — more slack.
-- After a successful `schedule` (accompanied by funding):
-  - `balance' = balance + amount`
-  - `pending' = pending + amount`
-  - The invariant holds — both sides increase equally.
-- If any pre-condition fails, the call reverts and state is unchanged.
+3. **Settlement Developer Balances** (sum of all `DeveloperBalance` entries)
+   - Storage: `StorageKey::DeveloperBalance(Address)` in settlement contract (persistent storage)
+   - Accessor: [`get_developer_balance(env, developer)`](contracts/settlement/src/lib.rs), [`get_all_developer_balances(env, caller)`](contracts/settlement/src/lib.rs)
+   - Modified by: `receive_payment(..., to_pool=false, developer=Some(...))`
+   - Test Helper: `settlement_tests::get_total_developer_balances(env, settlement_addr, admin)` computes the sum
 
-### How Tests Support the Invariant
+4. **Revenue Pool Balance** (on-ledger USDC held by revenue pool)
+   - Storage: On-ledger token balance (not internal accounting)
+   - Accessor: `token::Client.balance(&revenue_pool_address)`
+   - Modified by: `distribute`, `batch_distribute` (outbound), and external USDC transfers (inbound)
 
-The invariant test in [`test_invariant.rs`](contracts/revenue_pool/src/test_invariant.rs) provides Foundry-style stateful invariant coverage:
+### Value Flow Architecture
 
-- **128 deterministic seeded traces**: Each seed (0..127) generates a unique sequence of 75 stateful actions.
-- **Action types**:
-  - **Fund** (33%): Mint USDC to the pool, increasing the balance gap.
-  - **Schedule and fund** (25%): Mint USDC *and* increase the virtual `scheduled` total, simulating a backend approval with concurrent vault settlement.
-  - **Distribute single** (17%): Call `distribute` — on success, decrement `scheduled`.
-  - **Batch distribute** (8%): Call `batch_distribute` with 1-5 random legs — on success, decrement `scheduled` by the batch total. Duplicate recipient detection is implicitly exercised by random address selection.
-  - **Pause/unpause toggle** (8%): Guards are tested by toggling the pause flag.
-  - **Pause-then-distribute edge case** (8%): Pauses the pool, attempts a `distribute` (which must revert with `ERR_PAUSED`), then unpauses. Verifies that `scheduled` is unchanged after the failed attempt.
-- **Invariant check after every action**: `usdc.balance(pool) >= scheduled` is asserted after each of the 75 steps across all 128 traces — 9,600 invariant checks total.
-- **`catch_unwind` for expected reverts**: Actions that are expected to fail (e.g., distribute while paused, duplicate recipients, insufficient balance) are wrapped in `std::panic::catch_unwind` so that the test runner continues the trace and verifies the invariant after the revert.
+```text
+┌─────────────────┐
+│  CalloraVault   │
+│   (Internal     │
+│   Accounting)   │
+└────────┬────────┘
+         │ deduct / batch_deduct
+         ▼
+    ┌────────────────────────────────────┐
+    │   USDC Token Transfer              │
+    │   (vault → settlement or revenue)  │
+    └────────────┬───────────────────────┘
+                 │
+         ┌───────┴────────┐
+         ▼                ▼
+┌─────────────────┐  ┌──────────────────┐
+│ CalloraSettlement│  │  RevenuePool     │
+│  - Global Pool   │  │  (On-ledger USDC)│
+│  - Dev Balances  │  │                  │
+└──────────────────┘  └──────────────────┘
+```
 
-Together with the explicit design above, these tests help auditors and maintainers validate that **the revenue pool's on-ledger USDC never falls below the sum of pending scheduled distributions**.
+### Routing Rules
+
+1. **Vault-Originated Deducts** (Current Implementation)
+   - `deduct(env, caller, amount, request_id)` → Always routes to settlement global pool (`to_pool=true`)
+   - `batch_deduct(env, caller, items)` → Always routes total to settlement global pool (`to_pool=true`)
+   - Post-transfer: Vault calls `settlement.receive_payment(..., to_pool=true, developer=None)`
+
+2. **Admin-Initiated Developer Credits**
+   - `settlement.receive_payment(..., to_pool=false, developer=Some(addr))` → Credits specific developer
+   - `settlement.batch_receive_payment(caller, items)` → Credits multiple developers atomically
+   - These do **not** deduct from vault; they are administrative reallocations within settlement
+
+3. **Revenue Pool Distribution**
+   - `revenue_pool.distribute(caller, to, amount)` → Moves USDC out of revenue pool to developer
+   - `revenue_pool.batch_distribute(caller, payments)` → Batch payout to multiple developers
+   - These reduce `revenue_pool_balance` (on-ledger) but do not affect vault or settlement accounting
+
+### Operations Covered by the Invariant
+
+#### Single Deduct Operations
+- **Entry Point**: [`deduct(env, caller, amount, request_id)`](contracts/vault/src/lib.rs)
+- **Test Coverage**: [`conservation_scenario_1_standard_pool_routing`](contracts/vault/src/test.rs#conservation_invariant)
+- **Pre-conditions**:
+  - Vault is not paused
+  - Caller is authorized (owner or `authorized_caller`)
+  - `amount > 0` and `amount <= max_deduct`
+  - Vault balance >= amount
+  - Settlement address is configured
+- **Atomicity**: Full validation before any state write; Soroban transaction atomicity ensures all-or-nothing
+- **Conservation Path**:
+  1. Vault balance decreases by `amount`
+  2. USDC transfers from vault to settlement
+  3. Settlement global pool increases by `amount`
+  4. Result: `abs(Δ vault) = Δ pool`
+
+#### Batch Deduct Operations
+- **Entry Point**: [`batch_deduct(env, caller, items: Vec<DeductItem>)`](contracts/vault/src/lib.rs)
+- **Test Coverage**:
+  - [`conservation_scenario_3_zero_developer_batch`](contracts/vault/src/test.rs#conservation_invariant)
+  - [`conservation_scenario_4_fully_pool_batch_max_size`](contracts/vault/src/test.rs#conservation_invariant)
+- **Pre-conditions**:
+  - Vault is not paused
+  - Caller is authorized
+  - `1 <= items.len() <= MAX_BATCH_SIZE` (50)
+  - All items: `amount > 0`, `amount <= max_deduct`
+  - Total deduction <= vault balance
+  - Settlement address is configured
+  - No duplicate `request_id` in batch or with previously processed requests
+- **Atomicity**: Full batch validation before any transfer or state write
+- **Conservation Path**:
+  1. Vault balance decreases by `sum(items.amount)`
+  2. USDC transfers from vault to settlement (single transfer for total)
+  3. Settlement global pool increases by `sum(items.amount)`
+  4. Result: `abs(Δ vault) = Δ pool`
+
+#### Mixed Routing Scenarios
+- **Test Coverage**: [`conservation_scenario_5_mixed_batch_routing`](contracts/vault/src/test.rs#conservation_invariant)
+- **Scenario**:
+  - Multiple vault deductions (batch or single)
+  - Administrative developer credits via `settlement.batch_receive_payment`
+  - Complex routing patterns with multiple destinations
+- **Conservation Path**:
+  1. Vault deductions route to settlement pool
+  2. Admin actions reallocate pool → developer balances (within settlement)
+  3. Aggregate: `abs(Δ vault) = Δ pool + Δ developer_balances`
+
+### Safety Guarantees
+
+1. **No Partial Updates**
+   - All entry points use full validation before state writes
+   - Soroban transaction atomicity: any panic reverts the entire transaction
+   - See [Vault Balance Invariant](#vault-balance-invariant) for single-contract guarantees
+
+2. **No Double-Spending**
+   - Vault balance decreases **before** external USDC transfer (CEI pattern variant)
+   - If transfer fails, Soroban reverts the balance decrease
+   - Settlement credits only occur **after** successful USDC receipt
+
+3. **No Value Loss**
+   - Every deducted token unit must land in a destination bucket
+   - Conservation test suite verifies `abs(Δ vault) = sum(Δ destinations)` across all scenarios
+   - Failed operations leave all accounting buckets unchanged
+
+4. **Idempotency Protection**
+   - Optional `request_id` on `deduct`/`batch_deduct` prevents duplicate execution
+   - Processed request markers live in temporary storage with TTL
+   - Duplicate `request_id` returns `VaultError::DuplicateRequestId` before any state change
+
+### Test Suite Implementation
+
+The conservation invariant test suite is located in [`contracts/vault/src/test.rs`](contracts/vault/src/test.rs) under the `conservation_invariant` module.
+
+#### Test Helper: `ConservationSnapshot`
+
+```rust
+struct ConservationSnapshot {
+    vault_balance: i128,
+    settlement_pool: i128,
+    settlement_developer_total: i128,
+    revenue_pool_balance: i128,
+}
+```
+
+**Methods**:
+- `capture(...)` → Snapshot current state across all contracts
+- `delta(before, after)` → Compute deltas for each bucket
+- `assert_conservation_invariant()` → Verify `abs(Δ vault) = Δ pool + Δ devs + Δ revenue`
+
+#### Test Scenarios
+
+| Scenario | Description | File Reference |
+|----------|-------------|----------------|
+| **Scenario 1** | Standard pool routing (`to_pool=true`) | `conservation_scenario_1_standard_pool_routing` |
+| **Scenario 2** | Standard developer routing (`to_pool=false`) | `conservation_scenario_2_standard_developer_routing` |
+| **Scenario 3** | Zero-developer batch (all to pool) | `conservation_scenario_3_zero_developer_batch` |
+| **Scenario 4** | Fully-pool batch (50 items, max size) | `conservation_scenario_4_fully_pool_batch_max_size` |
+| **Scenario 5** | Mixed batch routing (pool + developer credits) | `conservation_scenario_5_mixed_batch_routing` |
+
+#### Running the Tests
+
+```bash
+# Run all conservation invariant tests
+cargo test -p callora-vault conservation_invariant
+
+# Run a specific scenario
+cargo test -p callora-vault conservation_scenario_1_standard_pool_routing
+
+# Run with output
+cargo test -p callora-vault conservation_invariant -- --nocapture
+```
+
+#### Expected Output
+
+```text
+running 5 tests
+test conservation_invariant::conservation_scenario_1_standard_pool_routing ... ok
+test conservation_invariant::conservation_scenario_2_standard_developer_routing ... ok
+test conservation_invariant::conservation_scenario_3_zero_developer_batch ... ok
+test conservation_invariant::conservation_scenario_4_fully_pool_batch_max_size ... ok
+test conservation_invariant::conservation_scenario_5_mixed_batch_routing ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+### Integration with Existing Invariants
+
+This cross-contract conservation invariant **extends and refines** the existing single-contract invariants:
+
+1. **Vault Balance Invariant** (see [above](#vault-balance-invariant))
+   - Guarantees vault balance remains non-negative
+   - Conservation invariant ensures deductions are fully accounted for **downstream**
+
+2. **Settlement Developer Credit Invariant** (see [above](#settlement-developer-credit-invariant))
+   - Guarantees developer balances remain non-negative
+   - Conservation invariant ensures these credits originate from legitimate vault deductions
+
+3. **Settlement Global Pool Accounting Invariant** (see [above](#settlement-global-pool-accounting-invariant))
+   - Guarantees pool balance remains non-negative
+   - Conservation invariant ensures pool credits match vault deductions
+
+4. **Cross-Contract Authorization Invariant** (see [above](#cross-contract-authorization-invariant))
+   - Guarantees only authorized principals can trigger value flow
+   - Conservation invariant assumes authorization checks pass (tests use `mock_all_auths`)
+
+### Audit Recommendations
+
+When reviewing value conservation:
+
+1. **Trace Deduction Paths**
+   - Start from `deduct`/`batch_deduct` calls
+   - Follow USDC transfer to settlement or revenue pool
+   - Verify settlement accounting update (pool or developer balance)
+   - Confirm no intermediate state allows value to escape
+
+2. **Verify Atomicity**
+   - Check that all validation occurs before any state write
+   - Confirm Soroban transaction boundaries encompass all steps
+   - Test failure scenarios to ensure full rollback
+
+3. **Review Test Coverage**
+   - Run `cargo test -p callora-vault conservation_invariant`
+   - Verify all 5 scenarios pass
+   - Inspect `ConservationSnapshot` logic for correctness
+   - Check that helper functions (e.g., `get_total_developer_balances`) accurately sum balances
+
+4. **Check Edge Cases**
+   - Zero amounts (should panic before conservation violation)
+   - Overflow scenarios (checked arithmetic prevents conservation violations via panic)
+   - Concurrent operations (Soroban serializes transactions; no race conditions at contract level)
+   - Request ID deduplication (prevents accidental double-deduction)
+
+### Known Limitations
+
+1. **Revenue Pool as Pass-Through**
+   - Current architecture: Revenue pool is an endpoint, not a conservation participant
+   - Distributions from revenue pool **reduce** its balance but do not affect vault/settlement
+   - Future: If revenue pool becomes a routing intermediary, add `Δ revenue_pool` to conservation formula
+
+2. **Admin-Initiated Credits**
+   - `settlement.receive_payment(..., caller=admin)` can credit balances without vault deduction
+   - Conservation invariant applies **per vault operation**, not per settlement credit
+   - Admin credits are valid reallocation within settlement (e.g., refunds, adjustments)
+
+3. **External USDC Transfers**
+   - Anyone can transfer USDC directly to settlement or revenue pool
+   - These do **not** trigger vault accounting changes
+   - Conservation invariant is **not violated** because vault balance is unchanged
+   - Tests focus on **vault-originated** value flow only
+
+### References
+
+- **Vault Contract**: [`contracts/vault/src/lib.rs`](contracts/vault/src/lib.rs)
+- **Settlement Contract**: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs)
+- **Revenue Pool Contract**: [`contracts/revenue_pool/src/lib.rs`](contracts/revenue_pool/src/lib.rs)
+- **Test Suite**: [`contracts/vault/src/test.rs`](contracts/vault/src/test.rs) → `conservation_invariant` module
+- **Settlement Test Helpers**: [`contracts/settlement/src/test.rs`](contracts/settlement/src/test.rs) → `get_total_developer_balances`, `get_settlement_pool_balance`
+
+---
+
+This cross-contract value conservation guarantee is the cornerstone of the Callora protocol's financial integrity. It ensures that every token unit deducted from the vault is precisely accounted for across the protocol's downstream contracts, with no possibility of duplication, loss, or unallocated state.

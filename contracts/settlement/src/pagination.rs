@@ -1,4 +1,7 @@
-use crate::{DeveloperBalance, StorageKey, MAX_DEVELOPER_BALANCES_PAGE_SIZE};
+use crate::{
+    DeveloperBalance, StorageKey, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
+    MAX_DEVELOPER_BALANCES_PAGE_SIZE, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
+};
 use soroban_sdk::{Address, Env, Vec};
 
 /// Get a paginated page of developer balances using cursor-based pagination.
@@ -15,7 +18,7 @@ use soroban_sdk::{Address, Env, Vec};
 ///
 /// # Ordering Guarantees
 /// The index is maintained in deterministic sorted ascending order by address bytes, guaranteeing
-/// stable, deterministic pagination across repeated calls. The output is sorted, meaning pages 
+/// stable, deterministic pagination across repeated calls. The output is sorted, meaning pages
 /// are stable even if interleaved credits happen for developers that sort after the cursor.
 ///
 /// # Page-size Configuration
@@ -23,17 +26,23 @@ use soroban_sdk::{Address, Env, Vec};
 /// and prevent transaction size limits from being exceeded.
 ///
 /// # Intended Use
-/// This function is designed for batch reconciliation, indexing, and reporting dashboards 
+/// This function is designed for batch reconciliation, indexing, and reporting dashboards
 /// where developer balances must be safely and incrementally sync'd.
 ///
 /// # State Mutation
-/// This function is entirely read-only and performs no write operations.
+/// This function is read-only for contract state logic but extends storage TTL for retrieved
+/// entries to prevent archival.
 pub fn get_page(
     env: &Env,
     index: &Vec<Address>,
     cursor: Option<Address>,
     limit: u32,
+    usdc_token: &Address,
 ) -> (Vec<DeveloperBalance>, Option<Address>) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
     let effective_limit = if limit == 0 {
         return (Vec::new(env), None);
     } else {
@@ -54,14 +63,20 @@ pub fn get_page(
             continue;
         }
 
-        let balance: i128 = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::DeveloperBalance(address.clone()))
-            .unwrap_or(0);
+        let key = StorageKey::DeveloperBalance(address.clone(), usdc_token.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
 
         result.push_back(DeveloperBalance {
             address: address.clone(),
+            token: usdc_token.clone(),
             balance,
         });
         last_address = Some(address.clone());

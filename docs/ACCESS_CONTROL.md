@@ -11,6 +11,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Authorized Caller**: Optional address permitted to trigger `deduct` operations.
 - **Pending Owner**: Nominee awaiting acceptance of the owner role.
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
+- **Admin / Multisig Admin**: Current admin address. If this address is a Stellar multisig account, native thresholds and signer weights are enforced by `require_auth`.
 - **Pending Revenue Pool**: Proposed revenue pool address awaiting acceptance.
 
 ### Authorization Matrix
@@ -35,6 +36,7 @@ The Callora Vault implements role-based access control for deposit operations to
 | `accept_revenue_pool` | ❌ | ❌ | ❌ | ❌ | ✅ |
 | `cancel_revenue_pool` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `pause` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `nuclear_pause` | ❌ | ❌ | ❌ | ❌ | Admin only |
 | `unpause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ### Security Model
@@ -42,6 +44,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
 - **Cancellation Safety**: Provides `cancel_ownership_transfer` and `cancel_admin_transfer` functions to abort mistaken nominations before acceptance.
 - **Restricted Depositors**: Only owner and explicitly allowed depositors can increase vault balance.
+- **Multisig-Guarded Nuclear Pause**: `nuclear_pause(caller)` accepts only the current admin address and calls `caller.require_auth()`, so deployments that set admin to a Stellar multisig account get native threshold enforcement for the emergency pause.
 - **Nonce-Bound Authorized-Caller Rotation**: `set_authorized_caller` requires the caller to supply the current monotonic nonce (see below), preventing a leaked owner signature from being replayed to reinstate a stale `authorized_caller`.
 
 ### Authorized-Caller Replay Protection
@@ -141,18 +144,39 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 
 ### Authorization Matrix
 
-| Function | Admin | Pending Admin | Pause Guardian | Others |
-|----------|-------|---------------|----------------|--------|
-| `distribute` | ✅ | ❌ | ❌ | ❌ |
-| `batch_distribute` | ✅ | ❌ | ❌ | ❌ |
-| `pause` | ✅ | ❌ | ✅ | ❌ |
-| `unpause` | ✅ | ❌ | ❌ | ❌ |
-| `set_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
-| `clear_pause_guardian` | ✅ | ❌ | ❌ | ❌ |
-| `set_admin` | ✅ | ❌ | ❌ | ❌ |
-| `accept_admin` | ❌ | ✅ | ❌ | ❌ |
-| `claim_admin` (alias of `accept_admin`) | ❌ | ✅ | ❌ | ❌ |
-| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
+> **Issue #730 audit** (GrantFox FWC26 Stellar Wave, 2026-07-28): every
+> state-changing entrypoint below was verified to call `require_auth` on its
+> acting `Address` before touching storage or emitting events.  No gaps were
+> found.  Focused per-entrypoint tests are maintained in
+> `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit`
+> module) and `contracts/revenue_pool/tests/auth_snap.rs`.
+
+| Function | `require_auth` on | Admin | Pending Admin | Pause Guardian | Others |
+|----------|-------------------|-------|---------------|----------------|--------|
+| `set_admin` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `accept_admin` | `caller` | ❌ | ✅ | ❌ | ❌ |
+| `claim_admin` (alias of `accept_admin`) | `caller` | ❌ | ✅ | ❌ | ❌ |
+| `cancel_admin_transfer` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `set_pause_guardian` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `clear_pause_guardian` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `pause` | `caller` | ✅ | ❌ | ✅ | ❌ |
+| `unpause` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `receive_payment` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `deposit_yield` | `treasury` | ✅ (treasury == admin) | ❌ | ❌ | ❌ |
+| `set_max_distribute` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `distribute` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `batch_distribute` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `upgrade` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `broadcast` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `propose_emergency_drain` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `execute_emergency_drain` | `caller` | ✅ | ❌ | ❌ | ❌ |
+| `cancel_emergency_drain` | `caller` | ✅ | ❌ | ❌ | ❌ |
+
+**Read-only entrypoints** (`get_admin`, `get_usdc_token`, `get_pending_admin`,
+`get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`,
+`get_max_distribute`, `balance`, `get_version`, `version`, `get_storage_ttl`,
+`get_pending_emergency_drain`, `chunk_iter`) do **not** require auth and are
+callable by anyone.
 
 ### Cancellation Safety
 The current admin can call `cancel_admin_transfer` to abort a pending admin nomination.
@@ -160,10 +184,21 @@ The current admin can call `cancel_admin_transfer` to abort a pending admin nomi
 ### Pause Guardian Safety
 The current admin can call `set_pause_guardian` to delegate emergency pause authority to a narrow role, and `clear_pause_guardian` to remove that role. The pause guardian can only call `pause`; it cannot unpause, distribute funds, rotate admin, change caps, clear or replace itself, or upgrade the contract.
 
+### Auth Audit History
+
+| Date | Issue | Scope | Outcome |
+|------|-------|-------|---------|
+| 2026-07-28 | [#730](https://github.com/CalloraOrg/Callora-Contracts/issues/730) | All 18 state-changing entrypoints on `callora-revenue-pool` | ✅ All entrypoints call `require_auth`; no gaps found. Focused tests added to `revenue_pool_audit` module in `grant_fox_fwc26_auth_matrix.rs`. |
+
 ---
 
 ## Test Coverage
 The implementation includes comprehensive tests covering:
+- ✅ **Issue #730 — Revenue Pool auth audit (FWC26 Stellar Wave)**: every state-changing
+  entrypoint audited; focused three-variant tests (`_no_auth`, `_wrong_role`, `_authorized`)
+  added to `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit` module).
+  Existing per-entrypoint coverage in `contracts/revenue_pool/tests/auth_snap.rs` and
+  `contracts/revenue_pool/tests/emergency_auth_snap.rs` confirmed complete.
 - ✅ `set_authorized_caller` default nonce is `0` before first rotation
 - ✅ First rotation with nonce `0` succeeds and advances stored nonce to `1`
 - ✅ Replaying a consumed nonce is rejected with `VaultError::StaleNonce`
@@ -191,3 +226,9 @@ Run tests with:
 ```bash
 cargo build --workspace --release --target=wasm32-unknown-unknown
 ```
+-| `set_allowed_depositor` | ✅ | ❌ | ❌ | ❌ | ❌ |
+-| `clear_allowed_depositors` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `add_address` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `clear_all` | ✅ | ❌ | ❌ | ❌ | ❌ |
++| `get_allowlist` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
++| `is_authorized_depositor` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |

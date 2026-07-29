@@ -42,6 +42,12 @@ use soroban_sdk::contracterror;
 /// | 32   | StaleNonce                     | Rotation nonce does not match the stored current nonce   |
 /// | 33   | NewRevenuePoolSameAsCurrent    | Proposed revenue pool matches the current revenue pool   |
 /// | 34   | NoRevenuePoolTransferPending   | No revenue-pool transfer is pending                      |
+/// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
+/// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
+/// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
+/// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
+/// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
+/// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -64,8 +70,7 @@ pub enum VaultError {
     BelowMinDeposit = 8,
     /// Arithmetic overflow detected (code 9).
     Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
+    // code 10 reserved (was InitialBalanceNegative)
     /// Min deposit must be positive (code 11).
     MinDepositNotPositive = 11,
     /// Max deduct must be positive (code 12).
@@ -90,16 +95,10 @@ pub enum VaultError {
     BatchEmpty = 21,
     /// Batch size exceeds maximum allowed (code 22).
     BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
+    // codes 23-24 reserved (were NewOwnerSameAsCurrent, NoOwnershipTransferPending)
     /// No admin transfer is pending (code 25).
     NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
+    // codes 26-27 reserved (were OfferingIdTooLong, MetadataTooLong)
     /// Price parsing error or non-positive price (code 28).
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
@@ -118,4 +117,34 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
+    /// Operation is rejected because the vault is paused (code 37).
+    PausedState = 37,
+    /// Hot BPS must be between 1 and 10000 (code 38).
+    InvalidHotBps = 38,
+    /// Rebalance threshold must be between 1 and 10000 (code 39).
+    InvalidRebalanceThreshold = 39,
+    /// Cold signer set cannot be empty (code 40).
+    ColdSignersEmpty = 40,
+    /// Cold threshold must be between 1 and signer count (code 41).
+    InvalidColdThreshold = 41,
+    /// Duplicate address found in cold signer set (code 42).
+    DuplicateColdSigner = 42,
+    /// Deposit would exceed the configured reserve cap (code 43).
+    ExceedsReserveCap = 43,
+    /// Caller is not in the allowlist and is not the owner (code 44).
+    CallerNotInAllowlist = 44,
+    /// A critical admin action is still inside the global cool-off window (code 49).
+    AdminCooldownActive = 49,
+    /// Admin cool-off window is outside the accepted bounds (code 50).
+    InvalidAdminCooldown = 50,
+    /// No pending timelock proposal for the requested action (code 51).
+    ProposalNotFound = 51,
+    /// Action attempted before the timelock window has elapsed (code 52).
+    TimelockNotExpired = 52,
+    /// `proposed_at + window` overflowed `u64` (code 53).
+    TimelockOverflow = 53,
+    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 54).
+    InvalidTimelockWindow = 54,
+    /// Amount is below the minimum transfer unit (code 55).
+    BelowMinTransferAmount = 55,
 }

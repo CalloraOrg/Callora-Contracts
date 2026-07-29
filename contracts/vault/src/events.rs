@@ -4,6 +4,7 @@
 //! ensuring byte-identity is preserved and preventing accidental topic name drift
 //! across call sites.
 
+#![allow(dead_code)]
 use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
@@ -174,20 +175,44 @@ pub fn event_metadata_removed(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"upgraded"` event topic.
 ///
 /// Emitted when the vault contract is upgraded to a new WASM hash.
+///
+/// Retained for backwards compatibility with off-chain consumers that subscribed
+/// to the original single-event shape. Newly written indexers should prefer the
+/// structured [`event_upgrade_started`] / [`event_upgrade_completed`] pair.
 pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
 }
 
-/// Returns the Symbol for the `"allowlist_add"` event topic.
+/// Returns the Symbol for the `"upgrade_started"` event topic.
 ///
-/// Emitted when the owner adds an address to the vault deposit allowlist.
+/// Emitted *before* the host swaps the contract WASM. Pairs with
+/// [`event_upgrade_completed`] so indexers can distinguish a host-level trap
+/// mid-upgrade from a fully applied upgrade.
+pub fn event_upgrade_started(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_started")
+}
+
+/// Returns the Symbol for the `"upgrade_completed"` event topic.
+///
+/// Emitted *after* the WASM swap and the `ContractVersion` storage write.
+/// Receipt of this event without a preceding `upgrade_started` at the same
+/// `(ledger, timestamp)` would indicate event-emission tampering.
+pub fn event_upgrade_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_completed")
+}
+
+/// Emitted when an address is added to the deposit allowlist.
+///
+/// Topics: ("allowlist_add", caller: Address, depositor: Address)
+/// Data: ()
 pub fn event_allowlist_add(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_add")
 }
 
-/// Returns the Symbol for the `"allowlist_clear"` event topic.
+/// Emitted when the deposit allowlist is cleared.
 ///
-/// Emitted when the owner clears the entire vault deposit allowlist.
+/// Topics: ("allowlist_clear", caller: Address)
+/// Data: ()
 pub fn event_allowlist_clear(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_clear")
 }
@@ -213,11 +238,115 @@ pub fn event_revenue_pool_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "revenue_pool_cancelled")
 }
 
+/// Returns the Symbol for the `"request_id_pruned"` event topic.
+///
+/// Emitted when an expired idempotency request ID is pruned from storage.
+pub fn event_request_id_pruned(env: &Env) -> Symbol {
+    Symbol::new(env, "request_id_pruned")
+}
+
 /// Returns the Symbol for the `"admin_broadcast"` event topic.
 ///
 /// Emitted when the admin broadcasts an emergency message.
 pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
+}
+
+// --- Escape-hatch timelock event symbols (Issue #482) ---------------------
+
+/// Returns the Symbol for the `"pause_proposed"` event topic.
+///
+/// Emitted when an admin stages a pause proposal that must wait for the
+/// configured timelock window before it can be executed.
+pub fn event_pause_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_proposed")
+}
+
+/// Returns the Symbol for the `"pause_executed"` event topic.
+///
+/// Emitted when an admin executes a pause proposal after the timelock
+/// window has elapsed.
+pub fn event_pause_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_executed")
+}
+
+/// Returns the Symbol for the `"pause_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending pause proposal.
+pub fn event_pause_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_cancelled")
+}
+
+/// Returns the Symbol for the `"upgrade_proposed"` event topic.
+///
+/// Emitted when an admin stages an upgrade proposal.
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_executed"` event topic.
+///
+/// Emitted when an admin executes an upgrade proposal after the timelock
+/// window has elapsed.
+pub fn event_upgrade_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_executed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending upgrade proposal.
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
+/// Returns the Symbol for the `"sweep_proposed"` event topic.
+///
+/// Emitted when an admin stages a sweep (`distribute`) proposal.
+pub fn event_sweep_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_proposed")
+}
+
+/// Returns the Symbol for the `"sweep_executed"` event topic.
+///
+/// Emitted when an admin executes a sweep proposal after the timelock
+/// window has elapsed.
+pub fn event_sweep_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_executed")
+}
+
+/// Returns the Symbol for the `"sweep_cancelled"` event topic.
+///
+/// Emitted when an admin aborts a pending sweep proposal.
+pub fn event_sweep_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_cancelled")
+}
+
+/// Returns the Symbol for the `"timelock_window_changed"` event topic.
+///
+/// Emitted when the admin updates the configured timelock window length.
+pub fn event_timelock_window_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "tl_window_changed")
+}
+
+/// Returns the Symbol for the `"rescue_funds"` event topic.
+///
+/// Emitted when the admin rescues funds from the vault.
+pub fn event_rescue_funds(env: &Env) -> Symbol {
+    Symbol::new(env, "rescue_funds")
+}
+
+/// Returns the Symbol for the `"reserve_cap_set"` event topic.
+///
+/// Emitted when the owner configures a reserve cap for a token.
+pub fn event_reserve_cap_set(env: &Env) -> Symbol {
+    Symbol::new(env, "reserve_cap_set")
+}
+
+/// Returns the Symbol for the `"swept"` event topic.
+///
+/// Emitted when idle balance is swept from the vault.
+pub fn event_swept(env: &Env) -> Symbol {
+    Symbol::new(env, "swept")
 }
 
 #[cfg(test)]
@@ -245,6 +374,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_accepted"));
+    }
+
+    #[test]
+    fn test_event_rescue_funds_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_rescue_funds(&env);
+        assert_eq!(sym, Symbol::new(&env, "rescue_funds"));
     }
 
     #[test]
@@ -395,6 +531,20 @@ mod tests {
     }
 
     #[test]
+    fn test_event_upgrade_started_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_started(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_started"));
+    }
+
+    #[test]
+    fn test_event_upgrade_completed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_completed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_completed"));
+    }
+
+    #[test]
     fn test_event_allowlist_add_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_allowlist_add(&env);
@@ -429,11 +579,105 @@ mod tests {
         assert_eq!(sym, Symbol::new(&env, "revenue_pool_cancelled"));
     }
 
+    /// Snapshot: proves event_request_id_pruned still maps to exactly the bytes for "request_id_pruned".
+    #[test]
+    fn test_event_request_id_pruned_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_request_id_pruned(&env);
+        assert_eq!(sym, Symbol::new(&env, "request_id_pruned"));
+    }
+
     /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".
     #[test]
     fn test_event_admin_broadcast_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_admin_broadcast(&env);
         assert_eq!(sym, Symbol::new(&env, "admin_broadcast"));
+    }
+
+    /// Snapshot: proves event_reserve_cap_set still maps to exactly the bytes for "reserve_cap_set".
+    #[test]
+    fn test_event_reserve_cap_set_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_reserve_cap_set(&env);
+        assert_eq!(sym, Symbol::new(&env, "reserve_cap_set"));
+    }
+
+    /// Snapshot: proves event_swept still maps to exactly the bytes for "swept".
+    #[test]
+    fn test_event_swept_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_swept(&env);
+        assert_eq!(sym, Symbol::new(&env, "swept"));
+    }
+
+    #[test]
+    fn test_event_pause_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_proposed"));
+    }
+
+    #[test]
+    fn test_event_pause_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_executed"));
+    }
+
+    #[test]
+    fn test_event_pause_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_cancelled"));
+    }
+
+    #[test]
+    fn test_event_upgrade_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_proposed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_executed"));
+    }
+
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_cancelled"));
+    }
+
+    #[test]
+    fn test_event_sweep_proposed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_proposed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_proposed"));
+    }
+
+    #[test]
+    fn test_event_sweep_executed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_executed(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_executed"));
+    }
+
+    #[test]
+    fn test_event_sweep_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_cancelled"));
+    }
+
+    #[test]
+    fn test_event_timelock_window_changed_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_timelock_window_changed(&env);
+        assert_eq!(sym, Symbol::new(&env, "tl_window_changed"));
     }
 }

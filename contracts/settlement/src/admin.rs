@@ -2,13 +2,12 @@
 
 use soroban_sdk::{Address, Env, Vec};
 
-use crate::{
-    events, timelock, AdminMigrationEvent, CalloraSettlement, SettlementError, StorageKey,
-};
+use crate::types::AdminMigrationEvent;
+use crate::{events, timelock, CalloraSettlement, SettlementError, StorageKey};
 
 fn require_admin(env: &Env, caller: &Address) {
     caller.require_auth();
-    let admin = CalloraSettlement::get_admin(env.clone());
+    let admin = CalloraSettlement::get_admin(env.clone()).unwrap();
     if caller != &admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
@@ -38,7 +37,10 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
     let amount: i128 = env
         .storage()
         .persistent()
-        .get(&StorageKey::DeveloperBalance(from.clone(), usdc_token.clone()))
+        .get(&StorageKey::DeveloperBalance(
+            from.clone(),
+            usdc_token.clone(),
+        ))
         .unwrap_or(0);
     if amount <= 0 {
         env.panic_with_error(SettlementError::NoDeveloperBalance);
@@ -56,11 +58,7 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
         execute_after,
     };
     timelock::set_pending_migration(env, &migration);
-
-    env.events().publish(
-        (events::event_admin_migration_proposed(env), from.clone()),
-        migration,
-    );
+    events::emit_admin_migration_proposed(env, from, migration);
 }
 
 pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Address) {
@@ -76,11 +74,7 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
     let source_key = StorageKey::DeveloperBalance(from.clone(), usdc_token.clone());
     let destination_key = StorageKey::DeveloperBalance(migration.to.clone(), usdc_token.clone());
 
-    let source_balance: i128 = env
-        .storage()
-        .persistent()
-        .get(&source_key)
-        .unwrap_or(0);
+    let source_balance: i128 = env.storage().persistent().get(&source_key).unwrap_or(0);
     let new_source_balance = source_balance
         .checked_sub(migration.amount)
         .filter(|b| *b >= 0)
@@ -118,12 +112,10 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
         .set(&StorageKey::DeveloperIndex, &index);
     timelock::remove_pending_migration(env, from);
 
-    env.events().publish(
-        (
-            events::event_admin_migration(env),
-            from.clone(),
-            migration.to.clone(),
-        ),
+    events::emit_admin_migration(
+        env,
+        from,
+        &migration.to.clone(),
         AdminMigrationEvent {
             from: from.clone(),
             to: migration.to,

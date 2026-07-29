@@ -41,7 +41,7 @@ impl MaliciousToken {
                 let client = CalloraVaultClient::new(&env, &vault);
 
                 // Attempt re-entry into deduct
-                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_token")), &u16::MAX);
+                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_token")));
             }
         }
     }
@@ -103,7 +103,7 @@ impl MaliciousSettlement {
                 let client = CalloraVaultClient::new(&env, &vault);
 
                 // Attempt re-entry into deduct
-                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_settle")), &u16::MAX);
+                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_settle")));
             }
         }
     }
@@ -137,7 +137,6 @@ fn setup_reentrancy_test(env: &Env) -> (Address, CalloraVaultClient, Address, Ad
 
     // Init vault with the malicious token
     vault_client.init(&owner, &token_addr, &Some(1000), &None, &None, &None, &None);
-    vault_client.set_settlement(&owner, &settlement_addr);
 
     (vault_addr, vault_client, token_addr, settlement_addr, owner)
 }
@@ -155,7 +154,7 @@ fn test_reentrancy_via_token_transfer_is_blocked_by_auth() {
     assert_eq!(initial_balance, 1000);
 
     // Trigger deduct -> calls token.transfer -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")), &u16::MAX);
+    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(
@@ -197,7 +196,7 @@ fn test_reentrancy_via_settlement_callback_is_blocked() {
     assert_eq!(initial_balance, 1000);
 
     // Trigger deduct -> calls settlement.receive_payment -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")), &u16::MAX);
+    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(
@@ -290,7 +289,7 @@ fn test_reentrancy_by_authorized_attacker() {
 
     let attacker = Address::generate(&env);
     vault_client.set_authorized_caller(&Some(attacker.clone()), &0u64);
-    
+
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
     token_mock.set_token_attack_config(&vault_addr, &attacker, &true);
 
@@ -298,7 +297,7 @@ fn test_reentrancy_by_authorized_attacker() {
     assert_eq!(initial_balance, 1000);
 
     // Attacker calls deduct -> token.transfer -> attacker calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&attacker, &100, &Some(Symbol::new(&env, "first_call")), &u16::MAX);
+    let result = vault_client.try_deduct(&attacker, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(

@@ -44,7 +44,9 @@
 
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-use crate::{SettlementError, StorageKey, MAX_BATCH_SIZE};
+use crate::{
+    SettlementError, StorageKey, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD, MAX_BATCH_SIZE,
+};
 
 /// Storage-layout version that predates version tracking.
 pub const STORAGE_VERSION_V1: u32 = 1;
@@ -59,6 +61,9 @@ pub const STORAGE_VERSION_V2: u32 = 2;
 /// (contract initialised before version tracking was introduced).
 /// Returns [`STORAGE_VERSION_V2`] once [`migrate_v1_to_v2`] has completed.
 pub fn storage_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     env.storage()
         .instance()
         .get(&StorageKey::StorageVersion)
@@ -178,7 +183,11 @@ pub fn migrate_v1_to_v2_page(
         .unwrap_or_else(|| Vec::new(env));
 
     let total = index.len();
-    let effective = if batch_size == 0 { 1 } else { batch_size.min(MAX_BATCH_SIZE) };
+    let effective = if batch_size == 0 {
+        1
+    } else {
+        batch_size.min(MAX_BATCH_SIZE)
+    };
     let end = offset.saturating_add(effective).min(total);
 
     let mut i = 0u32;
@@ -226,11 +235,7 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
     let v1_balance: Option<i128> = env.storage().persistent().get(&v1_key);
     if let Some(v1) = v1_balance {
         let v2_key = StorageKey::DeveloperBalance(addr.clone(), usdc_token.clone());
-        let existing_v2: i128 = env
-            .storage()
-            .persistent()
-            .get(&v2_key)
-            .unwrap_or(0i128);
+        let existing_v2: i128 = env.storage().persistent().get(&v2_key).unwrap_or(0i128);
         let merged = v1
             .checked_add(existing_v2)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
@@ -240,6 +245,22 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
             .extend_ttl(&v2_key, 50_000, 50_000);
         env.storage().persistent().remove(&v1_key);
     }
+}
+
+/// Migrate a single developer's V1 balance to V2 (admin only).
+pub fn migrate_single_developer(
+    env: &Env,
+    caller: &Address,
+    developer: &Address,
+) -> Result<(), crate::SettlementError> {
+    caller.require_auth();
+    require_admin(env, caller);
+    let inst = env.storage().instance();
+    let usdc_token: Address = inst
+        .get(&crate::StorageKey::Usdc)
+        .ok_or(crate::SettlementError::UsdcTokenNotConfigured)?;
+    migrate_developer_slot(env, developer, &usdc_token);
+    Ok(())
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

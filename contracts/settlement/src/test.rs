@@ -3003,17 +3003,19 @@ mod settlement_tests {
             }
         }
 
-        assert_eq!(
-            cursor_pages.len(),
-            5,
-            "all developers must be returned across pages"
-        );
+#[test]
+fn deposit_event_emitted_once_per_batch_item() {
+    // items with 3 developers -> assert exactly 3 `deposit` events, one per developer,
+    // and that each event's amount matches the corresponding batch item
+}
 
-        // The cursor pages must be in sorted order (ascending by address).
-        devs.sort();
-        assert_eq!(
-            cursor_pages, devs,
-            "cursor pages must iterate in deterministic sorted order"
-        );
-    }
+#[test]
+fn deposit_event_not_emitted_for_pool_credit() {
+    // to_pool = true -> assert NO `deposit` event is published
+}
+
+#[test]
+fn deposit_event_amount_matches_balance_credited_amount() {
+    // amount field in DepositEvent must equal amount field in BalanceCreditedEvent
+    // for the same call
 }

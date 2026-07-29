@@ -7,19 +7,21 @@ use crate::{
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, Error, IntoVal, InvokeError, Symbol};
 
-fn setup() -> (Env, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(1_700_000_000);
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
+    let token = Address::generate(&env);
     let from = Address::generate(&env);
     let to = Address::generate(&env);
     let contract = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &contract);
     client.init(&admin, &vault);
-    client.receive_payment(&vault, &500, &false, &Some(from.clone()));
-    (env, contract, admin, vault, from, to)
+    client.set_usdc_token(&admin, &token);
+    client.receive_payment(&vault, &500, &false, &Some(from.clone()), &token, &100);
+    (env, contract, admin, vault, from, to, token)
 }
 
 fn is_error<V, CE: Into<Error>, E: Into<Error>>(
@@ -34,7 +36,7 @@ fn is_error<V, CE: Into<Error>, E: Into<Error>>(
 
 #[test]
 fn proposal_stores_balance_snapshot_and_deadline() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
 
     client.propose_balance_migration(&admin, &from, &to);
@@ -52,43 +54,43 @@ fn proposal_stores_balance_snapshot_and_deadline() {
 
 #[test]
 fn execution_requires_timelock_and_succeeds_at_boundary() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     client.propose_balance_migration(&admin, &from, &to);
 
     let early = client.try_execute_balance_migration(&admin, &from);
     assert!(is_error(early, SettlementError::TimelockNotExpired));
-    assert_eq!(client.get_developer_balance(&from), 500);
-    assert_eq!(client.get_developer_balance(&to), 0);
+    assert_eq!(client.get_developer_balance(&from, &token), 500);
+    assert_eq!(client.get_developer_balance(&to, &token), 0);
 
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
     client.execute_balance_migration(&admin, &from);
 
-    assert_eq!(client.get_developer_balance(&from), 0);
-    assert_eq!(client.get_developer_balance(&to), 500);
+    assert_eq!(client.get_developer_balance(&from, &token), 0);
+    assert_eq!(client.get_developer_balance(&to, &token), 500);
     assert_eq!(client.get_balance_migration(&from), None);
 }
 
 #[test]
 fn execution_adds_to_destination_and_leaves_later_source_credits() {
-    let (env, contract, admin, vault, from, to) = setup();
+    let (env, contract, admin, vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
-    client.receive_payment(&vault, &40, &false, &Some(to.clone()));
+    client.receive_payment(&vault, &40, &false, &Some(to.clone()), &token, &1u32);
     client.propose_balance_migration(&admin, &from, &to);
-    client.receive_payment(&vault, &25, &false, &Some(from.clone()));
+    client.receive_payment(&vault, &25, &false, &Some(from.clone()), &token, &2u32);
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
 
     client.execute_balance_migration(&admin, &from);
 
-    assert_eq!(client.get_developer_balance(&from), 25);
-    assert_eq!(client.get_developer_balance(&to), 540);
+    assert_eq!(client.get_developer_balance(&from, &token), 25);
+    assert_eq!(client.get_developer_balance(&to, &token), 540);
 }
 
 #[test]
 fn execute_emits_admin_migration_event_and_cannot_replay() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     client.propose_balance_migration(&admin, &from, &to);
     let executed_at = 1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS + 1;
@@ -116,7 +118,7 @@ fn execute_emits_admin_migration_event_and_cannot_replay() {
 
 #[test]
 fn both_state_changes_require_current_admin_auth() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     env.set_auths(&[]);
     assert!(client
@@ -133,7 +135,7 @@ fn both_state_changes_require_current_admin_auth() {
 
 #[test]
 fn unauthorized_address_is_rejected_even_when_it_authorizes() {
-    let (env, contract, _admin, _vault, from, to) = setup();
+    let (env, contract, _admin, _vault, from, to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     let outsider = Address::generate(&env);
 
@@ -143,7 +145,7 @@ fn unauthorized_address_is_rejected_even_when_it_authorizes() {
 
 #[test]
 fn invalid_proposals_are_rejected() {
-    let (env, contract, admin, _vault, from, _to) = setup();
+    let (env, contract, admin, _vault, from, _to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     assert!(is_error(
         client.try_propose_balance_migration(&admin, &from, &from),
@@ -163,7 +165,7 @@ fn invalid_proposals_are_rejected() {
 
 #[test]
 fn reproposal_replaces_target_and_restarts_timelock() {
-    let (env, contract, admin, _vault, from, first_to) = setup();
+    let (env, contract, admin, _vault, from, first_to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     let second_to = Address::generate(&env);
     client.propose_balance_migration(&admin, &from, &first_to);
@@ -181,7 +183,7 @@ fn reproposal_replaces_target_and_restarts_timelock() {
 
 #[test]
 fn proposal_rejects_timestamp_overflow() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, _token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     env.ledger().set_timestamp(u64::MAX);
 
@@ -193,13 +195,14 @@ fn proposal_rejects_timestamp_overflow() {
 
 #[test]
 fn execution_rejects_a_spent_snapshot_without_partial_writes() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     client.propose_balance_migration(&admin, &from, &to);
     env.as_contract(&contract, || {
-        env.storage()
-            .persistent()
-            .set(&StorageKey::DeveloperBalance(from.clone()), &499_i128);
+        env.storage().persistent().set(
+            &StorageKey::DeveloperBalance(from.clone(), token.clone()),
+            &499_i128,
+        );
     });
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
@@ -207,20 +210,21 @@ fn execution_rejects_a_spent_snapshot_without_partial_writes() {
     let result = client.try_execute_balance_migration(&admin, &from);
 
     assert!(is_error(result, SettlementError::MigrationBalanceChanged));
-    assert_eq!(client.get_developer_balance(&from), 499);
-    assert_eq!(client.get_developer_balance(&to), 0);
+    assert_eq!(client.get_developer_balance(&from, &token), 499);
+    assert_eq!(client.get_developer_balance(&to, &token), 0);
     assert!(client.get_balance_migration(&from).is_some());
 }
 
 #[test]
 fn destination_overflow_reverts_all_migration_state() {
-    let (env, contract, admin, _vault, from, to) = setup();
+    let (env, contract, admin, _vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     client.propose_balance_migration(&admin, &from, &to);
     env.as_contract(&contract, || {
-        env.storage()
-            .persistent()
-            .set(&StorageKey::DeveloperBalance(to.clone()), &i128::MAX);
+        env.storage().persistent().set(
+            &StorageKey::DeveloperBalance(to.clone(), token.clone()),
+            &i128::MAX,
+        );
     });
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
@@ -228,7 +232,7 @@ fn destination_overflow_reverts_all_migration_state() {
     let result = client.try_execute_balance_migration(&admin, &from);
 
     assert!(is_error(result, SettlementError::DeveloperOverflow));
-    assert_eq!(client.get_developer_balance(&from), 500);
-    assert_eq!(client.get_developer_balance(&to), i128::MAX);
+    assert_eq!(client.get_developer_balance(&from, &token), 500);
+    assert_eq!(client.get_developer_balance(&to, &token), i128::MAX);
     assert!(client.get_balance_migration(&from).is_some());
 }
