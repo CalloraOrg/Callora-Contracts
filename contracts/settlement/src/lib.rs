@@ -122,6 +122,26 @@ pub struct DeveloperClaimWindow {
     pub end_ts: u64,
 }
 
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
+}
+
 /// Payment received event
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -678,6 +698,89 @@ impl CalloraSettlement {
         );
 
         Ok(())
+    }
+
+    /// Simulate a developer claim without side effects.
+    ///
+    /// This read-only view previews the outcome of `withdraw_developer_balance`
+    /// for the configured USDC token. It intentionally does not require
+    /// developer authorization and does not transfer tokens, mutate balances,
+    /// update daily withdrawal counters, extend TTLs, or emit events.
+    ///
+    /// The view returns the same typed errors as a real claim for amount, claim
+    /// window, developer balance, daily cap, USDC configuration, and contract
+    /// token-liquidity failures. If `to` is `None`, the simulated recipient is
+    /// the developer address.
+    pub fn simulate_claim(
+        env: Env,
+        developer: Address,
+        amount: i128,
+        to: Option<Address>,
+    ) -> Result<ClaimSimulation, SettlementError> {
+        if amount <= 0 {
+            return Err(SettlementError::AmountNotPositive);
+        }
+
+        let recipient = to.unwrap_or_else(|| developer.clone());
+        let contract_address = env.current_contract_address();
+        if recipient == contract_address {
+            panic!("invalid recipient: cannot withdraw to contract itself");
+        }
+
+        Self::require_claim_window_open(&env, &developer)?;
+
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .unwrap_or(0);
+        if amount > current_balance {
+            return Err(SettlementError::InsufficientDeveloperBalance);
+        }
+
+        let today = env.ledger().timestamp() / 86400;
+        let cap: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
+            .unwrap_or(0);
+        let daily = env
+            .storage()
+            .persistent()
+            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+            .unwrap_or(DailyWithdrawState {
+                day: today,
+                amount: 0,
+            });
+        let withdrawn_today = if daily.day == today { daily.amount } else { 0 };
+        let withdrawn_today_after = withdrawn_today
+            .checked_add(amount)
+            .ok_or(SettlementError::DailyWithdrawCapExceeded)?;
+        if cap > 0 && withdrawn_today_after > cap {
+            return Err(SettlementError::DailyWithdrawCapExceeded);
+        }
+
+        let remaining_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let contract_balance = token::Client::new(&env, &usdc_address).balance(&contract_address);
+        if contract_balance < amount {
+            return Err(SettlementError::InsufficientContractBalance);
+        }
+
+        Ok(ClaimSimulation {
+            developer,
+            amount,
+            recipient,
+            token: usdc_address,
+            current_balance,
+            remaining_balance,
+            contract_balance,
+            daily_withdraw_cap: cap,
+            withdrawn_today,
+            withdrawn_today_after,
+        })
     }
 
     /// Configure the inclusive claim window for a developer.

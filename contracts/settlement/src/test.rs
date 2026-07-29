@@ -278,6 +278,78 @@ mod settlement_tests {
     }
 
     #[test]
+    fn test_simulate_claim_returns_preview_without_side_effects() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(86_400);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, usdc, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &500i128, &false, &Some(developer.clone()), &usdc_address);
+        client.set_daily_withdraw_cap(&admin, &developer, &400i128);
+        usdc_admin_client.mint(&addr, &500i128);
+
+        let preview = client
+            .try_simulate_claim(&developer, &250i128, &Some(recipient.clone()))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(preview.developer, developer);
+        assert_eq!(preview.amount, 250i128);
+        assert_eq!(preview.recipient, recipient);
+        assert_eq!(preview.token, usdc_address);
+        assert_eq!(preview.current_balance, 500i128);
+        assert_eq!(preview.remaining_balance, 250i128);
+        assert_eq!(preview.contract_balance, 500i128);
+        assert_eq!(preview.daily_withdraw_cap, 400i128);
+        assert_eq!(preview.withdrawn_today, 0i128);
+        assert_eq!(preview.withdrawn_today_after, 250i128);
+
+        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 500i128);
+        assert_eq!(client.get_withdrawal_today(&developer), 0i128);
+        assert_eq!(usdc.balance(&addr), 500i128);
+        assert_eq!(usdc.balance(&recipient), 0i128);
+    }
+
+    #[test]
+    fn test_simulate_claim_reuses_claim_validation_errors() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(50);
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let (usdc_address, _, usdc_admin_client) = create_usdc(&env, &admin);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &usdc_address);
+        usdc_admin_client.mint(&addr, &100i128);
+
+        let zero = client.try_simulate_claim(&developer, &0i128, &None);
+        assert!(is_error(zero, SettlementError::AmountNotPositive));
+
+        let overdraw = client.try_simulate_claim(&developer, &101i128, &None);
+        assert!(is_error(overdraw, SettlementError::InsufficientDeveloperBalance));
+
+        client
+            .try_set_developer_claim_window(&admin, &developer, &100u64, &200u64)
+            .unwrap()
+            .unwrap();
+        let closed = client.try_simulate_claim(&developer, &100i128, &None);
+        assert!(is_error(closed, SettlementError::ClaimWindowClosed));
+    }
+
+    #[test]
     fn test_withdraw_developer_balance_succeeds_exact_balance() {
         let env = Env::default();
         env.mock_all_auths();
