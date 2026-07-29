@@ -45,7 +45,6 @@ members = [
 
 default-members = [
     "contracts/admin",
-    "contracts/batch_claim",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",

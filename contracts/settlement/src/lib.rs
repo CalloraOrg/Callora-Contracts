@@ -4,6 +4,7 @@ pub mod archive;
 pub mod batch;
 pub mod errors;
 pub mod events;
+pub mod freeze;
 pub mod limits;
 pub mod migrate;
 pub mod pagination;
@@ -411,7 +412,11 @@ impl CalloraSettlement {
     ///
     /// Performs a direct O(1) persistent storage lookup for the specified
     /// developer's balance denominated in `token`. Bumps instance and persistent TTL on read.
-    pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> Result<i128, SettlementError> {
+    pub fn get_developer_balance(
+        env: Env,
+        developer: Address,
+        token: Address,
+    ) -> Result<i128, SettlementError> {
         if !env.storage().instance().has(&StorageKey::Admin) {
             return Err(SettlementError::NotInitialized);
         }
@@ -511,6 +516,9 @@ impl CalloraSettlement {
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         developer.require_auth();
+        if freeze::is_developer_frozen(env.clone(), developer.clone()) {
+            return Err(SettlementError::DeveloperFrozen);
+        }
         if amount <= 0 {
             return Err(SettlementError::AmountNotPositive);
         }
@@ -1260,6 +1268,54 @@ impl CalloraSettlement {
         batch::batch_settle(&env, settlements)
     }
 
+    /// Freeze a developer's withdrawals.
+    ///
+    /// Only the admin may call. Sets the developer's `FrozenDeveloper` flag
+    /// to `true`, blocking `withdraw_developer_balance` for that developer.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to freeze.
+    /// * `reason` - Opaque label emitted in the event for off-chain indexers.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperFrozen`] — developer is already frozen.
+    pub fn freeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        reason: Symbol,
+    ) -> Result<(), SettlementError> {
+        freeze::freeze_developer(env, caller, developer, reason)
+    }
+
+    /// Unfreeze a developer's withdrawals.
+    ///
+    /// Only the admin may call.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to unfreeze.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperNotFrozen`] — developer is not frozen.
+    pub fn unfreeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        freeze::unfreeze_developer(env, caller, developer)
+    }
+
+    /// Return `true` if the developer's withdrawals are currently frozen.
+    ///
+    /// Read-only; no auth required.
+    pub fn is_developer_frozen(env: Env, developer: Address) -> bool {
+        freeze::is_developer_frozen(env, developer)
+    }
+
     // ─── Internal helpers ───────────────────────────────────────────────────
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
@@ -1288,6 +1344,9 @@ impl CalloraSettlement {
         index.insert(pos, addr);
     }
 }
+
+#[cfg(test)]
+mod test_freeze;
 
 #[cfg(test)]
 // Legacy suites targeting the pre-nonce payment API are intentionally not
