@@ -19,6 +19,8 @@
 //! - No `unwrap()` in production paths; all fallible ops return `Result`.
 //! - Overflow-safe: `checked_add`, `checked_sub` with explicit error variants.
 
+mod events;
+
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env};
 
 // ---------------------------------------------------------------------------
@@ -92,6 +94,8 @@ impl CalloraRescue {
         env.storage()
             .instance()
             .set(&DataKey::TotalRescued, &0_i128);
+
+        events::emit_initialized(&env, &admin);
         Ok(())
     }
 
@@ -151,6 +155,16 @@ impl CalloraRescue {
             .ok_or(RescueError::Overflow)?;
         env.storage().instance().set(&DataKey::TotalRescued, &next);
 
+        let payload = events::RescueEvent::new(
+            &env,
+            token.clone(),
+            to.clone(),
+            amount,
+            events::RescueCap::None,
+            next,
+        );
+        events::emit_rescue(&env, &admin, &payload);
+
         Ok(())
     }
 
@@ -205,6 +219,16 @@ impl CalloraRescue {
             .checked_add(amount)
             .ok_or(RescueError::Overflow)?;
         env.storage().instance().set(&DataKey::TotalRescued, &next);
+
+        let payload = events::RescueEvent::new(
+            &env,
+            token.clone(),
+            to.clone(),
+            amount,
+            events::RescueCap::Some(cap),
+            next,
+        );
+        events::emit_rescue_capped(&env, &admin, &payload);
 
         Ok(())
     }
@@ -427,5 +451,300 @@ mod test {
                 .unwrap(),
             RescueError::NotInitialized
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event lifecycle tests
+// ---------------------------------------------------------------------------
+
+/// Integration tests that verify actual event emission from rescue
+/// contract entrypoints. Each test drives the contract through a public
+/// function and inspects `env.events().all()` to assert the correct
+/// topic shape and structured payload.
+#[cfg(test)]
+mod test_events {
+    extern crate std;
+
+    use crate::events::{self, RescueCap};
+    use crate::{CalloraRescue, CalloraRescueClient};
+    use soroban_sdk::testutils::{Address as _, Events as _};
+    use soroban_sdk::{token, Address, Env, IntoVal, Symbol};
+
+    /// Helper: register a Stellar Asset Contract token, mint `amount` to the
+    /// rescue contract, and return the token address.
+    fn create_token(env: &Env, admin: &Address, rescue_addr: &Address, mint_amount: i128) -> Address {
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = token::StellarAssetClient::new(env, &token_addr);
+        token_admin.mint(rescue_addr, &mint_amount);
+        token_addr
+    }
+
+    /// `init` must emit exactly one `initialized` event with topic[1]=admin.
+    #[test]
+    fn test_init_emits_initialized_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let all_events = env.events().all();
+        // Find the last event emitted by this contract.
+        let event = all_events
+            .iter()
+            .rev()
+            .find(|e| e.0 == cid)
+            .expect("expected at least one event from rescue contract");
+
+        let topics = &event.1;
+        assert_eq!(topics.len(), 2);
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "initialized"));
+        assert_eq!(topic1, admin);
+
+        // Payload is the admin address.
+        let data: Address = event.2.into_val(&env);
+        assert_eq!(data, admin);
+    }
+
+    /// Failed `init` (double-init) must NOT emit an `initialized` event.
+    #[test]
+    fn test_double_init_emits_no_second_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+        // Clear events from successful init.
+        env.events().all();
+
+        // Double init should fail.
+        let result = c.try_init(&admin);
+        assert!(result.is_err());
+
+        let all_events = env.events().all();
+        let init_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "initialized")
+            })
+            .collect();
+        assert_eq!(init_events.len(), 0, "double init must not emit 'initialized'");
+    }
+
+    /// `rescue` emits exactly one `rescue` event with correct topics and
+    /// a versioned `RescueEvent` payload.
+    #[test]
+    fn test_rescue_emits_rescue_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let amount: i128 = 500;
+        let token_addr = create_token(&env, &admin, &cid, &amount);
+
+        // Clear init event.
+        env.events().all();
+
+        c.rescue(&admin, &token_addr, &to, &amount);
+
+        let all_events = env.events().all();
+        let event = all_events
+            .iter()
+            .rev()
+            .find(|e| e.0 == cid)
+            .expect("expected rescue event");
+
+        let topics = &event.1;
+        assert_eq!(topics.len(), 3);
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "rescue"));
+        assert_eq!(topic1, admin);
+        assert_eq!(topic2, token_addr);
+
+        // Payload is a RescueEvent.
+        let payload: events::RescueEvent = event.2.into_val(&env);
+        assert_eq!(payload.version, events::RESCUE_EVENT_VERSION);
+        assert_eq!(payload.token, token_addr);
+        assert_eq!(payload.to, to);
+        assert_eq!(payload.amount, amount);
+        assert_eq!(payload.cap, RescueCap::None);
+        assert_eq!(payload.cumulative_rescued, amount);
+        assert_eq!(payload.ledger_sequence, env.ledger().sequence());
+        assert_eq!(payload.timestamp, env.ledger().timestamp());
+    }
+
+    /// `rescue_capped` emits `rescue_capped` event with `cap` populated in
+    /// the payload.
+    #[test]
+    fn test_rescue_capped_emits_rescue_capped_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let amount: i128 = 500;
+        let cap: i128 = 1000;
+        let token_addr = create_token(&env, &admin, &cid, &amount);
+
+        env.events().all();
+
+        c.rescue_capped(&admin, &token_addr, &to, &amount, &cap);
+
+        let all_events = env.events().all();
+        let event = all_events
+            .iter()
+            .rev()
+            .find(|e| e.0 == cid)
+            .expect("expected rescue_capped event");
+
+        let topics = &event.1;
+        assert_eq!(topics.len(), 3);
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        let topic1: Address = topics.get(1).unwrap().into_val(&env);
+        let topic2: Address = topics.get(2).unwrap().into_val(&env);
+        assert_eq!(topic0, Symbol::new(&env, "rescue_capped"));
+        assert_eq!(topic1, admin);
+        assert_eq!(topic2, token_addr);
+
+        let payload: events::RescueEvent = event.2.into_val(&env);
+        assert_eq!(payload.version, events::RESCUE_EVENT_VERSION);
+        assert_eq!(payload.amount, amount);
+        assert_eq!(payload.cap, RescueCap::Some(cap));
+        assert_eq!(payload.cumulative_rescued, amount);
+    }
+
+    /// `cumulative_rescued` must accumulate across multiple rescue calls.
+    #[test]
+    fn test_multiple_rescues_accumulate_cumulative_total() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let token_addr = create_token(&env, &admin, &cid, &1000);
+
+        env.events().all();
+
+        // First rescue: 300
+        c.rescue(&admin, &token_addr, &to, &300_i128);
+        // Second rescue: 200
+        c.rescue(&admin, &token_addr, &to, &200_i128);
+
+        let all_events = env.events().all();
+        let rescue_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+
+        assert_eq!(rescue_events.len(), 2);
+
+        let payload1: events::RescueEvent = rescue_events[0].2.into_val(&env);
+        assert_eq!(payload1.cumulative_rescued, 300);
+
+        let payload2: events::RescueEvent = rescue_events[1].2.into_val(&env);
+        assert_eq!(payload2.cumulative_rescued, 500);
+    }
+
+    /// Failed rescue (invalid amount) must NOT emit a `rescue` event.
+    #[test]
+    fn test_failed_rescue_emits_no_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let token = Address::generate(&env);
+        let to = Address::generate(&env);
+
+        // Clear init event.
+        env.events().all();
+
+        let result = c.try_rescue(&admin, &token, &to, &0_i128);
+        assert!(result.is_err());
+
+        let all_events = env.events().all();
+        let rescue_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+        assert_eq!(rescue_events.len(), 0, "failed rescue must not emit 'rescue'");
+    }
+
+    /// Failed `rescue_capped` (amount exceeds cap) must NOT emit an event.
+    #[test]
+    fn test_failed_rescue_capped_emits_no_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let token_addr = create_token(&env, &admin, &cid, &500);
+        let to = Address::generate(&env);
+
+        // Clear init event.
+        env.events().all();
+
+        // Amount 500 > cap 400 should fail.
+        let result = c.try_rescue_capped(&admin, &token_addr, &to, &500_i128, &400_i128);
+        assert!(result.is_err());
+
+        let all_events = env.events().all();
+        let capped_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue_capped")
+            })
+            .collect();
+        assert_eq!(capped_events.len(), 0, "failed rescue_capped must not emit 'rescue_capped'");
     }
 }
