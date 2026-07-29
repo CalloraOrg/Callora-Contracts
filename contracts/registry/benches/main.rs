@@ -8,6 +8,7 @@
 //! # Covered entrypoints
 //! * [`CalloraRegistry::init`] — first-time initialization
 //! * [`CalloraRegistry::register_offering`] — happy-path registration
+//! * [`CalloraRegistry::register_offering_with_gate`] — balance-gated registration
 //! * [`CalloraRegistry::is_offering_registered`] — read-only lookup (registered)
 //! * [`CalloraRegistry::registered_count`] — read count view
 //! * [`CalloraRegistry::get_offering`] — full record fetch
@@ -20,7 +21,7 @@
 use callora_registry::{CalloraRegistry, CalloraRegistryClient};
 use criterion::{criterion_group, criterion_main, Criterion};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
 
 // ---------------------------------------------------------------------------
 // Mock catalog — accepts every put_offering call without error
@@ -33,6 +34,20 @@ struct MockCatalog;
 impl MockCatalog {
     /// Accepts any offering registration forwarded by the registry.
     pub fn put_offering(_env: Env, _registry: Address, _offering_id: String, _metadata: String) {}
+}
+
+// ---------------------------------------------------------------------------
+// Mock token with a fixed balance per developer
+// ---------------------------------------------------------------------------
+
+#[contract]
+struct MockToken;
+
+#[contractimpl]
+impl MockToken {
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        1_000_000_000
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +127,31 @@ fn bench_register_offering(c: &mut Criterion) {
     });
 }
 
+/// Benchmark `register_offering_with_gate` on an already-initialized registry.
+///
+/// Uses a mock token that returns a fixed high balance so the gate passes.
+/// Each iteration uses a distinct offering-id to avoid duplicate errors.
+fn bench_register_offering_with_gate(c: &mut Criterion) {
+    let (env, admin, client) = setup();
+    let developer = Address::generate(&env);
+    let token_id = env.register(MockToken, ());
+    let mut counter: u32 = 0;
+    c.bench_function("registry/register_offering_with_gate", |b| {
+        b.iter(|| {
+            counter += 1;
+            let id_str = alloc_id_string(&env, counter);
+            criterion::black_box(client.register_offering_with_gate(
+                &admin,
+                &developer,
+                &token_id,
+                &1_000i128,
+                &id_str,
+                &String::from_str(&env, "https://meta.example.com/bench"),
+            ))
+        })
+    });
+}
+
 /// Benchmark `is_offering_registered` for an offering that is present.
 fn bench_is_offering_registered_hit(c: &mut Criterion) {
     let (env, _admin, client) = setup_with_offering();
@@ -178,6 +218,7 @@ criterion_group!(
     benches,
     bench_init,
     bench_register_offering,
+    bench_register_offering_with_gate,
     bench_is_offering_registered_hit,
     bench_is_offering_registered_miss,
     bench_registered_count,
