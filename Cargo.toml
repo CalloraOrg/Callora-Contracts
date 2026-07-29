@@ -55,6 +55,7 @@ default-members = [
     "contracts/registry",
     "contracts/revenue_pool",
     "contracts/settlement",
+    "contracts/stake",
     "contracts/upgrade",
     "contracts/validators",
     "contracts/vault",
