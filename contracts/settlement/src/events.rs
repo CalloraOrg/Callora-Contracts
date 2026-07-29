@@ -32,7 +32,6 @@ use crate::types::{
     DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
     GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
-use crate::Severity;
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
 
@@ -215,15 +214,6 @@ pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceiv
 pub fn emit_balance_credited(env: &Env, developer: &Address, payload: BalanceCreditedEvent) {
     env.events()
         .publish((event_balance_credited(env), developer.clone()), payload);
-}
-
-/// Emit a structured `deposit` event for a developer credit.
-///
-/// Topics: `("deposit", developer)`
-/// Data: `DepositEvent { developer, token, amount }`
-pub fn emit_deposit(env: &Env, developer: &Address, data: DepositEvent) {
-    let topics = (Symbol::new(env, "deposit"), developer.clone());
-    env.events().publish(topics, data);
 }
 
 /// Emit `"deposit"` alongside each developer credit (both single and batch).

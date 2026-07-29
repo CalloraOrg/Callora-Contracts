@@ -129,13 +129,11 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(
-                &StorageKey::RegisteredCount,
-                &count.checked_add(1).ok_or(RegistryError::Overflow)?,
-            );
+            .ok_or(RegistryError::NotInitialized)?;
+        env.storage().instance().set(
+            &StorageKey::RegisteredCount,
+            &count.checked_add(1).ok_or(RegistryError::Overflow)?,
+        );
 
         env.events().publish(
             (events::event_offering_registered(&env), offering_id),
@@ -195,13 +193,11 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0);
-        env.storage()
-            .instance()
-            .set(
-                &StorageKey::RegisteredCount,
-                &count.checked_add(1).ok_or(RegistryError::Overflow)?,
-            );
+            .ok_or(RegistryError::NotInitialized)?;
+        env.storage().instance().set(
+            &StorageKey::RegisteredCount,
+            &count.checked_add(1).ok_or(RegistryError::Overflow)?,
+        );
 
         env.events().publish(
             (events::event_offering_registered(&env), offering_id),
@@ -231,14 +227,11 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .unwrap_or(0))
+            .ok_or(RegistryError::NotInitialized)?)
     }
 
     /// Fetch a registered offering record.
-    pub fn get_offering(
-        env: Env,
-        offering_id: String,
-    ) -> Result<OfferingRecord, RegistryError> {
+    pub fn get_offering(env: Env, offering_id: String) -> Result<OfferingRecord, RegistryError> {
         Self::validate_offering_id(&offering_id)?;
         if Self::admin(&env).is_err() {
             return Err(RegistryError::NotInitialized);

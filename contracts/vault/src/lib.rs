@@ -17,6 +17,11 @@
 //! defaults to 48 h (`172_800`). Valid bounds are 1 h – 30 d. All three slots
 //! are independent so multiple proposals can coexist concurrently.
 //!
+//! Successful executions also share a global admin cool-off window. This
+//! prevents several independently matured proposals from being executed in
+//! rapid succession. The window defaults to one hour and is configurable with
+//! `set_admin_cooldown` within the bounds exposed by [`admin`].
+//!
 ///
 /// ## Pause Circuit Breaker
 ///
@@ -51,6 +56,7 @@ use soroban_sdk::{
     contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
 };
 
+pub mod admin;
 pub mod timelock;
 pub mod views;
 
@@ -150,6 +156,10 @@ pub enum VaultError {
     InvalidTimelockWindow = 40,
     /// Caller is not in the allowlist and is not the owner (code 44).
     CallerNotInAllowlist = 44,
+    /// A critical admin action is still inside the global cool-off window (code 49).
+    AdminCooldownActive = 49,
+    /// Admin cool-off window is outside the accepted bounds (code 50).
+    InvalidAdminCooldown = 50,
 }
 
 #[contracttype]
@@ -193,13 +203,32 @@ pub enum StorageKey {
     ContractVersion,
     /// Vector of addresses allowed to deposit (owner-managed allowlist).
     AllowedDepositors,
+    /// Global cool-off window between critical admin executions.
+    AdminCooldown,
+    /// Audit record for the most recently executed critical admin action.
+    LastCriticalAdminAction,
 }
 
+/// Ledgers per day at a 5-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
 /// TTL extension trigger for instance storage keys (~30 days of ledgers at 5 s/ledger).
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// TTL extension target for instance storage keys (~60 days of ledgers at 5 s/ledger).
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// TTL extension trigger for persistent storage keys — mirrors the instance threshold.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// TTL extension target for persistent storage keys — mirrors the instance amount.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
+
+/// TTL extension trigger for processed-request-id markers (~7 days).
+pub const REQUEST_ID_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
+
+/// TTL extension target for processed-request-id markers (~30 days).
+pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 
 pub mod token {
     pub use soroban_sdk::token::Client;
@@ -351,9 +380,9 @@ impl CalloraVault {
             .instance()
             .set(&DataKey::Settlement, &settlement);
         env.storage().instance().set(&DataKey::Paused, &false);
-        // Admin defaults to owner at initialization.
-        env.storage().instance().set(&StorageKey::Admin, &owner);
-        Ok(())
+
+        env.events()
+            .publish((events::event_init(&env), owner.clone()), initial_balance);
     }
 
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
@@ -406,7 +435,9 @@ impl CalloraVault {
 
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
-        Ok(())
+
+        env.events()
+            .publish((events::event_deposit(&env), caller), (amount, new_bal));
     }
 
     pub fn deduct(
@@ -459,14 +490,10 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("Math underflow"));
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
-        // Transfer USDC from vault to settlement on-ledger.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let usdc = token::Client::new(&env, &usdc_addr);
+        env.events().publish(
+            (events::event_deduct(&env), caller.clone()),
+            (amount, new_bal),
+        );
 
         let settlement_addr = env
             .storage()
@@ -516,40 +543,14 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap_or_else(|| panic!("Max deduct not set"));
+            .unwrap();
 
-        let mut total_amount: i128 = 0;
-        for item in items.iter() {
-            let (amount, _) = item;
-            Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-
-        let current_bal = env
+        let mut running_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
 
-        if current_bal < total_amount {
-            return Err(VaultError::InsufficientBalance);
-        }
-
-        let new_bal = current_bal
-            .checked_sub(total_amount)
-            .unwrap_or_else(|| panic!("Math underflow"));
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
-
-        // Transfer total USDC from vault to settlement on-ledger atomically.
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let usdc = token::Client::new(&env, &usdc_addr);
         let settlement_addr = env
             .storage()
             .instance()
@@ -563,18 +564,24 @@ impl CalloraVault {
         );
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
+
         for item in items.iter() {
             let (amount, request_id) = item;
-            settlement_client.receive_payment(
-                &env.current_contract_address(),
-                &amount,
-                &true,
-                &None,
-                &usdc_addr,
-                &(request_id as u32),
+            if amount > max_deduct || amount <= 0 {
+                panic!("Invalid deduct amount");
+            }
+            running_bal = running_bal.checked_sub(amount).unwrap();
+
+            env.events().publish(
+                (events::event_deduct(&env), caller.clone()),
+                (amount, running_bal),
             );
+
+            settlement_client.record_deduction(&amount, &request_id);
         }
-        Ok(())
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
     }
 
     // -----------------------------------------------------------------------
@@ -683,7 +690,11 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &caller);
-        Ok(())
+
+        env.events().publish(
+            (events::event_set_authorized_caller(&env), caller.clone()),
+            caller,
+        );
     }
 
     pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -700,7 +711,9 @@ impl CalloraVault {
         }
 
         env.storage().instance().set(&DataKey::Paused, &true);
-        Ok(())
+
+        env.events()
+            .publish((events::event_vault_paused(&env), caller), ());
     }
 
     pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
@@ -717,7 +730,9 @@ impl CalloraVault {
         }
 
         env.storage().instance().set(&DataKey::Paused, &false);
-        Ok(())
+
+        env.events()
+            .publish((events::event_vault_unpaused(&env), caller), ());
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -814,7 +829,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::MaxDeduct, &max_deduct);
-        Ok(())
+
+        env.events()
+            .publish((events::event_set_max_deduct(&env), caller), max_deduct);
     }
 
     /// Return the configured settlement contract address.
@@ -1088,6 +1105,50 @@ impl CalloraVault {
     }
 
     // -----------------------------------------------------------------------
+    // Critical admin action cooldown
+    // -----------------------------------------------------------------------
+
+    /// Return the global cool-off window between critical admin executions.
+    ///
+    /// The secure one-hour default is returned until an admin explicitly sets
+    /// a value. This read-only view requires no authorization.
+    pub fn get_admin_cooldown(env: Env) -> u64 {
+        admin::get_cooldown(&env)
+    }
+
+    /// Configure the global cool-off window between critical admin executions.
+    ///
+    /// # Authorization
+    /// `caller` must be the current admin and must authorize this invocation.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] when `caller` is not the current admin.
+    /// - [`VaultError::NotInitialized`] when the vault has no configured admin.
+    /// - [`VaultError::InvalidAdminCooldown`] when `seconds` is outside
+    ///   [`admin::MIN_COOLDOWN_SECONDS`]..=[`admin::MAX_COOLDOWN_SECONDS`].
+    pub fn set_admin_cooldown(env: Env, caller: Address, seconds: u64) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        admin::set_cooldown(&env, seconds)?;
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return seconds remaining before another critical admin action may run.
+    pub fn admin_cooldown_remaining(env: Env) -> u64 {
+        admin::remaining(&env)
+    }
+
+    /// Return whether a critical admin action may execute now.
+    pub fn is_admin_action_ready(env: Env) -> bool {
+        admin::is_ready(&env)
+    }
+
+    /// Return the most recently executed critical admin action, if any.
+    pub fn get_last_critical_admin_action(env: Env) -> Option<admin::CriticalAdminAction> {
+        admin::last_action(&env)
+    }
+
+    // -----------------------------------------------------------------------
     // Timelock window
     // -----------------------------------------------------------------------
 
@@ -1162,6 +1223,7 @@ impl CalloraVault {
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
+        admin::guard(&env, Symbol::new(&env, "pause"))?;
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
         env.events().publish(
@@ -1222,6 +1284,7 @@ impl CalloraVault {
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
+        admin::guard(&env, Symbol::new(&env, "upgrade"))?;
         let wasm_hash = proposal.wasm_hash.clone();
         let _admin = Self::get_admin(env.clone())?;
         env.deployer()
@@ -1324,6 +1387,7 @@ impl CalloraVault {
         if usdc.balance(&env.current_contract_address()) < proposal.amount {
             return Err(VaultError::InsufficientBalance);
         }
+        admin::guard(&env, Symbol::new(&env, "sweep"))?;
         usdc.transfer(
             &env.current_contract_address(),
             &proposal.to,
@@ -1400,6 +1464,26 @@ impl CalloraVault {
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /// Extend instance storage TTL to `INSTANCE_BUMP_AMOUNT` when the
+    /// remaining TTL falls below `INSTANCE_BUMP_THRESHOLD`.
+    ///
+    /// Called on every hot read path so that frequently-queried contracts
+    /// do not archive due to infrequent writes.
+    #[inline]
+    pub(crate) fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Unconditional alias for `bump_instance_ttl` — used on write paths
+    /// that may also update the instance and therefore always need a fresh
+    /// TTL extension.
+    #[inline]
+    pub(crate) fn bump_instance(env: &Env) {
+        Self::bump_instance_ttl(env);
+    }
 
     #[inline(never)]
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
@@ -1588,6 +1672,73 @@ impl CalloraVault {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    /// Transfer tokens accidentally sent to the vault address to a designated
+    /// recipient (admin only, emergency rescue path).
+    ///
+    /// For non-USDC tokens the full on-ledger balance is available for rescue.
+    /// For the configured USDC token the vault protects the internally-tracked
+    /// balance (`DataKey::Balance`) so that rescue can only recover surplus
+    /// above what the vault's accounting already claims; this prevents draining
+    /// real user funds via the rescue path.
+    ///
+    /// ## TTL behaviour
+    ///
+    /// This is a **hot read path**: it reads the tracked USDC balance and the
+    /// USDC token address from instance storage before executing the transfer.
+    /// The instance TTL is bumped on entry (buffer #5) so that vaults which
+    /// are only ever touched via `admin_rescue` do not silently archive.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `token_address` — Token contract to rescue funds from.
+    /// - `to` — Recipient of the rescued funds.
+    /// - `amount` — Amount to transfer; must be > 0.
+    ///
+    /// # Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the admin.
+    /// - [`VaultError::AmountNotPositive`] — `amount <= 0`.
+    /// - [`VaultError::InsufficientBalance`] — Available (unprotected) balance
+    ///   is less than `amount`.
+    ///
+    /// # Events
+    /// Emits `("rescue_funds", caller, token_address)` with payload `(to, amount)`.
+    pub fn admin_rescue(
+        env: Env,
+        caller: Address,
+        token_address: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_admin(&env, &caller)?;
+
+        // --- Hot read path: bump instance TTL before reading any storage ---
+        Self::bump_instance_ttl(&env);
+
+        // Read the tracked USDC balance so we can pass the protection sentinel
+        // to rescue::rescue_funds for the USDC token.
+        let usdc_addr: Option<Address> = env.storage().instance().get(&DataKey::UsdcToken);
+        let protected_balance: Option<i128> = if usdc_addr.as_ref() == Some(&token_address) {
+            let bal: i128 = env
+                .storage()
+                .instance()
+                .get(&DataKey::Balance)
+                .unwrap_or(0);
+            Some(bal)
+        } else {
+            None
+        };
+
+        rescue::rescue_funds(&env, &token_address, &to, amount, protected_balance)?;
+
+        env.events().publish(
+            (events::event_rescue_funds(&env), caller, token_address),
+            (to, amount),
+        );
+
+        Ok(())
+    }
+
     /// Set or update the reserve cap for a token (owner only).
     ///
     /// The reserve cap is the maximum total balance the vault may hold for
@@ -1642,6 +1793,7 @@ mod cold_storage;
 pub mod events;
 pub mod limits;
 pub mod rate_limit;
+pub mod rescue;
 
 // #[cfg(test)]
 // #[path = "../proofs/deduct.rs"]

@@ -68,7 +68,12 @@ pub mod revert_catalog {
 
     #[contractimpl]
     impl RevertCatalog {
-        pub fn put_offering(_env: Env, _registry: Address, _offering_id: String, _metadata: String) {
+        pub fn put_offering(
+            _env: Env,
+            _registry: Address,
+            _offering_id: String,
+            _metadata: String,
+        ) {
             panic!("catalog callee revert");
         }
     }
@@ -101,13 +106,13 @@ fn offering_id(env: &Env, suffix: &str) -> String {
 }
 
 fn metadata(env: &Env) -> String {
-    String::from_str(env, "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi")
+    String::from_str(
+        env,
+        "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+    )
 }
 
-fn setup_registry(
-    env: &Env,
-    catalog: Address,
-) -> (Address, CalloraRegistryClient<'_>, Address) {
+fn setup_registry(env: &Env, catalog: Address) -> (Address, CalloraRegistryClient<'_>, Address) {
     env.mock_all_auths();
     let admin = Address::generate(env);
     let developer = Address::generate(env);
@@ -186,7 +191,7 @@ fn balance_gate_token_panic_leaves_registry_clean() {
     let oid = offering_id(&env, "token-panic");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -194,7 +199,10 @@ fn balance_gate_token_panic_leaves_registry_clean() {
         &oid,
         &meta,
     );
-    assert!(result.is_err(), "token balance panic must abort registration");
+    assert!(
+        result.is_err(),
+        "token balance panic must abort registration"
+    );
 
     assert_eq!(client.registered_count(), 0);
     assert!(!client.is_offering_registered(&oid));
@@ -215,7 +223,7 @@ fn balance_gate_catalog_panic_after_balance_read_leaves_registry_clean() {
     let oid = offering_id(&env, "gate-panic");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -223,7 +231,10 @@ fn balance_gate_catalog_panic_after_balance_read_leaves_registry_clean() {
         &oid,
         &meta,
     );
-    assert!(result.is_err(), "catalog panic must fail gated registration");
+    assert!(
+        result.is_err(),
+        "catalog panic must fail gated registration"
+    );
 
     assert_eq!(client.registered_count(), 0);
     assert!(!client.is_offering_registered(&oid));
@@ -244,14 +255,7 @@ fn balance_gate_success_commits_registry_state() {
     let oid = offering_id(&env, "gate-ok");
     let meta = metadata(&env);
 
-    client.register_offering_with_balance_gate(
-        &admin,
-        &developer,
-        &token_addr,
-        &100i128,
-        &oid,
-        &meta,
-    );
+    client.register_offering_with_gate(&admin, &developer, &token_addr, &100i128, &oid, &meta);
 
     assert_eq!(client.registered_count(), 1);
     assert!(client.is_offering_registered(&oid));
@@ -270,7 +274,7 @@ fn balance_gate_insufficient_balance_does_not_call_catalog() {
     let oid = offering_id(&env, "low-balance");
     let meta = metadata(&env);
 
-    let result = client.try_register_offering_with_balance_gate(
+    let result = client.try_register_offering_with_gate(
         &admin,
         &developer,
         &token_addr,
@@ -279,10 +283,7 @@ fn balance_gate_insufficient_balance_does_not_call_catalog() {
         &meta,
     );
     assert!(
-        matches!(
-            result,
-            Ok(Err(RegistryError::InsufficientDeveloperBalance))
-        ),
+        matches!(result, Err(Ok(RegistryError::InsufficientDeveloperBalance))),
         "expected InsufficientDeveloperBalance, got {:?}",
         result
     );

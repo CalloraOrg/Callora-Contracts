@@ -20,7 +20,10 @@
 use soroban_sdk::{contracttype, Address, Env};
 
 use crate::events;
-use crate::{SettlementError, StorageKey};
+use crate::{
+    SettlementError, StorageKey, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
+    PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
+};
 
 /// Event payload emitted when a developer's minimum balance is set or changed.
 #[contracttype]
@@ -88,12 +91,20 @@ pub fn set_developer_min_balance(
 ///
 /// Returns `0` if no minimum has been configured for this developer, which
 /// means there is no withdrawal restriction beyond the balance being
-/// non-negative.
+/// non-negative. Bumps instance TTL and persistent TTL on read.
 pub fn get_developer_min_balance(env: &Env, developer: Address) -> i128 {
     env.storage()
-        .persistent()
-        .get(&StorageKey::DeveloperMinBalance(developer))
-        .unwrap_or(0)
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    let key = StorageKey::DeveloperMinBalance(developer);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+    env.storage().persistent().get(&key).unwrap_or(0)
 }
 
 /// Check that `remaining_balance` after a withdrawal meets the developer's

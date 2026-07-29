@@ -18,6 +18,7 @@ extern crate std;
 pub mod admin;
 pub mod errors;
 pub mod events;
+pub mod pause;
 
 use errors::HotError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
@@ -227,10 +228,7 @@ impl CalloraHot {
 
     /// Return whether the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Paused)
-            .unwrap_or(false)
+        pause::is_paused(&env)
     }
 
     // -----------------------------------------------------------------------
@@ -245,21 +243,15 @@ impl CalloraHot {
     /// # Errors
     /// * [`HotError::Unauthorized`] -- caller is not the current admin.
     /// * [`HotError::NotInitialized`] -- contract not initialized.
+    /// * [`HotError::AlreadyPaused`] -- the contract is already paused.
     /// * [`HotError::CooldownActive`] -- a `pause` ran within the cool-off window.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"pause"` tag as data.
+    /// Emits `paused` with `caller` as topic.
     pub fn pause(env: Env, caller: Address) -> Result<(), HotError> {
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_PAUSE);
-        admin::guard(&env, &action)?;
-
-        env.storage().instance().set(&StorageKey::Paused, &true);
-
-        env.events()
-            .publish((events::event_action(&env), caller), action);
-
-        Ok(())
+        pause::do_pause(&env, &caller, &action)
     }
 
     /// Unpause the contract. Cool-off-guarded critical action (tag `"unpause"`).
@@ -270,21 +262,15 @@ impl CalloraHot {
     /// # Errors
     /// * [`HotError::Unauthorized`] -- caller is not the current admin.
     /// * [`HotError::NotInitialized`] -- contract not initialized.
+    /// * [`HotError::NotPaused`] -- the contract is not currently paused.
     /// * [`HotError::CooldownActive`] -- an `unpause` ran within the cool-off window.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"unpause"` tag as data.
+    /// Emits `unpaused` with `caller` as topic.
     pub fn unpause(env: Env, caller: Address) -> Result<(), HotError> {
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_UNPAUSE);
-        admin::guard(&env, &action)?;
-
-        env.storage().instance().set(&StorageKey::Paused, &false);
-
-        env.events()
-            .publish((events::event_action(&env), caller), action);
-
-        Ok(())
+        pause::do_unpause(&env, &caller, &action)
     }
 
     /// Rotate the hot signer. Cool-off-guarded critical action (tag `"rotate"`).

@@ -46,6 +46,8 @@ use soroban_sdk::contracterror;
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
 /// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
+/// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
+/// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -146,4 +148,8 @@ pub enum VaultError {
     /// Returned instead of panicking to provide machine-readable feedback to
     /// integrators and prevent information leakage.
     CallerNotInAllowlist = 44,
+    /// A critical admin action is still inside the global cool-off window (code 49).
+    AdminCooldownActive = 49,
+    /// Admin cool-off window is outside the accepted bounds (code 50).
+    InvalidAdminCooldown = 50,
 }

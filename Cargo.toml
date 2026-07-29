@@ -7,31 +7,47 @@ publish = false
 [workspace]
 resolver = "2"
 members = [
+    "contracts/admin",
+    "contracts/checkpoint",
+    "contracts/cold",
+    "contracts/distribute",
+    "contracts/emergency",
+    "contracts/errors",
+    "contracts/freeze",
+    "contracts/helpers",
+    "contracts/hot",
+    "contracts/limits",
+    "contracts/migrate",
+    "contracts/registry",
     "contracts/revenue_pool",
+    "contracts/revenue_pool/fuzz",
     "contracts/settlement",
     "contracts/settlement/fuzz",
-    "contracts/checkpoint",
-    "contracts/freeze",
-    "contracts/helpers",
-    "contracts/validators",
-    "contracts/revenue_pool/fuzz",
-    "contracts/migrate",
+    "contracts/stake",
     "contracts/tests",
+    "contracts/upgrade",
+    "contracts/validators",
+    "contracts/vault",
     "contracts/whitelist",
-    "contracts/cold",
-    "contracts/errors",
+    "contracts/yield",
 ]
 default-members = [
-    "contracts/revenue_pool",
-    "contracts/settlement",
+    "contracts/admin",
     "contracts/checkpoint",
+    "contracts/cold",
+    "contracts/emergency",
     "contracts/freeze",
     "contracts/helpers",
-    "contracts/cold",
     "contracts/hot",
+    "contracts/limits",
+    "contracts/registry",
+    "contracts/revenue_pool",
+    "contracts/settlement",
+    "contracts/upgrade",
     "contracts/validators",
+    "contracts/vault",
+    "contracts/yield",
 ]
-
 
 [workspace.dependencies]
 soroban-sdk = "22"
@@ -39,6 +55,7 @@ soroban-sdk = "22"
 [dev-dependencies]
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
+callora-distribute = { path = "contracts/distribute" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
