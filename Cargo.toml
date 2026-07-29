@@ -29,7 +29,11 @@ members = [
     "contracts/validators",
     "contracts/vault",
     "contracts/whitelist",
-    "contracts/yield",
+    "contracts/cold",
+    "contracts/errors",
+    "contracts/registry",
+    "contracts/hot",
+    "contracts/refund",
 ]
 default-members = [
     "contracts/admin",
