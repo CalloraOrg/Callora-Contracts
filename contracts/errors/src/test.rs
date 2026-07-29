@@ -69,3 +69,62 @@ fn test_overflow_protection() {
         Error::Overflow
     );
 }
+
+#[test]
+fn test_overflow_boundary_safe() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ErrorsContract);
+    let client = ErrorsContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // u32::MAX - 1 is the largest code that does NOT overflow when adding 1.
+    assert_eq!(client.log_error(&user, &(u32::MAX - 1)), ());
+}
+
+#[test]
+fn test_overflow_zero_code() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ErrorsContract);
+    let client = ErrorsContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // code = 0: checked_add(1) -> Some(1), no overflow.
+    assert_eq!(client.log_error(&user, &0u32), ());
+}
+
+#[test]
+fn test_overflow_edge_round_trip() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ErrorsContract);
+    let client = ErrorsContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // Boundary: code at max - 1 succeeds, max fails, then max - 1 still succeeds.
+    assert_eq!(client.log_error(&user, &(u32::MAX - 1)), ());
+    assert_eq!(
+        client.try_log_error(&user, &u32::MAX).unwrap_err().unwrap(),
+        Error::Overflow
+    );
+    assert_eq!(client.log_error(&user, &(u32::MAX - 1)), ());
+}
+
+#[test]
+fn test_overflow_multiple_users_safe() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, ErrorsContract);
+    let client = ErrorsContractClient::new(&env, &contract_id);
+
+    // Multiple users logging at different code values — all safe.
+    for i in 0..10u32 {
+        let user = Address::generate(&env);
+        assert_eq!(client.log_error(&user, &(u32::MAX - 1 - i)), ());
+    }
+}

@@ -55,6 +55,9 @@ impl ErrorsContract {
     pub fn log_error(env: Env, user: Address, code: u32) -> Result<(), Error> {
         user.require_auth();
 
+        // Overflow-safe: checked_add prevents silent wrap at u32::MAX.
+        // This is the only arithmetic path in the contract; all other
+        // operations are storage reads/writes and comparisons.
         let _safe_calc = code.checked_add(1).ok_or(Error::Overflow)?;
 
         env.storage()
@@ -68,3 +71,6 @@ impl ErrorsContract {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test;
