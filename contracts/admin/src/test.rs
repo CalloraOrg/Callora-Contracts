@@ -35,10 +35,7 @@ use soroban_sdk::{
 fn events_with_topic<'a>(
     env: &'a Env,
     topic: &str,
-) -> std::vec::Vec<(
-    soroban_sdk::Vec<soroban_sdk::Val>,
-    soroban_sdk::Val,
-)> {
+) -> std::vec::Vec<(soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)> {
     let needle = Symbol::new(env, topic);
     env.events()
         .all()
@@ -98,7 +95,11 @@ fn init_emits_admin_init_event() {
     admin::init(&env, &admin);
 
     let matches = events_with_topic(&env, "admin_init");
-    assert_eq!(matches.len(), 1, "init must emit exactly one admin_init event");
+    assert_eq!(
+        matches.len(),
+        1,
+        "init must emit exactly one admin_init event"
+    );
 
     let (topics, data) = &matches[0];
     assert_eq!(topics.len(), 2, "admin_init must carry exactly 2 topics");
@@ -107,7 +108,10 @@ fn init_emits_admin_init_event() {
     assert_eq!(topic0, Symbol::new(&env, "admin_init"));
 
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, admin, "admin_init topic[1] must be the initial admin");
+    assert_eq!(
+        topic1, admin,
+        "admin_init topic[1] must be the initial admin"
+    );
 
     // data is `()` (empty tuple).
     let _: () = data.clone().into_val(&env);
@@ -349,7 +353,10 @@ fn accept_admin_emits_admin_changed_event_with_correct_shape() {
 
     // topic[1] is the incoming admin (the caller who just accepted).
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, new_admin, "admin_changed topic[1] must be the incoming admin");
+    assert_eq!(
+        topic1, new_admin,
+        "admin_changed topic[1] must be the incoming admin"
+    );
 
     let (previous_admin, new_admin_data): (Address, Address) = data.clone().into_val(&env);
     assert_eq!(
@@ -392,10 +399,7 @@ fn cancel_admin_transfer_requires_auth() {
     let res = std::panic::catch_unwind(|| {
         admin::cancel_admin_transfer(&env, &admin);
     });
-    assert!(
-        res.is_err(),
-        "cancel_admin_transfer must require auth"
-    );
+    assert!(res.is_err(), "cancel_admin_transfer must require auth");
 }
 
 /// `cancel_admin_transfer` panics with `no pending admin transfer` when no
@@ -963,22 +967,13 @@ fn limits_set_account_rejects_invalid_caps() {
     let alice = Address::generate(&env);
     admin::init(&env, &admin);
 
-    let bad_bets = limits::set_account_limits(
-        &env, &admin, &alice,
-        limits::MAX_CAP + 1, 0, 0,
-    );
+    let bad_bets = limits::set_account_limits(&env, &admin, &alice, limits::MAX_CAP + 1, 0, 0);
     assert_eq!(bad_bets, Err(errors::AdminLimitError::InvalidLimit));
 
-    let bad_positions = limits::set_account_limits(
-        &env, &admin, &alice,
-        0, limits::MAX_CAP + 1, 0,
-    );
+    let bad_positions = limits::set_account_limits(&env, &admin, &alice, 0, limits::MAX_CAP + 1, 0);
     assert_eq!(bad_positions, Err(errors::AdminLimitError::InvalidLimit));
 
-    let bad_subs = limits::set_account_limits(
-        &env, &admin, &alice,
-        0, 0, limits::MAX_CAP + 1,
-    );
+    let bad_subs = limits::set_account_limits(&env, &admin, &alice, 0, 0, limits::MAX_CAP + 1);
     assert_eq!(bad_subs, Err(errors::AdminLimitError::InvalidLimit));
 }
 

@@ -79,7 +79,11 @@ fn refill_state(env: &Env, developer: &Address) -> Option<(RateLimitConfig, Rate
 /// - `VaultError::RateLimited` if the post-refill `tokens` is below `amount`.
 /// - Returns `Ok(())` when no rate limit is configured for the developer (the
 ///   developer's deducts are unconstrained).
-pub fn would_consume_tokens(env: &Env, developer: &Address, amount: i128) -> Result<(), crate::VaultError> {
+pub fn would_consume_tokens(
+    env: &Env,
+    developer: &Address,
+    amount: i128,
+) -> Result<(), crate::VaultError> {
     let (_config, state) = match refill_state(env, developer) {
         Some(v) => v,
         None => return Ok(()),
@@ -92,7 +96,11 @@ pub fn would_consume_tokens(env: &Env, developer: &Address, amount: i128) -> Res
 
 /// Consume tokens from the developer's token bucket.
 /// Applies the amortized refill based on elapsed ledgers before checking the limit.
-pub fn consume_tokens(env: &Env, developer: &Address, amount: i128) -> Result<(), crate::VaultError> {
+pub fn consume_tokens(
+    env: &Env,
+    developer: &Address,
+    amount: i128,
+) -> Result<(), crate::VaultError> {
     let (_config, mut state) = match refill_state(env, developer) {
         Some(v) => v,
         None => return Ok(()), // No rate limit configured
@@ -100,11 +108,18 @@ pub fn consume_tokens(env: &Env, developer: &Address, amount: i128) -> Result<()
     if state.tokens < amount {
         return Err(crate::VaultError::RateLimited);
     }
-    state.tokens = state.tokens.checked_sub(amount).ok_or(crate::VaultError::Overflow)?;
+    state.tokens = state
+        .tokens
+        .checked_sub(amount)
+        .ok_or(crate::VaultError::Overflow)?;
 
     let state_key = crate::StorageKey::DeveloperState(developer.clone());
     env.storage().persistent().set(&state_key, &state);
-    env.storage().persistent().extend_ttl(&state_key, RATE_LIMIT_BUMP_THRESHOLD, RATE_LIMIT_BUMP_AMOUNT);
+    env.storage().persistent().extend_ttl(
+        &state_key,
+        RATE_LIMIT_BUMP_THRESHOLD,
+        RATE_LIMIT_BUMP_AMOUNT,
+    );
 
     Ok(())
 }

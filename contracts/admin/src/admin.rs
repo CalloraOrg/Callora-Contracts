@@ -105,11 +105,7 @@ const ERR_NO_PENDING_ADMIN: &str = "no pending admin transfer";
 /// data payload. The initial admin identity is carried in topic[1], so
 /// there is no redundant address in `data`.
 pub fn init(env: &Env, admin: &Address) {
-    if env
-        .storage()
-        .instance()
-        .has(&Symbol::new(env, ADMIN_KEY))
-    {
+    if env.storage().instance().has(&Symbol::new(env, ADMIN_KEY)) {
         panic!("{}", ERR_ALREADY_INITIALIZED);
     }
     let inst = env.storage().instance();
@@ -130,9 +126,7 @@ pub fn init(env: &Env, admin: &Address) {
 /// This is the authoritative lookup used by every other Callora contract
 /// that integrates with admin lifecycle hooks.
 pub fn get_admin(env: &Env) -> Option<Address> {
-    env.storage()
-        .instance()
-        .get(&Symbol::new(env, ADMIN_KEY))
+    env.storage().instance().get(&Symbol::new(env, ADMIN_KEY))
 }
 
 /// Return the pending admin address, or `None` if no transfer is in progress.
@@ -291,8 +285,6 @@ pub fn cancel_admin_transfer(env: &Env, caller: &Address) {
     inst.remove(&Symbol::new(env, PENDING_ADMIN_KEY));
     inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-    env.events().publish(
-        (events::event_admin_cancelled(env), &current),
-        pending,
-    );
+    env.events()
+        .publish((events::event_admin_cancelled(env), &current), pending);
 }

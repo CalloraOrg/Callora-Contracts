@@ -252,8 +252,7 @@ enum StorageKey {
 /// - [`AdminLimitError::NotInitialized`] — admin has never been set.
 fn require_admin(env: &Env, caller: &Address) -> Result<(), AdminLimitError> {
     caller.require_auth();
-    let admin =
-        crate::admin::get_admin(env).ok_or(AdminLimitError::NotInitialized)?;
+    let admin = crate::admin::get_admin(env).ok_or(AdminLimitError::NotInitialized)?;
     if *caller != admin {
         return Err(AdminLimitError::Unauthorized);
     }
@@ -349,7 +348,11 @@ pub fn set_default_limits(
         .persistent()
         .set(&StorageKey::DefaultLimits, &caps);
     env.events().publish(
-        (events::event_default_limits_set(env), caller.clone(), caps.clone()),
+        (
+            events::event_default_limits_set(env),
+            caller.clone(),
+            caps.clone(),
+        ),
         caps,
     );
     Ok(())

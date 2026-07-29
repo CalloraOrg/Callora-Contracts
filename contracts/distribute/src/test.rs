@@ -932,7 +932,11 @@ fn batch_open_blocked_while_paused_unpause_restores() {
     );
     let err = client.try_batch_open(&admin, &items2).unwrap_err();
     assert_eq!(err, Ok(DistributeError::Paused));
-    assert_eq!(client.get_account_count(&account), 1, "count unchanged while paused");
+    assert_eq!(
+        client.get_account_count(&account),
+        1,
+        "count unchanged while paused"
+    );
 
     // Unpause -> restored
     client.unpause(&admin);
@@ -976,7 +980,11 @@ fn batch_close_blocked_while_paused_unpause_restores() {
     );
     let err = client.try_batch_close(&admin, &close_items).unwrap_err();
     assert_eq!(err, Ok(DistributeError::Paused));
-    assert_eq!(client.get_account_count(&account), 1, "count unchanged while paused");
+    assert_eq!(
+        client.get_account_count(&account),
+        1,
+        "count unchanged while paused"
+    );
 
     // Unpause -> restored
     client.unpause(&admin);

@@ -192,14 +192,8 @@ fn receive_payment_developer_overflow_is_caught() {
     // Seed near-max developer balance.
     poke_dev_balance(&env, &contract_id, &developer, &token, i128::MAX - 1);
 
-    let result = client.try_receive_payment(
-        &vault,
-        &2i128,
-        &false,
-        &Some(developer),
-        &token,
-        &1u32,
-    );
+    let result =
+        client.try_receive_payment(&vault, &2i128, &false, &Some(developer), &token, &1u32);
     assert!(
         result.is_err(),
         "receive_payment developer credit should fail on i128 overflow"
@@ -214,11 +208,25 @@ fn receive_payment_developer_credit_accumulates_correctly() {
     let token = Address::generate(&env);
     let developer = Address::generate(&env);
 
-    client.receive_payment(&vault, &3_000i128, &false, &Some(developer.clone()), &token, &1u32);
+    client.receive_payment(
+        &vault,
+        &3_000i128,
+        &false,
+        &Some(developer.clone()),
+        &token,
+        &1u32,
+    );
     assert_eq!(client.get_developer_balance(&developer, &token), 3_000i128);
 
     // Second credit accumulates.
-    client.receive_payment(&vault, &1_500i128, &false, &Some(developer.clone()), &token, &2u32);
+    client.receive_payment(
+        &vault,
+        &1_500i128,
+        &false,
+        &Some(developer.clone()),
+        &token,
+        &2u32,
+    );
     assert_eq!(client.get_developer_balance(&developer, &token), 4_500i128);
 }
 
@@ -279,7 +287,14 @@ fn withdraw_more_than_balance_returns_error() {
     let developer = Address::generate(&env);
 
     // Credit 100 to the developer.
-    client.receive_payment(&vault, &100i128, &false, &Some(developer.clone()), &usdc, &1u32);
+    client.receive_payment(
+        &vault,
+        &100i128,
+        &false,
+        &Some(developer.clone()),
+        &usdc,
+        &1u32,
+    );
 
     // Attempt to withdraw 200 — must fail.
     let result = client.try_withdraw_developer_balance(&developer, &200i128, &None);
@@ -310,7 +325,10 @@ fn withdraw_exact_balance_succeeds() {
     );
 
     let result = client.try_withdraw_developer_balance(&developer, &500i128, &None);
-    assert!(result.is_ok(), "exact-balance withdrawal should succeed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "exact-balance withdrawal should succeed: {result:?}"
+    );
     assert_eq!(
         client.get_developer_balance(&developer, &stored_usdc),
         0i128,

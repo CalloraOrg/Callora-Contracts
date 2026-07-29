@@ -39,7 +39,11 @@ pub struct CriticalAdminAction {
 /// Reads the `WhitelistAdminCooldown` storage key. Returns
 /// [`DEFAULT_COOLDOWN_SECONDS`] (1 hour) when no window has been explicitly set.
 pub fn get_cooldown(env: &Env) -> u64 {
-    match env.storage().instance().get(&StorageKey::WhitelistAdminCooldown) {
+    match env
+        .storage()
+        .instance()
+        .get(&StorageKey::WhitelistAdminCooldown)
+    {
         Some(seconds) => seconds,
         None => DEFAULT_COOLDOWN_SECONDS,
     }
@@ -138,7 +142,10 @@ mod tests {
             assert_eq!(WhitelistError::AdminCooldownActive as u32, 49);
             assert_eq!(WhitelistError::InvalidAdminCooldown as u32, 50);
             assert_eq!(get_cooldown(&env), DEFAULT_COOLDOWN_SECONDS);
-            assert_eq!(set_cooldown(&env, 0), Err(WhitelistError::InvalidAdminCooldown));
+            assert_eq!(
+                set_cooldown(&env, 0),
+                Err(WhitelistError::InvalidAdminCooldown)
+            );
             assert_eq!(
                 set_cooldown(&env, MAX_COOLDOWN_SECONDS.saturating_add(1)),
                 Err(WhitelistError::InvalidAdminCooldown)

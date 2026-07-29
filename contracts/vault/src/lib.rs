@@ -1464,9 +1464,11 @@ impl CalloraVault {
     fn mark_request_processed(env: &Env, request_id: &Symbol) {
         let key = StorageKey::ProcessedRequest(request_id.clone());
         env.storage().persistent().set(&key, &true);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            REQUEST_ID_BUMP_THRESHOLD,
+            REQUEST_ID_BUMP_AMOUNT,
+        );
     }
 
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
@@ -1668,11 +1670,7 @@ impl CalloraVault {
         // to rescue::rescue_funds for the USDC token.
         let usdc_addr: Option<Address> = env.storage().instance().get(&DataKey::UsdcToken);
         let protected_balance: Option<i128> = if usdc_addr.as_ref() == Some(&token_address) {
-            let bal: i128 = env
-                .storage()
-                .instance()
-                .get(&DataKey::Balance)
-                .unwrap_or(0);
+            let bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
             Some(bal)
         } else {
             None

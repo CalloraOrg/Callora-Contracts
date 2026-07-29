@@ -192,6 +192,7 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
     pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
+        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -491,10 +492,7 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(
-            result.unwrap_err(),
-            Ok(WhitelistError::NoAdminTransferPending)
-        );
+        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
     }
 
     // -----------------------------------------------------------------------

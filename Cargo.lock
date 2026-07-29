@@ -259,6 +259,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-admin"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
@@ -301,7 +308,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-fee"
+name = "callora-emergency"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -324,6 +331,15 @@ name = "callora-hot"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-limits"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
  "soroban-sdk",
 ]
 
@@ -378,6 +394,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-stake"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-upgrade"
 version = "0.0.0"
 dependencies = [
@@ -393,9 +416,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-vault"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
+ "callora-validators",
+ "rand 0.8.7",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
+ "callora-vault",
  "criterion",
  "soroban-sdk",
 ]
@@ -876,6 +911,7 @@ dependencies = [
 name = "errors"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 

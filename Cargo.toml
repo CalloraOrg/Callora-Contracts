@@ -6,6 +6,7 @@ publish = false
 
 [workspace]
 resolver = "2"
+
 members = [
     "contracts/admin",
     "contracts/checkpoint",
@@ -36,6 +37,7 @@ members = [
     "contracts/recipient",
     "contracts/recipient/fuzz",
 ]
+
 default-members = [
     "contracts/admin",
     "contracts/checkpoint",

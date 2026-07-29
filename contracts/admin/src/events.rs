@@ -280,10 +280,7 @@ mod tests {
     #[test]
     fn test_event_bet_consumed_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_bet_consumed(&env),
-            Symbol::new(&env, "bet_consumed")
-        );
+        assert_eq!(event_bet_consumed(&env), Symbol::new(&env, "bet_consumed"));
     }
 
     /// Snapshot: proves `event_bet_released` maps to exactly
@@ -291,10 +288,7 @@ mod tests {
     #[test]
     fn test_event_bet_released_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_bet_released(&env),
-            Symbol::new(&env, "bet_released")
-        );
+        assert_eq!(event_bet_released(&env), Symbol::new(&env, "bet_released"));
     }
 
     /// Snapshot: proves `event_position_consumed` maps to exactly

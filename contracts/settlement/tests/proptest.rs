@@ -686,7 +686,14 @@ fn test_invariant_daily_withdraw_cap() {
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &usdc_addr);
 
-    client.receive_payment(&vault, &5_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
+    client.receive_payment(
+        &vault,
+        &5_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
 
     client.set_daily_withdraw_cap(&admin, &dev, &2_000);
 
@@ -694,7 +701,7 @@ fn test_invariant_daily_withdraw_cap() {
 
     let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
     assert!(res.is_err());
-    
+
     let balance = client.get_developer_balance(&dev, &usdc_addr);
     assert_eq!(balance, 3_500);
 }
