@@ -1,6 +1,8 @@
 # Cold Contract Storage Documentation
 
-This document outlines the foreseeable storage keys for the Cold contract, their storage tiers (Instance, Persistent, or Temporary), and the rationale behind each choice in accordance with Soroban best practices. The Cold contract is currently a read-only capability facade; the keys below represent the anticipated storage layout once the full cold-storage feature set is implemented.
+This document outlines the storage keys used by the Cold storage feature, their storage tiers (Instance, Persistent, or Temporary), and the rationale behind each choice in accordance with Soroban best practices.
+
+Cold accounting is implemented in `contracts/vault/src/cold_storage.rs` as an accounting partition of the vault's tracked balance. The data types defined there serve as the storage schema for the hot/cold split, auto-rebalance, and multisig cold-sweep features.
 
 ## Storage Tiers Overview
 
@@ -12,27 +14,17 @@ This document outlines the foreseeable storage keys for the Cold contract, their
 
 ## Storage Keys
 
-### 1. `Admin`
+### 1. `ColdConfig`
 - **Tier**: **Instance**
-- **Data Type**: `Address`
-- **Rationale**: The administrator address controls access to admin-restricted actions such as `set_config` and signer rotation. It is a core global configuration parameter shared across nearly all state-changing entrypoints and must be available efficiently on every invocation.
+- **Data Type**: `ColdConfig { hot_bps: u32, rebalance_threshold_bps: u32, cold_signers: Vec<Address>, cold_threshold: u32 }`
+- **Rationale**: The hot/cold split configuration is a singleton that governs all cold-storage behavior for the vault. It is read on every deposit (to evaluate rebalance) and on every cold-sweep proposal/approval. Because it is a global singleton with a lifetime matching the contract instance, instance storage is appropriate. It shares the contract instance TTL, avoiding the need for separate TTL management.
 
-### 2. `PendingAdmin`
+### 2. `ColdBalances`
 - **Tier**: **Instance**
-- **Data Type**: `Address` (Optional / Nullable)
-- **Rationale**: Used during a secure two-step admin transfer process to hold the nominated successor before they accept the role. As a singleton configuration state tied to the contract's administration lifecycle, instance storage is appropriate.
+- **Data Type**: `ColdBalances { hot: i128, cold: i128 }`
+- **Rationale**: The current hot/cold balance partition is the core accounting state of the cold feature. It is read and written on every deposit (potential rebalance) and on every cold-sweep execution. As a singleton balance record that must remain consistent with the vault's total tracked balance (`VaultMeta.balance`), instance storage ensures it shares the contract's lifecycle and is always available when the contract is invoked.
 
-### 3. `ColdConfig`
+### 3. `PendingColdSweep`
 - **Tier**: **Instance**
-- **Data Type**: `ColdConfig` (hot_bps, rebalance_threshold_bps, cold_signers, cold_threshold)
-- **Rationale**: The cold-storage configuration governs the hot/cold balance split, rebalance drift tolerance, and multisig cold-sweep parameters. It is a singleton global configuration referenced on every deposit, rebalance, and sweep operation, making instance storage the natural choice.
-
-### 4. `ColdBalances`
-- **Tier**: **Instance**
-- **Data Type**: `ColdBalances` (hot: i128, cold: i128)
-- **Rationale**: The hot/cold balance accounting record tracks the current split of the vault's total balance. This is a singleton value mutated on every deposit (rebalance) and cold-sweep execution, and read on nearly every interaction. Instance storage ensures low-latency access and ties the balance's lifetime to the contract instance.
-
-### 5. `PendingColdSweep`
-- **Tier**: **Temporary**
-- **Data Type**: `PendingColdSweep` (amount, destination, approvals, proposed_at)
-- **Rationale**: A pending multisig cold-sweep request is inherently transient — it exists only during the propose/approve workflow and is consumed once executed (or expires). Temporary storage is appropriate because these entries have a natural TTL and do not need to persist beyond the sweep lifecycle. Only one sweep may be pending at a time.
+- **Data Type**: `PendingColdSweep { amount: i128, destination: Address, approvals: Vec<Address>, proposed_at: u64 }`
+- **Rationale**: A pending multisig cold-sweep request. At most one sweep can be pending at a time per vault. It exists from the moment a cold signer proposes a sweep until the threshold is met and the sweep executes (or is cancelled). Instance storage is appropriate because this is a singleton temporary state tied to the vault's lifecycle; the entry is explicitly cleared after execution, so there is no long-term accumulation.
