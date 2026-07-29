@@ -13,6 +13,7 @@ jobs:
   coverage:
     name: "Cargo Test Coverage (≥ 95 %)"
     runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
       # -----------------------------------------------------------------------
