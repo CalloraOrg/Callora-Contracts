@@ -21,6 +21,7 @@ members = [
     "contracts/freeze",
     "contracts/helpers",
     "contracts/hot",
+    "contracts/hot/fuzz",
     "contracts/limits",
     "contracts/migrate",
     "contracts/registry",
