@@ -192,7 +192,6 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
     pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
-        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -332,6 +331,14 @@ impl CalloraWhitelist {
 
     /// Configure the admin cool-off window (admin only).
     ///
+    /// Rejected while another critical action's cool-off is still actively
+    /// counting down — otherwise an admin could defeat the entire mechanism
+    /// by shrinking the window to its minimum immediately after arming it
+    /// with a real mutation, then acting again almost immediately. This
+    /// check does not itself arm a new cool-off window: reconfiguring while
+    /// idle (no active window) is unrestricted, since there is no in-flight
+    /// action for the window to protect.
+    ///
     /// # Bounds
     /// - Minimum: [`admin::MIN_COOLDOWN_SECONDS`] (1 s).
     /// - Maximum: [`admin::MAX_COOLDOWN_SECONDS`] (30 d).
@@ -343,6 +350,7 @@ impl CalloraWhitelist {
     /// # Errors
     /// - [`WhitelistError::Unauthorized`] when `caller` is not the current admin.
     /// - [`WhitelistError::NotInitialized`] when the contract has no configured admin.
+    /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::InvalidAdminCooldown`] when `seconds` is outside bounds.
     pub fn set_admin_cooldown(
         env: Env,
@@ -350,6 +358,7 @@ impl CalloraWhitelist {
         seconds: u64,
     ) -> Result<(), WhitelistError> {
         Self::require_admin(&env, &caller)?;
+        admin::require_ready(&env)?;
         admin::set_cooldown(&env, seconds)?;
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -492,7 +501,10 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::NoAdminTransferPending)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -744,6 +756,63 @@ mod tests {
             result.unwrap_err(),
             Ok(WhitelistError::InvalidAdminCooldown)
         );
+    }
+
+    #[test]
+    fn test_set_admin_cooldown_cannot_shrink_an_active_window() {
+        // Regression test: set_admin_cooldown must not be usable to escape an
+        // already-armed cool-off from a prior critical action. Before this
+        // fix, an admin could call add_address (arming the default 1-hour
+        // window) and then immediately shrink the window to 1 second via
+        // set_admin_cooldown, defeating the entire rate limit within the
+        // same transaction sequence.
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &3600);
+
+        client.add_address(&admin, &addr);
+
+        // Attempting to shrink the window while add_address's cool-off is
+        // still counting down must fail, not silently succeed.
+        let result = client.try_set_admin_cooldown(&admin, &admin::MIN_COOLDOWN_SECONDS);
+        assert_eq!(result.unwrap_err(), Ok(WhitelistError::AdminCooldownActive));
+
+        // The cooldown value itself must be unchanged by the rejected call.
+        assert_eq!(client.get_admin_cooldown(), 3600);
+
+        // Once the original window elapses, reconfiguration succeeds again.
+        env.ledger().set_timestamp(1_003_600);
+        client.set_admin_cooldown(&admin, &admin::MIN_COOLDOWN_SECONDS);
+        assert_eq!(client.get_admin_cooldown(), admin::MIN_COOLDOWN_SECONDS);
+    }
+
+    #[test]
+    fn test_set_admin_cooldown_does_not_arm_a_window_when_idle() {
+        // Reconfiguring the cooldown while no critical action is in flight
+        // must not itself start a new cool-off window — otherwise the very
+        // common "shrink the cooldown, then act" setup pattern used
+        // throughout this test suite would break.
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+
+        client.set_admin_cooldown(&admin, &1);
+        assert!(client.is_admin_action_ready());
+
+        // No timestamp advance — this must still succeed.
+        client.add_address(&admin, &addr);
+        assert!(client.is_whitelisted(&addr));
     }
 
     #[test]

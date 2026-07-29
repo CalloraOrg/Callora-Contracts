@@ -121,6 +121,25 @@ pub fn guard(env: &Env, action: Symbol) -> Result<(), WhitelistError> {
     Ok(())
 }
 
+/// Enforce the admin cool-off window without arming it.
+///
+/// Unlike [`guard`], this does not record a new critical action on success —
+/// it only rejects the caller while an *existing* window from a prior
+/// critical action is still counting down. Use this to gate configuration
+/// changes (like reconfiguring the window itself) that must not be usable to
+/// escape an already-active cool-off, but that shouldn't independently arm a
+/// fresh window when the contract is idle.
+///
+/// # Errors
+/// Returns [`WhitelistError::AdminCooldownActive`] while another critical action's
+/// cool-off window is still active.
+pub fn require_ready(env: &Env) -> Result<(), WhitelistError> {
+    if !is_ready(env) {
+        return Err(WhitelistError::AdminCooldownActive);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +200,31 @@ mod tests {
             let record = last_action(&env).expect("critical action record");
             assert_eq!(record.action, Symbol::new(&env, "clear_all"));
             assert_eq!(record.executed_at, 1_300);
+        });
+    }
+
+    #[test]
+    fn require_ready_rejects_during_an_active_window_without_arming_one() {
+        let env = Env::default();
+        env.ledger().set_timestamp(2_000);
+        in_contract(&env, || {
+            // Idle contract: require_ready must not arm anything.
+            assert_eq!(require_ready(&env), Ok(()));
+            assert_eq!(require_ready(&env), Ok(()));
+            assert!(last_action(&env).is_none());
+
+            set_cooldown(&env, 300).unwrap();
+            assert_eq!(guard(&env, Symbol::new(&env, "add_address")), Ok(()));
+
+            // A window is now actively counting down; require_ready must
+            // reject rather than silently allow reconfiguration.
+            assert_eq!(
+                require_ready(&env),
+                Err(WhitelistError::AdminCooldownActive)
+            );
+
+            env.ledger().set_timestamp(2_300);
+            assert_eq!(require_ready(&env), Ok(()));
         });
     }
 
