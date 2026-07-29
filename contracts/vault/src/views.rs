@@ -25,7 +25,8 @@
 
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
-use crate::{CalloraVault, VaultError};
+use crate::errors::VaultError;
+use crate::{CalloraVault, CalloraVaultClient, CalloraVaultArgs};
 
 /// Read-only pre-flight of [`crate::CalloraVault::deduct`].
 ///
@@ -88,7 +89,7 @@ impl CalloraVault {
         _caller: Address,
         amount: i128,
         request_id: Option<Symbol>,
-        max_fee_bps: u16,
+        max_fee_bps: u32,
         developer: Address,
     ) -> Result<i128, VaultError> {
         // 1. Pause guard (read-only via `Self::is_paused`).
@@ -118,25 +119,30 @@ impl CalloraVault {
         crate::rate_limit::would_consume_tokens(&env, &developer, amount)?;
 
         // 6. Balance check.
-        let meta = CalloraVault::get_meta(env.clone())?;
-        if meta.balance < amount {
+        let balance: i128 = env
+            .storage()
+            .instance()
+            .get(&crate::DataKey::Balance)
+            .unwrap_or(0);
+        if balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
 
         // 7. Slippage guard. Mirrors `deduct`'s math exactly: skip when
         //    `max_fee_bps == u16::MAX` (sentinel = no limit) or when the
         //    balance is zero (division-by-zero guard).
-        if max_fee_bps < u16::MAX && meta.balance > 0 {
-            let calculated_fee_bps =
-                amount.checked_mul(10_000).ok_or(VaultError::Overflow)? / meta.balance;
+        if max_fee_bps < u32::MAX && balance > 0 {
+            let calculated_fee_bps = amount
+                .checked_mul(10_000)
+                .ok_or(VaultError::Overflow)?
+                / balance;
             if calculated_fee_bps > max_fee_bps as i128 {
                 return Err(VaultError::Slippage);
             }
         }
 
         // Projected new balance — same shape as `deduct`'s `Ok(..)` payload.
-        let new_balance = meta
-            .balance
+        let new_balance = balance
             .checked_sub(amount)
             .ok_or(VaultError::Overflow)?;
         Ok(new_balance)

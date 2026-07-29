@@ -9,7 +9,7 @@ resolver = "2"
 
 members = [
     "contracts/admin",
-    "contracts/batch_claim",
+    "contracts/allowlist",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
