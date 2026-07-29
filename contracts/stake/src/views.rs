@@ -55,4 +55,49 @@ mod tests {
         let caps = capabilities(&env);
         assert_eq!(caps & !((1u64 << 6) - 1), 0);
     }
+
+    #[test]
+    fn capability_flags_are_distinct_single_bits() {
+        let flags = [
+            CAP_STAKE_UNSTAKE,
+            CAP_DELEGATION,
+            CAP_REWARDS,
+            CAP_SLASHING,
+            CAP_WITHDRAW_TIMELOCK,
+            CAP_STAKE_VIEW,
+        ];
+
+        // Every flag must be a nonzero power of two (exactly one bit set).
+        for flag in flags {
+            assert_ne!(flag, 0);
+            assert_eq!(flag & (flag - 1), 0, "flag {flag:#x} is not a single bit");
+        }
+
+        // No two flags may share a bit.
+        let mut seen: u64 = 0;
+        for flag in flags {
+            assert_eq!(seen & flag, 0, "flag {flag:#x} overlaps a previous flag");
+            seen |= flag;
+        }
+    }
+
+    #[test]
+    fn supported_capabilities_is_exact_union_of_flags() {
+        let union = CAP_STAKE_UNSTAKE
+            | CAP_DELEGATION
+            | CAP_REWARDS
+            | CAP_SLASHING
+            | CAP_WITHDRAW_TIMELOCK
+            | CAP_STAKE_VIEW;
+        assert_eq!(SUPPORTED_CAPABILITIES, union);
+        assert_eq!(SUPPORTED_CAPABILITIES.count_ones(), 6);
+    }
+
+    #[test]
+    fn capabilities_is_deterministic_across_calls() {
+        let env = Env::default();
+        let first = capabilities(&env);
+        let second = capabilities(&env);
+        assert_eq!(first, second);
+    }
 }

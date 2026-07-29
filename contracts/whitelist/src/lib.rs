@@ -192,7 +192,6 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
     pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
-        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -492,7 +491,10 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::NoAdminTransferPending)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -623,6 +625,22 @@ mod tests {
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_add_address(&intruder, &addr);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_non_admin_cannot_set_admin_cooldown() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let intruder = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        let result = client.try_set_admin_cooldown(&intruder, &300);
+        assert_eq!(result.unwrap_err(), Ok(WhitelistError::Unauthorized));
+
+        // Cooldown window is left at its default — the rejected caller made
+        // no change to contract state.
+        assert_eq!(client.get_admin_cooldown(), admin::DEFAULT_COOLDOWN_SECONDS);
     }
 
     // -----------------------------------------------------------------------
@@ -798,6 +816,12 @@ mod tests {
         client.remove_address(&admin, &addr);
         let record = client.get_last_critical_admin_action().unwrap();
         assert_eq!(record.action, Symbol::new(&env, "remove_address"));
+
+        env.ledger().set_timestamp(1_000_600);
+        client.clear_all(&admin);
+        let record = client.get_last_critical_admin_action().unwrap();
+        assert_eq!(record.action, Symbol::new(&env, "clear_all"));
+        assert_eq!(record.executed_at, 1_000_600);
     }
 
     #[test]
