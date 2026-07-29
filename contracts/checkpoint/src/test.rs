@@ -2,6 +2,7 @@ use crate::{
     CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD,
     MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
+use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
@@ -342,10 +343,10 @@ fn test_get_checkpoint_not_found() {
 }
 
 #[test]
-fn test_get_checkpoints_range_empty_when_no_checkpoints() {
+fn test_get_checkpoints_range_empty() {
     let (_env, _admin, client) = setup();
-    let result = client.get_checkpoints_range(&1u64, &10u32);
-    assert!(result.is_empty());
+    let records = client.get_checkpoints_range(&1, &10);
+    assert!(records.is_empty());
 }
 
 #[test]
@@ -504,7 +505,7 @@ fn test_bump_checkpoints_ttl_range_fails_for_non_admin() {
 
 #[test]
 fn test_bump_checkpoints_ttl_range_fails_when_start_gt_end() {
-    let (env, admin, client) = setup();
+    let (_env, admin, client) = setup();
 
     let result = client.try_bump_checkpoints_ttl_range(&admin, &5u64, &3u64);
     assert!(result.is_err(), "expected InvalidPageSize error");
@@ -550,10 +551,15 @@ fn test_get_checkpoint_bumps_ttl_on_read() {
     // Advance the ledger until the write-path bump's TTL has dropped below
     // the threshold, but the entry has not yet expired.
     let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
 
-    let ttl_before = env.storage().persistent().get_ttl(&key);
+    let ttl_before = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert!(
         ttl_before < LIFETIME_THRESHOLD,
         "sanity: TTL should be below the bump threshold before the read"
@@ -563,7 +569,7 @@ fn test_get_checkpoint_bumps_ttl_on_read() {
     let record = client.get_checkpoint(&id);
     assert_eq!(record.balance, 1000);
 
-    let ttl_after = env.storage().persistent().get_ttl(&key);
+    let ttl_after = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert_eq!(
         ttl_after, BUMP_AMOUNT,
         "buffer #26: get_checkpoint must bump TTL back to BUMP_AMOUNT"
@@ -582,6 +588,11 @@ fn test_get_checkpoints_range_bumps_ttl_for_every_returned_record() {
     }
 
     let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
 
@@ -590,7 +601,7 @@ fn test_get_checkpoints_range_bumps_ttl_for_every_returned_record() {
 
     for id in 1..=3u64 {
         let key = StorageKey::Checkpoint(id);
-        let ttl = env.storage().persistent().get_ttl(&key);
+        let ttl = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
         assert_eq!(
             ttl, BUMP_AMOUNT,
             "buffer #26: get_checkpoints_range must bump TTL for checkpoint {id}"
@@ -610,13 +621,18 @@ fn test_get_latest_checkpoint_bumps_ttl_on_read() {
     let key = StorageKey::Checkpoint(id);
 
     let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
     env.ledger()
         .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
 
     let latest = client.get_latest_checkpoint().unwrap();
     assert_eq!(latest.id, id);
 
-    let ttl = env.storage().persistent().get_ttl(&key);
+    let ttl = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
     assert_eq!(
         ttl, BUMP_AMOUNT,
         "buffer #26: get_latest_checkpoint must bump TTL of the returned record"
@@ -638,17 +654,29 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
     let seq_init = env.ledger().sequence();
 
     // Advance to just before the original write-path bump would expire.
-    env.ledger()
-        .set_sequence_number(seq_init + BUMP_AMOUNT - 1);
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger().set_sequence_number(seq_init + BUMP_AMOUNT - 1);
     let _ = client.get_checkpoint(&id); // read-path bump
 
     // Advance past where the *original* bump would have expired.
     let seq_after_read = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
     env.ledger()
         .set_sequence_number(seq_after_read + LIFETIME_THRESHOLD + 10);
 
     let record = client.get_checkpoint(&id);
-    assert_eq!(record.balance, 42, "read-path bump must keep the record alive");
+    assert_eq!(
+        record.balance, 42,
+        "read-path bump must keep the record alive"
+    );
 }
 
 // ===========================================================================
@@ -898,3 +926,86 @@ fn test_batch_create_checkpoints_overflow_protection() {
     assert_eq!(client.get_checkpoint_count(), 3);
     assert_eq!(client.get_latest_checkpoint_id(), 3);
 }
+
+// ===========================================================================
+// Fuzz-discovered edge-case tests
+// ===========================================================================
+
+#[test]
+fn test_fuzz_discovered_batch_empty_and_oversized_limits() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "limits");
+
+    // 1. Empty batch
+    let empty_items = Vec::new(&env);
+    let res_empty = client.try_batch_create_checkpoints(&admin, &empty_items);
+    assert!(res_empty.is_err(), "expected error for empty batch");
+
+    // 2. Oversized batch (> MAX_BATCH_SIZE 50)
+    let mut oversized = Vec::new(&env);
+    for _ in 0..51 {
+        oversized.push_back((subject.clone(), token.clone(), 100i128, meta.clone()));
+    }
+    let res_oversized = client.try_batch_create_checkpoints(&admin, &oversized);
+    assert!(res_oversized.is_err(), "expected error for batch > 50");
+    assert_eq!(client.get_checkpoint_count(), 0);
+}
+
+#[test]
+fn test_fuzz_discovered_batch_atomic_rollback_on_negative_item() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "rollback");
+
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject.clone(), token.clone(), 100i128, meta.clone()),
+            (subject.clone(), token.clone(), -50i128, meta.clone()), // invalid item
+            (subject.clone(), token.clone(), 200i128, meta.clone()),
+        ],
+    );
+
+    let res = client.try_batch_create_checkpoints(&admin, &items);
+    assert!(res.is_err(), "expected error due to negative balance");
+    assert_eq!(client.get_checkpoint_count(), 0, "count mutated despite error");
+    assert_eq!(client.get_latest_checkpoint_id(), 0);
+}
+
+#[test]
+fn test_fuzz_discovered_range_query_limit_zero() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "limit_zero");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let res = client.try_get_checkpoints_range(&1u64, &0u32);
+    assert!(res.is_err(), "expected error for page size 0");
+}
+
+#[test]
+fn test_fuzz_discovered_ttl_range_invalid_order() {
+    let (env, admin, client) = setup();
+
+    let res = client.try_bump_checkpoints_ttl_range(&admin, &10u64, &5u64);
+    assert!(res.is_err(), "expected error for start_id > end_id");
+}
+
+#[test]
+fn test_fuzz_discovered_unauthenticated_auth_gate() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "unauth");
+
+    env.set_auths(&[]);
+
+    let res = client.try_create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    assert!(res.is_err(), "expected auth failure when unauthenticated");
+}
+

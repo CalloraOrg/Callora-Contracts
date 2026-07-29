@@ -294,7 +294,11 @@ fn simulate_deduct_insufficient_balance() {
     let real = client.try_deduct(&owner, &250_i128, &None, &u16::MAX, &developer);
     assert_eq!(sim, real);
     assert_eq!(sim, Err(Ok(VaultError::InsufficientBalance)));
-    assert_eq!(client.balance(), 100, "simulation must not change state on failure");
+    assert_eq!(
+        client.balance(),
+        100,
+        "simulation must not change state on failure"
+    );
 }
 
 #[test]
@@ -372,11 +376,16 @@ fn simulate_deduct_duplicate_request_id() {
 
     // Now simulate_deduct with the same rid. Should return DuplicateRequestId
     // (parity with re-running real deduct).
-    let sim = client.try_simulate_deduct(&owner, &100_i128, &Some(rid.clone()), &u16::MAX, &developer);
+    let sim =
+        client.try_simulate_deduct(&owner, &100_i128, &Some(rid.clone()), &u16::MAX, &developer);
     let real = client.try_deduct(&owner, &100_i128, &Some(rid.clone()), &u16::MAX, &developer);
     assert_eq!(sim, real);
     assert_eq!(sim, Err(Ok(VaultError::DuplicateRequestId)));
-    assert_eq!(client.balance(), 900, "simulation must not change state on duplicate");
+    assert_eq!(
+        client.balance(),
+        900,
+        "simulation must not change state on duplicate"
+    );
 }
 
 #[test]
@@ -388,8 +397,19 @@ fn simulate_deduct_new_request_id_differs_from_replay() {
     env.mock_all_auths();
 
     let rid_new = Symbol::new(&env, "fresh_id");
-    let sim = client.simulate_deduct(&owner, &100_i128, &Some(rid_new.clone()), &u16::MAX, &developer);
-    let real = client.deduct(&owner, &100_i128, &Some(rid_new.clone(), &developer), &u16::MAX);
+    let sim = client.simulate_deduct(
+        &owner,
+        &100_i128,
+        &Some(rid_new.clone()),
+        &u16::MAX,
+        &developer,
+    );
+    let real = client.deduct(
+        &owner,
+        &100_i128,
+        &Some(rid_new.clone(), &developer),
+        &u16::MAX,
+    );
     assert_eq!(sim, 900);
     assert_eq!(real, 900);
     assert!(client.is_request_processed(rid_new.clone()));
@@ -554,18 +574,108 @@ fn simulate_deduct_parity_table() {
     }
 
     let scenarios: &[Scenario] = &[
-        Scenario { label: "happy",           balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount: 100, max_fee_bps: u16::MAX },
-        Scenario { label: "amount_zero",     balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount:   0, max_fee_bps: u16::MAX },
-        Scenario { label: "amount_negative", balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount:  -1, max_fee_bps: u16::MAX },
-        Scenario { label: "exceed_max",      balance: 10_000,      max_deduct: Some(500),   rate_limit: None,                                                                                  amount: 501, max_fee_bps: u16::MAX },
-        Scenario { label: "insufficient",    balance:    50,       max_deduct: None,        rate_limit: None,                                                                                  amount: 100, max_fee_bps: u16::MAX },
-        Scenario { label: "exact_balance",   balance:    75,       max_deduct: None,        rate_limit: None,                                                                                  amount:  75, max_fee_bps: u16::MAX },
-        Scenario { label: "slippage_exceed", balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount: 500, max_fee_bps:   100 },
-        Scenario { label: "slippage_at_max", balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount: 100, max_fee_bps: 1_000 },
-        Scenario { label: "slippage_off",    balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount: 999, max_fee_bps: u16::MAX },
-        Scenario { label: "rl_unconfigured", balance: 1_000,       max_deduct: None,        rate_limit: None,                                                                                  amount: 999, max_fee_bps: u16::MAX },
-        Scenario { label: "rl_blocked",      balance: 1_000_000,   max_deduct: None,        rate_limit: Some(crate::rate_limit::RateLimitConfig { capacity: 100, refill_rate:  10 }),                  amount: 200, max_fee_bps: u16::MAX },
-        Scenario { label: "rl_fits",         balance: 1_000_000,   max_deduct: None,        rate_limit: Some(crate::rate_limit::RateLimitConfig { capacity: 100, refill_rate:  10 }),                  amount:  50, max_fee_bps: u16::MAX },
+        Scenario {
+            label: "happy",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 100,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "amount_zero",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 0,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "amount_negative",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: -1,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "exceed_max",
+            balance: 10_000,
+            max_deduct: Some(500),
+            rate_limit: None,
+            amount: 501,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "insufficient",
+            balance: 50,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 100,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "exact_balance",
+            balance: 75,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 75,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "slippage_exceed",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 500,
+            max_fee_bps: 100,
+        },
+        Scenario {
+            label: "slippage_at_max",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 100,
+            max_fee_bps: 1_000,
+        },
+        Scenario {
+            label: "slippage_off",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 999,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "rl_unconfigured",
+            balance: 1_000,
+            max_deduct: None,
+            rate_limit: None,
+            amount: 999,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "rl_blocked",
+            balance: 1_000_000,
+            max_deduct: None,
+            rate_limit: Some(crate::rate_limit::RateLimitConfig {
+                capacity: 100,
+                refill_rate: 10,
+            }),
+            amount: 200,
+            max_fee_bps: u16::MAX,
+        },
+        Scenario {
+            label: "rl_fits",
+            balance: 1_000_000,
+            max_deduct: None,
+            rate_limit: Some(crate::rate_limit::RateLimitConfig {
+                capacity: 100,
+                refill_rate: 10,
+            }),
+            amount: 50,
+            max_fee_bps: u16::MAX,
+        },
     ];
 
     for scenario in scenarios.iter() {
@@ -597,8 +707,20 @@ fn simulate_deduct_parity_table() {
 
         // For rate-limit scenarios: simulate first (read-only), then real.
         // For all other scenarios: simulate, then real.
-        let sim = client.try_simulate_deduct(&owner, &scenario.amount, &None::<Symbol>, &scenario.max_fee_bps, &developer);
-        let real = client.try_deduct(&owner, &scenario.amount, &None::<Symbol>, &scenario.max_fee_bps, &developer);
+        let sim = client.try_simulate_deduct(
+            &owner,
+            &scenario.amount,
+            &None::<Symbol>,
+            &scenario.max_fee_bps,
+            &developer,
+        );
+        let real = client.try_deduct(
+            &owner,
+            &scenario.amount,
+            &None::<Symbol>,
+            &scenario.max_fee_bps,
+            &developer,
+        );
 
         // The simulation must not change the vault balance.
         assert_eq!(
@@ -637,7 +759,11 @@ fn simulate_deduct_does_not_panic_on_max_balance_and_max_amount() {
     // Pick a safe amount that doesn't trigger overflow in slippage mul.
     let amount = balance / 10;
     let sim = client.simulate_deduct(&owner, &amount, &None, &u16::MAX, &developer);
-    assert!(sim.is_ok(), "simulation must not overflow on large numbers: {:?}", sim);
+    assert!(
+        sim.is_ok(),
+        "simulation must not overflow on large numbers: {:?}",
+        sim
+    );
 }
 
 #[test]

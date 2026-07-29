@@ -3,6 +3,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod admin;
 pub mod catalog;
 pub mod errors;
 pub mod events;
@@ -25,6 +26,7 @@ pub enum StorageKey {
     Catalog,
     RegisteredCount,
     Offering(String),
+    LastAdminAction,
 }
 
 #[contracttype]
@@ -103,6 +105,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        admin::require_cooldown(&env)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -130,17 +133,16 @@ impl CalloraRegistry {
             .instance()
             .get(&StorageKey::RegisteredCount)
             .ok_or(RegistryError::NotInitialized)?;
-        env.storage()
-            .instance()
-            .set(
-                &StorageKey::RegisteredCount,
-                &count.checked_add(1).ok_or(RegistryError::Overflow)?,
-            );
+        env.storage().instance().set(
+            &StorageKey::RegisteredCount,
+            &count.checked_add(1).ok_or(RegistryError::Overflow)?,
+        );
 
         env.events().publish(
             (events::event_offering_registered(&env), offering_id),
             record,
         );
+        admin::update_cooldown(&env);
         Ok(())
     }
 
@@ -163,6 +165,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        admin::require_cooldown(&env)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -196,17 +199,16 @@ impl CalloraRegistry {
             .instance()
             .get(&StorageKey::RegisteredCount)
             .ok_or(RegistryError::NotInitialized)?;
-        env.storage()
-            .instance()
-            .set(
-                &StorageKey::RegisteredCount,
-                &count.checked_add(1).ok_or(RegistryError::Overflow)?,
-            );
+        env.storage().instance().set(
+            &StorageKey::RegisteredCount,
+            &count.checked_add(1).ok_or(RegistryError::Overflow)?,
+        );
 
         env.events().publish(
             (events::event_offering_registered(&env), offering_id),
             record,
         );
+        admin::update_cooldown(&env);
         Ok(())
     }
 
@@ -235,10 +237,7 @@ impl CalloraRegistry {
     }
 
     /// Fetch a registered offering record.
-    pub fn get_offering(
-        env: Env,
-        offering_id: String,
-    ) -> Result<OfferingRecord, RegistryError> {
+    pub fn get_offering(env: Env, offering_id: String) -> Result<OfferingRecord, RegistryError> {
         Self::validate_offering_id(&offering_id)?;
         if Self::admin(&env).is_err() {
             return Err(RegistryError::NotInitialized);

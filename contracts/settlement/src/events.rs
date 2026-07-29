@@ -32,155 +32,271 @@ use crate::types::{
     DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
     GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
-use crate::Severity;
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
 
 /// Returns the Symbol for the `"initialized"` event topic.
 ///
-/// Emitted once when the settlement contract is first initialized.
+/// **What**: Returns the canonical symbol for contract initialization events.
+///
+/// **How**: Creates a `Symbol` from `"initialized"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_initialized(env: &Env) -> Symbol {
     Symbol::new(env, "initialized")
 }
 
 /// Returns the Symbol for the `"payment_received"` event topic.
 ///
-/// Emitted when a payment is received from the vault or admin, crediting
-/// either the global pool or a specific developer balance.
+/// **What**: Returns the canonical symbol for payment received events.
+///
+/// **How**: Creates a `Symbol` from `"payment_received"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_payment_received(env: &Env) -> Symbol {
     Symbol::new(env, "payment_received")
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
 ///
-/// Emitted when a developer's balance is incremented — either via
-/// `receive_payment` (single) or `batch_receive_payment` (batch).
+/// **What**: Returns the canonical symbol for balance credited events.
+///
+/// **How**: Creates a `Symbol` from `"balance_credited"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_balance_credited(env: &Env) -> Symbol {
     Symbol::new(env, "balance_credited")
 }
 
 /// Returns the Symbol for the `"deposit"` event topic.
 ///
-/// Emitted when a deposit is made for a developer (alongside `balance_credited`)
-/// in both `receive_payment` (`to_pool = false`) and `batch_receive_payment`.
+/// **What**: Returns the canonical symbol for developer deposit events.
+///
+/// **How**: Creates a `Symbol` from `"deposit"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_deposit(env: &Env) -> Symbol {
     Symbol::new(env, "deposit")
 }
 
 /// Returns the Symbol for the `"developer_withdraw"` event topic.
 ///
-/// Emitted when a developer successfully withdraws their accrued balance
-/// as on-ledger USDC.
+/// **What**: Returns the canonical symbol for developer withdrawal events.
+///
+/// **How**: Creates a `Symbol` from `"developer_withdraw"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_developer_withdraw(env: &Env) -> Symbol {
     Symbol::new(env, "developer_withdraw")
 }
 
 /// Returns the Symbol for the `"daily_withdraw_cap_changed"` event topic.
 ///
-/// Emitted when the admin sets or updates a developer's daily withdrawal cap.
+/// **What**: Returns the canonical symbol for daily withdrawal cap change events.
+///
+/// **How**: Creates a `Symbol` from `"daily_withdraw_cap_changed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_daily_withdraw_cap_changed(env: &Env) -> Symbol {
     Symbol::new(env, "daily_withdraw_cap_changed")
 }
 
 /// Returns the Symbol for the `"claim_window_changed"` event topic.
 ///
-/// Emitted when the admin sets or clears a developer's claim window.
+/// **What**: Returns the canonical symbol for claim window change events.
+///
+/// **How**: Creates a `Symbol` from `"claim_window_changed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_developer_claim_window_changed(env: &Env) -> Symbol {
     Symbol::new(env, "claim_window_changed")
 }
 
 /// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
-/// Emitted when the current admin nominates a new admin via `set_admin`.
-/// The nominated admin must call `accept_admin` to complete the transfer.
+/// **What**: Returns the canonical symbol for admin nomination events.
+///
+/// **How**: Creates a `Symbol` from `"admin_nominated"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_nominated(env: &Env) -> Symbol {
     Symbol::new(env, "admin_nominated")
 }
 
 /// Returns the Symbol for the `"admin_accepted"` event topic.
 ///
-/// Emitted when the pending admin accepts the admin role via `accept_admin`,
-/// completing the two-step admin handover.
+/// **What**: Returns the canonical symbol for admin acceptance events.
+///
+/// **How**: Creates a `Symbol` from `"admin_accepted"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
 /// Returns the Symbol for the `"admin_cancelled"` event topic.
 ///
-/// Emitted when the current admin cancels a pending admin transfer.
+/// **What**: Returns the canonical symbol for admin transfer cancellation events.
+///
+/// **How**: Creates a `Symbol` from `"admin_cancelled"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "admin_cancelled")
 }
 
 /// Returns the Symbol for the `"vault_proposed"` event topic.
 ///
-/// Emitted when the admin proposes a new vault address via `propose_vault`.
-/// The proposed vault must call `accept_vault` to be activated.
+/// **What**: Returns the canonical symbol for vault proposal events.
+///
+/// **How**: Creates a `Symbol` from `"vault_proposed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_vault_proposed(env: &Env) -> Symbol {
     Symbol::new(env, "vault_proposed")
 }
 
 /// Returns the Symbol for the `"vault_accepted"` event topic.
 ///
-/// Emitted when the proposed vault (or admin) accepts the vault rotation
-/// via `accept_vault`, completing the two-step vault update.
+/// **What**: Returns the canonical symbol for vault acceptance events.
+///
+/// **How**: Creates a `Symbol` from `"vault_accepted"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_vault_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "vault_accepted")
 }
 
 /// Returns the Symbol for the `"upgraded"` event topic.
 ///
-/// Emitted when the admin upgrades the contract to a new WASM hash via `upgrade`.
+/// **What**: Returns the canonical symbol for contract upgrade events.
+///
+/// **How**: Creates a `Symbol` from `"upgraded"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
 }
 
 /// Returns the Symbol for the `"developer_force_credited"` event topic.
 ///
-/// Emitted when the admin force-credits a developer's balance outside the
-/// normal `receive_payment` flow (e.g. correcting an error or migrating funds).
+/// **What**: Returns the canonical symbol for developer force credit events.
+///
+/// **How**: Creates a `Symbol` from `"developer_force_credited"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_developer_force_credited(env: &Env) -> Symbol {
     Symbol::new(env, "developer_force_credited")
 }
 
 /// Returns the Symbol for the `"admin_broadcast"` event topic.
 ///
-/// Emitted when the admin broadcasts an emergency message.
+/// **What**: Returns the canonical symbol for admin emergency broadcast events.
+///
+/// **How**: Creates a `Symbol` from `"admin_broadcast"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_broadcast(env: &Env) -> Symbol {
     Symbol::new(env, "admin_broadcast")
 }
 
 /// Returns the Symbol for the `"admin_migration_proposed"` event topic.
 ///
-/// Emitted when the admin proposes a timelocked developer balance migration
-/// via [`crate::CalloraSettlement::propose_admin_migration`]. The migration
-/// becomes executable after the configured timelock window has elapsed.
+/// **What**: Returns the canonical symbol for admin migration proposal events.
+///
+/// **How**: Creates a `Symbol` from `"admin_migration_proposed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_migration_proposed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration_proposed")
 }
 
 /// Returns the Symbol for the `"admin_migration"` event topic.
 ///
-/// Emitted when a pending developer balance migration is executed via
-/// [`crate::CalloraSettlement::execute_admin_migration`]. The `from` and `to`
-/// addresses are included as topics so indexers can trace balance movement.
+/// **What**: Returns the canonical symbol for admin migration execution events.
+///
+/// **How**: Creates a `Symbol` from `"admin_migration"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_admin_migration(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration")
 }
 
 /// Returns the Symbol for the `"developer_min_balance_changed"` event topic.
 ///
-/// Emitted when the admin sets or updates a developer's minimum balance
-/// threshold. A withdrawal that would leave the developer's balance below
-/// this threshold is rejected.
+/// **What**: Returns the canonical symbol for developer minimum balance change events.
+///
+/// **How**: Creates a `Symbol` from `"developer_min_balance_changed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_developer_min_balance_changed(env: &Env) -> Symbol {
     Symbol::new(env, "developer_min_balance_changed")
 }
 
 /// Returns the Symbol for the `"metadata_removed"` event topic.
 ///
-/// Emitted when the admin removes metadata associated with a developer or
-/// offering via [`crate::CalloraSettlement::remove_metadata`].
+/// **What**: Returns the canonical symbol for metadata removal events.
+///
+/// **How**: Creates a `Symbol` from `"metadata_removed"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
 pub fn event_metadata_removed(env: &Env) -> Symbol {
     Symbol::new(env, "metadata_removed")
 }
@@ -189,8 +305,17 @@ pub fn event_metadata_removed(env: &Env) -> Symbol {
 
 /// Emit `"initialized"` once when the settlement contract is first set up.
 ///
-/// Topics: `(initialized, admin)`
-/// Data:   `GlobalPool` snapshot captured at init time.
+/// **What**: Publishes the initialization event containing the global pool configuration snapshot.
+///
+/// **How**: Calls `env.events().publish()` with topic `(initialized, admin, vault)` and payload `GlobalPool`.
+///
+/// **Why**: Allows off-chain indexers to discover and record contract deployment parameters.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `admin` - Primary contract administrator address.
+/// * `vault` - Authorized vault contract address.
+/// * `pool` - Initial global pool parameters snapshot.
 pub fn emit_initialized(env: &Env, admin: &Address, vault: &Address, pool: &GlobalPool) {
     env.events().publish(
         (event_initialized(env), admin.clone(), vault.clone()),
@@ -201,8 +326,16 @@ pub fn emit_initialized(env: &Env, admin: &Address, vault: &Address, pool: &Glob
 /// Emit `"payment_received"` when an inbound payment is routed to the global
 /// pool or a developer balance.
 ///
-/// Topics: `(payment_received, from_vault)`
-/// Data:   [`PaymentReceivedEvent`]
+/// **What**: Publishes a payment received event recording caller and payment metadata.
+///
+/// **How**: Calls `env.events().publish()` with topic `(payment_received, caller)` and payload `PaymentReceivedEvent`.
+///
+/// **Why**: Indexers track incoming revenue allocations across developers and global pool.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Account or vault address making the payment deposit.
+/// * `payload` - Structured payment received details.
 pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceivedEvent) {
     env.events()
         .publish((event_payment_received(env), caller.clone()), payload);
@@ -210,26 +343,33 @@ pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceiv
 
 /// Emit `"balance_credited"` when a developer's balance is incremented.
 ///
-/// Topics: `(balance_credited, developer)`
-/// Data:   [`BalanceCreditedEvent`]
+/// **What**: Publishes a developer credit event recording developer and amount credited.
+///
+/// **How**: Calls `env.events().publish()` with topic `(balance_credited, developer)` and payload `BalanceCreditedEvent`.
+///
+/// **Why**: Provides accounting transparency for developer revenue accrual.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Target developer account address.
+/// * `payload` - Structured credit event details.
 pub fn emit_balance_credited(env: &Env, developer: &Address, payload: BalanceCreditedEvent) {
     env.events()
         .publish((event_balance_credited(env), developer.clone()), payload);
 }
 
-/// Emit a structured `deposit` event for a developer credit.
-///
-/// Topics: `("deposit", developer)`
-/// Data: `DepositEvent { developer, token, amount }`
-pub fn emit_deposit(env: &Env, developer: &Address, data: DepositEvent) {
-    let topics = (Symbol::new(env, "deposit"), developer.clone());
-    env.events().publish(topics, data);
-}
-
 /// Emit `"deposit"` alongside each developer credit (both single and batch).
 ///
-/// Topics: `(deposit, developer)`
-/// Data:   [`DepositEvent`]
+/// **What**: Publishes a deposit event paired with developer credit.
+///
+/// **How**: Calls `env.events().publish()` with topic `(deposit, developer)` and payload `DepositEvent`.
+///
+/// **Why**: Maintained for indexer compatibility tracking developer deposit entries.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Developer account address.
+/// * `payload` - Structured deposit details.
 pub fn emit_deposit(env: &Env, developer: &Address, payload: DepositEvent) {
     env.events()
         .publish((event_deposit(env), developer.clone()), payload);
@@ -237,8 +377,16 @@ pub fn emit_deposit(env: &Env, developer: &Address, payload: DepositEvent) {
 
 /// Emit `"developer_withdraw"` when a developer withdraws accrued balance.
 ///
-/// Topics: `(developer_withdraw, developer)`
-/// Data:   [`DeveloperWithdrawEvent`]
+/// **What**: Publishes a developer withdrawal event recording payout amount.
+///
+/// **How**: Calls `env.events().publish()` with topic `(developer_withdraw, developer)` and payload `DeveloperWithdrawEvent`.
+///
+/// **Why**: Indexers monitor withdrawal frequency, daily cap usage, and payout amounts.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Developer account performing withdrawal.
+/// * `payload` - Structured withdrawal event details.
 pub fn emit_developer_withdraw(env: &Env, developer: &Address, payload: DeveloperWithdrawEvent) {
     env.events()
         .publish((event_developer_withdraw(env), developer.clone()), payload);
@@ -247,8 +395,16 @@ pub fn emit_developer_withdraw(env: &Env, developer: &Address, payload: Develope
 /// Emit `"daily_withdraw_cap_changed"` when the admin updates a developer's
 /// daily cap.
 ///
-/// Topics: `(daily_withdraw_cap_changed, caller)`
-/// Data:   [`DailyWithdrawCapChanged`]
+/// **What**: Publishes an event when a developer's daily withdrawal cap is modified.
+///
+/// **How**: Calls `env.events().publish()` with topic `(daily_withdraw_cap_changed, caller)` and payload `DailyWithdrawCapChanged`.
+///
+/// **Why**: Audit log for administrative cap adjustments.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address changing the cap.
+/// * `payload` - Structured daily withdrawal cap change details.
 pub fn emit_daily_withdraw_cap_changed(
     env: &Env,
     caller: &Address,
@@ -262,8 +418,16 @@ pub fn emit_daily_withdraw_cap_changed(
 
 /// Emit `"claim_window_changed"` when a developer claim window is set or cleared.
 ///
-/// Topics: `(claim_window_changed, developer)`
-/// Data:   [`DeveloperClaimWindowChanged`]
+/// **What**: Publishes an event when a developer's claim window parameters are updated.
+///
+/// **How**: Calls `env.events().publish()` with topic `(claim_window_changed, developer)` and payload `DeveloperClaimWindowChanged`.
+///
+/// **Why**: Audit trail for claim window timeline adjustments.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Target developer address.
+/// * `payload` - Structured claim window change details.
 pub fn emit_developer_claim_window_changed(
     env: &Env,
     developer: &Address,
@@ -277,8 +441,16 @@ pub fn emit_developer_claim_window_changed(
 
 /// Emit `"admin_nominated"` when the current admin nominates a successor.
 ///
-/// Topics: `(admin_nominated, current_admin, new_admin)`
-/// Data:   `new_admin` address
+/// **What**: Publishes an event when an admin succession process is initiated.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_nominated, current_admin, new_admin)` and payload `new_admin`.
+///
+/// **Why**: Indexers track upcoming admin transfers for governance operations.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `current_admin` - Address of current admin nominating a successor.
+/// * `new_admin` - Address of nominated pending admin.
 pub fn emit_admin_nominated(env: &Env, current_admin: &Address, new_admin: &Address) {
     env.events().publish(
         (
@@ -292,8 +464,16 @@ pub fn emit_admin_nominated(env: &Env, current_admin: &Address, new_admin: &Addr
 
 /// Emit `"admin_accepted"` when the pending admin finalizes the transfer.
 ///
-/// Topics: `(admin_accepted, old_admin, new_admin)`
-/// Data:   `new_admin` address
+/// **What**: Publishes an event when a pending admin accepts the administrator role.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_accepted, old_admin, new_admin)` and payload `new_admin`.
+///
+/// **Why**: Confirms completion of two-step admin role rotation.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `old_admin` - Address of previous admin.
+/// * `new_admin` - Address of newly accepted admin.
 pub fn emit_admin_accepted(env: &Env, old_admin: &Address, new_admin: &Address) {
     env.events().publish(
         (
@@ -307,8 +487,15 @@ pub fn emit_admin_accepted(env: &Env, old_admin: &Address, new_admin: &Address) 
 
 /// Emit `"admin_cancelled"` when the admin cancels a pending transfer.
 ///
-/// Topics: `(admin_cancelled, admin)`
-/// Data:   `admin` address
+/// **What**: Publishes an event when a pending admin nomination is revoked.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_cancelled, admin)` and payload `admin`.
+///
+/// **Why**: Notifies indexers that a proposed admin transfer has been voided.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `admin` - Admin address revoking nomination.
 pub fn emit_admin_cancelled(env: &Env, admin: &Address) {
     env.events()
         .publish((event_admin_cancelled(env), admin.clone()), admin.clone());
@@ -316,8 +503,16 @@ pub fn emit_admin_cancelled(env: &Env, admin: &Address) {
 
 /// Emit `"vault_proposed"` when the admin proposes a new vault.
 ///
-/// Topics: `(vault_proposed, admin)`
-/// Data:   [`VaultProposedEvent`]
+/// **What**: Publishes an event when a vault rotation proposal is submitted.
+///
+/// **How**: Calls `env.events().publish()` with topic `(vault_proposed, admin)` and payload `VaultProposedEvent`.
+///
+/// **Why**: Tracks proposed vault contracts prior to activation.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `admin` - Admin address initiating proposal.
+/// * `payload` - Structured vault proposal details.
 pub fn emit_vault_proposed(env: &Env, admin: &Address, payload: VaultProposedEvent) {
     env.events()
         .publish((event_vault_proposed(env), admin.clone()), payload);
@@ -325,8 +520,16 @@ pub fn emit_vault_proposed(env: &Env, admin: &Address, payload: VaultProposedEve
 
 /// Emit `"vault_accepted"` when the proposed vault rotation is accepted.
 ///
-/// Topics: `(vault_accepted, new_vault)`
-/// Data:   [`VaultAcceptedEvent`]
+/// **What**: Publishes an event when a proposed vault is accepted and activated.
+///
+/// **How**: Calls `env.events().publish()` with topic `(vault_accepted, new_vault)` and payload `VaultAcceptedEvent`.
+///
+/// **Why**: Indexers update active vault address references.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `new_vault` - Address of newly accepted vault.
+/// * `payload` - Structured vault acceptance details.
 pub fn emit_vault_accepted(env: &Env, new_vault: &Address, payload: VaultAcceptedEvent) {
     env.events()
         .publish((event_vault_accepted(env), new_vault.clone()), payload);
@@ -334,8 +537,16 @@ pub fn emit_vault_accepted(env: &Env, new_vault: &Address, payload: VaultAccepte
 
 /// Emit `"upgraded"` when the contract WASM is replaced.
 ///
-/// Topics: `(upgraded, caller)`
-/// Data:   `new_wasm_hash`
+/// **What**: Publishes an event when contract executable code is upgraded.
+///
+/// **How**: Calls `env.events().publish()` with topic `(upgraded, caller)` and payload `new_wasm_hash`.
+///
+/// **Why**: Audit logging of on-chain contract code modifications.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address executing the upgrade.
+/// * `new_wasm_hash` - 32-byte hash of new WASM code.
 pub fn emit_upgraded(env: &Env, caller: &Address, new_wasm_hash: &BytesN<32>) {
     env.events()
         .publish((event_upgraded(env), caller.clone()), new_wasm_hash.clone());
@@ -344,8 +555,16 @@ pub fn emit_upgraded(env: &Env, caller: &Address, new_wasm_hash: &BytesN<32>) {
 /// Emit `"developer_force_credited"` when the admin manually credits a
 /// developer balance outside the normal payment flow.
 ///
-/// Topics: `(developer_force_credited, developer)`
-/// Data:   [`DeveloperForceCreditedEvent`]
+/// **What**: Publishes an event when a developer balance is manually credited by admin.
+///
+/// **How**: Calls `env.events().publish()` with topic `(developer_force_credited, developer)` and payload `DeveloperForceCreditedEvent`.
+///
+/// **Why**: Audit trail for manual balance corrections and migrations.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Developer account address receiving credit.
+/// * `payload` - Structured force credit details.
 pub fn emit_developer_force_credited(
     env: &Env,
     developer: &Address,
@@ -359,8 +578,16 @@ pub fn emit_developer_force_credited(
 
 /// Emit `"admin_broadcast"` when the admin sends an emergency message.
 ///
-/// Topics: `(admin_broadcast, caller)`
-/// Data:   [`AdminBroadcast`]
+/// **What**: Publishes an admin broadcast message event.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_broadcast, caller)` and payload `AdminBroadcast`.
+///
+/// **Why**: Emits system status alerts and emergency messages to indexers.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address issuing broadcast.
+/// * `payload` - Structured broadcast message payload.
 pub fn emit_admin_broadcast(env: &Env, caller: &Address, payload: AdminBroadcast) {
     env.events()
         .publish((event_admin_broadcast(env), caller.clone()), payload);
@@ -369,8 +596,16 @@ pub fn emit_admin_broadcast(env: &Env, caller: &Address, payload: AdminBroadcast
 /// Emit `"admin_migration_proposed"` when a timelock'd developer balance
 /// migration proposal is recorded.
 ///
-/// Topics: `(admin_migration_proposed, from)`
-/// Data:   [`crate::timelock::PendingDeveloperMigration`]
+/// **What**: Publishes an event when a balance migration is proposed under timelock.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_migration_proposed, from)` and payload `PendingDeveloperMigration`.
+///
+/// **Why**: Notifies indexers of pending timelocked balance migrations.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `from` - Source developer address.
+/// * `payload` - Structured pending migration payload.
 pub fn emit_admin_migration_proposed(
     env: &Env,
     from: &Address,
@@ -382,8 +617,17 @@ pub fn emit_admin_migration_proposed(
 
 /// Emit `"admin_migration"` when a pending balance migration is executed.
 ///
-/// Topics: `(admin_migration, from, to)`
-/// Data:   [`AdminMigrationEvent`]
+/// **What**: Publishes an event when a timelocked balance migration is executed.
+///
+/// **How**: Calls `env.events().publish()` with topic `(admin_migration, from, to)` and payload `AdminMigrationEvent`.
+///
+/// **Why**: Traces executed balance transfers between developer accounts.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `from` - Source developer address.
+/// * `to` - Destination developer address.
+/// * `payload` - Structured migration event payload.
 pub fn emit_admin_migration(env: &Env, from: &Address, to: &Address, payload: AdminMigrationEvent) {
     env.events().publish(
         (event_admin_migration(env), from.clone(), to.clone()),
@@ -394,8 +638,16 @@ pub fn emit_admin_migration(env: &Env, from: &Address, to: &Address, payload: Ad
 /// Emit `"developer_min_balance_changed"` when the admin sets a developer's
 /// minimum withdrawal threshold.
 ///
-/// Topics: `(developer_min_balance_changed, developer)`
-/// Data:   [`MinBalanceChanged`]
+/// **What**: Publishes an event when a developer's minimum balance threshold is changed.
+///
+/// **How**: Calls `env.events().publish()` with topic `(developer_min_balance_changed, developer)` and payload `MinBalanceChanged`.
+///
+/// **Why**: Audit trail for minimum balance configuration changes.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `developer` - Target developer account address.
+/// * `payload` - Structured minimum balance change details.
 pub fn emit_developer_min_balance_changed(
     env: &Env,
     developer: &Address,

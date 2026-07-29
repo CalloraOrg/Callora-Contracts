@@ -11,10 +11,5 @@ use soroban_sdk::{contractclient, Address, Env, String};
 #[contractclient(name = "OfferingCatalogClient")]
 pub trait OfferingCatalog {
     /// Publish or anchor `metadata` for `offering_id` on behalf of `registry`.
-    fn put_offering(
-        env: Env,
-        registry: Address,
-        offering_id: String,
-        metadata: String,
-    );
+    fn put_offering(env: Env, registry: Address, offering_id: String, metadata: String);
 }

@@ -198,7 +198,7 @@ fn check_invariant(
 ) {
     let balances = client.get_all_developer_balances(admin, usdc_addr);
     let dev_sum: i128 = balances.iter().map(|b| b.balance).sum();
-    let pool = client.get_global_pool().total_balance;
+    let pool = client.get_global_pool().unwrap().total_balance;
 
     if dev_sum != expected_dev_total || pool != expected_pool_total {
         trace.panic_invariant(
@@ -304,9 +304,9 @@ fn run_trace(seed: u64) {
                 let n = rng.gen_usize(1, MAX_BATCH);
                 let mut items: Vec<(Address, i128)> = Vec::new(env);
                 let mut batch_total: i128 = 0;
+                let mut batch_devs: std::vec::Vec<(usize, i128)> = std::vec::Vec::new();
                 let mut used_devs = std::collections::HashSet::new();
                 for _ in 0..n {
-                    // Ensure unique developers in batch to avoid replay guard conflict
                     let mut dev_idx = rng.gen_usize(0, DEV_POOL_SIZE - 1);
                     while used_devs.contains(&dev_idx) && used_devs.len() < DEV_POOL_SIZE {
                         dev_idx = rng.gen_usize(0, DEV_POOL_SIZE - 1);
@@ -318,7 +318,7 @@ fn run_trace(seed: u64) {
                     batch_total = batch_total
                         .checked_add(amount)
                         .expect("batch tally overflow");
-                    dev_balances[dev_idx] += amount;
+                    batch_devs.push((dev_idx, amount));
                 }
                 ledger_seq += 1;
                 let result =
@@ -327,11 +327,8 @@ fn run_trace(seed: u64) {
                     expected_dev_total = expected_dev_total
                         .checked_add(batch_total)
                         .expect("test tally overflow");
-                } else {
-                    // Replay detected - revert our test tally
-                    for dev_idx in used_devs {
-                        // We can't easily know which items succeeded, so just skip this batch
-                        dev_balances[dev_idx] -= 1; // placeholder, actual tracking is complex
+                    for (dev_idx, amount) in &batch_devs {
+                        dev_balances[*dev_idx] += amount;
                     }
                 }
                 trace.push(
@@ -453,6 +450,27 @@ fn run_trace(seed: u64) {
             &trace,
             step,
         );
+
+        // Per-developer balance check: each tracked balance must match exactly.
+        for (i, &expected_bal) in dev_balances.iter().enumerate() {
+            let actual_bal = client.get_developer_balance(&devs[i], &usdc_addr);
+            assert_eq!(
+                actual_bal, expected_bal,
+                "seed={seed} step={step} dev[{i}] balance mismatch"
+            );
+        }
+
+        // Non-negative balance invariant.
+        for (i, &bal) in dev_balances.iter().enumerate() {
+            assert!(
+                bal >= 0,
+                "seed={seed} step={step} dev[{i}] balance is negative: {bal}"
+            );
+        }
+        assert!(
+            client.get_global_pool().total_balance >= 0,
+            "seed={seed} step={step} pool balance is negative",
+        );
     }
 }
 
@@ -499,7 +517,7 @@ fn test_invariant_pool_only() {
         ledger_seq += 1;
         client.receive_payment(&vault, &amount, &true, &None, &usdc_addr, &ledger_seq);
         expected_pool += amount;
-        let pool = client.get_global_pool().total_balance;
+        let pool = client.get_global_pool().unwrap().total_balance;
         assert_eq!(
             pool, expected_pool,
             "pool invariant failed at step {i}: expected {expected_pool}, got {pool}"
@@ -553,7 +571,7 @@ fn test_invariant_single_dev_full_withdraw() {
     );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
-    let balance = client.get_developer_balance(&dev, &usdc_addr);
+    let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
     assert_eq!(balance, 3_500);
 
     let dev_sum: i128 = client
@@ -573,23 +591,47 @@ fn test_invariant_single_dev_full_withdraw() {
         .sum();
     assert_eq!(dev_sum_after, 0, "dev sum must be 0 after full withdraw");
     assert_eq!(
-        client.get_global_pool().total_balance,
+        client.get_global_pool().unwrap().total_balance,
         0,
         "pool must stay 0"
     );
 }
 
-/// Edge case: batch payments with duplicated developer in same batch accumulate correctly.
-/// This test is commented out because the contract's replay guard correctly rejects
-/// duplicate developers in the same batch with the same ledger_seq (ReplayDetected error).
-/// The contract validates all HWMs upfront and updates them immediately, so the second
-/// entry for the same developer fails the replay check.
+/// Edge case: `record_deduction` updates `TotalReceived` without affecting
+/// developer or pool balances.
 #[test]
-#[ignore]
-fn test_invariant_batch_duplicate_dev_ignored() {
-    // This test is ignored because the contract correctly rejects this case.
-    // To test batch with same developer, they would need different ledger_seqs,
-    // but batch_receive_payment uses a single ledger_seq for the entire batch.
+fn test_invariant_record_deduction() {
+    let env: &'static Env = Box::leak(Box::new(Env::default()));
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let vault = Address::generate(env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(env, &contract);
+
+    let usdc_admin = Address::generate(env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
+    sac.mint(&contract, &1_000_000);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    assert_eq!(client.get_total_received(), 0);
+
+    client.record_deduction(&1_000, &1);
+    assert_eq!(client.get_total_received(), 1_000);
+    assert_eq!(client.get_global_pool().total_balance, 0);
+    assert_eq!(client.get_all_developer_balances(&admin, &usdc_addr).len(), 0);
+
+    client.record_deduction(&500, &2);
+    assert_eq!(client.get_total_received(), 1_500);
+    assert_eq!(client.get_global_pool().total_balance, 0);
+
+    client.receive_payment(&vault, &300, &false, &Some(Address::generate(env)), &usdc_addr, &1u32);
+    assert_eq!(client.get_total_received(), 1_500);
+    assert_eq!(client.get_global_pool().total_balance, 0);
 }
 
 /// Edge case: interleaved developer and pool payments preserve the full conservation invariant.
@@ -643,7 +685,7 @@ fn test_invariant_interleaved_dev_and_pool() {
             .iter()
             .map(|b| b.balance)
             .sum();
-        let pool = client.get_global_pool().total_balance;
+        let pool = client.get_global_pool().unwrap().total_balance;
         assert_eq!(dev_sum, exp_dev, "dev sum mismatch");
         assert_eq!(pool, exp_pool, "pool mismatch");
     }
@@ -663,4 +705,45 @@ proptest! {
     fn proptest_settlement_balance_invariant(seed in 0u64..=u64::from(u32::MAX)) {
         run_trace(seed);
     }
+}
+
+/// Edge case: daily withdraw cap invariant verification
+#[test]
+fn test_invariant_daily_withdraw_cap() {
+    let env: &'static Env = Box::leak(Box::new(Env::default()));
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let vault = Address::generate(env);
+    let dev = Address::generate(env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(env, &contract);
+
+    let usdc_admin = Address::generate(env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
+    sac.mint(&contract, &10_000);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    client.receive_payment(
+        &vault,
+        &5_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
+
+    client.set_daily_withdraw_cap(&admin, &dev, &2_000);
+
+    client.withdraw_developer_balance(&dev, &1_500, &None);
+
+    let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
+    assert!(res.is_err());
+    
+    let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
+    assert_eq!(balance, 3_500);
 }
