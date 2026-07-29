@@ -39,6 +39,12 @@ remain stable (guarded by a code-stability test).
 | `require_non_negative_amount` | `(i128) -> Result<i128, ValidatorError>` | `AmountNegative` |
 | `checked_add_amount` | `(i128, i128) -> Result<i128, ValidatorError>` | `Overflow` |
 | `require_in_range` | `(i128, i128, i128) -> Result<i128, ValidatorError>` | `OutOfRange` |
+| `capabilities` | `(&Env) -> u64` | — (read-only capability bitmap view) |
+
+The new `capabilities()` view returns a stable `u64` bitmask for the validator
+features exposed by the current crate version. Clients can compare bitmasks
+across upgrades to detect capability deltas without needing to inspect the
+contract implementation directly.
 
 `MAX_VALIDATED_STRING_LEN` (256) is the maximum byte length accepted by the
 string validators.
