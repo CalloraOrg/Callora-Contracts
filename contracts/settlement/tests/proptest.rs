@@ -453,7 +453,7 @@ fn run_trace(seed: u64) {
 
         // Per-developer balance check: each tracked balance must match exactly.
         for (i, &expected_bal) in dev_balances.iter().enumerate() {
-            let actual_bal = client.get_developer_balance(&devs[i], &usdc_addr).unwrap();
+            let actual_bal = client.get_developer_balance(&devs[i], &usdc_addr);
             assert_eq!(
                 actual_bal, expected_bal,
                 "seed={seed} step={step} dev[{i}] balance mismatch"
@@ -468,7 +468,7 @@ fn run_trace(seed: u64) {
             );
         }
         assert!(
-            client.get_global_pool().unwrap().total_balance >= 0,
+            client.get_global_pool().total_balance >= 0,
             "seed={seed} step={step} pool balance is negative",
         );
     }
@@ -622,16 +622,16 @@ fn test_invariant_record_deduction() {
 
     client.record_deduction(&1_000, &1);
     assert_eq!(client.get_total_received(), 1_000);
-    assert_eq!(client.get_global_pool().unwrap().total_balance, 0);
+    assert_eq!(client.get_global_pool().total_balance, 0);
     assert_eq!(client.get_all_developer_balances(&admin, &usdc_addr).len(), 0);
 
     client.record_deduction(&500, &2);
     assert_eq!(client.get_total_received(), 1_500);
-    assert_eq!(client.get_global_pool().unwrap().total_balance, 0);
+    assert_eq!(client.get_global_pool().total_balance, 0);
 
     client.receive_payment(&vault, &300, &false, &Some(Address::generate(env)), &usdc_addr, &1u32);
     assert_eq!(client.get_total_received(), 1_500);
-    assert_eq!(client.get_global_pool().unwrap().total_balance, 0);
+    assert_eq!(client.get_global_pool().total_balance, 0);
 }
 
 /// Edge case: interleaved developer and pool payments preserve the full conservation invariant.

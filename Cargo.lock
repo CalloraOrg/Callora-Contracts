@@ -266,15 +266,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-allowlist"
-version = "0.1.0"
-dependencies = [
- "callora-settlement",
- "callora-vault",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
@@ -326,7 +317,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-escrow"
+name = "callora-emergency"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

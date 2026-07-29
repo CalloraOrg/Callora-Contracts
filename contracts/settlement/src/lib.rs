@@ -74,7 +74,7 @@ impl CalloraSettlement {
     /// panics with [`SettlementError::PoolOverflow`] rather than wrapping
     /// silently.
     pub fn record_deduction(env: Env, amount: i128, _request_id: u64) {
-        let vault = Self::get_vault(env.clone());
+        let vault = Self::get_vault(env.clone()).unwrap();
         vault.require_auth();
         let total = env
             .storage()
@@ -140,7 +140,7 @@ impl CalloraSettlement {
             if developer.is_some() {
                 env.panic_with_error(SettlementError::DeveloperMustBeNone);
             }
-            let mut global_pool = Self::get_global_pool(env.clone());
+            let mut global_pool = Self::get_global_pool(env.clone()).unwrap();
             global_pool.total_balance = global_pool
                 .total_balance
                 .checked_add(amount)
@@ -332,14 +332,14 @@ impl CalloraSettlement {
     }
 
     /// Get current admin address
-    pub fn get_admin(env: Env) -> Address {
+    pub fn get_admin(env: Env) -> Result<Address, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Set the minimum balance for a developer (admin only).
@@ -373,25 +373,25 @@ impl CalloraSettlement {
     }
 
     /// Get registered vault address
-    pub fn get_vault(env: Env) -> Address {
+    pub fn get_vault(env: Env) -> Result<Address, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get(&StorageKey::Vault)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Get global pool information
-    pub fn get_global_pool(env: Env) -> GlobalPool {
+    pub fn get_global_pool(env: Env) -> Result<GlobalPool, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get::<_, GlobalPool>(&StorageKey::GlobalPool)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Return the cumulative total of all funds received via `receive_payment` and
@@ -411,9 +411,9 @@ impl CalloraSettlement {
     ///
     /// Performs a direct O(1) persistent storage lookup for the specified
     /// developer's balance denominated in `token`. Bumps instance and persistent TTL on read.
-    pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> i128 {
+    pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> Result<i128, SettlementError> {
         if !env.storage().instance().has(&StorageKey::Admin) {
-            env.panic_with_error(SettlementError::NotInitialized);
+            return Err(SettlementError::NotInitialized);
         }
         env.storage()
             .instance()
@@ -426,7 +426,7 @@ impl CalloraSettlement {
                 PERSISTENT_BUMP_AMOUNT,
             );
         }
-        env.storage().persistent().get(&key).unwrap_or(0)
+        Ok(env.storage().persistent().get(&key).unwrap_or(0))
     }
 
     /// Propose moving a developer's current balance to a replacement address.
@@ -463,7 +463,7 @@ impl CalloraSettlement {
     /// contract will use to execute withdrawals.
     pub fn set_usdc_token(env: Env, caller: Address, usdc_address: Address) {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
+        let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             panic!("unauthorized: caller is not admin");
         }
@@ -632,7 +632,7 @@ impl CalloraSettlement {
         end_ts: u64,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
@@ -675,7 +675,7 @@ impl CalloraSettlement {
         developer: Address,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
@@ -749,7 +749,7 @@ impl CalloraSettlement {
     /// Emits `daily_withdraw_cap_changed` with the developer and new cap.
     pub fn set_daily_withdraw_cap(env: Env, caller: Address, developer: Address, cap: i128) {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
+        let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -846,7 +846,7 @@ impl CalloraSettlement {
         reason: Symbol,
     ) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -900,7 +900,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> Vec<DeveloperBalance> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -944,7 +944,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> Vec<DeveloperBalance> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1006,7 +1006,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> (Vec<DeveloperBalance>, Option<Address>) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1035,7 +1035,7 @@ impl CalloraSettlement {
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1059,7 +1059,7 @@ impl CalloraSettlement {
             .get(&StorageKey::PendingAdmin)
             .unwrap_or_else(|| panic!("no admin transfer pending"));
         pending.require_auth();
-        let old_admin = Self::get_admin(env.clone());
+        let old_admin = Self::get_admin(env.clone()).unwrap();
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &pending);
         inst.remove(&StorageKey::PendingAdmin);
@@ -1075,7 +1075,7 @@ impl CalloraSettlement {
     /// Emits `admin_cancelled`.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1093,14 +1093,14 @@ impl CalloraSettlement {
     /// Emits `vault_proposed` with [`VaultProposedEvent`].
     pub fn propose_vault(env: Env, caller: Address, new_vault: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
         if new_vault == env.current_contract_address() {
             panic!("invalid vault: cannot be the contract itself");
         }
-        let current_vault = Self::get_vault(env.clone());
+        let current_vault = Self::get_vault(env.clone()).unwrap();
         env.storage()
             .instance()
             .set(&StorageKey::PendingVault, &new_vault);
@@ -1134,11 +1134,11 @@ impl CalloraSettlement {
             .instance()
             .get(&StorageKey::PendingVault)
             .unwrap_or_else(|| panic!("no vault rotation pending"));
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != pending && caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
-        let old_vault = Self::get_vault(env.clone());
+        let old_vault = Self::get_vault(env.clone()).unwrap();
         let inst = env.storage().instance();
         inst.set(&StorageKey::Vault, &pending);
         inst.remove(&StorageKey::PendingVault);
@@ -1156,7 +1156,7 @@ impl CalloraSettlement {
     /// Broadcast an operator/emergency message (admin only).
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1169,7 +1169,7 @@ impl CalloraSettlement {
     /// Emits `upgraded` with the new WASM hash.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1264,8 +1264,8 @@ impl CalloraSettlement {
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
     fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
+        let vault = Self::get_vault(env.clone()).unwrap();
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != vault && caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
