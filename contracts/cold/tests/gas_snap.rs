@@ -11,7 +11,7 @@
 /// `scripts/gas-regression.sh` harvests those lines, compares them against
 /// `contracts/.gas-baseline.json`, and fails CI when any metric grows by more
 /// than 5 %.
-use soroban_sdk::{Env};
+use soroban_sdk::Env;
 
 use callora_cold::{CalloraCold, CalloraColdClient};
 

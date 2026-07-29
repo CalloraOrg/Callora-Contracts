@@ -4,7 +4,8 @@ use crate::{
     CalloraSettlement, CalloraSettlementClient, StorageKey, INSTANCE_BUMP_AMOUNT,
     INSTANCE_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
 };
-use soroban_sdk::testutils::{Address as _, Ledger, Storage};
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+use soroban_sdk::testutils::{Address as _, Ledger};
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 fn setup() -> (Env, Address, Address, CalloraSettlementClient<'static>) {
@@ -54,17 +55,18 @@ fn test_get_vault_bumps_instance_ttl() {
 
 #[test]
 fn test_get_global_pool_bumps_instance_ttl() {
-    let (env, admin, vault, client) = setup();
+    let (env, _admin, vault, client) = setup();
 
-    // Initialize global pool
-    client.init_global_pool(&admin, &vault, &1000i128);
+    // Credit into the pool so total_balance is non-zero.
+    let token = Address::generate(&env);
+    client.receive_payment(&vault, &1000i128, &true, &None, &token, &1u32);
 
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
 
     let pool = client.get_global_pool();
-    assert_eq!(pool.balance, 1000i128);
+    assert_eq!(pool.total_balance, 1000i128);
 
     let ttl_after = env.storage().instance().get_ttl();
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);

@@ -664,3 +664,37 @@ proptest! {
         run_trace(seed);
     }
 }
+
+/// Edge case: daily withdraw cap invariant verification
+#[test]
+fn test_invariant_daily_withdraw_cap() {
+    let env: &'static Env = Box::leak(Box::new(Env::default()));
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let vault = Address::generate(env);
+    let dev = Address::generate(env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(env, &contract);
+
+    let usdc_admin = Address::generate(env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
+    sac.mint(&contract, &10_000);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    client.receive_payment(&vault, &5_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
+
+    client.set_daily_withdraw_cap(&admin, &dev, &2_000);
+
+    client.withdraw_developer_balance(&dev, &1_500, &None);
+
+    let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
+    assert!(res.is_err());
+    
+    let balance = client.get_developer_balance(&dev, &usdc_addr);
+    assert_eq!(balance, 3_500);
+}

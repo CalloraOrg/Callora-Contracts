@@ -32,7 +32,6 @@ use crate::types::{
     DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
     GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
-use crate::Severity;
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
 

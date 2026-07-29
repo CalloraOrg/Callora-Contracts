@@ -897,3 +897,162 @@ fn open_close_cycle_multiple_accounts_batch() {
     assert_eq!(client.get_account_count(&a), 0);
     assert_eq!(client.get_account_count(&b), 0);
 }
+
+// ===========================================================================
+// Pause/Resume — focused lifecycle tests for batch operations
+// ===========================================================================
+
+/// Pause blocks batch_open; unpause restores it.
+#[test]
+fn batch_open_blocked_while_paused_unpause_restores() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let account = Address::generate(&env);
+    let cat = Symbol::new(&env, "bet");
+
+    // Initially works
+    let items = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    client.batch_open(&admin, &items);
+    assert_eq!(client.get_account_count(&account), 1);
+
+    // Pause -> blocked
+    client.pause(&admin);
+    let items2 = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    let err = client.try_batch_open(&admin, &items2).unwrap_err();
+    assert_eq!(err, Ok(DistributeError::Paused));
+    assert_eq!(client.get_account_count(&account), 1, "count unchanged while paused");
+
+    // Unpause -> restored
+    client.unpause(&admin);
+    let items3 = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    client.batch_open(&admin, &items3);
+    assert_eq!(client.get_account_count(&account), 2);
+}
+
+/// Pause blocks batch_close; unpause restores it.
+#[test]
+fn batch_close_blocked_while_paused_unpause_restores() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let account = Address::generate(&env);
+    let cat = Symbol::new(&env, "bet");
+
+    let items = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    client.batch_open(&admin, &items);
+    assert_eq!(client.get_account_count(&account), 1);
+
+    // Pause -> blocked
+    client.pause(&admin);
+    let close_items = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    let err = client.try_batch_close(&admin, &close_items).unwrap_err();
+    assert_eq!(err, Ok(DistributeError::Paused));
+    assert_eq!(client.get_account_count(&account), 1, "count unchanged while paused");
+
+    // Unpause -> restored
+    client.unpause(&admin);
+    client.batch_close(&admin, &close_items);
+    assert_eq!(client.get_account_count(&account), 0);
+}
+
+/// Admin-set_global_cap remains available while paused (admin config functions).
+#[test]
+fn admin_config_available_while_paused() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // Admin config should work
+    client.set_global_cap(&admin, &20);
+    assert_eq!(client.get_global_cap(), 20);
+}
+
+/// Pause → unpause → pause cycle works correctly.
+#[test]
+fn multiple_pause_unpause_cycles() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let account = Address::generate(&env);
+    let cat = Symbol::new(&env, "bet");
+
+    // Cycle 1
+    client.pause(&admin);
+    assert!(client.is_paused());
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+
+    // batch_open works after cycle 1
+    let items = Vec::from_array(
+        &env,
+        [BatchItem {
+            account: account.clone(),
+            category: cat.clone(),
+        }],
+    );
+    client.batch_open(&admin, &items);
+    assert_eq!(client.get_account_count(&account), 1);
+
+    // Cycle 2
+    client.pause(&admin);
+    assert!(client.is_paused());
+    let err = client.try_batch_open(&admin, &items).unwrap_err();
+    assert_eq!(err, Ok(DistributeError::Paused));
+
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+    client.batch_open(&admin, &items);
+    assert_eq!(client.get_account_count(&account), 2);
+}
+
+/// Read-only views remain accessible while paused.
+#[test]
+fn reads_work_while_paused() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let account = Address::generate(&env);
+    let cat = Symbol::new(&env, "bet");
+
+    client.open(&admin, &account, &cat);
+    client.open(&admin, &account, &cat);
+
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    // All reads must work while paused
+    assert_eq!(client.get_account_count(&account), 2);
+    assert_eq!(client.get_account_category_count(&account, &cat), 2);
+    assert_eq!(client.get_global_cap(), 10);
+    assert!(client.is_paused());
+    assert_eq!(client.get_admin(), admin);
+}
