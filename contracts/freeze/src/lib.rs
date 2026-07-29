@@ -1,14 +1,26 @@
 //! Freeze (circuit-breaker) harness for Callora contracts.
 //!
-//! # What “freeze” means here
-//! There is no standalone `freeze` WASM today. Freeze maps to the revenue-pool
-//! **pause circuit-breaker** (`pause` / `unpause` / `is_paused`), which blocks
-//! `distribute` and `batch_distribute` while active. Vault exposes an analogous
-//! pause surface; this crate targets the compiling revenue-pool entrypoints.
+//! This crate provides the [`CalloraFreeze`] contract that wraps the revenue-pool
+//! **pause circuit-breaker** (`freeze` / `unfreeze` / `is_frozen`), which blocks
+//! `distribute` and `batch_distribute` while active. Every state-changing
+//! entrypoint calls `require_auth` on the acting `Address`.
+//!
+//! # Auth Model
+//!
+//! | Entrypoint            | Authorized by                         |
+//! |-----------------------|---------------------------------------|
+//! | `init`                | `admin.require_auth()`               |
+//! | `freeze`              | `caller.require_auth()` — admin or freeze operator |
+//! | `unfreeze`            | `caller.require_auth()` — admin only |
+//! | `set_freeze_operator` | `caller.require_auth()` — admin only |
 //!
 //! # Fuzzing
+//!
 //! See `fuzz/targets/main.rs` — a `cargo-fuzz` target that feeds malformed
 //! operation sequences into freeze/unfreeze and asserts safety invariants.
+//!
+//! See also `tests/malformed_freeze.rs` for manual freeze-scenario tests
+//! against the underlying `RevenuePool` contract.
 
 #![no_std]
 
@@ -16,8 +28,10 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+
 pub mod errors;
-pub use errors::ContractError;
+pub use errors::FreezeError;
 
 /// One step in a freeze/unfreeze fuzz sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,3 +90,142 @@ impl FreezeOp {
 
 /// Maximum operations executed per fuzz / unit-test invocation.
 pub const MAX_FREEZE_OPS: usize = 64;
+
+// ---------------------------------------------------------------------------
+// Storage keys
+// ---------------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    Admin,
+    Frozen,
+    FreezeOperator,
+}
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
+
+/// Callora circuit-breaker contract.
+///
+/// Wraps a pause/unpause surface with `require_auth` on every state-changing
+/// entrypoint.
+#[contract]
+pub struct CalloraFreeze;
+
+#[contractimpl]
+impl CalloraFreeze {
+    /// Initialise the contract with an `admin` address.
+    ///
+    /// # Arguments
+    /// * `admin` — Address authorised to freeze, unfreeze, and set the freeze
+    ///   operator.
+    ///
+    /// # Errors
+    /// * [`FreezeError::AlreadyInitialized`] — admin already set.
+    pub fn init(env: Env, admin: Address) -> Result<(), FreezeError> {
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(FreezeError::AlreadyInitialized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Frozen, &false);
+        Ok(())
+    }
+
+    /// Return the stored admin address.
+    ///
+    /// # Errors
+    /// * [`FreezeError::NotInitialized`] — `init` has not been called.
+    pub fn get_admin(env: Env) -> Result<Address, FreezeError> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(FreezeError::NotInitialized)
+    }
+
+    /// Return `true` if the contract is currently frozen.
+    pub fn is_frozen(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Frozen)
+            .unwrap_or(false)
+    }
+
+    /// Activate the circuit-breaker.
+    ///
+    /// The admin or the configured freeze operator may call.
+    ///
+    /// # Arguments
+    /// * `caller` — Must be the admin or freeze operator; must authorise.
+    /// * `_reason` — Opaque label emitted in the event for off-chain indexers.
+    ///
+    /// # Errors
+    /// * [`FreezeError::Unauthorized`] — caller is neither admin nor operator.
+    /// * [`FreezeError::AlreadyFrozen`] — contract is already frozen.
+    pub fn freeze(env: Env, caller: Address, _reason: Symbol) -> Result<(), FreezeError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        let operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
+
+        let is_authorized = caller == admin
+            || operator.map_or(false, |op| caller == op);
+        if !is_authorized {
+            return Err(FreezeError::Unauthorized);
+        }
+        if Self::is_frozen(env.clone()) {
+            return Err(FreezeError::AlreadyFrozen);
+        }
+        env.storage().instance().set(&DataKey::Frozen, &true);
+        Ok(())
+    }
+
+    /// Deactivate the circuit-breaker. Only the admin may call.
+    ///
+    /// # Errors
+    /// * [`FreezeError::Unauthorized`] — caller is not the admin.
+    /// * [`FreezeError::NotFrozen`] — contract is not currently frozen.
+    pub fn unfreeze(env: Env, caller: Address) -> Result<(), FreezeError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(FreezeError::Unauthorized);
+        }
+        if !Self::is_frozen(env.clone()) {
+            return Err(FreezeError::NotFrozen);
+        }
+        env.storage().instance().set(&DataKey::Frozen, &false);
+        Ok(())
+    }
+
+    /// Set or replace the freeze operator.
+    ///
+    /// The operator may call `freeze` but has no authority to `unfreeze`,
+    /// set the operator, or exercise any other admin-only power.
+    ///
+    /// Pass `None` to revoke the operator role.
+    ///
+    /// # Errors
+    /// * [`FreezeError::Unauthorized`] — caller is not the admin.
+    pub fn set_freeze_operator(env: Env, caller: Address, operator: Option<Address>) -> Result<(), FreezeError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
+            return Err(FreezeError::Unauthorized);
+        }
+        match operator {
+            Some(op) => env.storage().instance().set(&DataKey::FreezeOperator, &op),
+            None => env.storage().instance().remove(&DataKey::FreezeOperator),
+        }
+        Ok(())
+    }
+
+    /// Return the configured freeze operator, or `None` if unset.
+    pub fn get_freeze_operator(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::FreezeOperator)
+    }
+}
+
+#[cfg(test)]
+mod test;

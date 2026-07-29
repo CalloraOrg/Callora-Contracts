@@ -39,8 +39,21 @@ members = [
     "contracts/errors",
     "contracts/registry",
     "contracts/hot",
-    "contracts/recipient",
-    "contracts/recipient/fuzz",
+    "contracts/limits",
+    "contracts/migrate",
+    "contracts/registry",
+    "contracts/revenue_pool",
+    "contracts/revenue_pool/fuzz",
+    "contracts/settlement",
+    "contracts/settlement/fuzz",
+    "contracts/tests",
+    "contracts/upgrade",
+    "contracts/validators",
+    "contracts/vault",
+    "contracts/whitelist",
+    "contracts/yield",
+    "contracts/checkpoint",
+    "contracts/emergency",
 ]
 
 default-members = [
