@@ -152,4 +152,10 @@ pub enum VaultError {
     AdminCooldownActive = 49,
     /// Admin cool-off window is outside the accepted bounds (code 50).
     InvalidAdminCooldown = 50,
+    /// Sweep/rescue amount is below the vault's minimum transfer unit (code 51).
+    ///
+    /// Returned by [`propose_sweep`] and [`admin_rescue`] when the requested
+    /// `amount` is below the configured `min_deposit` floor, ensuring
+    /// consistent dust-rejection across all value-moving paths.
+    BelowMinTransferAmount = 51,
 }
