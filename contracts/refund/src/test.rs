@@ -1,8 +1,11 @@
 #![cfg(test)]
 
-use crate::{RefundContract, RefundContractClient, RefundError, RefundStatus};
-use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::{Address, Env, Symbol};
+use crate::{
+    InitializedEvent, RefundConfigUpdatedEvent, RefundContract, RefundContractClient, RefundError,
+    RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
+};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
+use soroban_sdk::{Address, Env, IntoVal, Symbol};
 
 fn setup() -> (Env, Address, RefundContractClient<'static>) {
     let env = Env::default();
@@ -281,4 +284,105 @@ fn test_get_refund_counter() {
 
     let counter = client.get_refund_counter();
     assert_eq!(counter, 2);
+}
+
+#[test]
+fn test_initialized_event_shape() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(RefundContract, ());
+    let client = RefundContractClient::new(&env, &contract_id);
+
+    client.init(&admin, &250, &100);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+
+    let topics = &event.1;
+    assert_eq!(topics.len(), 1);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "initialized"));
+
+    let data: InitializedEvent = event.2.into_val(&env);
+    assert_eq!(data.admin, admin);
+    assert_eq!(data.fee_bps, 250);
+    assert_eq!(data.min_refund_amount, 100);
+}
+
+#[test]
+fn test_refund_requested_event_shape() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+    let reason = Symbol::new(&env, "test");
+
+    let request_id = client.request_refund(&requester, &token, &500, &reason);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+
+    let topics = &event.1;
+    assert_eq!(topics.len(), 1);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "refund_requested"));
+
+    let data: RefundRequestedEvent = event.2.into_val(&env);
+    assert_eq!(data.request_id, request_id);
+    assert_eq!(data.requester, requester);
+    assert_eq!(data.token, token);
+    assert_eq!(data.amount, 500);
+    assert_eq!(data.reason, reason);
+}
+
+#[test]
+fn test_refund_processed_event_shape_for_each_transition() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    client.approve_refund(&admin, &request_id);
+    let approved: RefundProcessedEvent = env.events().all().last().unwrap().2.into_val(&env);
+    assert_eq!(approved.request_id, request_id);
+    assert_eq!(approved.processor, admin);
+    assert_eq!(approved.amount, 500);
+    assert_eq!(approved.status, RefundStatus::Approved);
+
+    client.process_refund(&admin, &request_id);
+    let processed: RefundProcessedEvent = env.events().all().last().unwrap().2.into_val(&env);
+    assert_eq!(processed.status, RefundStatus::Processed);
+
+    // Reject only applies to a still-Pending request, so exercise it on a
+    // second, independent request rather than the one already approved.
+    let other_id = client.request_refund(&requester, &token, &200, &Symbol::new(&env, "test2"));
+    client.reject_refund(&admin, &other_id);
+    let rejected: RefundProcessedEvent = env.events().all().last().unwrap().2.into_val(&env);
+    assert_eq!(rejected.request_id, other_id);
+    assert_eq!(rejected.status, RefundStatus::Rejected);
+
+    let topics = &env.events().all().last().unwrap().1;
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "refund_processed"));
+}
+
+#[test]
+fn test_config_updated_event_shape() {
+    let (env, admin, client) = setup();
+
+    client.update_config(&admin, &500, &200);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+
+    let topics = &event.1;
+    assert_eq!(topics.len(), 1);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "config_updated"));
+
+    let data: RefundConfigUpdatedEvent = event.2.into_val(&env);
+    assert_eq!(data.admin, admin);
+    assert_eq!(data.fee_bps, 500);
+    assert_eq!(data.min_refund_amount, 200);
 }
