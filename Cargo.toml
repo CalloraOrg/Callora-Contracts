@@ -33,7 +33,8 @@ members = [
     "contracts/errors",
     "contracts/registry",
     "contracts/hot",
-    "contracts/refund",
+    "contracts/recipient",
+    "contracts/recipient/fuzz",
 ]
 default-members = [
     "contracts/admin",
