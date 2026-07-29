@@ -3,9 +3,9 @@
 mod errors;
 mod types;
 
-#[cfg(any(test))]
+#[cfg(test)]
 mod test;
-#[cfg(any(test))]
+#[cfg(test)]
 mod test_ttl_bump;
 
 #[cfg(test)]
@@ -462,13 +462,17 @@ impl RefundContract {
         Ok(())
     }
 
-    /// Emit the initialized event.
-    fn emit_initialized(
-        env: &Env,
-        admin: &Address,
-        fee_bps: u32,
-        min_refund_amount: i128,
-    ) {
+    /// Publish the `"initialized"` event.
+    ///
+    /// **What**: Announces that the contract has just been configured with its
+    /// first admin and fee policy.
+    /// **How**: Called exactly once, from [`Self::init`], immediately after the
+    /// admin address and [`RefundConfig`] are persisted to instance storage.
+    /// **Why**: Lets off-chain indexers detect contract bootstrap and cache the
+    /// initial fee/minimum-amount policy without polling storage.
+    ///
+    /// Topic: `("initialized",)`. Data: [`InitializedEvent`].
+    fn emit_initialized(env: &Env, admin: &Address, fee_bps: u32, min_refund_amount: i128) {
         env.events().publish(
             (Symbol::new(env, "initialized"),),
             InitializedEvent {
@@ -479,7 +483,15 @@ impl RefundContract {
         );
     }
 
-    /// Emit the refund requested event.
+    /// Publish the `"refund_requested"` event.
+    ///
+    /// **What**: Records that a new refund request entered the `Pending` state.
+    /// **How**: Called from [`Self::request_refund`] after the request is
+    /// assigned an ID and written to persistent storage.
+    /// **Why**: Gives indexers and admin tooling a durable feed of pending
+    /// requests to drive an approval queue, without re-scanning storage.
+    ///
+    /// Topic: `("refund_requested",)`. Data: [`RefundRequestedEvent`].
     fn emit_refund_requested(
         env: &Env,
         request_id: u64,
@@ -500,7 +512,20 @@ impl RefundContract {
         );
     }
 
-    /// Emit the refund processed event.
+    /// Publish the `"refund_processed"` event.
+    ///
+    /// **What**: Records a status transition on an existing refund request.
+    /// **How**: Called from three admin-only entrypoints, once each, with the
+    /// terminal or intermediate status the request just moved to:
+    /// [`Self::approve_refund`] (`status = Approved`),
+    /// [`Self::reject_refund`] (`status = Rejected`), and
+    /// [`Self::process_refund`] (`status = Processed`).
+    /// **Why**: A single topic covering all three transitions lets indexers
+    /// reconstruct the full request lifecycle by filtering on `request_id` and
+    /// reading `status` from the payload, instead of subscribing to three
+    /// separate topics.
+    ///
+    /// Topic: `("refund_processed",)`. Data: [`RefundProcessedEvent`].
     fn emit_refund_processed(
         env: &Env,
         request_id: u64,
@@ -519,13 +544,18 @@ impl RefundContract {
         );
     }
 
-    /// Emit the config updated event.
-    fn emit_config_updated(
-        env: &Env,
-        admin: &Address,
-        fee_bps: u32,
-        min_refund_amount: i128,
-    ) {
+    /// Publish the `"config_updated"` event.
+    ///
+    /// **What**: Announces a change to the contract-wide fee rate and/or
+    /// minimum refund amount.
+    /// **How**: Called from [`Self::update_config`] after the new
+    /// [`RefundConfig`] passes validation and is persisted.
+    /// **Why**: Lets clients quoting refund amounts invalidate cached fee
+    /// assumptions as soon as the admin changes policy, rather than after
+    /// their next storage read.
+    ///
+    /// Topic: `("config_updated",)`. Data: [`RefundConfigUpdatedEvent`].
+    fn emit_config_updated(env: &Env, admin: &Address, fee_bps: u32, min_refund_amount: i128) {
         env.events().publish(
             (Symbol::new(env, "config_updated"),),
             RefundConfigUpdatedEvent {
@@ -537,91 +567,70 @@ impl RefundContract {
     }
 }
 
-/// Event types for the refund contract.
+/// Payload for the `"initialized"` event.
+///
+/// Published once by [`RefundContract::emit_initialized`] when the contract
+/// is first configured.
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitializedEvent {
+    /// Address granted admin privileges by [`RefundContract::init`].
     pub admin: Address,
+    /// Fee rate in basis points (0-10000) applied to future refunds.
     pub fee_bps: u32,
+    /// Minimum refund amount accepted by [`RefundContract::request_refund`].
     pub min_refund_amount: i128,
 }
 
-/// Event emitted when a refund is requested.
+/// Payload for the `"refund_requested"` event.
+///
+/// Published by [`RefundContract::emit_refund_requested`] when a new refund
+/// request is created in the `Pending` state.
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefundRequestedEvent {
+    /// ID assigned to this request; use it to correlate with the eventual
+    /// `"refund_processed"` event.
     pub request_id: u64,
+    /// Address that submitted the refund request.
     pub requester: Address,
+    /// Token contract address the refund would be paid in.
     pub token: Address,
+    /// Requested refund amount, in the token's smallest unit.
     pub amount: i128,
+    /// Caller-supplied reason code for the request.
     pub reason: Symbol,
 }
 
-/// Event emitted when a refund is processed (approved, rejected, or processed).
+/// Payload for the `"refund_processed"` event.
+///
+/// Published by [`RefundContract::emit_refund_processed`] on every admin
+/// decision on a refund request. `status` distinguishes which transition
+/// occurred — see [`RefundStatus`].
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefundProcessedEvent {
+    /// ID of the refund request this decision applies to.
     pub request_id: u64,
+    /// Admin address that made the decision.
     pub processor: Address,
+    /// Amount recorded on the original request at decision time.
     pub amount: i128,
+    /// New status of the request: `Approved`, `Rejected`, or `Processed`.
     pub status: RefundStatus,
 }
 
-/// Event emitted when refund configuration is updated.
+/// Payload for the `"config_updated"` event.
+///
+/// Published by [`RefundContract::emit_config_updated`] whenever the admin
+/// changes the fee policy via [`RefundContract::update_config`].
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefundConfigUpdatedEvent {
+    /// Admin address that made the change.
     pub admin: Address,
+    /// New fee rate in basis points (0-10000).
     pub fee_bps: u32,
+    /// New minimum refund amount.
     pub min_refund_amount: i128,
-}
-
-/// Generate contract client for testing.
-#[cfg(feature = "testutils")]
-pub mod testutils {
-    use super::*;
-    use soroban_sdk::{contractclient, Address, Env, Symbol};
-
-    #[contractclient(name = "RefundContractClient")]
-    pub trait RefundContract {
-        fn init(
-            env: Env,
-            admin: Address,
-            fee_bps: u32,
-            min_refund_amount: i128,
-        ) -> Result<(), RefundError>;
-        fn request_refund(
-            env: Env,
-            requester: Address,
-            token: Address,
-            amount: i128,
-            reason: Symbol,
-        ) -> Result<u64, RefundError>;
-        fn approve_refund(
-            env: Env,
-            admin: Address,
-            request_id: u64,
-        ) -> Result<(), RefundError>;
-        fn reject_refund(
-            env: Env,
-            admin: Address,
-            request_id: u64,
-        ) -> Result<(), RefundError>;
-        fn process_refund(
-            env: Env,
-            admin: Address,
-            request_id: u64,
-        ) -> Result<(), RefundError>;
-        fn update_config(
-            env: Env,
-            admin: Address,
-            fee_bps: u32,
-            min_refund_amount: i128,
-        ) -> Result<(), RefundError>;
-        fn get_admin(env: Env) -> Result<Address, RefundError>;
-        fn get_config(env: Env) -> Result<RefundConfig, RefundError>;
-        fn get_refund_request(env: Env, request_id: u64) -> Result<RefundRequest, RefundError>;
-        fn get_total_refunds(env: Env) -> Result<i128, RefundError>;
-        fn get_refund_counter(env: Env) -> Result<u64, RefundError>;
-    }
 }
