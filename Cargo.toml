@@ -22,6 +22,7 @@ members = [
     "contracts/errors",
     "contracts/registry",
     "contracts/hot",
+    "contracts/limits",
 ]
 default-members = [
     "contracts/revenue_pool",
