@@ -2,7 +2,7 @@ extern crate std;
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, IntoVal, Symbol, Val, Vec};
+use soroban_sdk::{token, Address, BytesN, Env, IntoVal, Symbol, Val, Vec};
 
 #[test]
 fn init_event_structure_validation() {
@@ -325,7 +325,7 @@ fn all_event_constructors_return_correct_symbols() {
 }
 
 #[test]
-fn require_auth_on_state_changing_functions() {
+fn require_auth_on_all_state_changing_functions() {
     let env = Env::default();
     // Do NOT mock all auths — we want to verify auth failures
     let admin = Address::generate(&env);
@@ -337,19 +337,57 @@ fn require_auth_on_state_changing_functions() {
 
     client.init(&admin, &usdc_addr);
 
-    // Non-admin should fail on state-changing functions
-    let intruder = Address::generate(&env);
+    // Fund the contract for distribute tests
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1000);
 
+    // Non-admin should fail on all state-changing functions
+    let intruder = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    // set_admin
     let result = client.try_set_admin(&intruder, &intruder);
     assert!(result.is_err(), "non-admin should not be able to set_admin");
 
+    // pause
     let result = client.try_pause(&intruder);
     assert!(result.is_err(), "non-admin should not be able to pause");
 
+    // unpause
+    let result = client.try_unpause(&intruder);
+    assert!(result.is_err(), "non-admin should not be able to unpause");
+
+    // set_max_distribute
     let result = client.try_set_max_distribute(&intruder, &100);
     assert!(
         result.is_err(),
         "non-admin should not be able to set_max_distribute"
+    );
+
+    // cancel_admin_transfer (no pending transfer needed — auth checked first)
+    let result = client.try_cancel_admin_transfer(&intruder);
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to cancel_admin_transfer"
+    );
+
+    // accept_admin / claim_admin (no pending transfer — auth checked first)
+    let result = client.try_accept_admin(&intruder);
+    assert!(result.is_err(), "non-admin should not be able to accept_admin");
+
+    let result = client.try_claim_admin(&intruder);
+    assert!(result.is_err(), "non-admin should not be able to claim_admin");
+
+    // upgrade (auth checked before wasm verification)
+    let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let result = client.try_upgrade(&intruder, &new_wasm_hash);
+    assert!(result.is_err(), "non-admin should not be able to upgrade");
+
+    // distribute
+    let result = client.try_distribute(&intruder, &recipient, &100);
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to distribute"
     );
 }
 
