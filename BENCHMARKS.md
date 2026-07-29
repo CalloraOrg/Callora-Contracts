@@ -100,3 +100,49 @@ cargo bench -p callora-hot -- --baseline main
 ## Dev-Dependency
 
 `criterion = "0.5"` is added as a dev-dependency in `contracts/hot/Cargo.toml`. This does not affect the production WASM artifact.
+
+# Whitelist Criterion Benchmarks
+
+The `callora-whitelist` package benchmarks the contract's public whitelist
+entrypoints with Criterion. The harness is located at
+`contracts/whitelist/benches/main.rs`.
+
+## Running
+
+```bash
+cargo bench -p callora-whitelist
+```
+
+## Benchmark Targets
+
+| Target | Description |
+|---|---|
+| `whitelist/is_whitelisted/member/32` | Check a member at the end of a 32-address whitelist |
+| `whitelist/is_whitelisted/miss/32` | Check a missing address against a 32-address whitelist |
+| `whitelist/get_whitelist/32` | Return a 32-address whitelist |
+| `whitelist/add_address/empty` | Add the first address |
+| `whitelist/add_address/32` | Add an address after 32 existing entries |
+| `whitelist/remove_address/32` | Remove the final address from 32 entries |
+| `whitelist/clear_all/32` | Clear a 32-address whitelist |
+
+Each state-changing sample uses a newly initialized fixture. Initialization,
+list population, and cooldown advancement stay outside the measured operation,
+while the measured invocation still executes the entrypoint's authorization
+and cooldown checks.
+
+## Baseline
+
+Save a comparison baseline with:
+
+```bash
+cargo bench -p callora-whitelist -- --save-baseline main
+```
+
+Compare a later run with:
+
+```bash
+cargo bench -p callora-whitelist -- --baseline main
+```
+
+`criterion = "0.5"` is a development-only dependency and does not affect the
+production contract WASM.

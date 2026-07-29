@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::enum_variant_names)]
 //!
 //! # Callora Whitelist Contract
 //!
@@ -190,12 +191,7 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
-    pub fn add_address(
-        env: Env,
-        caller: Address,
-        address: Address,
-    ) -> Result<(), WhitelistError> {
-        caller.require_auth();
+    pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -235,7 +231,6 @@ impl CalloraWhitelist {
         caller: Address,
         address: Address,
     ) -> Result<(), WhitelistError> {
-        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "remove_address"))?;
@@ -244,7 +239,7 @@ impl CalloraWhitelist {
             .storage()
             .instance()
             .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .ok_or(WhitelistError::WhitelistEmpty)?;
+            .ok_or(WhitelistError::AddressNotInWhitelist)?;
 
         let pos = list.iter().position(|a| a == address);
         match pos {
@@ -255,9 +250,7 @@ impl CalloraWhitelist {
         }
 
         if list.is_empty() {
-            env.storage()
-                .instance()
-                .remove(&StorageKey::WhitelistList);
+            env.storage().instance().remove(&StorageKey::WhitelistList);
         } else {
             env.storage()
                 .instance()
@@ -281,14 +274,11 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     pub fn clear_all(env: Env, caller: Address) -> Result<(), WhitelistError> {
-        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
-        env.storage()
-            .instance()
-            .remove(&StorageKey::WhitelistList);
+        env.storage().instance().remove(&StorageKey::WhitelistList);
 
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -414,14 +404,11 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Ledger as _;
-    use soroban_sdk::{contract, Env};
-
-    #[contract]
-    struct WhitelistHarness;
+    use soroban_sdk::Env;
 
     /// Deploy a fresh whitelist contract, init with `admin`, and return
     /// `(env, admin, client)`.
-    fn deploy_whitelist(env: &Env, admin: &Address) -> CalloraWhitelistClient<'_> {
+    fn deploy_whitelist<'a>(env: &'a Env, admin: &Address) -> CalloraWhitelistClient<'a> {
         let contract_id = env.register(CalloraWhitelist, ());
         let client = CalloraWhitelistClient::new(env, &contract_id);
         client.init(admin);
@@ -439,7 +426,7 @@ mod tests {
         let admin = Address::generate(&env);
 
         let client = deploy_whitelist(&env, &admin);
-        assert_eq!(client.get_admin().unwrap(), admin);
+        assert_eq!(client.get_admin(), admin);
     }
 
     #[test]
@@ -467,7 +454,7 @@ mod tests {
         let client = deploy_whitelist(&env, &admin);
         client.set_admin(&admin, &new_admin);
         client.accept_admin();
-        assert_eq!(client.get_admin().unwrap(), new_admin);
+        assert_eq!(client.get_admin(), new_admin);
     }
 
     #[test]
@@ -490,7 +477,10 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_set_admin(&admin, &admin);
-        assert_eq!(result.unwrap_err(), WhitelistError::NewAdminSameAsCurrent);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::NewAdminSameAsCurrent)
+        );
     }
 
     #[test]
@@ -503,7 +493,7 @@ mod tests {
         let result = client.try_accept_admin();
         assert_eq!(
             result.unwrap_err(),
-            WhitelistError::NoAdminTransferPending
+            Ok(WhitelistError::NoAdminTransferPending)
         );
     }
 
@@ -548,7 +538,7 @@ mod tests {
         let result = client.try_add_address(&admin, &addr);
         assert_eq!(
             result.unwrap_err(),
-            WhitelistError::AddressAlreadyInWhitelist
+            Ok(WhitelistError::AddressAlreadyInWhitelist)
         );
     }
 
@@ -583,7 +573,10 @@ mod tests {
         client.set_admin_cooldown(&admin, &1);
 
         let result = client.try_remove_address(&admin, &addr);
-        assert_eq!(result.unwrap_err(), WhitelistError::AddressNotInWhitelist);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::AddressNotInWhitelist)
+        );
     }
 
     #[test]
@@ -657,7 +650,7 @@ mod tests {
 
         // Second action blocked by cooldown
         let result = client.try_add_address(&admin, &addr2);
-        assert_eq!(result.unwrap_err(), WhitelistError::AdminCooldownActive);
+        assert_eq!(result.unwrap_err(), Ok(WhitelistError::AdminCooldownActive));
 
         // Advance past cooldown window
         env.ledger().set_timestamp(1_000_300);
@@ -691,7 +684,7 @@ mod tests {
         // remove_address just armed cooldown — another remove on non-existent
         // address should be blocked by cooldown, not by "not found"
         let result = client.try_remove_address(&admin, &addr);
-        assert_eq!(result.unwrap_err(), WhitelistError::AdminCooldownActive);
+        assert_eq!(result.unwrap_err(), Ok(WhitelistError::AdminCooldownActive));
     }
 
     #[test]
@@ -713,7 +706,7 @@ mod tests {
 
         // Clear blocked by cooldown (just after second add)
         let result = client.try_clear_all(&admin);
-        assert_eq!(result.unwrap_err(), WhitelistError::AdminCooldownActive);
+        assert_eq!(result.unwrap_err(), Ok(WhitelistError::AdminCooldownActive));
 
         env.ledger().set_timestamp(1_000_600);
         assert!(client.is_admin_action_ready());
@@ -743,10 +736,16 @@ mod tests {
 
         // Out of bounds
         let result = client.try_set_admin_cooldown(&admin, &0);
-        assert_eq!(result.unwrap_err(), WhitelistError::InvalidAdminCooldown);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::InvalidAdminCooldown)
+        );
 
         let result = client.try_set_admin_cooldown(&admin, &(admin::MAX_COOLDOWN_SECONDS + 1));
-        assert_eq!(result.unwrap_err(), WhitelistError::InvalidAdminCooldown);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::InvalidAdminCooldown)
+        );
     }
 
     #[test]
