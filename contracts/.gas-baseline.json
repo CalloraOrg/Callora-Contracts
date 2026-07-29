@@ -19,6 +19,18 @@
       "cpu": 343235,
       "mem": 3236
     },
+    "add_address": {
+      "cpu": 82000,
+      "mem": 1200
+    },
+    "clear_all": {
+      "cpu": 85000,
+      "mem": 1220
+    },
+    "get_allowlist": {
+      "cpu": 40000,
+      "mem": 504
+    },
     "set_allowed_depositor": {
       "cpu": 80805,
       "mem": 1168
@@ -250,6 +262,32 @@
     "is_paused": {
       "cpu": 60000,
       "mem": 6000
+    }
+  },
+  "callora-allowlist": {
+    "add_address": {
+      "cpu": 82000,
+      "mem": 1200
+    },
+    "clear_all": {
+      "cpu": 85000,
+      "mem": 1220
+    },
+    "get_allowlist": {
+      "cpu": 40000,
+      "mem": 504
+    },
+    "set_allowed_depositor": {
+      "cpu": 80805,
+      "mem": 1168
+    },
+    "clear_allowed_depositors": {
+      "cpu": 85379,
+      "mem": 1216
+    },
+    "is_authorized_depositor": {
+      "cpu": 43314,
+      "mem": 504
     }
   }
 }

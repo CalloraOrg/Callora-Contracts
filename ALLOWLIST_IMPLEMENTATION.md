@@ -294,6 +294,56 @@ cargo build --target wasm32-unknown-unknown --release -p callora-vault
 
 ---
 
+## Gas Snapshot Testing (`contracts/allowlist/tests/gas_snap.rs`)
+
+Per-entrypoint CPU/memory profile snapshots are captured for all allowlist
+entrypoints and enforced via CI.
+
+### Covered Entrypoints
+
+| Entrypoint                  | CPU Cap   | Mem Cap |
+| --------------------------- | --------- | ------- |
+| `add_address`               | 170,000   | 3,000   |
+| `clear_all`                 | 180,000   | 3,000   |
+| `get_allowlist`             | 90,000    | 1,100   |
+| `set_allowed_depositor`     | 170,000   | 3,000   |
+| `clear_allowed_depositors`  | 180,000   | 3,000   |
+| `is_authorized_depositor`   | 90,000    | 1,100   |
+
+Budget caps are set at **2× the baseline** values in `contracts/.gas-baseline.json`
+to absorb measurement jitter while catching genuine regressions.
+
+### Running Gas Snapshots Locally
+
+```bash
+# Run only gas snapshot tests with JSON output
+cargo test -p callora-allowlist -- gas_snap --nocapture
+
+# Full regression check vs baseline (requires jq, python3)
+./scripts/gas-regression.sh
+
+# Update baseline after intentional changes
+./scripts/gas-regression.sh --update-baseline
+```
+
+### JSON Output Format
+
+Each test emits a machine-readable JSON line:
+
+```json
+{"contract":"callora-allowlist","entrypoint":"add_address","cpu":82000,"mem":1200,"budget_cpu":170000,"budget_mem":3000}
+```
+
+`scripts/gas-regression.sh` harvests these lines, compares them to
+`contracts/.gas-baseline.json`, and **fails CI** if any metric grows by **> 5%**.
+
+### Relative Growth Guards
+
+- **`add_address_second_vs_first`**: Second distinct-address insertion must not exceed first call by > 50%.
+- **`clear_all_idempotent_second_vs_first`**: Second idempotent `clear_all` must not exceed first by > 50%.
+
+
+
 ## Migration Guide
 
 ### For Existing Integrations

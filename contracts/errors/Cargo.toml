@@ -3,5 +3,17 @@ name = "errors"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
 [dependencies]
 soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = "1.4"
+
+[[test]]
+name = "proptest"
+path = "tests/proptest.rs"

@@ -4,6 +4,10 @@ Implements [issue #743](https://github.com/CalloraOrg/Callora-Contracts/issues/7
 a cool-off window between admin actions on the `hot` contract to prevent rapid
 abuse of an online ("hot") admin key.
 
+Extends [issue #901](https://github.com/CalloraOrg/Callora-Contracts/issues/901):
+a focused `pause.rs` module providing an admin-gated circuit-breaker that halts
+state-changing operations while allowing read-only views to continue serving.
+
 ## Overview
 
 The `hot` contract is the operational control surface where privileged keys
@@ -31,6 +35,21 @@ it is independent of block cadence.
 - **Auth at the edge.** `require_auth` and the admin check run in the contract
   entrypoints; `admin.rs` is pure cool-off bookkeeping and is unit-tested in
   isolation.
+- **Pause circuit-breaker.** The `pause.rs` module contains the focused pause /
+  unpause logic. It guards against redundant state transitions — attempting to
+  `pause` an already-paused contract returns `AlreadyPaused`; attempting to
+  `unpause` a non-paused contract returns `NotPaused` — before the cool-off
+  guard is evaluated.
+
+## Module structure
+
+| Module | Responsibility |
+|--------|---------------|
+| `lib.rs` | Contract entrypoints, auth, and dispatch |
+| `admin.rs` | Cool-off bookkeeping (per-action timestamps, window validation) |
+| `pause.rs` | Circuit-breaker state (`do_pause`, `do_unpause`, `is_paused`) |
+| `events.rs` | Event topic `Symbol` constructors |
+| `errors.rs` | Stable numeric error codes |
 
 ## Entrypoints (API)
 
@@ -41,17 +60,40 @@ it is independent of block cadence.
 | `get_cooldown() -> u64` | — (view) | — | Current window in seconds. |
 | `cooldown_remaining(action) -> u64` | — (view) | — | Seconds until `action` is available (0 = now). |
 | `is_ready(action) -> bool` | — (view) | — | Whether `action` may run now. |
-| `pause(caller)` | admin | `"pause"` | Pause the contract. |
-| `unpause(caller)` | admin | `"unpause"` | Unpause the contract. |
+| `pause(caller)` | admin | `"pause"` | Activate the circuit-breaker. Returns `AlreadyPaused` when already paused. |
+| `unpause(caller)` | admin | `"unpause"` | Deactivate the circuit-breaker. Returns `NotPaused` when not paused. |
+| `is_paused() -> bool` | — (view) | — | Current pause state. |
 | `rotate_signer(caller, new_signer)` | admin | `"rotate"` | Replace the hot signer. |
 | `set_admin(caller, new_admin)` | admin | — | Nominate a new admin (two-step). |
 | `accept_admin(caller)` | pending admin | — | Complete the two-step transfer. |
 | `get_admin() -> Address` | — (view) | — | Current admin. |
 | `get_pending_admin() -> Option<Address>` | — (view) | — | Pending nominee, if any. |
 | `get_signer() -> Address` | — (view) | — | Current hot signer. |
-| `is_paused() -> bool` | — (view) | — | Current pause state. |
 
 Every state-changing entrypoint calls `require_auth` on its `caller`.
+
+## Pause / unpause semantics (pause.rs)
+
+The `pause.rs` module exposes three functions:
+
+```rust
+pub fn is_paused(env: &Env) -> bool
+pub fn do_pause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), HotError>
+pub fn do_unpause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), HotError>
+```
+
+Evaluation order inside `do_pause` / `do_unpause`:
+
+1. **State guard** — `AlreadyPaused` / `NotPaused` is checked first. This
+   ensures the semantic error is surfaced before the cooldown guard fires,
+   giving callers a precise signal about *why* the call was rejected.
+2. **Cool-off guard** — `admin::guard` enforces the rate-limit window and
+   records `last_run_ts = now`.
+3. **State update** — the `Paused` flag is flipped in instance storage.
+4. **Event emission** — a dedicated `paused` or `unpaused` topic is published.
+
+The `paused` / `unpaused` events carry the `caller` address as the topic and
+`()` as data (the state change itself is the signal).
 
 ## Cool-off semantics
 
@@ -82,6 +124,8 @@ admin to safely shorten the cool-off in a genuine emergency.
 | 5 | `InvalidCooldown` | Proposed window outside `[1s, 30d]` |
 | 6 | `NoPendingAdmin` | No admin transfer pending |
 | 7 | `Overflow` | Arithmetic overflow detected |
+| 8 | `AlreadyPaused` | `pause` called when contract is already paused |
+| 9 | `NotPaused` | `unpause` called when contract is not paused |
 
 ## Events
 
@@ -90,6 +134,8 @@ admin to safely shorten the cool-off in a genuine emergency.
 | `init` | `cooldown: u64` | On initialization (topic includes `admin`). |
 | `cooldown_set` | `secs: u64` | On `set_cooldown` (topic includes `caller`). |
 | `action` | `tag: Symbol` | On each successful guarded action (topic includes `caller`). |
+| `paused` | `()` | On `pause` (topic includes `caller`). Dedicated topic from `pause.rs`. |
+| `unpaused` | `()` | On `unpause` (topic includes `caller`). Dedicated topic from `pause.rs`. |
 | `admin_nominated` | `new_admin: Address` | On `set_admin`. |
 | `admin_accepted` | `new_admin: Address` | On `accept_admin`. |
 
@@ -98,7 +144,12 @@ admin to safely shorten the cool-off in a genuine emergency.
 - The cool-off caps the *rate* of critical actions; it is a defense-in-depth
   layer complementing the two-step admin rotation, not a replacement for key
   hygiene.
+- The `AlreadyPaused` / `NotPaused` guards prevent silent no-ops: an operator
+  trying to double-pause gets an explicit error rather than a successful
+  transaction that changed nothing.
 - Distinct action tags are independently cooled so that an emergency `pause` is
   never blocked by a recent `rotate`, and vice versa.
 - All windows are bounded, so a configuration mistake cannot brick critical
   actions for longer than `MAX_COOLDOWN_SECS` (30 days).
+- `is_paused` is a pure read and does not require initialization; it returns
+  `false` when the storage key is absent (pre-`init`).
