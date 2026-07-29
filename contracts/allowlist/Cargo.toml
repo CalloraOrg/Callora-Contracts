@@ -1,0 +1,13 @@
+[package]
+name = "callora-allowlist"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+callora-vault = { path = "../vault" }
+callora-settlement = { path = "../settlement" }
+soroban-sdk = { workspace = true, features = ["testutils"] }

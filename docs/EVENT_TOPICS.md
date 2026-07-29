@@ -162,13 +162,15 @@ Source: [`contracts/revenue_pool/src/events.rs`](../contracts/revenue_pool/src/e
 | 14 | `set_max_distribute`            | `event_set_max_distribute`            | Per-leg distribution cap updated             |
 | 15 | `distribute`                    | `event_distribute`                    | USDC distributed to a single developer       |
 | 16 | `batch_distribute`              | `event_batch_distribute`              | One payment leg in a batch distribution      |
-| 17 | `upgraded`                      | `event_upgraded`                      | Contract upgraded to new WASM                |
-| 18 | `admin_broadcast`               | `event_admin_broadcast`               | Admin emergency broadcast                    |
-| 19 | `emergency_drain_proposed`      | `event_emergency_drain_proposed`      | Timelocked emergency drain proposed          |
-| 20 | `emergency_drain_executed`      | `event_emergency_drain_executed`      | Pending emergency drain executed             |
-| 21 | `emergency_drain_cancelled`     | `event_emergency_drain_cancelled`     | Pending emergency drain cancelled            |
+| 17 | `distribute_started`            | `event_distribute_started`            | Validated distribution transfer is starting  |
+| 18 | `distribute_completed`          | `event_distribute_completed`          | Distribution transfer completed              |
+| 19 | `upgraded`                      | `event_upgraded`                      | Contract upgraded to new WASM                |
+| 20 | `admin_broadcast`               | `event_admin_broadcast`               | Admin emergency broadcast                    |
+| 21 | `emergency_drain_proposed`      | `event_emergency_drain_proposed`      | Timelocked emergency drain proposed          |
+| 22 | `emergency_drain_executed`      | `event_emergency_drain_executed`      | Pending emergency drain executed             |
+| 23 | `emergency_drain_cancelled`     | `event_emergency_drain_cancelled`     | Pending emergency drain cancelled            |
 
-**Total: 21 topics**
+**Total: 23 topics**
 
 ---
 
@@ -208,7 +210,8 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `pause_guardian_set`, `pause_guardian_cleared`, `pause_set`,
 `receive_payment`, `yield_deposited`, `treasury_transfer_started`,
 `treasury_transfer_completed`, `treasury_cancelled`, `set_max_distribute`,
-`batch_distribute`, `emergency_drain_proposed`, `emergency_drain_executed`,
+`batch_distribute`, `distribute_started`, `distribute_completed`,
+`emergency_drain_proposed`, `emergency_drain_executed`,
 `emergency_drain_cancelled`
 
 **Shared across contracts** (disambiguate by contract address):
@@ -223,8 +226,8 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 |---------------|--------|---------------------|--------|
 | vault         | 36     | 27                  | 9      |
 | settlement    | 18     | 12                  | 6      |
-| revenue_pool  | 21     | 15                  | 6      |
-| **Total**     | **75** | **54**              | **21** |
+| revenue_pool  | 23     | 17                  | 6      |
+| **Total**     | **77** | **56**              | **21** |
 
 > Shared count: each unique topic string that appears in more than one
 > contract is counted once per contract it appears in. The shared topic

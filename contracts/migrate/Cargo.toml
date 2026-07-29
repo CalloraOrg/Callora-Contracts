@@ -3,7 +3,7 @@ name = "callora-migrate"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Thin wrapper re-exporting the settlement contract migration API for fuzzing."
+description = "Emergency migration contract and fuzzing helpers."
 
 [lib]
 crate-type = ["rlib"]
@@ -12,6 +12,9 @@ doctest = false
 [dependencies]
 callora-settlement = { path = "../settlement" }
 soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [features]
 testutils = ["soroban-sdk/testutils", "callora-settlement/testutils"]

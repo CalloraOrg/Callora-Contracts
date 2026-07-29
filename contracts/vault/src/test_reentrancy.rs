@@ -41,11 +41,7 @@ impl MaliciousToken {
                 let client = CalloraVaultClient::new(&env, &vault);
 
                 // Attempt re-entry into deduct
-                let _ = client.try_deduct(
-                    &caller,
-                    &1,
-                    &Some(Symbol::new(&env, "reentry_token"))
-                );
+                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_token")));
             }
         }
     }
@@ -107,11 +103,7 @@ impl MaliciousSettlement {
                 let client = CalloraVaultClient::new(&env, &vault);
 
                 // Attempt re-entry into deduct
-                let _ = client.try_deduct(
-                    &caller,
-                    &1,
-                    &Some(Symbol::new(&env, "reentry_settle"))
-                );
+                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_settle")));
             }
         }
     }
@@ -162,11 +154,7 @@ fn test_reentrancy_via_token_transfer_is_blocked_by_auth() {
     assert_eq!(initial_balance, 1000);
 
     // Trigger deduct -> calls token.transfer -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "first_call"))
-    );
+    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(
@@ -208,11 +196,7 @@ fn test_reentrancy_via_settlement_callback_is_blocked() {
     assert_eq!(initial_balance, 1000);
 
     // Trigger deduct -> calls settlement.receive_payment -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(
-        &owner,
-        &100,
-        &Some(Symbol::new(&env, "first_call"))
-    );
+    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(
@@ -313,11 +297,7 @@ fn test_reentrancy_by_authorized_attacker() {
     assert_eq!(initial_balance, 1000);
 
     // Attacker calls deduct -> token.transfer -> attacker calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(
-        &attacker,
-        &100,
-        &Some(Symbol::new(&env, "first_call"))
-    );
+    let result = vault_client.try_deduct(&attacker, &100, &Some(Symbol::new(&env, "first_call")));
 
     assert!(result.is_ok(), "First deduct should succeed");
     assert_eq!(

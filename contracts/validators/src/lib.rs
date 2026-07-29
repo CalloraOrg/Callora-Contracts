@@ -1,16 +1,12 @@
 #![no_std]
-//! Bounded string validators for user-supplied contract metadata.
+
+//! Reusable, semantic input validators for the Callora contracts.
 //!
-//! Metadata is stored as contract state and later consumed by wallets,
-//! indexers, and off-chain services. Accepting arbitrary Unicode would allow
-//! invisible controls, bidi overrides, and homoglyph confusables to make two
-//! different byte strings appear identical. The on-chain policy is therefore
-//! intentionally narrow: metadata identifiers and values must be visible ASCII.
-//! ASCII is already NFC-normalized, so stored values have one canonical byte
-//! representation without pulling large Unicode tables into the WASM.
-//!
-//! The validator is O(n) over the input length, with `n` capped at the
-//! contract's existing 256-byte metadata limit.
+//! This crate exists to replace generic panics and opaque `Result<_, ()>`
+//! error values in validation code with a stable, machine-readable
+//! [`ValidatorError`] enum. Callers can branch on the numeric error codes
+//! instead of parsing panic strings, and every rejection carries a specific
+//! reason (empty input, out-of-range amount, arithmetic overflow, and so on).
 //!
 //! # Core invariant
 //! For every input string `s`:
@@ -20,6 +16,19 @@
 //!   ASCII space (`0x20`).
 
 use soroban_sdk::String;
+
+/// Error type for validation failures in [`normalize_visible_ascii`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationError {
+    /// String is empty.
+    Empty,
+    /// String exceeds maximum length.
+    TooLong,
+    /// String contains non-visible ASCII characters.
+    InvalidCharacter,
+    /// String has leading or trailing spaces.
+    InvalidSpacing,
+}
 
 /// Maximum byte length accepted by [`normalize_visible_ascii`].
 pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
@@ -32,13 +41,18 @@ pub const MAX_VALIDATED_STRING_LEN: u32 = 256;
 /// the returned value is NFC-normalized and byte-stable.
 ///
 /// # Errors
-/// Returns `Err(())` when the string is empty, exceeds
+/// Returns `Err(ValidationError)` when the string is empty, exceeds
 /// [`MAX_VALIDATED_STRING_LEN`], contains a non-visible-ASCII byte, or has
 /// leading/trailing ASCII space.
-pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ()> {
+pub fn normalize_visible_ascii(
+    s: &String,
+) -> Result<[u8; MAX_VALIDATED_STRING_LEN as usize], ValidationError> {
     let len = s.len();
-    if len == 0 || len > MAX_VALIDATED_STRING_LEN {
-        return Err(());
+    if len == 0 {
+        return Err(ValidationError::Empty);
+    }
+    if len > MAX_VALIDATED_STRING_LEN {
+        return Err(ValidationError::TooLong);
     }
 
     let mut buf = [0u8; MAX_VALIDATED_STRING_LEN as usize];
@@ -46,12 +60,12 @@ pub fn normalize_visible_ascii(s: &String) -> Result<[u8; MAX_VALIDATED_STRING_L
     let bytes = &buf[..len as usize];
 
     if bytes[0] == b' ' || bytes[len as usize - 1] == b' ' {
-        return Err(());
+        return Err(ValidationError::InvalidSpacing);
     }
 
     for &b in bytes {
         if !(0x20..=0x7e).contains(&b) {
-            return Err(());
+            return Err(ValidationError::InvalidCharacter);
         }
     }
 

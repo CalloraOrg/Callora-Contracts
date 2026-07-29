@@ -321,7 +321,8 @@ fn run_trace(seed: u64) {
                     dev_balances[dev_idx] += amount;
                 }
                 ledger_seq += 1;
-                let result = client.try_batch_receive_payment(&vault, &items, &usdc_addr, &ledger_seq);
+                let result =
+                    client.try_batch_receive_payment(&vault, &items, &usdc_addr, &ledger_seq);
                 if result.is_ok() {
                     expected_dev_total = expected_dev_total
                         .checked_add(batch_total)
@@ -356,7 +357,10 @@ fn run_trace(seed: u64) {
                         trace.push(
                             step,
                             "withdraw(ok)",
-                            std::format!("dev_idx={dev_idx} amount={amount} remaining={}", current - amount),
+                            std::format!(
+                                "dev_idx={dev_idx} amount={amount} remaining={}",
+                                current - amount
+                            ),
                         );
                     } else {
                         trace.push(
@@ -366,7 +370,11 @@ fn run_trace(seed: u64) {
                         );
                     }
                 } else {
-                    trace.push(step, "withdraw(skip-zero)", std::format!("dev_idx={dev_idx}"));
+                    trace.push(
+                        step,
+                        "withdraw(skip-zero)",
+                        std::format!("dev_idx={dev_idx}"),
+                    );
                 }
             }
 
@@ -527,8 +535,22 @@ fn test_invariant_single_dev_full_withdraw() {
     client.set_usdc_token(&admin, &usdc_addr);
 
     // Credit the developer.
-    client.receive_payment(&vault, &1_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
-    client.receive_payment(&vault, &2_000, &false, &Some(dev.clone()), &usdc_addr, &2u32);
+    client.receive_payment(
+        &vault,
+        &1_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &2_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &2u32,
+    );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
     let balance = client.get_developer_balance(&dev, &usdc_addr);
@@ -641,4 +663,38 @@ proptest! {
     fn proptest_settlement_balance_invariant(seed in 0u64..=u64::from(u32::MAX)) {
         run_trace(seed);
     }
+}
+
+/// Edge case: daily withdraw cap invariant verification
+#[test]
+fn test_invariant_daily_withdraw_cap() {
+    let env: &'static Env = Box::leak(Box::new(Env::default()));
+    env.mock_all_auths();
+
+    let admin = Address::generate(env);
+    let vault = Address::generate(env);
+    let dev = Address::generate(env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(env, &contract);
+
+    let usdc_admin = Address::generate(env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+    let sac = token_mod::StellarAssetClient::new(env, &usdc_addr);
+    sac.mint(&contract, &10_000);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    client.receive_payment(&vault, &5_000, &false, &Some(dev.clone()), &usdc_addr, &1u32);
+
+    client.set_daily_withdraw_cap(&admin, &dev, &2_000);
+
+    client.withdraw_developer_balance(&dev, &1_500, &None);
+
+    let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
+    assert!(res.is_err());
+    
+    let balance = client.get_developer_balance(&dev, &usdc_addr);
+    assert_eq!(balance, 3_500);
 }

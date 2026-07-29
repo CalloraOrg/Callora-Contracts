@@ -3,6 +3,7 @@
 **Date:** 2026-04-24  
 **Updated:** 2026-05-27 — duplicate recipient detection added  
 **Updated:** 2026-06-25 — typed size-violation errors (`RevenuePoolError`) and `chunk_iter` helper added (#418)  
+**Updated:** 2026-07-28 — all revenue-pool validation failures migrated to semantic `RevenuePoolError` codes (#858)
 **Feature:** Atomic batch transfer with all-or-nothing execution and duplicate-recipient rejection
 
 ---
@@ -18,7 +19,7 @@ every transfer in the batch succeeds or none do.
 ## Duplicate Recipient Policy
 
 **Duplicates are rejected.** If the same `Address` appears more than once in the `payments`
-vector, the call panics with `"duplicate recipient in batch"` and no tokens are moved.
+vector, the call fails with `RevenuePoolError::DuplicateRecipient` and no tokens are moved.
 
 ### Rationale
 
@@ -89,7 +90,7 @@ for payment in payments.iter() {
     let (to, amount) = payment;
 
     if seen.contains_key(to.clone()) {
-        panic!("{}", ERR_DUPLICATE_RECIPIENT); // "duplicate recipient in batch"
+        env.panic_with_error(RevenuePoolError::DuplicateRecipient);
     }
     seen.set(to.clone(), true);
 
@@ -105,24 +106,22 @@ loop — well within budget for `MAX_BATCH_SIZE = 50`.
 
 ## Errors
 
-Batch **size** violations are typed (`#[contracterror] RevenuePoolError`) so integrators
-branch on a numeric code, never a panic string:
+All contract-owned validation failures are typed (`#[contracterror] RevenuePoolError`) so
+integrators branch on numeric codes rather than panic strings:
 
 | Error | Code | Trigger |
 |---|---|---|
 | `RevenuePoolError::BatchEmpty` | `1` | `payments` is empty |
 | `RevenuePoolError::BatchTooLarge` | `2` | `payments.len() > MAX_BATCH_SIZE` |
-
-Remaining per-leg validations still panic with string constants (typed-error migration for
-these is tracked separately):
-
-| Constant | Value |
-|---|---|
-| `ERR_DUPLICATE_RECIPIENT` | `"duplicate recipient in batch"` |
-| `ERR_AMOUNT_NOT_POSITIVE` | `"amount must be positive"` |
-| `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` | `"amount exceeds max_distribute"` |
-| `ERR_INSUFFICIENT_BALANCE` | `"insufficient USDC balance"` |
-| `ERR_UNAUTHORIZED` | `"unauthorized: caller is not admin"` |
+| `RevenuePoolError::NotInitialized` | `3` | Required pool configuration is missing |
+| `RevenuePoolError::Unauthorized` | `5` | Caller is not authorized for the operation |
+| `RevenuePoolError::Paused` | `6` | Pool is paused |
+| `RevenuePoolError::AmountNotPositive` | `12` | A payment amount is not positive |
+| `RevenuePoolError::AmountExceedsMaxDistribute` | `13` | A payment exceeds the per-leg cap |
+| `RevenuePoolError::InvalidRecipient` | `14` | A recipient is the pool contract |
+| `RevenuePoolError::InsufficientBalance` | `15` | Pool balance is below the batch total |
+| `RevenuePoolError::DuplicateRecipient` | `16` | A recipient appears more than once |
+| `RevenuePoolError::Overflow` | `17` | The checked batch total overflows `i128` |
 
 ---
 
@@ -260,7 +259,7 @@ due to a Soroban unit-test environment limitation — WASM upload is not support
 
 ### Overflow
 **Threat:** Crafted amounts overflow `i128` total, bypassing balance check.  
-**Mitigation:** `checked_add` panics on overflow before reaching Phase 2.
+**Mitigation:** `checked_add` emits `RevenuePoolError::Overflow` before reaching Phase 2.
 
 ### Reentrancy
 **Threat:** Token contract re-enters `batch_distribute` mid-execution.  
@@ -273,7 +272,7 @@ due to a Soroban unit-test environment limitation — WASM upload is not support
 - [x] Four-phase execution model implemented
 - [x] Duplicate recipient detection in Phase 1 (before any external call)
 - [x] `Map<Address, bool>` seen-set — O(n log n), no `unwrap()` in prod paths
-- [x] Error constant `ERR_DUPLICATE_RECIPIENT` defined
+- [x] Semantic `RevenuePoolError::DuplicateRecipient` code defined
 - [x] All validation before external calls (atomicity preserved)
 - [x] `MAX_BATCH_SIZE` cap preserved
 - [x] Events reflect final per-recipient amount (one event per unique recipient)
@@ -282,6 +281,6 @@ due to a Soroban unit-test environment limitation — WASM upload is not support
 - [x] `/// doc` comments updated on `batch_distribute`
 - [x] Policy documented in this file
 - [x] No `unwrap()` in production paths
-- [x] Typed `RevenuePoolError::{BatchEmpty, BatchTooLarge}` replace size-violation string panics (#418)
+- [x] Typed `RevenuePoolError` variants replace contract-owned validation panic strings (#858)
 - [x] `chunk_iter` helper for backend pre-chunking, with Rust + TypeScript usage documented
 - [x] Boundary tests for length `0`, `MAX_BATCH_SIZE`, and `MAX_BATCH_SIZE + 1`

@@ -19,7 +19,16 @@ fn setup(env: &Env) -> (Address, CalloraVaultClient, Address, Address) {
     let admin = Address::generate(env);
     let (vault_addr, client) = create_vault(env);
     let (usdc, _) = create_usdc(env, &admin);
-    client.init(&admin, &usdc, &Some(0), &Some(admin.clone()), &Some(1), &None, &None);
+    client.init(
+        &admin,
+        &usdc,
+        &0,
+        &admin,
+        &1,
+        &None,
+        &10000000000,
+        &soroban_sdk::Address::generate(&env),
+    );
     (vault_addr, client, usdc, admin)
 }
 
@@ -57,7 +66,7 @@ fn set_price_successful() {
     );
     // Verify readback
     let stored = client.get_price(&String::from_str(&env, "off1"));
-    assert_eq!(stored, Some(String::from_str(&env, "1000");
+    assert_eq!(stored, Some(String::from_str(&env, "1000")));
     // Verify event emitted (using try call to capture events)
     let events = env.events().all();
     // Find price_set event
@@ -90,7 +99,7 @@ fn set_settlement_equals_revenue_pool_fails() {
     let (_, client, _, admin) = setup(&env);
     let pool = Address::generate(&env);
     // Use propose/accept two-step flow to set revenue pool
-    client.propose_revenue_pool(&Some(pool.clone());
+    client.propose_revenue_pool(&Some(pool.clone()));
     client.accept_revenue_pool();
     let result = client.try_set_settlement(&admin, &pool);
     assert!(result.is_err());
@@ -126,7 +135,7 @@ fn set_metadata_empty_offering_id_fails() {
         &String::from_str(&env, ""),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -138,7 +147,7 @@ fn set_metadata_null_byte_in_offering_id_fails() {
         &String::from_str(&env, "off\x00ering"),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -150,7 +159,7 @@ fn set_metadata_control_char_in_offering_id_fails() {
         &String::from_str(&env, "off\x01ering"),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -162,7 +171,7 @@ fn set_metadata_leading_space_offering_id_fails() {
         &String::from_str(&env, " off1"),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -174,7 +183,7 @@ fn set_metadata_trailing_space_offering_id_fails() {
         &String::from_str(&env, "off1 "),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -186,7 +195,7 @@ fn set_metadata_whitespace_only_offering_id_fails() {
         &String::from_str(&env, "   "),
         &String::from_str(&env, "valid"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -198,7 +207,7 @@ fn set_metadata_empty_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, ""),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -210,7 +219,7 @@ fn set_metadata_null_byte_in_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, "meta\x00data"),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -222,7 +231,7 @@ fn set_metadata_control_char_in_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, "meta\x1Fdata"),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -234,7 +243,7 @@ fn set_metadata_leading_space_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, " metadata"),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -246,7 +255,7 @@ fn set_metadata_trailing_space_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, "metadata "),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -258,7 +267,7 @@ fn set_metadata_whitespace_only_metadata_fails() {
         &String::from_str(&env, "off1"),
         &String::from_str(&env, "   "),
     );
-    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid);
+    assert_eq!(result, Err(Ok(VaultError::MetadataInvalid)));
 }
 
 #[test]
@@ -288,7 +297,7 @@ fn set_price_empty_offering_id_fails() {
         &String::from_str(&env, ""),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -300,7 +309,7 @@ fn set_price_null_byte_in_offering_id_fails() {
         &String::from_str(&env, "off\x00ering"),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -312,7 +321,7 @@ fn set_price_control_char_in_offering_id_fails() {
         &String::from_str(&env, "off\x01ering"),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -324,7 +333,7 @@ fn set_price_leading_space_offering_id_fails() {
         &String::from_str(&env, " off1"),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -336,7 +345,7 @@ fn set_price_trailing_space_offering_id_fails() {
         &String::from_str(&env, "off1 "),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }
 
 #[test]
@@ -348,5 +357,5 @@ fn set_price_whitespace_only_offering_id_fails() {
         &String::from_str(&env, "   "),
         &String::from_str(&env, "100"),
     );
-    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid);
+    assert_eq!(result, Err(Ok(VaultError::OfferingIdInvalid)));
 }

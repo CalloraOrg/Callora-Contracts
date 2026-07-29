@@ -54,31 +54,60 @@ mod event_tests {
     }
 
     /// Extract the first topic of an event as a `Symbol`.
-    fn topic0(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Symbol {
+    fn topic0(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Symbol {
         event.1.get(0).unwrap().into_val(env)
     }
 
     /// Extract the second topic of an event as an `Address`.
-    fn topic1_addr(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Address {
+    fn topic1_addr(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Address {
         event.1.get(1).unwrap().into_val(env)
     }
 
     /// Extract the third topic of an event as an `Address`.
-    fn topic2_addr(env: &Env, event: &(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)) -> Address {
+    fn topic2_addr(
+        env: &Env,
+        event: &(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        ),
+    ) -> Address {
         event.1.get(2).unwrap().into_val(env)
     }
 
     /// Find all events whose topic[0] equals `topic_name`.
-    fn filter_by_topic<'a>(
+    fn filter_by_topic(
         env: &Env,
-        events: &'a soroban_sdk::Vec<(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)>,
+        events: &soroban_sdk::Vec<(
+            Address,
+            soroban_sdk::Vec<soroban_sdk::Val>,
+            soroban_sdk::Val,
+        )>,
         topic_name: &str,
-    ) -> std::vec::Vec<(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)> {
+    ) -> std::vec::Vec<(
+        Address,
+        soroban_sdk::Vec<soroban_sdk::Val>,
+        soroban_sdk::Val,
+    )> {
         let expected = Symbol::new(env, topic_name);
         events
             .iter()
             .filter(|e| {
-                e.1.len() > 0 && {
+                !e.1.is_empty() && {
                     let sym: Symbol = e.1.get(0).unwrap().into_val(env);
                     sym == expected
                 }
@@ -127,7 +156,7 @@ mod event_tests {
     /// `to_pool = true` and no developer address.
     #[test]
     fn test_receive_payment_pool_emits_payment_received() {
-        let (env, contract, admin, vault, token) = setup();
+        let (env, contract, _admin, vault, token) = setup();
         let client = CalloraSettlementClient::new(&env, &contract);
 
         client.receive_payment(&vault, &1_000i128, &true, &None, &token, &1u32);
@@ -302,7 +331,11 @@ mod event_tests {
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "developer_withdraw");
-        assert_eq!(evs.len(), 1, "expected exactly one developer_withdraw event");
+        assert_eq!(
+            evs.len(),
+            1,
+            "expected exactly one developer_withdraw event"
+        );
         assert_eq!(topic1_addr(&env, &evs[0]), developer);
     }
 
@@ -365,9 +398,7 @@ mod event_tests {
         let developer = Address::generate(&env);
         let client = CalloraSettlementClient::new(&env, &contract);
 
-        client
-            .set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64)
-            .unwrap();
+        client.set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64);
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "claim_window_changed");
@@ -384,14 +415,10 @@ mod event_tests {
         let client = CalloraSettlementClient::new(&env, &contract);
 
         // Set first, then clear.
-        client
-            .set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64)
-            .unwrap();
+        client.set_developer_claim_window(&admin, &developer, &1_700_000_000u64, &1_800_000_000u64);
         env.events().all(); // clear
 
-        client
-            .clear_developer_claim_window(&admin, &developer)
-            .unwrap();
+        client.clear_developer_claim_window(&admin, &developer);
 
         let all = env.events().all();
         let evs = filter_by_topic(&env, &all, "claim_window_changed");
@@ -630,9 +657,8 @@ mod event_tests {
         env.events().all();
 
         // Fast-forward past the timelock.
-        env.ledger().set_timestamp(
-            env.ledger().timestamp() + DEVELOPER_MIGRATION_TIMELOCK_SECONDS + 1,
-        );
+        env.ledger()
+            .set_timestamp(env.ledger().timestamp() + DEVELOPER_MIGRATION_TIMELOCK_SECONDS + 1);
 
         client.execute_balance_migration(&admin, &developer);
 

@@ -1,5 +1,9 @@
-use crate::{CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
-use soroban_sdk::testutils::Address as _;
+use crate::{
+    CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD,
+    MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+};
+use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
 /// Helper: initialise a fresh checkpoint contract and return `(env, admin, client)`.
@@ -339,10 +343,10 @@ fn test_get_checkpoint_not_found() {
 }
 
 #[test]
-fn test_get_checkpoints_range_empty_when_no_checkpoints() {
+fn test_get_checkpoints_range_empty() {
     let (_env, _admin, client) = setup();
-    let result = client.get_checkpoints_range(&1u64, &10u32);
-    assert!(result.is_empty());
+    let records = client.get_checkpoints_range(&1, &10);
+    assert!(records.is_empty());
 }
 
 #[test]
@@ -501,7 +505,7 @@ fn test_bump_checkpoints_ttl_range_fails_for_non_admin() {
 
 #[test]
 fn test_bump_checkpoints_ttl_range_fails_when_start_gt_end() {
-    let (env, admin, client) = setup();
+    let (_env, admin, client) = setup();
 
     let result = client.try_bump_checkpoints_ttl_range(&admin, &5u64, &3u64);
     assert!(result.is_err(), "expected InvalidPageSize error");
@@ -521,6 +525,157 @@ fn test_bump_checkpoints_ttl_range_skips_missing_ids() {
     // Bump range 1–3 should not error on missing ID 2.
     let result = client.try_bump_checkpoints_ttl_range(&admin, &1u64, &3u64);
     assert!(result.is_ok());
+}
+
+// ===========================================================================
+// Read-path TTL bump tests (buffer #26)
+// ===========================================================================
+//
+// Write paths (`create_checkpoint`, `batch_create_checkpoints`) and the
+// explicit admin bump entrypoints already extend a checkpoint's persistent
+// TTL. These tests cover the remaining gap: hot *read* paths
+// (`get_checkpoint`, `get_checkpoints_range`, `get_latest_checkpoint`) must
+// also extend TTL, so an audit record that is queried often but never
+// rewritten does not silently archive.
+
+#[test]
+fn test_get_checkpoint_bumps_ttl_on_read() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "read_bump");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &1000i128, &meta);
+    let key = StorageKey::Checkpoint(id);
+
+    // Advance the ledger until the write-path bump's TTL has dropped below
+    // the threshold, but the entry has not yet expired.
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    let ttl_before = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+    assert!(
+        ttl_before < LIFETIME_THRESHOLD,
+        "sanity: TTL should be below the bump threshold before the read"
+    );
+
+    // The read must bump TTL back out to BUMP_AMOUNT from the current ledger.
+    let record = client.get_checkpoint(&id);
+    assert_eq!(record.balance, 1000);
+
+    let ttl_after = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+    assert_eq!(
+        ttl_after, BUMP_AMOUNT,
+        "buffer #26: get_checkpoint must bump TTL back to BUMP_AMOUNT"
+    );
+}
+
+#[test]
+fn test_get_checkpoints_range_bumps_ttl_for_every_returned_record() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "range_read_bump");
+
+    for i in 1..=3u64 {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128 * 10), &meta);
+    }
+
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    let results = client.get_checkpoints_range(&1u64, &10u32);
+    assert_eq!(results.len(), 3);
+
+    for id in 1..=3u64 {
+        let key = StorageKey::Checkpoint(id);
+        let ttl = env.as_contract(&client.address, || {
+            env.storage().persistent().get_ttl(&key)
+        });
+        assert_eq!(
+            ttl, BUMP_AMOUNT,
+            "buffer #26: get_checkpoints_range must bump TTL for checkpoint {id}"
+        );
+    }
+}
+
+#[test]
+fn test_get_latest_checkpoint_bumps_ttl_on_read() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "latest_read_bump");
+
+    client.create_checkpoint(&admin, &subject, &token, &500i128, &meta);
+    let id = client.create_checkpoint(&admin, &subject, &token, &900i128, &meta);
+    let key = StorageKey::Checkpoint(id);
+
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    let latest = client.get_latest_checkpoint().unwrap();
+    assert_eq!(latest.id, id);
+
+    let ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&key)
+    });
+    assert_eq!(
+        ttl, BUMP_AMOUNT,
+        "buffer #26: get_latest_checkpoint must bump TTL of the returned record"
+    );
+}
+
+#[test]
+fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
+    // Without the read-path bump, this checkpoint would archive at
+    // seq_init + BUMP_AMOUNT. A read before that point must push the
+    // expiry further out, so a *second* advance past the original window
+    // still finds the record alive.
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "survive");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &42i128, &meta);
+    let seq_init = env.ledger().sequence();
+
+    // Advance to just before the original write-path bump would expire.
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq_init + BUMP_AMOUNT - 1);
+    let _ = client.get_checkpoint(&id); // read-path bump
+
+    // Advance past where the *original* bump would have expired.
+    let seq_after_read = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage().instance().extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq_after_read + LIFETIME_THRESHOLD + 10);
+
+    let record = client.get_checkpoint(&id);
+    assert_eq!(
+        record.balance, 42,
+        "read-path bump must keep the record alive"
+    );
 }
 
 // ===========================================================================

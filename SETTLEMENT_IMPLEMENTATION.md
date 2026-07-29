@@ -801,9 +801,23 @@ inst.set(&StorageKey::DeveloperIndex, &empty_index);
 - **Scalability**: Can handle 100+ developers without significant gas cost increases
 
 #### TTL Management
-- Developer balances now have persistent storage with 1-year TTL
-- TTL is automatically extended on every credit via `extend_ttl`
-- Index remains in instance storage (no TTL)
+- Developer balances and configured limits/caps have persistent storage with active TTL management.
+- TTL is automatically extended on every credit via `extend_ttl`.
+- Index remains in instance storage (no TTL).
+
+## Hot Read Path TTL Maintenance
+
+To prevent frequently accessed persistent storage entries and contract instance state from decaying or archiving when reads outpace state mutations, all public read/query functions trigger storage TTL extensions before returning:
+
+- **Instance Storage**: Extended via `INSTANCE_BUMP_THRESHOLD` (`17_280 * 30` ledgers, ~30 days) and `INSTANCE_BUMP_AMOUNT` (`17_280 * 60` ledgers, ~60 days). Applied across `get_admin`, `get_vault`, `get_global_pool`, `get_total_received`, `get_pending_admin`, `get_version`, and `migration_storage_version`.
+- **Persistent Storage**: Extended via `PERSISTENT_BUMP_THRESHOLD` (`50,000` ledgers) and `PERSISTENT_BUMP_AMOUNT` (`50,000` ledgers). Extended on existence checks (`has()`) across:
+  - `get_developer_balance` (`DeveloperBalance`)
+  - `get_developer_min_balance` (`DeveloperMinBalance`)
+  - `get_developer_claim_window` & `require_claim_window_open` (`DeveloperClaimWindow`)
+  - `get_daily_withdraw_cap` (`DailyWithdrawCap`)
+  - `get_withdrawal_today` (`WithdrawalToday`)
+  - `get_all_developer_balances`, `get_developer_balances_page`, and `get_developer_balances_cursor` (`DeveloperBalance` for queried records)
+  - `get_balance_migration` (`PendingDeveloperMigration`)
 
 ### Testing
 

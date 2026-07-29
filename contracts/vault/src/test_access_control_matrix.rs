@@ -43,7 +43,10 @@ fn test_entrypoints_require_auth() {
     usdc_client.mint(&vault_addr, &1000);
 
     let mut items: Vec<DeductItem> = Vec::new(&env);
-    items.push_back(DeductItem { amount: 10, request_id: None });
+    items.push_back(DeductItem {
+        amount: 10,
+        request_id: None,
+    });
 
     env.set_auths(&[]);
 
@@ -58,7 +61,8 @@ fn test_entrypoints_require_auth() {
     assert!(client
         .try_set_settlement(&owner, &Address::generate(&env))
         .is_err());
-    assert!(client.try_set_reserve_cap(&owner, &usdc, &200).is_err());
+    assert!(client.try_set_reserve_cap(&owner, &usdc, &200).is_err(assert!(client.try_add_address(&owner, &recipient).is_err());
+    assert!(client.try_clear_all(&owner).is_err());));
     assert!(client
         .try_prune_processed_requests(&owner, &Vec::<soroban_sdk::Symbol>::new(&env))
         .is_err());
@@ -74,4 +78,36 @@ fn test_entrypoints_require_auth() {
     assert!(client.try_propose_sweep(&owner, &recipient, &10).is_err());
     assert!(client.try_execute_sweep(&owner).is_err());
     assert!(client.try_cancel_sweep(&owner).is_err());
+}
+
+#[test]
+fn test_allowlist_entrypoints_reject_non_owner() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let owner = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let target = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let (usdc, usdc_client) = create_usdc(&env, &owner);
+
+    client.init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(1),
+        &None,
+        &Some(1000),
+    );
+    usdc_client.mint(&vault_addr, &1000);
+
+    let result = client.try_add_address(&attacker, &target);
+    assert!(result.is_err());
+
+    let result = client.try_clear_all(&attacker);
+    assert!(result.is_err());
+
+    assert!(client.try_add_address(&owner, &target).is_ok());
+    assert!(client.try_clear_all(&owner).is_ok());
 }

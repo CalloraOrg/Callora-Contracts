@@ -1,6 +1,8 @@
 extern crate std;
 
-use callora_checkpoint::{CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE};
+use callora_checkpoint::{
+    CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+};
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Symbol, Vec as SorobanVec};
@@ -12,23 +14,15 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 #[derive(Clone, Debug)]
 enum CheckpointAction {
-    CreateSingle {
-        balance: i128,
-    },
-    CreateBatch {
-        count: u32,
-        balance: i128,
-    },
-    QueryRange {
-        start_id: u64,
-        limit: u32,
-    },
+    CreateSingle { balance: i128 },
+    CreateBatch { count: u32, balance: i128 },
+    QueryRange { start_id: u64, limit: u32 },
     QueryLatest,
 }
 
 fn checkpoint_action_strategy() -> impl Strategy<Value = CheckpointAction> {
     prop_oneof![
-        5 => (0_i128..=1_000_000_i128).prop_map(CheckpointAction::CreateSingle),
+        5 => (0_i128..=1_000_000_i128).prop_map(|balance| CheckpointAction::CreateSingle { balance }),
         3 => (1_u32..=MAX_BATCH_SIZE, 0_i128..=1_000_000_i128)
             .prop_map(|(count, balance)| CheckpointAction::CreateBatch { count, balance }),
         2 => (0_u64..=200_u64, 0_u32..=150_u32)
@@ -152,17 +146,15 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(ids_result) = result {
-                if let Ok(ids) = ids_result {
-                    for i in 0..ids.len() {
-                        expected_id += 1;
-                        let assigned_id = ids.get(i).unwrap();
-                        prop_assert_eq!(
-                            assigned_id, expected_id,
-                            "IDs not sequential: got {}, expected {}",
-                            assigned_id, expected_id
-                        );
-                    }
+            if let Ok(ids) = result {
+                for i in 0..ids.len() {
+                    expected_id += 1;
+                    let assigned_id = ids.get(i).unwrap();
+                    prop_assert_eq!(
+                        assigned_id, expected_id,
+                        "IDs not sequential: got {}, expected {}",
+                        assigned_id, expected_id
+                    );
                 }
             }
 
@@ -223,15 +215,15 @@ proptest! {
                 record.balance, expected_balance
             );
             prop_assert_eq!(
-                record.subject, subject,
+                record.subject, subject.clone(),
                 "record subject mutated"
             );
             prop_assert_eq!(
-                record.token, token,
+                record.token, token.clone(),
                 "record token mutated"
             );
             prop_assert_eq!(
-                record.metadata, meta,
+                record.metadata, meta.clone(),
                 "record metadata mutated"
             );
         }
@@ -287,7 +279,7 @@ proptest! {
 
         // Result length should never exceed effective_limit
         prop_assert!(
-            result.len() as u32 <= effective_limit,
+            result.len() <= effective_limit,
             "result len {} > effective_limit {}",
             result.len(),
             effective_limit
@@ -476,8 +468,8 @@ proptest! {
                 client.batch_create_checkpoints(&admin, &items)
             }));
 
-            if let Ok(Ok(ids)) = result {
-                expected_id = *ids.last().unwrap();
+            if let Ok(ids) = result {
+                expected_id = ids.last().unwrap();
             }
 
             let latest = client.get_latest_checkpoint();

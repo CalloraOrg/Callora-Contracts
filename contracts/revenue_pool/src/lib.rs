@@ -1,12 +1,13 @@
 #![no_std]
 
 pub mod emergency;
+pub mod errors;
 pub mod events;
 
 use emergency::{PendingEmergencyDrain, EMERGENCY_DRAIN_KEY, EMERGENCY_DRAIN_TIMELOCK_SECONDS};
+pub use errors::RevenuePoolError;
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Map, String,
-    Symbol, Vec,
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,34 +54,6 @@ pub const MAX_MESSAGE_LEN: u32 = 256;
 /// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (≈1.5 days)
 pub const BUMP_AMOUNT: u32 = 10_000;
 pub const LIFETIME_THRESHOLD: u32 = 1_000;
-
-// ---------------------------------------------------------------------------
-// Error strings
-// ---------------------------------------------------------------------------
-
-const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-const ERR_UNAUTHORIZED_PAUSE: &str = "unauthorized: caller is not admin or pause guardian";
-const ERR_PAUSED: &str = "revenue pool is paused";
-const ERR_NOT_INITIALIZED: &str = "revenue pool not initialized";
-const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
-const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
-const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
-const ERR_DUPLICATE_RECIPIENT: &str = "duplicate recipient in batch";
-
-// ---------------------------------------------------------------------------
-// Typed error enum (stable numeric codes for SDK integrators)
-// ---------------------------------------------------------------------------
-
-/// Typed errors returned by `batch_distribute` so off-chain callers can branch
-/// on a stable numeric code without parsing panic strings.
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RevenuePoolError {
-    /// `batch_distribute` received an empty `payments` vector.
-    BatchEmpty = 1,
-    /// `batch_distribute` exceeded `MAX_BATCH_SIZE` entries.
-    BatchTooLarge = 2,
-}
 
 // ---------------------------------------------------------------------------
 // Auxiliary contract-types
@@ -130,25 +103,23 @@ impl RevenuePool {
 
     /// Initialize the revenue pool with an admin and the USDC token address.
     ///
-    /// Can only be called once. Rejects `usdc_token == contract address`.
+    /// Can only be called once. The configured admin must authorize the call,
+    /// and the USDC token address must differ from both the pool and admin.
     ///
-    /// # Panics
-    /// * `"revenue pool already initialized"` — called more than once.
-    /// * `"invalid config: usdc_token cannot be the contract itself"` — bad token address.
-    /// * `"invalid config: usdc_token cannot be the admin address"` - token/admin aliasing.
+    /// # Errors
+    /// * [`RevenuePoolError::AlreadyInitialized`] - called more than once.
+    /// * [`RevenuePoolError::InvalidUsdcToken`] - token aliases the pool or admin.
     ///
     /// # Events
     /// Emits `init` with `admin` as topic and `usdc_token` as data.
     pub fn init(env: Env, admin: Address, usdc_token: Address) {
+        admin.require_auth();
         if env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
-            panic!("revenue pool already initialized");
+            env.panic_with_error(RevenuePoolError::AlreadyInitialized);
         }
         let contract_addr = env.current_contract_address();
-        if usdc_token == contract_addr {
-            panic!("invalid config: usdc_token cannot be the contract itself");
-        }
-        if usdc_token == admin {
-            panic!("invalid config: usdc_token cannot be the admin address");
+        if usdc_token == contract_addr || usdc_token == admin {
+            env.panic_with_error(RevenuePoolError::InvalidUsdcToken);
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
@@ -167,13 +138,22 @@ impl RevenuePool {
         env.storage()
             .instance()
             .get(&Symbol::new(env, ADMIN_KEY))
-            .expect(ERR_NOT_INITIALIZED)
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized))
     }
 
     fn require_admin(env: &Env, caller: &Address) {
         if *caller != Self::admin(env) {
-            panic!("{}", ERR_UNAUTHORIZED);
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
+    }
+
+    /// Extend instance storage TTL on hot read paths so frequently-queried
+    /// getters do not silently archive while only being read.
+    #[inline]
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
     }
 
     fn require_not_paused(env: &Env) {
@@ -183,14 +163,14 @@ impl RevenuePool {
             .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
             .unwrap_or(false)
         {
-            panic!("{}", ERR_PAUSED);
+            env.panic_with_error(RevenuePoolError::Paused);
         }
     }
 
-    fn validate_recipient(recipient: &Address, contract_self: &Address) {
+    fn validate_recipient(env: &Env, recipient: &Address, contract_self: &Address) {
         // Rule 1 — no self-distributions.
         if recipient == contract_self {
-            panic!("invalid recipient: cannot distribute to the contract itself");
+            env.panic_with_error(RevenuePoolError::InvalidRecipient);
         }
     }
 
@@ -200,21 +180,23 @@ impl RevenuePool {
 
     /// Return the current admin address.
     ///
-    /// # Panics
-    /// * `"revenue pool not initialized"` — called before `init`.
+    /// # Errors
+    /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn get_admin(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         Self::admin(&env)
     }
 
     /// Return the USDC token address configured for this pool.
     ///
-    /// # Panics
-    /// * `"revenue pool not initialized"` — called before `init`.
+    /// # Errors
+    /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn get_usdc_token(env: Env) -> Address {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED)
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized))
     }
 
     // -----------------------------------------------------------------------
@@ -224,8 +206,8 @@ impl RevenuePool {
     /// Nominate a new admin. Only the current admin may call.
     /// The nominee must call `claim_admin` (alias `accept_admin`) to complete.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
     /// Emits `admin_changed` with `(current, new_admin)` and
@@ -234,7 +216,7 @@ impl RevenuePool {
         caller.require_auth();
         let current = Self::admin(&env);
         if caller != current {
-            panic!("{}", ERR_UNAUTHORIZED);
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
@@ -251,9 +233,9 @@ impl RevenuePool {
 
     /// Complete the admin transfer. Only the pending admin may call.
     ///
-    /// # Panics
-    /// * `"no pending admin"` — no transfer is in progress.
-    /// * `"unauthorized: caller is not pending admin"` — wrong caller.
+    /// # Errors
+    /// * [`RevenuePoolError::NoAdminTransferPending`] - no transfer is in progress.
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
     /// Emits `admin_transfer_completed` with the new admin as topic.
@@ -262,9 +244,9 @@ impl RevenuePool {
         let inst = env.storage().instance();
         let pending: Address = inst
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
-            .expect("no pending admin");
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoAdminTransferPending));
         if caller != pending {
-            panic!("unauthorized: caller is not pending admin");
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
@@ -275,9 +257,9 @@ impl RevenuePool {
 
     /// Alias for `accept_admin` — legacy name kept for backward compatibility.
     ///
-    /// # Panics
-    /// * `"no pending admin"` - no transfer is in progress.
-    /// * `"unauthorized: caller is not pending admin"` - wrong caller.
+    /// # Errors
+    /// * [`RevenuePoolError::NoAdminTransferPending`] - no transfer is in progress.
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
     /// Emits `admin_transfer_completed` with the new admin as topic.
@@ -287,9 +269,9 @@ impl RevenuePool {
 
     /// Cancel a pending admin transfer. Only the current admin may call.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"no admin transfer pending"` — no transfer in progress.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NoAdminTransferPending`] - no transfer is in progress.
     ///
     /// # Events
     /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
@@ -297,12 +279,12 @@ impl RevenuePool {
         caller.require_auth();
         let current = Self::admin(&env);
         if caller != current {
-            panic!("{}", ERR_UNAUTHORIZED);
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
         let inst = env.storage().instance();
         let pending: Address = inst
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
-            .expect("no admin transfer pending");
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoAdminTransferPending));
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
@@ -311,6 +293,7 @@ impl RevenuePool {
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
@@ -325,8 +308,8 @@ impl RevenuePool {
     /// The guardian may call `pause` but has no authority to unpause, distribute,
     /// rotate admin, change caps, or upgrade the contract.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
     /// Emits `pause_guardian_set` with `caller` as topic and `guardian` as data.
@@ -345,9 +328,9 @@ impl RevenuePool {
 
     /// Clear the emergency pause guardian role. Only the admin may call.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"no pause guardian set"` — no guardian is configured.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NoPauseGuardian`] - no guardian is configured.
     ///
     /// # Events
     /// Emits `pause_guardian_cleared` with `caller` as topic and the previous guardian as data.
@@ -357,7 +340,7 @@ impl RevenuePool {
         let inst = env.storage().instance();
         let guardian: Address = inst
             .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
-            .expect("no pause guardian set");
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoPauseGuardian));
         inst.remove(&Symbol::new(&env, PAUSE_GUARDIAN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
@@ -368,6 +351,7 @@ impl RevenuePool {
 
     /// Return the configured pause guardian, or `None` if unset.
     pub fn get_pause_guardian(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, PAUSE_GUARDIAN_KEY))
@@ -381,9 +365,9 @@ impl RevenuePool {
     ///
     /// The admin or configured pause guardian may call.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED_PAUSE` — caller is neither admin nor guardian.
-    /// * `"revenue pool already paused"` — pool is already paused.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is neither admin nor guardian.
+    /// * [`RevenuePoolError::AlreadyPaused`] - pool is already paused.
     ///
     /// # Events
     /// Emits `pause_set` with `caller` as topic and `true` as data.
@@ -392,9 +376,11 @@ impl RevenuePool {
         let admin = Self::admin(&env);
         let guardian = Self::get_pause_guardian(env.clone());
         if caller != admin && guardian.as_ref() != Some(&caller) {
-            panic!("{}", ERR_UNAUTHORIZED_PAUSE);
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
-        assert!(!Self::is_paused(env.clone()), "revenue pool already paused");
+        if Self::is_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::AlreadyPaused);
+        }
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &true);
@@ -407,16 +393,18 @@ impl RevenuePool {
 
     /// Deactivate the circuit-breaker. Only the admin may call.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"revenue pool not paused"` — pool is not currently paused.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NotPaused`] - pool is not currently paused.
     ///
     /// # Events
     /// Emits `pause_set` with `caller` as topic and `false` as data.
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        assert!(Self::is_paused(env.clone()), "revenue pool not paused");
+        if !Self::is_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::NotPaused);
+        }
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &false);
@@ -429,6 +417,7 @@ impl RevenuePool {
 
     /// Return `true` if the revenue pool is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&Symbol::new(&env, PAUSED_KEY))
@@ -443,8 +432,8 @@ impl RevenuePool {
     ///
     /// Does **not** move tokens. Only the admin may call.
     ///
-    /// # Panics
-    /// * `"unauthorized: caller is not admin"` — wrong caller.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
     /// Emits `receive_payment` with `caller` as topic and `(amount, from_vault)` as data.
@@ -464,10 +453,11 @@ impl RevenuePool {
     /// writes so a callee panic cannot leave the metric ahead of a failed
     /// transfer (Soroban still rolls the whole invocation back on panic).
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — treasury is not the current admin.
-    /// * `ERR_AMOUNT_NOT_POSITIVE` — amount ≤ 0.
-    /// * `"cumulative yield overflow"` — cumulative metric would overflow `i128`.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - treasury is not the current admin.
+    /// * [`RevenuePoolError::AmountNotPositive`] - amount is not positive.
+    /// * [`RevenuePoolError::Overflow`] - cumulative yield would overflow `i128`.
+    /// * [`RevenuePoolError::NotInitialized`] - the USDC token is not configured.
     ///
     /// # Events
     /// Emits `yield_deposited` with `treasury` as topic and
@@ -475,20 +465,20 @@ impl RevenuePool {
     pub fn deposit_yield(env: Env, treasury: Address, amount: i128, source: Symbol) {
         treasury.require_auth();
         if treasury != Self::admin(&env) {
-            panic!("unauthorized: caller is not treasury");
+            env.panic_with_error(RevenuePoolError::Unauthorized);
         }
         if amount <= 0 {
-            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            env.panic_with_error(RevenuePoolError::AmountNotPositive);
         }
         let previous_total = Self::get_cumulative_yield_deposited(env.clone());
         let new_total = previous_total
             .checked_add(amount)
-            .unwrap_or_else(|| panic!("cumulative yield overflow"));
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
         let usdc_address: Address = env
             .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED);
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
         // Transfer before persisting the cumulative metric so a callee panic
@@ -510,6 +500,7 @@ impl RevenuePool {
 
     /// Return the cumulative USDC yield deposited via `deposit_yield`. Defaults to 0.
     pub fn get_cumulative_yield_deposited(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, CUMULATIVE_YIELD_DEPOSITED_KEY))
@@ -522,6 +513,7 @@ impl RevenuePool {
 
     /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
     pub fn get_max_distribute(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
@@ -530,16 +522,18 @@ impl RevenuePool {
 
     /// Set the maximum amount distributable per leg. Must be positive. Admin only.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"max_distribute must be positive"` — value ≤ 0.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::MaxDistributeNotPositive`] - value is not positive.
     ///
     /// # Events
     /// Emits `set_max_distribute` with `(old_max, new_max)`.
     pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        assert!(max_distribute > 0, "max_distribute must be positive");
+        if max_distribute <= 0 {
+            env.panic_with_error(RevenuePoolError::MaxDistributeNotPositive);
+        }
         let old_max = Self::get_max_distribute(env.clone());
         env.storage()
             .instance()
@@ -559,63 +553,93 @@ impl RevenuePool {
 
     /// Distribute USDC from this contract to a single developer wallet.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `ERR_PAUSED` — pool is paused.
-    /// * `ERR_AMOUNT_NOT_POSITIVE` — amount ≤ 0.
-    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` — amount exceeds the cap.
-    /// * `"invalid recipient: cannot distribute to the contract itself"`.
-    /// * `ERR_INSUFFICIENT_BALANCE` — pool holds less than `amount`.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::Paused`] - pool is paused.
+    /// * [`RevenuePoolError::AmountNotPositive`] - amount is not positive.
+    /// * [`RevenuePoolError::AmountExceedsMaxDistribute`] - amount exceeds the cap.
+    /// * [`RevenuePoolError::InvalidRecipient`] - recipient is the pool contract.
+    /// * [`RevenuePoolError::InsufficientBalance`] - pool holds less than `amount`.
+    /// * [`RevenuePoolError::NotInitialized`] - the USDC token is not configured.
     ///
     /// # Events
-    /// Emits `distribute` with `to` as topic and `amount` as data.
+    /// Emits `distribute_started` and `distribute_completed` with a versioned
+    /// payload around the transfer. The legacy `distribute` event is preserved.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
         Self::require_not_paused(&env);
         Self::require_admin(&env, &caller);
         if amount <= 0 {
-            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            env.panic_with_error(RevenuePoolError::AmountNotPositive);
         }
         let max_distribute = Self::get_max_distribute(env.clone());
         if amount > max_distribute {
-            panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
+            env.panic_with_error(RevenuePoolError::AmountExceedsMaxDistribute);
         }
         let usdc_address: Address = env
             .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED);
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
-        Self::validate_recipient(&to, &contract_address);
+        Self::validate_recipient(&env, &to, &contract_address);
         if usdc.balance(&contract_address) < amount {
-            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+            env.panic_with_error(RevenuePoolError::InsufficientBalance);
         }
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let lifecycle = events::DistributionLifecycleEvent::new(
+            &env,
+            amount,
+            events::DistributionMode::Single,
+            0,
+            1,
+        );
+        events::emit_distribute_started(&env, &caller, &to, &lifecycle);
         usdc.transfer(&contract_address, &to, &amount);
         env.events()
-            .publish((events::event_distribute(&env), to), amount);
+            .publish((events::event_distribute(&env), to.clone()), amount);
+        events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
     }
 
-    /// Distribute USDC to multiple developer wallets in one atomic transaction.
+    /// Distribute USDC to multiple developer wallets in a single atomic transaction.
     ///
-    /// All validation runs before any transfer. Returns a typed error for size
-    /// violations; panics for all other invalid conditions.
+    /// All payments are validated upfront before any USDC transfer occurs.
+    /// If **any** payment fails validation **no** transfers are executed and the
+    /// entire call reverts. If all payments pass validation every transfer is
+    /// executed and a `batch_distribute` event is emitted per payment leg.
+    ///
+    /// # Arguments
+    /// * `caller` — must be the current admin and provide `require_auth`.
+    /// * `payments` — a vector of `(recipient: Address, amount: i128)` pairs.
+    ///   Maximum length is [`MAX_BATCH_SIZE`] (currently 50).
     ///
     /// # Errors
-    /// * `RevenuePoolError::BatchEmpty` — `payments` is empty.
-    /// * `RevenuePoolError::BatchTooLarge` — `payments` exceeds `MAX_BATCH_SIZE`.
-    ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED`, `ERR_PAUSED`, `ERR_AMOUNT_NOT_POSITIVE`,
-    ///   `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE`, `ERR_DUPLICATE_RECIPIENT`,
-    ///   `"total overflow"`, `ERR_INSUFFICIENT_BALANCE`,
-    ///   `"invalid recipient: cannot distribute to the contract itself"`.
+    /// * [`RevenuePoolError::BatchEmpty`] — `payments` is empty.
+    /// * [`RevenuePoolError::BatchTooLarge`] — `payments` exceeds `MAX_BATCH_SIZE`.
+    /// * [`RevenuePoolError::Unauthorized`] — caller is not the current admin.
+    /// * [`RevenuePoolError::Paused`] — pool is paused.
+    /// * [`RevenuePoolError::AmountNotPositive`] — any amount is not positive.
+    /// * [`RevenuePoolError::AmountExceedsMaxDistribute`] — a leg exceeds the cap.
+    /// * [`RevenuePoolError::DuplicateRecipient`] — recipients are duplicated.
+    /// * [`RevenuePoolError::Overflow`] — total amount overflows `i128`.
+    /// * [`RevenuePoolError::InsufficientBalance`] — balance is below the total.
+    /// * [`RevenuePoolError::InvalidRecipient`] — a recipient is the pool contract.
+    /// * [`RevenuePoolError::NotInitialized`] — the USDC token is not configured.
     ///
     /// # Events
-    /// Emits one `batch_distribute` event per payment leg, after all validation.
+    /// Emits structured `distribute_started` and `distribute_completed` events
+    /// around each transfer. The legacy [`events::event_batch_distribute`] event
+    /// is preserved for every payment leg.
+    ///
+    /// # Atomicity
+    /// The function is **all-or-nothing**: either every payment succeeds and every
+    /// event is emitted, or the entire transaction reverts. No partial state is
+    /// observable. Indexers can verify atomicity by checking that all
+    /// `batch_distribute` events share the same `(ledger, tx)` pair.
     pub fn batch_distribute(
         env: Env,
         caller: Address,
@@ -636,46 +660,58 @@ impl RevenuePool {
         let max_distribute = Self::get_max_distribute(env.clone());
         let mut seen: Map<Address, bool> = Map::new(&env);
         let mut total_amount: i128 = 0;
+        let contract_address = env.current_contract_address();
 
         for payment in payments.iter() {
             let (to, amount) = payment;
+            Self::validate_recipient(&env, &to, &contract_address);
             if seen.contains_key(to.clone()) {
-                panic!("{}", ERR_DUPLICATE_RECIPIENT);
+                env.panic_with_error(RevenuePoolError::DuplicateRecipient);
             }
             seen.set(to.clone(), true);
             if amount <= 0 {
-                panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+                env.panic_with_error(RevenuePoolError::AmountNotPositive);
             }
             if amount > max_distribute {
-                panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
+                env.panic_with_error(RevenuePoolError::AmountExceedsMaxDistribute);
             }
             total_amount = total_amount
                 .checked_add(amount)
-                .unwrap_or_else(|| panic!("total overflow"));
+                .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
         }
 
         let usdc_address: Address = env
             .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED);
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
-        let contract_address = env.current_contract_address();
 
         if usdc.balance(&contract_address) < total_amount {
-            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+            env.panic_with_error(RevenuePoolError::InsufficientBalance);
         }
 
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+        let mut batch_index = 0_u32;
         for payment in payments.iter() {
             let (to, amount) = payment;
-            Self::validate_recipient(&to, &contract_address);
+
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                batch_index,
+                n,
+            );
+            events::emit_distribute_started(&env, &caller, &to, &lifecycle);
             usdc.transfer(&contract_address, &to, &amount);
             env.events()
-                .publish((events::event_batch_distribute(&env), to), amount);
+                .publish((events::event_batch_distribute(&env), to.clone()), amount);
+            events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            batch_index = batch_index.saturating_add(1);
         }
 
         Ok(())
@@ -687,14 +723,15 @@ impl RevenuePool {
 
     /// Return this contract's on-ledger USDC balance.
     ///
-    /// # Panics
-    /// * `ERR_NOT_INITIALIZED` — called before `init`.
+    /// # Errors
+    /// * [`RevenuePoolError::NotInitialized`] - called before `init`.
     pub fn balance(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
         let usdc_addr: Address = env
             .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED);
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_addr);
         usdc.balance(&env.current_contract_address())
     }
@@ -705,8 +742,8 @@ impl RevenuePool {
 
     /// Admin-gated contract upgrade. Replaces the WASM and persists the version.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
     /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
@@ -729,6 +766,7 @@ impl RevenuePool {
 
     /// Return the stored WASM version hash, or `None` if never upgraded.
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, VERSION_KEY))
@@ -745,10 +783,10 @@ impl RevenuePool {
 
     /// Broadcast an emergency message from the admin.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"message cannot be empty"` — empty message.
-    /// * `"message length exceeds maximum of 256 characters"`.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::MessageEmpty`] - message is empty.
+    /// * [`RevenuePoolError::MessageTooLong`] - message exceeds [`MAX_MESSAGE_LEN`].
     ///
     /// # Events
     /// Emits `admin_broadcast` with `caller` as topic and `AdminBroadcast` as data.
@@ -757,10 +795,10 @@ impl RevenuePool {
         Self::require_admin(&env, &caller);
         let len = message.len();
         if len == 0 {
-            panic!("message cannot be empty");
+            env.panic_with_error(RevenuePoolError::MessageEmpty);
         }
         if len > MAX_MESSAGE_LEN {
-            panic!("message length exceeds maximum of 256 characters");
+            env.panic_with_error(RevenuePoolError::MessageTooLong);
         }
         env.events().publish(
             (events::event_admin_broadcast(&env), caller),
@@ -820,11 +858,11 @@ impl RevenuePool {
     ///   contract itself.
     /// * `amount` — USDC amount in base units. Must be positive.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `ERR_AMOUNT_NOT_POSITIVE` — amount ≤ 0.
-    /// * `"invalid recipient: cannot drain to the contract itself"` — self-drain.
-    /// * `"timelock overflow"` — proposed_at + 86 400 would overflow `u64`.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::AmountNotPositive`] - amount is not positive.
+    /// * [`RevenuePoolError::InvalidRecipient`] - treasury is the pool contract.
+    /// * [`RevenuePoolError::Overflow`] - timelock addition would overflow `u64`.
     ///
     /// # Events
     /// Emits `emergency_drain_proposed` with `caller` as topic and the full
@@ -833,16 +871,16 @@ impl RevenuePool {
         caller.require_auth();
         Self::require_admin(&env, &caller);
         if amount <= 0 {
-            panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            env.panic_with_error(RevenuePoolError::AmountNotPositive);
         }
         let contract_address = env.current_contract_address();
         if treasury == contract_address {
-            panic!("invalid recipient: cannot drain to the contract itself");
+            env.panic_with_error(RevenuePoolError::InvalidRecipient);
         }
         let proposed_at: u64 = env.ledger().timestamp();
         let execute_after: u64 = proposed_at
             .checked_add(EMERGENCY_DRAIN_TIMELOCK_SECONDS)
-            .unwrap_or_else(|| panic!("timelock overflow"));
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
 
         let drain = PendingEmergencyDrain {
             to: treasury,
@@ -869,11 +907,12 @@ impl RevenuePool {
     /// # Arguments
     /// * `caller` — Must be the current admin; must authorize.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"no pending emergency drain"` — no proposal exists.
-    /// * `"emergency drain timelock has not expired"` — too early to execute.
-    /// * `ERR_INSUFFICIENT_BALANCE` — pool holds less than the proposed amount.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NoPendingEmergencyDrain`] - no proposal exists.
+    /// * [`RevenuePoolError::TimelockNotExpired`] - execution is too early.
+    /// * [`RevenuePoolError::InsufficientBalance`] - pool balance is too low.
+    /// * [`RevenuePoolError::NotInitialized`] - the USDC token is not configured.
     ///
     /// # Events
     /// Emits `emergency_drain_executed` with `caller` as topic and
@@ -885,21 +924,21 @@ impl RevenuePool {
         let inst = env.storage().instance();
         let drain: PendingEmergencyDrain = inst
             .get(&Symbol::new(&env, EMERGENCY_DRAIN_KEY))
-            .expect("no pending emergency drain");
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoPendingEmergencyDrain));
 
         let now: u64 = env.ledger().timestamp();
         if now < drain.execute_after {
-            panic!("emergency drain timelock has not expired");
+            env.panic_with_error(RevenuePoolError::TimelockNotExpired);
         }
 
         let usdc_address: Address = inst
             .get(&Symbol::new(&env, USDC_KEY))
-            .expect(ERR_NOT_INITIALIZED);
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
 
         if usdc.balance(&contract_address) < drain.amount {
-            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+            env.panic_with_error(RevenuePoolError::InsufficientBalance);
         }
 
         // Remove before transfer to prevent re-entrancy replay.
@@ -922,9 +961,9 @@ impl RevenuePool {
     /// # Arguments
     /// * `caller` — Must be the current admin; must authorize.
     ///
-    /// # Panics
-    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-    /// * `"no pending emergency drain"` — no proposal exists to cancel.
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NoPendingEmergencyDrain`] - no proposal exists.
     ///
     /// # Events
     /// Emits `emergency_drain_cancelled` with `caller` as topic and the full
@@ -936,7 +975,7 @@ impl RevenuePool {
         let inst = env.storage().instance();
         let drain: PendingEmergencyDrain = inst
             .get(&Symbol::new(&env, EMERGENCY_DRAIN_KEY))
-            .expect("no pending emergency drain");
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoPendingEmergencyDrain));
 
         inst.remove(&Symbol::new(&env, EMERGENCY_DRAIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
@@ -1010,10 +1049,16 @@ pub fn chunk_iter(
 mod test_balance;
 
 #[cfg(test)]
+mod test_contract_errors;
+
+#[cfg(test)]
 mod test_error_codes;
 
 #[cfg(test)]
 mod test_emergency;
+
+#[cfg(test)]
+mod test_events;
 
 #[cfg(test)]
 mod test_invariant;
