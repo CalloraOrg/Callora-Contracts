@@ -185,3 +185,123 @@ fn test_multiple_refund_requests_bump_ttl() {
     });
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
+
+#[test]
+fn test_request_refund_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let ttl_before = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
+
+    let _ = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    let ttl_after = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn test_approve_refund_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let ttl_before = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
+
+    client.approve_refund(&admin, &request_id);
+
+    let ttl_after = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn test_reject_refund_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let ttl_before = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
+
+    client.reject_refund(&admin, &request_id);
+
+    let ttl_after = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn test_process_refund_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.approve_refund(&admin, &request_id);
+
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let ttl_before = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
+
+    client.process_refund(&admin, &request_id);
+
+    let ttl_after = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
+}
+
+#[test]
+fn test_update_config_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let ttl_before = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
+
+    client.update_config(&admin, &500, &200);
+
+    let ttl_after = env.as_contract(&env.current_contract_address(), || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
+}
