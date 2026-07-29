@@ -1067,6 +1067,9 @@ mod test_invariant;
 mod test_proptest;
 
 #[cfg(test)]
+mod test_reentrancy;
+
+#[cfg(test)]
 extern crate std;
 
 #[cfg(test)]

@@ -47,22 +47,22 @@ fn initialization_errors_are_typed() {
 
     assert_eq!(
         client.try_get_admin(),
-        Err(Ok(RevenuePoolError::NotInitialized))
+        Err(Ok(RevenuePoolError::NotInitialized.into()))
     );
 
     assert_eq!(
         client.try_init(&admin, &pool),
-        Err(Ok(RevenuePoolError::InvalidUsdcToken))
+        Err(Ok(RevenuePoolError::InvalidUsdcToken.into()))
     );
     assert_eq!(
         client.try_init(&admin, &admin),
-        Err(Ok(RevenuePoolError::InvalidUsdcToken))
+        Err(Ok(RevenuePoolError::InvalidUsdcToken.into()))
     );
 
     client.init(&admin, &usdc);
     assert_eq!(
         client.try_init(&admin, &usdc),
-        Err(Ok(RevenuePoolError::AlreadyInitialized))
+        Err(Ok(RevenuePoolError::AlreadyInitialized.into()))
     );
 }
 
@@ -75,17 +75,17 @@ fn admin_transfer_errors_are_typed() {
 
     assert_eq!(
         client.try_set_admin(&attacker, &candidate),
-        Err(Ok(RevenuePoolError::Unauthorized))
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
     );
     assert_eq!(
         client.try_claim_admin(&candidate),
-        Err(Ok(RevenuePoolError::NoAdminTransferPending))
+        Err(Ok(RevenuePoolError::NoAdminTransferPending.into()))
     );
 
     client.set_admin(&admin, &candidate);
     assert_eq!(
         client.try_claim_admin(&attacker),
-        Err(Ok(RevenuePoolError::Unauthorized))
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
     );
 }
 
@@ -98,25 +98,25 @@ fn pause_state_errors_are_typed() {
 
     assert_eq!(
         client.try_clear_pause_guardian(&admin),
-        Err(Ok(RevenuePoolError::NoPauseGuardian))
+        Err(Ok(RevenuePoolError::NoPauseGuardian.into()))
     );
     assert_eq!(
         client.try_unpause(&admin),
-        Err(Ok(RevenuePoolError::NotPaused))
+        Err(Ok(RevenuePoolError::NotPaused.into()))
     );
     assert_eq!(
         client.try_pause(&attacker),
-        Err(Ok(RevenuePoolError::Unauthorized))
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
     );
 
     client.pause(&admin);
     assert_eq!(
         client.try_pause(&admin),
-        Err(Ok(RevenuePoolError::AlreadyPaused))
+        Err(Ok(RevenuePoolError::AlreadyPaused.into()))
     );
     assert_eq!(
         client.try_distribute(&admin, &recipient, &1),
-        Err(Ok(RevenuePoolError::Paused))
+        Err(Ok(RevenuePoolError::Paused.into()))
     );
 }
 
@@ -128,21 +128,21 @@ fn single_distribution_errors_are_typed() {
 
     assert_eq!(
         client.try_distribute(&admin, &recipient, &0),
-        Err(Ok(RevenuePoolError::AmountNotPositive))
+        Err(Ok(RevenuePoolError::AmountNotPositive.into()))
     );
 
     client.set_max_distribute(&admin, &10);
     assert_eq!(
         client.try_distribute(&admin, &recipient, &11),
-        Err(Ok(RevenuePoolError::AmountExceedsMaxDistribute))
+        Err(Ok(RevenuePoolError::AmountExceedsMaxDistribute.into()))
     );
     assert_eq!(
         client.try_distribute(&admin, &pool, &1),
-        Err(Ok(RevenuePoolError::InvalidRecipient))
+        Err(Ok(RevenuePoolError::InvalidRecipient.into()))
     );
     assert_eq!(
         client.try_distribute(&admin, &recipient, &1),
-        Err(Ok(RevenuePoolError::InsufficientBalance))
+        Err(Ok(RevenuePoolError::InsufficientBalance.into()))
     );
 }
 
@@ -203,20 +203,20 @@ fn cap_and_broadcast_errors_are_typed() {
 
     assert_eq!(
         client.try_set_max_distribute(&admin, &0),
-        Err(Ok(RevenuePoolError::MaxDistributeNotPositive))
+        Err(Ok(RevenuePoolError::MaxDistributeNotPositive.into()))
     );
 
     let empty = String::from_str(&env, "");
     assert_eq!(
         client.try_broadcast(&admin, &Severity::Info, &empty),
-        Err(Ok(RevenuePoolError::MessageEmpty))
+        Err(Ok(RevenuePoolError::MessageEmpty.into()))
     );
 
     let long_text = "x".repeat((MAX_MESSAGE_LEN + 1) as usize);
     let long_message = String::from_str(&env, &long_text);
     assert_eq!(
         client.try_broadcast(&admin, &Severity::Info, &long_message),
-        Err(Ok(RevenuePoolError::MessageTooLong))
+        Err(Ok(RevenuePoolError::MessageTooLong.into()))
     );
 }
 
@@ -229,28 +229,28 @@ fn emergency_drain_errors_are_typed() {
 
     assert_eq!(
         client.try_execute_emergency_drain(&admin),
-        Err(Ok(RevenuePoolError::NoPendingEmergencyDrain))
+        Err(Ok(RevenuePoolError::NoPendingEmergencyDrain.into()))
     );
     assert_eq!(
         client.try_propose_emergency_drain(&admin, &treasury, &0),
-        Err(Ok(RevenuePoolError::AmountNotPositive))
+        Err(Ok(RevenuePoolError::AmountNotPositive.into()))
     );
     assert_eq!(
         client.try_propose_emergency_drain(&admin, &pool, &1),
-        Err(Ok(RevenuePoolError::InvalidRecipient))
+        Err(Ok(RevenuePoolError::InvalidRecipient.into()))
     );
 
     client.propose_emergency_drain(&admin, &treasury, &1);
     assert_eq!(
         client.try_execute_emergency_drain(&admin),
-        Err(Ok(RevenuePoolError::TimelockNotExpired))
+        Err(Ok(RevenuePoolError::TimelockNotExpired.into()))
     );
 
     env.ledger()
         .set_timestamp(1_700_000_000 + EMERGENCY_DRAIN_TIMELOCK_SECONDS);
     assert_eq!(
         client.try_execute_emergency_drain(&admin),
-        Err(Ok(RevenuePoolError::InsufficientBalance))
+        Err(Ok(RevenuePoolError::InsufficientBalance.into()))
     );
 }
 
@@ -263,7 +263,7 @@ fn emergency_drain_timelock_overflow_is_typed() {
 
     assert_eq!(
         client.try_propose_emergency_drain(&admin, &treasury, &1),
-        Err(Ok(RevenuePoolError::Overflow))
+        Err(Ok(RevenuePoolError::Overflow.into()))
     );
 }
 
@@ -283,6 +283,6 @@ fn cumulative_yield_overflow_is_typed() {
 
     assert_eq!(
         client.try_deposit_yield(&admin, &1, &source),
-        Err(Ok(RevenuePoolError::Overflow))
+        Err(Ok(RevenuePoolError::Overflow.into()))
     );
 }
