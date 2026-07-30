@@ -89,6 +89,22 @@ pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
 }
 
+/// Returns the Symbol for the `"batch_distribute_started"` event topic.
+///
+/// Emitted before batch distribution starts. Carries the total amount and
+/// count of legs as data for indexers to validate against the completed event.
+pub fn event_batch_distribute_started(env: &Env) -> Symbol {
+    Symbol::new(env, "batch_distribute_started")
+}
+
+/// Returns the Symbol for the `"batch_distribute_completed"` event topic.
+///
+/// Emitted after a successful batch distribution. Carries the total amount and
+/// count of legs as data, matching the started event for atomicity verification.
+pub fn event_batch_distribute_completed(env: &Env) -> Symbol {
+    Symbol::new(env, "batch_distribute_completed")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +205,26 @@ mod tests {
         assert_eq!(
             event_distribute_completed(&env),
             Symbol::new(&env, "distribute_completed")
+        );
+    }
+
+    /// Snapshot: proves event_batch_distribute_started still maps to exactly the bytes for "batch_distribute_started".
+    #[test]
+    fn test_event_batch_distribute_started_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_batch_distribute_started(&env),
+            Symbol::new(&env, "batch_distribute_started")
+        );
+    }
+
+    /// Snapshot: proves event_batch_distribute_completed still maps to exactly the bytes for "batch_distribute_completed".
+    #[test]
+    fn test_event_batch_distribute_completed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_batch_distribute_completed(&env),
+            Symbol::new(&env, "batch_distribute_completed")
         );
     }
 }

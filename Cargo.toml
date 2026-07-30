@@ -41,10 +41,10 @@ members = [
     "contracts/hot",
     "contracts/recipient",
     "contracts/recipient/fuzz",
+    "contracts/batch_distribute/fuzz",
 ]
 
 default-members = [
-    "contracts/admin",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/emergency",

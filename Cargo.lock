@@ -259,9 +259,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-admin"
+name = "callora-batch-distribute-fuzz"
 version = "0.0.0"
 dependencies = [
+ "callora-distribute",
+ "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -311,7 +313,7 @@ dependencies = [
 
 [[package]]
 name = "callora-distribute"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
@@ -344,6 +346,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-hot-fuzz"
+version = "0.0.0"
+dependencies = [
+ "callora-hot",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-limits"
 version = "0.0.1"
 dependencies = [
@@ -357,6 +368,23 @@ name = "callora-migrate"
 version = "0.1.0"
 dependencies = [
  "callora-settlement",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-recipient"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-recipient-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "callora-recipient",
+ "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -406,6 +434,7 @@ dependencies = [
 name = "callora-stake"
 version = "0.1.0"
 dependencies = [
+ "callora-stake",
  "soroban-sdk",
 ]
 
@@ -439,16 +468,7 @@ dependencies = [
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
- "callora-vault",
  "criterion",
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-yield"
-version = "0.0.1"
-dependencies = [
- "callora-revenue-pool",
  "soroban-sdk",
 ]
 
