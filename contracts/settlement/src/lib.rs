@@ -809,7 +809,7 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&balance_key, 50000, 50000);
 
-        daily.amount = daily.amount.saturating_add(amount);
+        daily.amount = daily.amount.checked_add(amount).ok_or(SettlementError::DailyWithdrawCapExceeded)?;
         env.storage().persistent().set(&today_key, &daily);
         env.storage()
             .persistent()

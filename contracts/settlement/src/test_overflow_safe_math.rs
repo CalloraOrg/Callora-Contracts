@@ -20,6 +20,9 @@
 //!    `InsufficientDeveloperBalance` rather than wrapping.
 //!
 //! 6. **Normal (non-overflow) paths** still produce correct arithmetic results.
+//!
+//! 7. **`withdraw_developer_balance`** (daily accumulator) — `checked_add` raises
+//!    `DailyWithdrawCapExceeded` rather than silently saturating on overflow.
 
 extern crate std;
 
@@ -78,6 +81,23 @@ fn poke_dev_balance(
         env.storage().persistent().set(
             &StorageKey::DeveloperBalance(developer.clone(), token.clone()),
             &value,
+        );
+    });
+}
+
+/// Directly write a developer's `WithdrawalToday` state in persistent storage.
+fn poke_withdrawal_today(
+    env: &Env,
+    contract_id: &Address,
+    developer: &Address,
+    amount: i128,
+    day: u64,
+) {
+    use crate::types::DailyWithdrawState;
+    env.as_contract(contract_id, || {
+        env.storage().persistent().set(
+            &StorageKey::WithdrawalToday(developer.clone()),
+            &DailyWithdrawState { day, amount },
         );
     });
 }
@@ -303,6 +323,45 @@ fn withdraw_more_than_balance_returns_error() {
         "withdrawal exceeding developer balance should be rejected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 6. withdraw_developer_balance — daily accumulator overflow -> DailyWithdrawCapExceeded
+// ---------------------------------------------------------------------------
+
+/// When the developer has no cap set (0 = unlimited), the daily withdrawal
+/// accumulator still uses `checked_add` so that an i128 overflow fails
+/// loudly instead of silently saturating.
+#[test]
+fn withdraw_daily_amount_overflow_raises_error() {
+    let (env, contract_id, _admin, vault, stored_usdc) = setup_with_usdc();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+    let developer = Address::generate(&env);
+
+    // Seed developer balance with a large amount so the withdrawal itself
+    // does not fail with InsufficientDeveloperBalance.
+    poke_dev_balance(&env, &contract_id, &developer, &stored_usdc, 1_000_000i128);
+
+    // Seed the same-day withdrawal accumulator to i128::MAX - 1 so the
+    // next withdrawal's checked_add will overflow.
+    let today = env.ledger().timestamp() / 86400;
+    poke_withdrawal_today(&env, &contract_id, &developer, i128::MAX - 1, today);
+
+    // Mint enough USDC to the contract so the transfer can proceed
+    // past the liquidity check.
+    let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &stored_usdc);
+    token_admin_client.mint(&contract_id, &1_000i128);
+
+    // Withdraw 1 micro-unit — must fail because daily.amount would overflow.
+    let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
+    assert!(
+        result.is_err(),
+        "daily accumulator overflow should fail, got {result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Normal withdrawals still work correctly
+// ---------------------------------------------------------------------------
 
 /// Exact-balance withdrawal succeeds and leaves the developer at zero.
 #[test]
