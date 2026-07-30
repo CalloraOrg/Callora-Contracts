@@ -70,8 +70,7 @@ pub enum VaultError {
     BelowMinDeposit = 8,
     /// Arithmetic overflow detected (code 9).
     Overflow = 9,
-    /// Initial balance must be non-negative (code 10).
-    InitialBalanceNegative = 10,
+    // code 10 reserved (was InitialBalanceNegative)
     /// Min deposit must be positive (code 11).
     MinDepositNotPositive = 11,
     /// Max deduct must be positive (code 12).
@@ -96,16 +95,10 @@ pub enum VaultError {
     BatchEmpty = 21,
     /// Batch size exceeds maximum allowed (code 22).
     BatchTooLarge = 22,
-    /// New owner must be different from current owner (code 23).
-    NewOwnerSameAsCurrent = 23,
-    /// No ownership transfer is pending (code 24).
-    NoOwnershipTransferPending = 24,
+    // codes 23-24 reserved (were NewOwnerSameAsCurrent, NoOwnershipTransferPending)
     /// No admin transfer is pending (code 25).
     NoAdminTransferPending = 25,
-    /// Offering ID exceeds maximum length (code 26).
-    OfferingIdTooLong = 26,
-    /// Metadata exceeds maximum length (code 27).
-    MetadataTooLong = 27,
+    // codes 26-27 reserved (were OfferingIdTooLong, MetadataTooLong)
     /// Price parsing error or non-positive price (code 28).
     PriceParseError = 28,
     /// Duplicate request ID detected (code 29).
@@ -139,23 +132,19 @@ pub enum VaultError {
     /// Deposit would exceed the configured reserve cap (code 43).
     ExceedsReserveCap = 43,
     /// Caller is not in the allowlist and is not the owner (code 44).
-    ///
-    /// # When returned
-    /// - `deposit()` when a non-owner address attempts to deposit and the caller
-    ///   is not present in the configured allowlist.
-    ///
-    /// # Security note
-    /// Returned instead of panicking to provide machine-readable feedback to
-    /// integrators and prevent information leakage.
     CallerNotInAllowlist = 44,
     /// A critical admin action is still inside the global cool-off window (code 49).
     AdminCooldownActive = 49,
     /// Admin cool-off window is outside the accepted bounds (code 50).
     InvalidAdminCooldown = 50,
-    /// Sweep/rescue amount is below the vault's minimum transfer unit (code 51).
-    ///
-    /// Returned by [`propose_sweep`] and [`admin_rescue`] when the requested
-    /// `amount` is below the configured `min_deposit` floor, ensuring
-    /// consistent dust-rejection across all value-moving paths.
-    BelowMinTransferAmount = 51,
+    /// No pending timelock proposal for the requested action (code 51).
+    ProposalNotFound = 51,
+    /// Action attempted before the timelock window has elapsed (code 52).
+    TimelockNotExpired = 52,
+    /// `proposed_at + window` overflowed `u64` (code 53).
+    TimelockOverflow = 53,
+    /// Proposed timelock window is outside the allowed `MIN..=MAX` bounds (code 54).
+    InvalidTimelockWindow = 54,
+    /// Amount is below the minimum transfer unit (code 55).
+    BelowMinTransferAmount = 55,
 }

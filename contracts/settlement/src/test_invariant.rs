@@ -346,7 +346,7 @@ fn run_trace(seed: u64) {
             x if x == Op::Withdraw as u8 => {
                 // Pick a developer who has a positive balance.
                 let dev = devs[rng.gen_usize(0, DEV_POOL_SIZE - 1)].clone();
-                let current: i128 = client.get_developer_balance(&dev, &usdc_addr).unwrap();
+                let current: i128 = client.get_developer_balance(&dev, &usdc_addr);
                 if current > 0 {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
                     let result = client.try_withdraw_developer_balance(&dev, &amount, &None);
@@ -485,7 +485,7 @@ fn test_invariant_single_dev_full_withdraw() {
     );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
-    let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
+    let balance = client.get_developer_balance(&dev, &usdc_addr);
     assert_eq!(balance, 3_500);
 
     let dev_sum: i128 = client

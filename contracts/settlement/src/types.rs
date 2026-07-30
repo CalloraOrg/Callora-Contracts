@@ -62,6 +62,8 @@ pub enum StorageKey {
     /// Cumulative total of every amount ever credited via `receive_payment` /
     /// `batch_receive_payment`, regardless of routing (pool or developer).
     TotalReceived,
+    /// Whether a specific developer's withdrawals are frozen.
+    FrozenDeveloper(Address),
 }
 
 /// Severity levels for admin broadcast messages.

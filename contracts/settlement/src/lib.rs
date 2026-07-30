@@ -4,6 +4,7 @@ pub mod archive;
 pub mod batch;
 pub mod errors;
 pub mod events;
+pub mod freeze;
 pub mod limits;
 pub mod migrate;
 pub mod pagination;
@@ -11,7 +12,221 @@ pub mod replay_guard;
 pub mod timelock;
 mod types;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
+};
+
+/// Maximum number of items allowed in a single `batch_receive_payment` call.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum number of developer balances returned per page in paginated queries.
+pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+
+/// Typed errors for the settlement contract.
+///
+/// Using `#[contracterror]` encodes each variant as a stable `u32` code.
+/// Callers and indexers can match on the code rather than parsing raw panic strings,
+/// and the WASM binary shrinks because no error string literals are embedded.
+///
+/// | Code | Variant                      | When                                              |
+/// |------|------------------------------|---------------------------------------------------|
+/// | 1    | NotInitialized               | A function is called before `init`                |
+/// | 2    | AlreadyInitialized           | `init` is called more than once                   |
+/// | 3    | Unauthorized                 | Caller is not the vault or admin                  |
+/// | 4    | AmountNotPositive            | `amount` is zero or negative                      |
+/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied |
+/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given  |
+/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow        |
+/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow  |
+/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals |
+/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
+/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
+/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
+/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded|
+/// | 14   | GasExhaustionRisk            | Index too large for safe full scan; use pagination|
+/// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
+/// | 16   | InvalidClaimWindow           | Claim window end is before start                  |
+/// | 17   | ClaimWindowClosed            | Claim attempted outside developer's claim window  |
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum SettlementError {
+    NotInitialized = 1,
+    AlreadyInitialized = 2,
+    Unauthorized = 3,
+    AmountNotPositive = 4,
+    DeveloperRequired = 5,
+    DeveloperMustBeNone = 6,
+    PoolOverflow = 7,
+    DeveloperOverflow = 8,
+    UsdcTokenNotConfigured = 9,
+    InsufficientDeveloperBalance = 10,
+    DeveloperBalanceUnderflow = 11,
+    InsufficientContractBalance = 12,
+    DailyWithdrawCapExceeded = 13,
+    GasExhaustionRisk = 14,
+    ReasonTooLong = 15,
+    InvalidClaimWindow = 16,
+    ClaimWindowClosed = 17,
+}
+
+/// Persistent storage keys for settlement contract
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum StorageKey {
+    Admin,
+    Vault,
+    PendingAdmin,
+    PendingVault,
+    DeveloperIndex,
+    DeveloperBalance(Address),
+    GlobalPool,
+    Usdc,
+    DailyWithdrawCap(Address),
+    WithdrawalToday(Address),
+    DeveloperClaimWindow(Address),
+    ContractVersion,
+}
+
+/// Developer balance record in settlement contract
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperBalance {
+    pub address: Address,
+    pub balance: i128,
+}
+
+/// Global pool balance tracking.
+///
+/// `last_updated` is set to `env.ledger().timestamp()` on every
+/// `receive_payment` call that credits the pool (`to_pool = true`).
+/// It is also set at `init` time. It is **not** updated when payments
+/// are routed to individual developer balances.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlobalPool {
+    pub total_balance: i128,
+    /// Ledger timestamp of the last pool credit. Useful for analytics
+    /// and staleness checks.
+    pub last_updated: u64,
+}
+
+/// Tracks a developer's cumulative withdrawal amount for a given epoch day.
+///
+/// `day` is `timestamp / 86400` (UTC epoch day). When the current call's day
+/// differs from the stored day the accumulator is silently reset.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawState {
+    pub day: u64,
+    pub amount: i128,
+}
+
+/// Timestamp range during which a developer may claim accrued balance.
+///
+/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
+/// inclusive on both ends: a withdrawal is allowed when
+/// `start_ts <= env.ledger().timestamp() <= end_ts`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindow {
+    pub start_ts: u64,
+    pub end_ts: u64,
+}
+
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
+}
+
+/// Payment received event
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaymentReceivedEvent {
+    pub from_vault: Address,
+    pub amount: i128,
+    pub to_pool: bool, // true if credited to global pool, false if to specific developer
+    pub developer: Option<Address>, // developer address if credited to specific developer
+}
+
+/// Balance credited event
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BalanceCreditedEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub new_balance: i128,
+}
+
+/// Emitted when a new vault address is proposed via `propose_vault()`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultProposedEvent {
+    pub current_vault: Address,
+    pub proposed_vault: Address,
+}
+
+/// Emitted when the proposed vault is accepted via `accept_vault()`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultAcceptedEvent {
+    pub old_vault: Address,
+    pub new_vault: Address,
+    pub accepted_by: Address,
+}
+
+/// Emitted when a developer withdraws their balance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperWithdrawEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
+    pub to: Address,
+}
+
+/// Emitted when the admin sets or changes a developer's daily withdrawal cap.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DailyWithdrawCapChanged {
+    pub developer: Address,
+    pub new_cap: i128,
+}
+
+/// Emitted when the admin sets or clears a developer claim window.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperClaimWindowChanged {
+    pub developer: Address,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub enabled: bool,
+}
+
+/// Emitted when an admin force-credits a developer balance (escape hatch).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeveloperForceCreditedEvent {
+    pub developer: Address,
+    pub amount: i128,
+    pub reason: Symbol,
+    pub new_balance: i128,
+}
 
 pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
@@ -74,7 +289,7 @@ impl CalloraSettlement {
     /// panics with [`SettlementError::PoolOverflow`] rather than wrapping
     /// silently.
     pub fn record_deduction(env: Env, amount: i128, _request_id: u64) {
-        let vault = Self::get_vault(env.clone());
+        let vault = Self::get_vault(env.clone()).unwrap();
         vault.require_auth();
         let total = env
             .storage()
@@ -140,7 +355,7 @@ impl CalloraSettlement {
             if developer.is_some() {
                 env.panic_with_error(SettlementError::DeveloperMustBeNone);
             }
-            let mut global_pool = Self::get_global_pool(env.clone());
+            let mut global_pool = Self::get_global_pool(env.clone()).unwrap();
             global_pool.total_balance = global_pool
                 .total_balance
                 .checked_add(amount)
@@ -332,14 +547,14 @@ impl CalloraSettlement {
     }
 
     /// Get current admin address
-    pub fn get_admin(env: Env) -> Address {
+    pub fn get_admin(env: Env) -> Result<Address, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Set the minimum balance for a developer (admin only).
@@ -373,25 +588,25 @@ impl CalloraSettlement {
     }
 
     /// Get registered vault address
-    pub fn get_vault(env: Env) -> Address {
+    pub fn get_vault(env: Env) -> Result<Address, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get(&StorageKey::Vault)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Get global pool information
-    pub fn get_global_pool(env: Env) -> GlobalPool {
+    pub fn get_global_pool(env: Env) -> Result<GlobalPool, SettlementError> {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage()
             .instance()
             .get::<_, GlobalPool>(&StorageKey::GlobalPool)
-            .unwrap_or_else(|| env.panic_with_error(SettlementError::NotInitialized))
+            .ok_or(SettlementError::NotInitialized)
     }
 
     /// Return the cumulative total of all funds received via `receive_payment` and
@@ -411,9 +626,13 @@ impl CalloraSettlement {
     ///
     /// Performs a direct O(1) persistent storage lookup for the specified
     /// developer's balance denominated in `token`. Bumps instance and persistent TTL on read.
-    pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> i128 {
+    pub fn get_developer_balance(
+        env: Env,
+        developer: Address,
+        token: Address,
+    ) -> Result<i128, SettlementError> {
         if !env.storage().instance().has(&StorageKey::Admin) {
-            env.panic_with_error(SettlementError::NotInitialized);
+            return Err(SettlementError::NotInitialized);
         }
         env.storage()
             .instance()
@@ -426,7 +645,7 @@ impl CalloraSettlement {
                 PERSISTENT_BUMP_AMOUNT,
             );
         }
-        env.storage().persistent().get(&key).unwrap_or(0)
+        Ok(env.storage().persistent().get(&key).unwrap_or(0))
     }
 
     /// Propose moving a developer's current balance to a replacement address.
@@ -463,7 +682,7 @@ impl CalloraSettlement {
     /// contract will use to execute withdrawals.
     pub fn set_usdc_token(env: Env, caller: Address, usdc_address: Address) {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
+        let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             panic!("unauthorized: caller is not admin");
         }
@@ -511,6 +730,9 @@ impl CalloraSettlement {
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         developer.require_auth();
+        if freeze::is_developer_frozen(env.clone(), developer.clone()) {
+            return Err(SettlementError::DeveloperFrozen);
+        }
         if amount <= 0 {
             return Err(SettlementError::AmountNotPositive);
         }
@@ -608,6 +830,89 @@ impl CalloraSettlement {
         Ok(())
     }
 
+    /// Simulate a developer claim without side effects.
+    ///
+    /// This read-only view previews the outcome of `withdraw_developer_balance`
+    /// for the configured USDC token. It intentionally does not require
+    /// developer authorization and does not transfer tokens, mutate balances,
+    /// update daily withdrawal counters, extend TTLs, or emit events.
+    ///
+    /// The view returns the same typed errors as a real claim for amount, claim
+    /// window, developer balance, daily cap, USDC configuration, and contract
+    /// token-liquidity failures. If `to` is `None`, the simulated recipient is
+    /// the developer address.
+    pub fn simulate_claim(
+        env: Env,
+        developer: Address,
+        amount: i128,
+        to: Option<Address>,
+    ) -> Result<ClaimSimulation, SettlementError> {
+        if amount <= 0 {
+            return Err(SettlementError::AmountNotPositive);
+        }
+
+        let recipient = to.unwrap_or_else(|| developer.clone());
+        let contract_address = env.current_contract_address();
+        if recipient == contract_address {
+            panic!("invalid recipient: cannot withdraw to contract itself");
+        }
+
+        Self::require_claim_window_open(&env, &developer)?;
+
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .unwrap_or(0);
+        if amount > current_balance {
+            return Err(SettlementError::InsufficientDeveloperBalance);
+        }
+
+        let today = env.ledger().timestamp() / 86400;
+        let cap: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
+            .unwrap_or(0);
+        let daily = env
+            .storage()
+            .persistent()
+            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+            .unwrap_or(DailyWithdrawState {
+                day: today,
+                amount: 0,
+            });
+        let withdrawn_today = if daily.day == today { daily.amount } else { 0 };
+        let withdrawn_today_after = withdrawn_today
+            .checked_add(amount)
+            .ok_or(SettlementError::DailyWithdrawCapExceeded)?;
+        if cap > 0 && withdrawn_today_after > cap {
+            return Err(SettlementError::DailyWithdrawCapExceeded);
+        }
+
+        let remaining_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let contract_balance = token::Client::new(&env, &usdc_address).balance(&contract_address);
+        if contract_balance < amount {
+            return Err(SettlementError::InsufficientContractBalance);
+        }
+
+        Ok(ClaimSimulation {
+            developer,
+            amount,
+            recipient,
+            token: usdc_address,
+            current_balance,
+            remaining_balance,
+            contract_balance,
+            daily_withdraw_cap: cap,
+            withdrawn_today,
+            withdrawn_today_after,
+        })
+    }
+
     /// Configure the inclusive claim window for a developer.
     ///
     /// A configured window restricts `withdraw_developer_balance` so the
@@ -632,7 +937,7 @@ impl CalloraSettlement {
         end_ts: u64,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
@@ -675,7 +980,7 @@ impl CalloraSettlement {
         developer: Address,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
@@ -749,7 +1054,7 @@ impl CalloraSettlement {
     /// Emits `daily_withdraw_cap_changed` with the developer and new cap.
     pub fn set_daily_withdraw_cap(env: Env, caller: Address, developer: Address, cap: i128) {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone());
+        let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -846,7 +1151,7 @@ impl CalloraSettlement {
         reason: Symbol,
     ) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -900,7 +1205,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> Vec<DeveloperBalance> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -944,7 +1249,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> Vec<DeveloperBalance> {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1006,7 +1311,7 @@ impl CalloraSettlement {
         token: Address,
     ) -> (Vec<DeveloperBalance>, Option<Address>) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1035,7 +1340,7 @@ impl CalloraSettlement {
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1059,7 +1364,7 @@ impl CalloraSettlement {
             .get(&StorageKey::PendingAdmin)
             .unwrap_or_else(|| panic!("no admin transfer pending"));
         pending.require_auth();
-        let old_admin = Self::get_admin(env.clone());
+        let old_admin = Self::get_admin(env.clone()).unwrap();
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &pending);
         inst.remove(&StorageKey::PendingAdmin);
@@ -1075,7 +1380,7 @@ impl CalloraSettlement {
     /// Emits `admin_cancelled`.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1093,14 +1398,14 @@ impl CalloraSettlement {
     /// Emits `vault_proposed` with [`VaultProposedEvent`].
     pub fn propose_vault(env: Env, caller: Address, new_vault: Address) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
         if new_vault == env.current_contract_address() {
             panic!("invalid vault: cannot be the contract itself");
         }
-        let current_vault = Self::get_vault(env.clone());
+        let current_vault = Self::get_vault(env.clone()).unwrap();
         env.storage()
             .instance()
             .set(&StorageKey::PendingVault, &new_vault);
@@ -1134,11 +1439,11 @@ impl CalloraSettlement {
             .instance()
             .get(&StorageKey::PendingVault)
             .unwrap_or_else(|| panic!("no vault rotation pending"));
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != pending && caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
-        let old_vault = Self::get_vault(env.clone());
+        let old_vault = Self::get_vault(env.clone()).unwrap();
         let inst = env.storage().instance();
         inst.set(&StorageKey::Vault, &pending);
         inst.remove(&StorageKey::PendingVault);
@@ -1156,7 +1461,7 @@ impl CalloraSettlement {
     /// Broadcast an operator/emergency message (admin only).
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1169,7 +1474,7 @@ impl CalloraSettlement {
     /// Emits `upgraded` with the new WASM hash.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
-        let admin = Self::get_admin(env.clone());
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1260,12 +1565,60 @@ impl CalloraSettlement {
         batch::batch_settle(&env, settlements)
     }
 
+    /// Freeze a developer's withdrawals.
+    ///
+    /// Only the admin may call. Sets the developer's `FrozenDeveloper` flag
+    /// to `true`, blocking `withdraw_developer_balance` for that developer.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to freeze.
+    /// * `reason` - Opaque label emitted in the event for off-chain indexers.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperFrozen`] — developer is already frozen.
+    pub fn freeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        reason: Symbol,
+    ) -> Result<(), SettlementError> {
+        freeze::freeze_developer(env, caller, developer, reason)
+    }
+
+    /// Unfreeze a developer's withdrawals.
+    ///
+    /// Only the admin may call.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to unfreeze.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperNotFrozen`] — developer is not frozen.
+    pub fn unfreeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        freeze::unfreeze_developer(env, caller, developer)
+    }
+
+    /// Return `true` if the developer's withdrawals are currently frozen.
+    ///
+    /// Read-only; no auth required.
+    pub fn is_developer_frozen(env: Env, developer: Address) -> bool {
+        freeze::is_developer_frozen(env, developer)
+    }
+
     // ─── Internal helpers ───────────────────────────────────────────────────
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
     fn require_authorized_caller(env: Env, caller: Address) {
-        let vault = Self::get_vault(env.clone());
-        let admin = Self::get_admin(env.clone());
+        let vault = Self::get_vault(env.clone()).unwrap();
+        let admin = Self::get_admin(env.clone()).unwrap();
         if caller != vault && caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
@@ -1288,6 +1641,9 @@ impl CalloraSettlement {
         index.insert(pos, addr);
     }
 }
+
+#[cfg(test)]
+mod test_freeze;
 
 #[cfg(test)]
 // Legacy suites targeting the pre-nonce payment API are intentionally not

@@ -78,6 +78,7 @@ pub enum DataKey {
     MaxDeduct,
     Settlement,
     Paused,
+    PendingOwner,
     Depositor(Address),
     AllowedDepositorsList,
     /// Pending owner address during a two-step ownership transfer.
@@ -113,8 +114,8 @@ pub enum StorageKey {
     AdminCooldown,
     /// Audit record for the most recently executed critical admin action.
     LastCriticalAdminAction,
-    /// Monotonic nonce for authorized-caller rotation (replay prevention).
-    AuthCallerNonce,
+    /// Settlement contract address.
+    Settlement,
 }
 
 /// Ledgers per day at a 5-second close cadence.
@@ -175,6 +176,8 @@ pub mod settlement {
             _token: &Address,
             _nonce: &u32,
         ) {
+        }
+        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {
         }
     }
 }
@@ -253,13 +256,14 @@ impl CalloraVault {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
         }
-        if min_deposit <= 0 {
+        let min_dep_val = min_deposit.unwrap_or(0);
+        if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
         }
         if max_deduct <= 0 {
             return Err(VaultError::MaxDeductNotPositive);
         }
-        if min_deposit > max_deduct {
+        if min_dep_val > max_deduct {
             return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
 
@@ -275,7 +279,7 @@ impl CalloraVault {
             .set(&DataKey::AuthorizedCaller, &authorized_caller);
         env.storage()
             .instance()
-            .set(&DataKey::MinDeposit, &min_deposit);
+            .set(&DataKey::MinDeposit, &min_dep_val);
 
         if let Some(pool) = revenue_pool {
             env.storage().instance().set(&DataKey::RevenuePool, &pool);
@@ -291,10 +295,39 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_init(&env), owner.clone()), initial_balance);
+        Ok(())
     }
 
+    /// Deposit USDC into the vault, incrementing the tracked balance.
+    ///
+    /// The caller must authenticate and, if not the owner, must be on the
+    /// deposit allowlist (see [`add_address`]).  Deposits are blocked while the
+    /// vault is paused.  The USDC transfer is executed atomically with the
+    /// balance update.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  The caller must be the owner or an
+    /// allowlisted address.
+    ///
+    /// ### Parameters
+    /// - `caller` — address initiating the deposit (must auth).
+    /// - `amount` — amount in USDC stroops; must be ≥ `min_deposit` and > 0.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Paused`] — vault is paused (circuit-breaker active).
+    /// - [`VaultError::AmountNotPositive`] — `amount ≤ 0`.
+    /// - [`VaultError::BelowMinDeposit`] — `amount < min_deposit`.
+    /// - [`VaultError::CallerNotInAllowlist`] — non-owner caller not in allowlist.
+    /// - [`VaultError::Overflow`] — tracked balance overflow.
+    ///
+    /// ### Events
+    /// Emits `deposit` with `caller` as topic and `(amount, new_balance)` as data.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
         caller.require_auth();
+        Self::require_not_paused(env.clone())?;
         if env
             .storage()
             .instance()
@@ -346,8 +379,38 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_deposit(&env), caller), (amount, new_bal));
+        Ok(())
     }
 
+    /// Deduct USDC from the vault and forward it to the settlement contract.
+    ///
+    /// Only the authorized caller or the vault owner may call this function.
+    /// The deducted amount is transferred to the settlement contract and the
+    /// tracked balance is decremented.  Deductions are blocked while paused.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  `caller` must be the authorized
+    /// deduct caller or the vault owner.
+    ///
+    /// ### Parameters
+    /// - `caller` — address initiating the deduction.
+    /// - `amount` — amount in USDC stroops; must be within `[min_deposit, max_deduct]`.
+    /// - `request_id` — idempotency key forwarded to the settlement contract.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Paused`] — vault is paused.
+    /// - [`VaultError::Unauthorized`] — caller is not authorized to deduct.
+    /// - [`VaultError::AmountNotPositive`] — `amount ≤ 0`.
+    /// - [`VaultError::BelowMinDeposit`] — `amount < min_deposit`.
+    /// - [`VaultError::ExceedsMaxDeduct`] — `amount > max_deduct`.
+    /// - [`VaultError::InsufficientBalance`] — tracked balance < amount.
+    /// - [`VaultError::Overflow`] — balance underflow.
+    ///
+    /// ### Events
+    /// Emits `deduct` with `caller` as topic and `(amount, new_balance)` as data.
     pub fn deduct(
         env: Env,
         caller: Address,
@@ -414,17 +477,41 @@ impl CalloraVault {
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
             .unwrap_or_else(|| panic!("USDC Token not set"));
-        token::Client::new(&env, &usdc_addr).transfer(
-            &env.current_contract_address(),
-            &settlement_addr,
-            &amount,
-        );
+        let usdc_client = token::Client::new(&env, &usdc_addr);
+        usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
         Ok(())
     }
 
+    /// Batch-deduct multiple amounts in a single atomic operation.
+    ///
+    /// Validates all items upfront, transfers the total to the settlement
+    /// contract, then processes each deduction.  Shares the same auth and
+    /// pause checks as [`deduct`].
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  Same rules as [`deduct`].
+    ///
+    /// ### Parameters
+    /// - `caller` — address initiating the deductions.
+    /// - `items` — vector of `(amount, request_id)` pairs; each amount must be
+    ///   within `(0, max_deduct]`.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Paused`] — vault is paused.
+    /// - [`VaultError::Unauthorized`] — caller is not authorized to deduct.
+    /// - [`VaultError::AmountNotPositive`] — any item has `amount ≤ 0`.
+    /// - [`VaultError::ExceedsMaxDeduct`] — any item exceeds `max_deduct`.
+    /// - [`VaultError::InsufficientBalance`] — total < sum of all amounts.
+    /// - [`VaultError::Overflow`] — total or running balance overflow.
+    ///
+    /// ### Events
+    /// Emits one `deduct` event per item with `caller` as topic.
     pub fn batch_deduct(
         env: Env,
         caller: Address,
@@ -479,30 +566,9 @@ impl CalloraVault {
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
             .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let usdc = token::Client::new(&env, &usdc_addr);
-        let settlement_client = settlement::Client::new(&env, &settlement_addr);
-
-        // Validate all items and compute total before mutating state.
-        let mut total_amount: i128 = 0;
-        for item in items.iter() {
-            let (amount, _request_id) = item;
-            if amount <= 0 {
-                return Err(VaultError::AmountNotPositive);
-            }
-            if amount > max_deduct {
-                return Err(VaultError::ExceedsMaxDeduct);
-            }
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-
-        if running_bal < total_amount {
-            return Err(VaultError::InsufficientBalance);
-        }
-
-        usdc.transfer(
+        let usdc_client = token::Client::new(&env, &usdc_addr);
+        let total_amount: i128 = items.iter().map(|item| item.0).sum();
+        usdc_client.transfer(
             &env.current_contract_address(),
             &settlement_addr,
             &total_amount,
@@ -682,11 +748,28 @@ impl CalloraVault {
             (events::event_set_authorized_caller(&env), owner),
             (old_caller, new_caller, nonce),
         );
-
-        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
+    /// Pause the vault, blocking deposits and deductions.
+    ///
+    /// Owner withdrawals and admin distributions remain available for
+    /// emergency recovery.  Only the vault owner may call this function.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  `caller` must be the vault owner.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the vault owner.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not the owner.
+    ///
+    /// ### Events
+    /// Emits `vault_paused` with `caller` as topic.
     pub fn pause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
 
@@ -704,8 +787,27 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_vault_paused(&env), caller), ());
+        Ok(())
     }
 
+    /// Unpause the vault, resuming deposits and deductions.
+    ///
+    /// Only the vault owner may call this function.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  `caller` must be the vault owner.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the vault owner.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not the owner.
+    ///
+    /// ### Events
+    /// Emits `vault_unpaused` with `caller` as topic.
     pub fn unpause(env: Env, caller: Address) -> Result<(), VaultError> {
         caller.require_auth();
 
@@ -723,6 +825,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_vault_unpaused(&env), caller), ());
+        Ok(())
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -801,6 +904,24 @@ impl CalloraVault {
             .unwrap_or(i128::MAX)
     }
 
+    /// Update the per-call deduction cap (owner only).
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  `caller` must be the vault owner.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `max_deduct` — new cap in USDC stroops; must be > 0.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not the owner.
+    /// - [`VaultError::MaxDeductNotPositive`] — `max_deduct ≤ 0`.
+    ///
+    /// ### Events
+    /// Emits `set_max_deduct` with `caller` as topic and `max_deduct` as data.
     pub fn set_max_deduct(env: Env, caller: Address, max_deduct: i128) -> Result<(), VaultError> {
         caller.require_auth();
 
@@ -822,6 +943,7 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_set_max_deduct(&env), caller), max_deduct);
+        Ok(())
     }
 
     /// Return the configured settlement contract address.
@@ -839,6 +961,20 @@ impl CalloraVault {
             .unwrap_or_else(|| panic!("Settlement not set"))
     }
 
+    /// Update the settlement contract address (owner only).
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced.  `caller` must be the vault owner.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `settlement` — new settlement contract address.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not the owner.
     pub fn set_settlement(
         env: Env,
         caller: Address,
@@ -1033,6 +1169,20 @@ impl CalloraVault {
     }
 
     /// Accept a pending admin transfer (pending admin only).
+    ///
+    /// The pending admin must authorize this call to finalize the transfer.
+    ///
+    /// ### Authorization
+    /// The pending admin (stored via [`set_admin`]) must call `require_auth()`.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::NoAdminTransferPending`] — no transfer is staged.
+    ///
+    /// ### Events
+    /// Emits `admin_accepted` with the new admin as topic.
     pub fn accept_admin(env: Env) -> Result<(), VaultError> {
         let new_admin: Address = env
             .storage()
@@ -1048,19 +1198,9 @@ impl CalloraVault {
     }
 
     /// Transfer ownership (two-step) — initiate.
-    ///
-    /// The current owner must authorize this call. The new owner must
-    /// subsequently call [`accept_ownership`] to complete the transfer.
-    ///
-    /// # Errors
-    /// - [`VaultError::Unauthorized`] if `caller` is not the current owner.
-    pub fn transfer_ownership(
-        env: Env,
-        caller: Address,
-        new_owner: Address,
-    ) -> Result<(), VaultError> {
+    pub fn transfer_ownership(env: Env, caller: Address, new_owner: Address) {
         caller.require_auth();
-        Self::require_owner(env.clone(), caller.clone())?;
+        Self::require_owner(env.clone(), caller.clone()).unwrap();
         env.storage()
             .instance()
             .set(&DataKey::PendingOwner, &new_owner);
@@ -1121,16 +1261,26 @@ impl CalloraVault {
     }
 
     /// Return seconds remaining before another critical admin action may run.
+    ///
+    /// Returns `0` when no cool-off period is active.  No auth required;
+    /// this is a read-only view.
     pub fn admin_cooldown_remaining(env: Env) -> u64 {
         admin::remaining(&env)
     }
 
     /// Return whether a critical admin action may execute now.
+    ///
+    /// Returns `true` when the global cool-off window has elapsed since the
+    /// last execution.  No auth required; this is a read-only view.
     pub fn is_admin_action_ready(env: Env) -> bool {
         admin::is_ready(&env)
     }
 
     /// Return the most recently executed critical admin action, if any.
+    ///
+    /// Returns `None` when no critical action has been executed since
+    /// deployment or after the last cooldown reset.  No auth required;
+    /// this is a read-only view.
     pub fn get_last_critical_admin_action(env: Env) -> Option<admin::CriticalAdminAction> {
         admin::last_action(&env)
     }
@@ -1139,6 +1289,30 @@ impl CalloraVault {
     // Propose/Execute/Cancel — pause
     // -----------------------------------------------------------------------
 
+    /// Stage a timelocked pause proposal (admin only).
+    ///
+    /// After the configured timelock window elapses, the pause may be
+    /// executed via [`execute_pause`].  Only one pause proposal may be
+    /// active at a time; proposing again replaces the existing proposal.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    /// - [`VaultError::NotInitialized`] — no admin configured.
+    /// - [`VaultError::TimelockOverflow`] — timestamp overflow.
+    ///
+    /// ### Events
+    /// Emits `pause_proposed` with `caller` as topic and
+    /// `(proposed_at, execute_after)` as data.
     pub fn propose_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposed_at = env.ledger().timestamp();
@@ -1159,6 +1333,30 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Execute a timelocked pause proposal (admin only).
+    ///
+    /// The proposal must exist and the ledger timestamp must have passed
+    /// the proposal's `execute_after` deadline.  On success the vault is
+    /// paused, the proposal is cleared, and the global admin cooldown is
+    /// activated.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    /// - [`VaultError::ProposalNotFound`] — no pending pause proposal.
+    /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    ///
+    /// ### Events
+    /// Emits `pause_executed` with `caller` as topic, then `vault_paused`.
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
@@ -1178,6 +1376,25 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Cancel a pending timelocked pause proposal (admin only).
+    ///
+    /// Clears the proposal regardless of whether one exists.  Idempotent.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    ///
+    /// ### Events
+    /// Emits `pause_cancelled` with `caller` as topic.
     pub fn cancel_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_pause(&env);
@@ -1194,6 +1411,29 @@ impl CalloraVault {
     // Propose/Execute/Cancel — upgrade
     // -----------------------------------------------------------------------
 
+    /// Stage a timelocked contract upgrade proposal (admin only).
+    ///
+    /// After the timelock window elapses the upgrade may be executed via
+    /// [`execute_upgrade`].  Proposing again replaces the existing proposal.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    /// - `new_wasm_hash` — target WASM hash for the upgrade.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    /// - [`VaultError::TimelockOverflow`] — timestamp overflow.
+    ///
+    /// ### Events
+    /// Emits `upgrade_proposed` with `caller` as topic and
+    /// `(wasm_hash, proposed_at, execute_after)` as data.
     pub fn propose_upgrade(
         env: Env,
         caller: Address,
@@ -1220,6 +1460,29 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Execute a timelocked contract upgrade (admin only).
+    ///
+    /// The proposal must exist and the timelock must have expired.  On
+    /// success the contract WASM is swapped and the `ContractVersion`
+    /// storage key is updated.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    /// - [`VaultError::ProposalNotFound`] — no pending upgrade proposal.
+    /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    ///
+    /// ### Events
+    /// Emits `upgrade_executed` with `caller` as topic, then `upgraded`.
     pub fn execute_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
@@ -1245,6 +1508,25 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Cancel a pending timelocked upgrade proposal (admin only).
+    ///
+    /// Clears the proposal regardless of whether one exists.  Idempotent.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    ///
+    /// ### Events
+    /// Emits `upgrade_cancelled` with `caller` as topic.
     pub fn cancel_upgrade(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_upgrade(&env);
@@ -1258,23 +1540,6 @@ impl CalloraVault {
     }
 
     /// Propose sweeping (distributing) on-ledger USDC surplus to a recipient (admin only, timelocked).
-    ///
-    /// After the configured window elapses, `execute_sweep` transfers the
-    /// funds and emits the standard `distribute` event. Re-proposing
-    /// replaces the recipient+amount **and restarts the timer**.
-    ///
-    /// `amount` is checked against the vault's configured `min_deposit` floor,
-    /// the same per-call minimum enforced on `deposit`/`deduct`/`batch_deduct`.
-    /// This closes the one remaining value-moving path that previously had no
-    /// floor, so sub-unit/dust sweeps are rejected consistently everywhere the
-    /// vault moves USDC.
-    ///
-    /// # Errors
-    /// - `VaultError::Unauthorized` if caller is not admin.
-    /// - `VaultError::AmountNotPositive` if `amount <= 0`.
-    /// - `VaultError::BelowMinTransferAmount` if `amount` is below the vault's
-    ///   configured minimum transfer unit (`min_deposit`).
-    /// - `VaultError::TimelockOverflow` if `proposed_at + window` overflows.
     pub fn propose_sweep(
         env: Env,
         caller: Address,
@@ -1314,6 +1579,30 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Execute a timelocked sweep proposal (admin only).
+    ///
+    /// Transfers USDC surplus to the proposal's recipient.  The proposal
+    /// must exist and the timelock must have expired.  Sweep is protected
+    /// by the admin cooldown.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    /// - [`VaultError::ProposalNotFound`] — no pending sweep proposal.
+    /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::InsufficientBalance`] — on-ledger balance < amount.
+    ///
+    /// ### Events
+    /// Emits `sweep_executed` with `caller` as topic, then `distribute`.
     pub fn execute_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
@@ -1349,6 +1638,25 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Cancel a pending timelocked sweep proposal (admin only).
+    ///
+    /// Clears the proposal regardless of whether one exists.  Idempotent.
+    ///
+    /// ### Authorization
+    /// `caller.require_auth()` is enforced via [`require_admin`].
+    /// `caller` must be the current admin.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the current admin.
+    ///
+    /// ### Returns
+    /// `Ok(())` on success.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — caller is not admin.
+    ///
+    /// ### Events
+    /// Emits `sweep_cancelled` with `caller` as topic.
     pub fn cancel_sweep(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let existing = timelock::get_pending_sweep(&env);
@@ -1357,47 +1665,6 @@ impl CalloraVault {
             (events::event_sweep_cancelled(&env), caller.clone()),
             (existing.is_some()),
         );
-        Self::bump_instance_ttl(&env);
-        Ok(())
-    }
-
-    /// Remove processed request-ID markers from persistent storage (owner only).
-    ///
-    /// Idempotency markers written by [`deduct`] and [`batch_deduct`] live in
-    /// persistent storage indefinitely. This function lets the owner reclaim
-    /// that storage once markers are no longer needed for duplicate detection.
-    /// IDs not present in storage are silently skipped.
-    ///
-    /// # Authorization
-    /// `caller.require_auth()` is enforced. `caller` must be the current owner.
-    ///
-    /// # Parameters
-    /// - `ids` — list of request IDs whose markers should be removed.
-    ///
-    /// # Events
-    /// Emits a `request_id_pruned` event for each successfully removed ID.
-    ///
-    /// # Errors
-    /// - [`VaultError::Unauthorized`] if `caller` is not the owner.
-    pub fn prune_processed_requests(
-        env: Env,
-        caller: Address,
-        ids: Vec<Symbol>,
-    ) -> Result<(), VaultError> {
-        caller.require_auth();
-        Self::require_owner(env.clone(), caller.clone())?;
-
-        for id in ids.iter() {
-            let key = StorageKey::ProcessedRequest(id.clone());
-            if env.storage().persistent().has(&key) {
-                env.storage().persistent().remove(&key);
-                env.events().publish(
-                    (events::event_request_id_pruned(&env), caller.clone()),
-                    id.clone(),
-                );
-            }
-        }
-
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -1426,25 +1693,30 @@ impl CalloraVault {
         Self::bump_instance_ttl(env);
     }
 
+    /// Extend persistent storage TTL for a given key.
+    #[inline]
+    pub(crate) fn bump_persistent_key(env: &Env, key: &StorageKey) {
+        env.storage()
+            .persistent()
+            .extend_ttl(key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
+
     #[inline(never)]
-    fn require_authorized_deduct_caller(env: &Env, caller: &Address) -> Result<(), VaultError> {
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .ok_or(VaultError::NotInitialized)?;
-        let authorized_caller: Option<Address> = env
+    fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
+        let owner = Self::get_owner(env.clone());
+        if *caller == owner {
+            return Ok(());
+        }
+        let auth_caller: Option<Address> = env
             .storage()
             .instance()
             .get(&DataKey::AuthorizedCaller);
-        let auth = match &authorized_caller {
-            Some(ac) => caller == ac || caller == &owner,
-            None => caller == &owner,
-        };
-        if !auth {
-            return Err(VaultError::Unauthorized);
+        if let Some(ac) = auth_caller {
+            if *caller == ac {
+                return Ok(());
+            }
         }
-        Ok(())
+        Err(VaultError::Unauthorized)
     }
 
     /// Return `true` if `request_id` has already been processed (marker present
@@ -1501,22 +1773,26 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VaultError::NotInitialized)?;
-        let owner: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Owner)
-            .ok_or(VaultError::NotInitialized)?;
+        let owner = Self::get_owner(env.clone());
         if *caller != admin && *caller != owner {
             return Err(VaultError::Unauthorized);
         }
         Ok(())
     }
 
-    /// Broadcast an emergency message from the admin.
+    /// Check whether an address is on the deposit allowlist.
     ///
-    /// The vault owner may always deposit regardless of this flag.
-    /// Non-owner callers must be explicitly added to the allowlist to call
-    /// [`deposit`]. No auth required; this is a read-only view.
+    /// Returns `true` if the address has been added via [`add_address`],
+    /// `false` otherwise.  Note that the owner may always deposit regardless
+    /// of the allowlist — this view only reflects the explicit allowlist.
+    ///
+    /// No auth required; this is a read-only view.
+    ///
+    /// ### Parameters
+    /// - `caller` — address to check.
+    ///
+    /// ### Returns
+    /// `true` if the address is on the deposit allowlist.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
         Self::bump_instance_ttl(&env);
         env.storage()

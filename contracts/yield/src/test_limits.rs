@@ -12,7 +12,7 @@ use crate::limits::{
 };
 use crate::YieldLimitError;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env, IntoVal, TryFromVal, Val};
+use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, Val};
 
 // ---------------------------------------------------------------------
 // helpers
