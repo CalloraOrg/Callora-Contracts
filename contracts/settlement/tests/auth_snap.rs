@@ -186,7 +186,10 @@ fn clear_developer_claim_window_requires_auth() {
 
     env.set_auths(&[]);
     let res = client.try_clear_developer_claim_window(&admin, &dev);
-    assert!(res.is_err(), "clear_developer_claim_window must require auth");
+    assert!(
+        res.is_err(),
+        "clear_developer_claim_window must require auth"
+    );
 }
 
 #[test]
@@ -197,7 +200,13 @@ fn force_credit_developer_requires_auth() {
     env.set_auths(&[]);
     let dev = Address::generate(&env);
     let token_addr = Address::generate(&env);
-    let res = client.try_force_credit_developer(&admin, &dev, &100_i128, &token_addr, &Symbol::new(&env, "test"));
+    let res = client.try_force_credit_developer(
+        &admin,
+        &dev,
+        &100_i128,
+        &token_addr,
+        &Symbol::new(&env, "test"),
+    );
     assert!(res.is_err(), "force_credit_developer must require auth");
 }
 
