@@ -40,6 +40,7 @@ use soroban_sdk::contracterror;
 /// | 30   | DeveloperFrozen              | Developer is frozen and cannot withdraw              |
 /// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
 /// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
+/// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -79,4 +80,6 @@ pub enum SettlementError {
     DeveloperNotFrozen = 31,
     /// Caller is not authorized to freeze/unfreeze developers.
     FreezeUnauthorized = 32,
+    /// Admin attempted a price write before the minimum interval elapsed.
+    WriteRateLimitExceeded = 33,
 }

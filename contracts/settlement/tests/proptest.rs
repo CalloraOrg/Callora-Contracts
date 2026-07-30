@@ -623,13 +623,23 @@ fn test_invariant_record_deduction() {
     client.record_deduction(&1_000, &1);
     assert_eq!(client.get_total_received(), 1_000);
     assert_eq!(client.get_global_pool().total_balance, 0);
-    assert_eq!(client.get_all_developer_balances(&admin, &usdc_addr).len(), 0);
+    assert_eq!(
+        client.get_all_developer_balances(&admin, &usdc_addr).len(),
+        0
+    );
 
     client.record_deduction(&500, &2);
     assert_eq!(client.get_total_received(), 1_500);
     assert_eq!(client.get_global_pool().total_balance, 0);
 
-    client.receive_payment(&vault, &300, &false, &Some(Address::generate(env)), &usdc_addr, &1u32);
+    client.receive_payment(
+        &vault,
+        &300,
+        &false,
+        &Some(Address::generate(env)),
+        &usdc_addr,
+        &1u32,
+    );
     assert_eq!(client.get_total_received(), 1_500);
     assert_eq!(client.get_global_pool().total_balance, 0);
 }
@@ -743,7 +753,7 @@ fn test_invariant_daily_withdraw_cap() {
 
     let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
     assert!(res.is_err());
-    
+
     let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
     assert_eq!(balance, 3_500);
 }

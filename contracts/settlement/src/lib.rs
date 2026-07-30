@@ -8,225 +8,18 @@ pub mod freeze;
 pub mod limits;
 pub mod migrate;
 pub mod pagination;
+pub mod price_registry;
 pub mod replay_guard;
 pub mod timelock;
 mod types;
 
-use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-
-/// Typed errors for the settlement contract.
-///
-/// Using `#[contracterror]` encodes each variant as a stable `u32` code.
-/// Callers and indexers can match on the code rather than parsing raw panic strings,
-/// and the WASM binary shrinks because no error string literals are embedded.
-///
-/// | Code | Variant                      | When                                              |
-/// |------|------------------------------|---------------------------------------------------|
-/// | 1    | NotInitialized               | A function is called before `init`                |
-/// | 2    | AlreadyInitialized           | `init` is called more than once                   |
-/// | 3    | Unauthorized                 | Caller is not the vault or admin                  |
-/// | 4    | AmountNotPositive            | `amount` is zero or negative                      |
-/// | 5    | DeveloperRequired            | `to_pool=false` but no developer address supplied |
-/// | 6    | DeveloperMustBeNone          | `to_pool=true` but a developer address was given  |
-/// | 7    | PoolOverflow                 | Global pool `i128` addition would overflow        |
-/// | 8    | DeveloperOverflow            | Developer balance `i128` addition would overflow  |
-/// | 9    | UsdcTokenNotConfigured       | USDC token address not configured for withdrawals |
-/// | 10   | InsufficientDeveloperBalance | Developer balance is less than withdrawal amount  |
-/// | 11   | DeveloperBalanceUnderflow    | Developer balance subtraction would overflow      |
-/// | 12   | InsufficientContractBalance  | Settlement contract lacks on-ledger USDC          |
-/// | 13   | DailyWithdrawCapExceeded     | Developer's daily withdrawal cap would be exceeded|
-/// | 14   | GasExhaustionRisk            | Index too large for safe full scan; use pagination|
-/// | 15   | ReasonTooLong                | Reason Symbol exceeds maximum allowed length      |
-/// | 16   | InvalidClaimWindow           | Claim window end is before start                  |
-/// | 17   | ClaimWindowClosed            | Claim attempted outside developer's claim window  |
-#[contracterror]
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u32)]
-pub enum SettlementError {
-    NotInitialized = 1,
-    AlreadyInitialized = 2,
-    Unauthorized = 3,
-    AmountNotPositive = 4,
-    DeveloperRequired = 5,
-    DeveloperMustBeNone = 6,
-    PoolOverflow = 7,
-    DeveloperOverflow = 8,
-    UsdcTokenNotConfigured = 9,
-    InsufficientDeveloperBalance = 10,
-    DeveloperBalanceUnderflow = 11,
-    InsufficientContractBalance = 12,
-    DailyWithdrawCapExceeded = 13,
-    GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
-    InvalidClaimWindow = 16,
-    ClaimWindowClosed = 17,
-}
-
-/// Persistent storage keys for settlement contract
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum StorageKey {
-    Admin,
-    Vault,
-    PendingAdmin,
-    PendingVault,
-    DeveloperIndex,
-    DeveloperBalance(Address),
-    GlobalPool,
-    Usdc,
-    DailyWithdrawCap(Address),
-    WithdrawalToday(Address),
-    DeveloperClaimWindow(Address),
-    ContractVersion,
-}
-
-/// Developer balance record in settlement contract
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperBalance {
-    pub address: Address,
-    pub balance: i128,
-}
-
-/// Global pool balance tracking.
-///
-/// `last_updated` is set to `env.ledger().timestamp()` on every
-/// `receive_payment` call that credits the pool (`to_pool = true`).
-/// It is also set at `init` time. It is **not** updated when payments
-/// are routed to individual developer balances.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct GlobalPool {
-    pub total_balance: i128,
-    /// Ledger timestamp of the last pool credit. Useful for analytics
-    /// and staleness checks.
-    pub last_updated: u64,
-}
-
-/// Tracks a developer's cumulative withdrawal amount for a given epoch day.
-///
-/// `day` is `timestamp / 86400` (UTC epoch day). When the current call's day
-/// differs from the stored day the accumulator is silently reset.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DailyWithdrawState {
-    pub day: u64,
-    pub amount: i128,
-}
-
-/// Timestamp range during which a developer may claim accrued balance.
-///
-/// `start_ts` and `end_ts` are ledger timestamps in seconds. The window is
-/// inclusive on both ends: a withdrawal is allowed when
-/// `start_ts <= env.ledger().timestamp() <= end_ts`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperClaimWindow {
-    pub start_ts: u64,
-    pub end_ts: u64,
-}
-
-/// Read-only preview of a developer claim/withdrawal.
-///
-/// Returned by `simulate_claim` after running the same validation checks as
-/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
-/// writing storage, or emitting events.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClaimSimulation {
-    pub developer: Address,
-    pub amount: i128,
-    pub recipient: Address,
-    pub token: Address,
-    pub current_balance: i128,
-    pub remaining_balance: i128,
-    pub contract_balance: i128,
-    pub daily_withdraw_cap: i128,
-    pub withdrawn_today: i128,
-    pub withdrawn_today_after: i128,
-}
-
-/// Payment received event
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct PaymentReceivedEvent {
-    pub from_vault: Address,
-    pub amount: i128,
-    pub to_pool: bool, // true if credited to global pool, false if to specific developer
-    pub developer: Option<Address>, // developer address if credited to specific developer
-}
-
-/// Balance credited event
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct BalanceCreditedEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub new_balance: i128,
-}
-
-/// Emitted when a new vault address is proposed via `propose_vault()`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultProposedEvent {
-    pub current_vault: Address,
-    pub proposed_vault: Address,
-}
-
-/// Emitted when the proposed vault is accepted via `accept_vault()`.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct VaultAcceptedEvent {
-    pub old_vault: Address,
-    pub new_vault: Address,
-    pub accepted_by: Address,
-}
-
-/// Emitted when a developer withdraws their balance.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperWithdrawEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub to: Address,
-}
-
-/// Emitted when the admin sets or changes a developer's daily withdrawal cap.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DailyWithdrawCapChanged {
-    pub developer: Address,
-    pub new_cap: i128,
-}
-
-/// Emitted when the admin sets or clears a developer claim window.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperClaimWindowChanged {
-    pub developer: Address,
-    pub start_ts: u64,
-    pub end_ts: u64,
-    pub enabled: bool,
-}
-
-/// Emitted when an admin force-credits a developer balance (escape hatch).
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeveloperForceCreditedEvent {
-    pub developer: Address,
-    pub amount: i128,
-    pub reason: Symbol,
-    pub new_balance: i128,
-}
 
 pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
@@ -433,15 +226,6 @@ impl CalloraSettlement {
                 DepositEvent {
                     developer: dev_address.clone(), // or dev.clone()
                     token: token.clone(),
-                    amount,
-                },
-            );
-            events::emit_deposit(
-                &env,
-                &dev_address.clone(),
-                DepositEvent {
-                    developer: dev_address,
-                    token,
                     amount,
                 },
             );
@@ -859,10 +643,14 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(&env, &developer)?;
 
+        let usdc_address = Self::get_usdc_token(env.clone())?;
         let current_balance: i128 = env
             .storage()
             .persistent()
-            .get(&StorageKey::DeveloperBalance(developer.clone()))
+            .get(&StorageKey::DeveloperBalance(
+                developer.clone(),
+                usdc_address.clone(),
+            ))
             .unwrap_or(0);
         if amount > current_balance {
             return Err(SettlementError::InsufficientDeveloperBalance);
@@ -893,7 +681,6 @@ impl CalloraSettlement {
         let remaining_balance = current_balance
             .checked_sub(amount)
             .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
-        let usdc_address = Self::get_usdc_token(env.clone())?;
         let contract_balance = token::Client::new(&env, &usdc_address).balance(&contract_address);
         if contract_balance < amount {
             return Err(SettlementError::InsufficientContractBalance);
@@ -1613,7 +1400,24 @@ impl CalloraSettlement {
         freeze::is_developer_frozen(env, developer)
     }
 
-    // ─── Internal helpers ───────────────────────────────────────────────────
+    pub fn set_price(
+        env: Env,
+        caller: Address,
+        offering_id: soroban_sdk::String,
+        price: soroban_sdk::String,
+    ) {
+        price_registry::set_price(&env, caller, offering_id, price);
+    }
+
+    pub fn remove_price(env: Env, caller: Address, offering_id: soroban_sdk::String) {
+        price_registry::remove_price(&env, caller, offering_id);
+    }
+
+    pub fn get_price(env: Env, offering_id: soroban_sdk::String) -> Option<soroban_sdk::String> {
+        price_registry::get_price(&env, offering_id)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Internal helpers ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
     fn require_authorized_caller(env: Env, caller: Address) {

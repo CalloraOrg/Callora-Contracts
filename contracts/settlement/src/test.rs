@@ -2090,7 +2090,7 @@ mod settlement_tests {
 
         env.as_contract(&addr, || {
             env.storage().persistent().set(
-                &crate::StorageKey::DeveloperBalance(developer.clone()),
+                &crate::StorageKey::DeveloperBalance(developer.clone(), token.clone()),
                 &i128::MAX,
             );
         });
