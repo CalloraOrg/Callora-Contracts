@@ -10,16 +10,24 @@ resolver = "2"
 members = [
     "contracts/admin",
     "contracts/allowlist",
+    "contracts/batch_claim",
+    "contracts/batch_distribute/fuzz",
     "contracts/checkpoint",
+    "contracts/checkpoint/fuzz",
     "contracts/cold",
     "contracts/distribute",
+    "contracts/distribute/fuzz",
     "contracts/errors",
     "contracts/escrow",
+    "contracts/fee",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/hot",
+    "contracts/hot/fuzz",
     "contracts/limits",
     "contracts/migrate",
+    "contracts/recipient",
+    "contracts/recipient/fuzz",
     "contracts/registry",
     "contracts/rescue",
     "contracts/revenue_pool",
@@ -33,19 +41,10 @@ members = [
     "contracts/validators",
     "contracts/vault",
     "contracts/whitelist",
-    "contracts/cold",
-    "contracts/errors",
-    "contracts/registry",
-    "contracts/hot",
-    "contracts/recipient",
-    "contracts/recipient/fuzz",
-    "contracts/fee",
-    "contracts/admin",
     "contracts/yield",
 ]
 
 default-members = [
-    "contracts/admin",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
@@ -90,3 +89,4 @@ debug-assertions = false  # Disable debug assertions in release
 panic = "abort"           # Smaller panic handler (no unwinding)
 codegen-units = 1         # Better optimization (slower compile, smaller binary)
 lto = true                # Link-time optimization across all crates
+
