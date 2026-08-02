@@ -65,8 +65,13 @@ cargo test -p callora-cold -- gas_budget --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   >> "${MEASUREMENTS_PATH}" || true
 
+# Harvest callora-registry gas snapshot metrics (appended to same file)
+cargo test -p callora-registry -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
 if [[ ! -s "${MEASUREMENTS_PATH}" ]]; then
-  err "No gas measurements found. Ensure gas_budget (callora-vault), gas_snap (callora-allowlist), gas_snap (callora-limits), and gas_budget (callora-cold) tests emit JSON lines."
+  err "No gas measurements found. Ensure gas_budget (callora-vault), gas_snap (callora-allowlist), gas_snap (callora-limits), gas_budget (callora-cold), and gas_snap (callora-registry) tests emit JSON lines."
   exit 2
 fi
 
