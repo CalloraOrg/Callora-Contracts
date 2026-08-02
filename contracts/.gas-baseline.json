@@ -289,5 +289,39 @@
       "cpu": 43314,
       "mem": 504
     }
+  },
+  "callora-registry": {
+    "init": {
+      "cpu": 40238,
+      "mem": 464
+    },
+    "get_offering": {
+      "cpu": 44037,
+      "mem": 608
+    },
+    "is_offering_registered": {
+      "cpu": 33756,
+      "mem": 608
+    },
+    "register_offering_second_vs_first": {
+      "cpu": 113087,
+      "mem": 1100
+    },
+    "is_offering_registered_repeated_second_vs_first": {
+      "cpu": 33756,
+      "mem": 608
+    },
+    "register_offering": {
+      "cpu": 107026,
+      "mem": 1084
+    },
+    "register_offering_with_gate": {
+      "cpu": 120319,
+      "mem": 1176
+    },
+    "registered_count": {
+      "cpu": 32705,
+      "mem": 328
+    }
   }
 }
