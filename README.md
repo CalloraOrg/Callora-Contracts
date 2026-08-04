@@ -2,6 +2,14 @@
 
 Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) and balance deduction for pay-per-call settlement.
 
+## API stability snapshots
+
+Client-facing contract error code numbers are treated as part of each
+contract's public API. The checkpoint contract freezes its
+`CheckpointError` discriminants with a focused snapshot test in
+`contracts/checkpoint/tests/err_stab.rs` so accidental renumbering is caught
+by diff.
+
 [![CI](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml)
 [![Coverage](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/coverage.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/coverage.yml)
 
