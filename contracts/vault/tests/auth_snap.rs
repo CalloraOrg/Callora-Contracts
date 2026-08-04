@@ -260,6 +260,17 @@ fn balance_does_not_require_auth() {
 }
 
 #[test]
+fn simulate_deduct_does_not_require_auth() {
+    let env = Env::default();
+    let (_owner, caller, client, _usdc_addr, _usdc_client, _usdc_admin) = setup_with_balance(&env, 500);
+    let developer = Address::generate(&env);
+
+    env.set_auths(&[]);
+    let res = client.simulate_deduct(&caller, &100_i128, &None, &u32::MAX, &developer);
+    assert_eq!(res, Ok(400));
+}
+
+#[test]
 fn get_owner_does_not_require_auth() {
     let env = Env::default();
     let (owner, _caller, client, _usdc_addr, _usdc_client, _usdc_admin) = setup(&env);

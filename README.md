@@ -1,5 +1,13 @@
 ﻿# Callora Contracts
 
+## Auth snapshot coverage
+
+Focused per-entrypoint auth snapshot tests cover read-only view entrypoints so
+regressions in `require_auth` behavior are caught by test diffs. Current view
+coverage includes capability views in `cold`, `emergency`, and `stake`, plus
+`yield` limits read views and the vault's `simulate_deduct` pre-flight view.
+
+
 Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) and balance deduction for pay-per-call settlement.
 
 [![CI](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml)
