@@ -16,6 +16,7 @@ members = [
     "contracts/checkpoint/fuzz",
     "contracts/cold",
     "contracts/distribute",
+    "contracts/emergency",
     "contracts/distribute/fuzz",
     "contracts/errors",
     "contracts/escrow",

@@ -14,8 +14,26 @@
 //!
 //! # Bit registry
 //! Reserved bits (6–63) are always zero in this version.
+//!
+//! # TTL bump policy
+//! [`capabilities`] bumps instance storage TTL on every call so that a
+//! frequently-queried contract does not archive due to infrequent writes.
+//! See [`INSTANCE_BUMP_THRESHOLD`] / [`INSTANCE_BUMP_AMOUNT`].
 
 use soroban_sdk::Env;
+
+// ---------------------------------------------------------------------------
+// TTL constants
+// ---------------------------------------------------------------------------
+
+/// Ledgers per day at a 5-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Remaining-TTL threshold that triggers an instance-storage extension (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL after an instance-storage extension (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
 
 // ---------------------------------------------------------------------------
 // Capability bits
@@ -72,8 +90,13 @@ pub const ALL_CAPABILITIES: u64 = CAP_EMERGENCY_PAUSE
 /// upgrades — once assigned a bit position is never reused for a different
 /// feature. Reserved bits (6–63) are always zero.
 ///
-/// Pure view: ignores `_env` (no storage reads). No authentication required.
-pub fn capabilities(_env: &Env) -> u64 {
+/// Bumps instance storage TTL on every call so that a frequently-queried
+/// contract does not archive due to infrequent writes. No authentication
+/// required.
+pub fn capabilities(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     ALL_CAPABILITIES
 }
 
