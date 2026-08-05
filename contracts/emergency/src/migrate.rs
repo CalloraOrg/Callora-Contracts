@@ -44,6 +44,23 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
 };
 
+// ─── TTL constants ────────────────────────────────────────────────────────────
+
+/// Ledgers per day at a 5-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Remaining-TTL threshold that triggers an instance-storage extension (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL after an instance-storage extension (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Remaining-TTL threshold that triggers a persistent-storage extension (~30 days).
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// Target TTL after a persistent-storage extension (~60 days).
+pub const PERSISTENT_BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
+
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
 /// Storage keys used by the emergency migration contract.
@@ -311,14 +328,26 @@ impl EmergencyMigrate {
     /// Return the reshaped emergency state, if migration has completed.
     ///
     /// Returns `None` if migration has not yet run.
+    ///
+    /// Bumps instance storage TTL on every call so that a frequently-queried
+    /// contract does not archive between writes.
     pub fn get_current(env: Env) -> Option<CurrentEmergency> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage().instance().get(&StorageKey::Current)
     }
 
     /// Return the stored migration version, if initialised.
     ///
     /// Returns `None` if the contract has not been initialised.
+    ///
+    /// Bumps instance storage TTL on every call so that a frequently-queried
+    /// contract does not archive between writes.
     pub fn version(env: Env) -> Option<u32> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.storage().instance().get(&StorageKey::Version)
     }
 
@@ -330,7 +359,13 @@ impl EmergencyMigrate {
     /// - An authorised (version, hash) pair is stored.
     /// - Both the stored version and the authorised version match, **and** the
     ///   supplied hash matches the authorised hash.
+    ///
+    /// Bumps instance storage TTL on every call so that a frequently-queried
+    /// contract does not archive between writes.
     pub fn is_upgrade_authorised(env: Env, wasm_hash: BytesN<32>) -> bool {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         let stored_version: Option<u32> = env.storage().instance().get(&StorageKey::Version);
         let authorisation: Option<(u32, BytesN<32>)> =
             env.storage().instance().get(&StorageKey::AuthorisedUpgrade);

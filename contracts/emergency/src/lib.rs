@@ -21,13 +21,34 @@
 //! let added   = after & !before;
 //! let removed = before & !after;
 //! ```
+//!
+//! # TTL bump policy (issue #709)
+//! All hot read paths (`capabilities`, `get_current`, `version`,
+//! `is_upgrade_authorised`) now call
+//! `env.storage().instance().extend_ttl(INSTANCE_BUMP_THRESHOLD,
+//! INSTANCE_BUMP_AMOUNT)` so that a frequently-queried contract does not
+//! archive due to infrequent writes.  The threshold is ~30 days; the target
+//! TTL is ~60 days (17,280 ledgers/day at 5 s/ledger).
 
 mod views;
 pub mod migrate;
 
+#[cfg(test)]
+mod test_ttl_bump;
+
 pub use views::{
-    capabilities, ALL_CAPABILITIES, CAP_EMERGENCY_DRAIN_CANCEL, CAP_EMERGENCY_DRAIN_EXECUTE,
-    CAP_EMERGENCY_DRAIN_PROPOSE, CAP_EMERGENCY_PAUSE, CAP_EMERGENCY_UNPAUSE, CAP_PENDING_DRAIN_VIEW,
+    capabilities,
+    ALL_CAPABILITIES,
+    CAP_EMERGENCY_DRAIN_CANCEL,
+    CAP_EMERGENCY_DRAIN_EXECUTE,
+    CAP_EMERGENCY_DRAIN_PROPOSE,
+    CAP_EMERGENCY_PAUSE,
+    CAP_EMERGENCY_UNPAUSE,
+    CAP_PENDING_DRAIN_VIEW,
+    // TTL constants — exported so integration tests and monitors can read them.
+    INSTANCE_BUMP_AMOUNT,
+    INSTANCE_BUMP_THRESHOLD,
+    LEDGERS_PER_DAY,
 };
 
 use soroban_sdk::{contract, contractimpl, Env};
@@ -49,7 +70,9 @@ impl CalloraEmergency {
     /// across upgrades — once assigned a bit position is never reused.
     /// Reserved bits (6–63) are always zero.
     ///
-    /// Pure view: no auth, no storage writes, no TTL bump.
+    /// Bumps instance storage TTL on every call (issue #709) so that a
+    /// frequently-queried contract does not archive due to infrequent writes.
+    /// No authentication required.
     pub fn capabilities(env: Env) -> u64 {
         views::capabilities(&env)
     }
