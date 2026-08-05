@@ -37,6 +37,10 @@ use soroban_sdk::contracterror;
 /// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
 /// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
 /// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
+/// | 30   | DeveloperFrozen              | Developer is frozen and cannot withdraw              |
+/// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
+/// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
+/// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -70,4 +74,12 @@ pub enum SettlementError {
     ReplayDetected = 27,
     BatchEmpty = 28,
     BatchTooLarge = 29,
+    /// Developer is frozen and cannot withdraw.
+    DeveloperFrozen = 30,
+    /// Developer is not frozen; cannot unfreeze.
+    DeveloperNotFrozen = 31,
+    /// Caller is not authorized to freeze/unfreeze developers.
+    FreezeUnauthorized = 32,
+    /// Admin attempted a price write before the minimum interval elapsed.
+    WriteRateLimitExceeded = 33,
 }

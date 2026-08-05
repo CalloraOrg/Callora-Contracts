@@ -266,6 +266,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-allowlist"
+version = "0.1.0"
+dependencies = [
+ "callora-settlement",
+ "callora-vault",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-batch-claim"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-batch-distribute-fuzz"
+version = "0.0.0"
+dependencies = [
+ "callora-distribute",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
@@ -311,13 +336,29 @@ dependencies = [
 
 [[package]]
 name = "callora-distribute"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "soroban-sdk",
 ]
 
 [[package]]
-name = "callora-emergency"
+name = "callora-distribute-fuzz"
+version = "0.0.0"
+dependencies = [
+ "callora-distribute",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-escrow"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-fee"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -344,11 +385,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-limits"
-version = "0.0.1"
+name = "callora-hot-fuzz"
+version = "0.0.0"
 dependencies = [
- "callora-revenue-pool",
- "callora-settlement",
+ "callora-hot",
+ "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -361,10 +402,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-recipient"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-recipient-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "callora-recipient",
+ "libfuzzer-sys",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-registry"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-rescue"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -406,6 +471,14 @@ dependencies = [
 name = "callora-stake"
 version = "0.1.0"
 dependencies = [
+ "callora-stake",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-topics"
+version = "0.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -439,7 +512,6 @@ dependencies = [
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
- "callora-vault",
  "criterion",
  "soroban-sdk",
 ]
@@ -2142,7 +2214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys",

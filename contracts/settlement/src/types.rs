@@ -1,15 +1,5 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// The maximum message length in bytes allowed for `broadcast` calls.
-pub const MAX_MESSAGE_LEN: u32 = 256;
-
-/// Maximum number of items allowed in a single `batch_receive_payment` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
-
-/// Maximum number of developer balance records returned in a single
-/// non-cursor-based query (gas guard).
-pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-
 /// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
 
@@ -62,6 +52,32 @@ pub enum StorageKey {
     /// Cumulative total of every amount ever credited via `receive_payment` /
     /// `batch_receive_payment`, regardless of routing (pool or developer).
     TotalReceived,
+    /// Whether a specific developer's withdrawals are frozen.
+    FrozenDeveloper(Address),
+    /// Per-admin last write ledger for price registry rate limiting.
+    PriceRegistryLastWrite(Address),
+    /// Price entry for a given offering identifier.
+    Price(soroban_sdk::String),
+}
+
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
 }
 
 /// Severity levels for admin broadcast messages.

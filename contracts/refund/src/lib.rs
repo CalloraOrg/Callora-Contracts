@@ -103,6 +103,7 @@ impl RefundContract {
     ) -> Result<u64, RefundError> {
         requester.require_auth();
         Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
 
         if amount <= 0 {
             return Err(RefundError::InvalidAmount);
@@ -170,6 +171,7 @@ impl RefundContract {
     ) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
 
         let stored_admin: Address = Self::get_admin_internal(&env)?;
         if admin != stored_admin {
@@ -222,6 +224,7 @@ impl RefundContract {
     ) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
 
         let stored_admin: Address = Self::get_admin_internal(&env)?;
         if admin != stored_admin {
@@ -278,6 +281,7 @@ impl RefundContract {
     ) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
 
         let stored_admin: Address = Self::get_admin_internal(&env)?;
         if admin != stored_admin {
@@ -345,6 +349,7 @@ impl RefundContract {
     ) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
 
         let stored_admin: Address = Self::get_admin_internal(&env)?;
         if admin != stored_admin {
@@ -374,9 +379,7 @@ impl RefundContract {
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
     pub fn get_admin(env: Env) -> Result<Address, RefundError> {
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         Self::get_admin_internal(&env)
     }
 
@@ -384,9 +387,7 @@ impl RefundContract {
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
     pub fn get_config(env: Env) -> Result<RefundConfig, RefundError> {
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&StorageKey::RefundConfig)
@@ -400,9 +401,7 @@ impl RefundContract {
         env: Env,
         request_id: u64,
     ) -> Result<RefundRequest, RefundError> {
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
 
         let key = StorageKey::PendingRefund(request_id);
         if env.storage().persistent().has(&key) {
@@ -420,9 +419,7 @@ impl RefundContract {
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
     pub fn get_total_refunds(env: Env) -> Result<i128, RefundError> {
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         Self::ensure_initialized(&env)?;
         Ok(env
             .storage()
@@ -435,9 +432,7 @@ impl RefundContract {
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
     pub fn get_refund_counter(env: Env) -> Result<u64, RefundError> {
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance_ttl(&env);
         Self::ensure_initialized(&env)?;
         Ok(env
             .storage()
@@ -460,6 +455,13 @@ impl RefundContract {
             return Err(RefundError::NotInitialized);
         }
         Ok(())
+    }
+
+    /// Bump instance storage TTL to prevent premature archival on hot read paths.
+    pub(crate) fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     }
 
     /// Publish the `"initialized"` event.

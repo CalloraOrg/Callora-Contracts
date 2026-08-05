@@ -1,9 +1,10 @@
 #![no_std]
 
 pub mod events;
+pub mod limits;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
 };
 
 // ---------------------------------------------------------------------------
@@ -305,6 +306,11 @@ impl Distribute {
             .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
     }
 
+    /// Return the configured maximum batch size.
+    pub fn get_max_batch_size(env: Env) -> u32 {
+        limits::MAX_BATCH_SIZE
+    }
+
     /// Set the maximum amount distributable per leg. Must be positive. Admin only.
     ///
     /// # Panics
@@ -382,6 +388,108 @@ impl Distribute {
         env.events().publish(
             (events::event_distribute_completed(&env), to),
             amount,
+        );
+    }
+
+    /// Distribute USDC from this contract to multiple recipients in a single
+    /// atomic transaction.
+    ///
+    /// Each leg is a `(Address, i128)` tuple of `(recipient, amount)`.  The
+    /// function validates every leg before transferring any USDC — if *any*
+    /// leg fails validation the entire batch is reverted (fail-early / all-or-nothing).
+    ///
+    /// # Validation (per-leg, fail-early)
+    /// - `amount` must be positive.
+    /// - `amount` must not exceed `max_distribute` (per-leg cap).
+    /// - `recipient` must not be the contract address itself.
+    ///
+    /// # Validation (batch-level)
+    /// - Caller must be authorised admin.
+    /// - Contract must not be paused.
+    /// - Batch must not be empty.
+    /// - Batch size must not exceed `MAX_BATCH_SIZE`.
+    /// - The sum of all amounts must not exceed the contract's USDC balance.
+    ///
+    /// # Panics
+    /// * `ERR_UNAUTHORIZED` — caller is not the current admin.
+    /// * `ERR_PAUSED` — contract is paused.
+    /// * `"batch is empty"` — no payment legs provided.
+    /// * `"batch exceeds max batch size"` — more than `MAX_BATCH_SIZE` legs.
+    /// * `ERR_AMOUNT_NOT_POSITIVE` — any leg has amount ≤ 0.
+    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` — any leg exceeds per-leg cap.
+    /// * `"invalid recipient: cannot distribute to the contract itself"`.
+    /// * `ERR_INSUFFICIENT_BALANCE` — contract holds less than `total`.
+    ///
+    /// # Events
+    /// Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
+    /// Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
+    pub fn batch_distribute(
+        env: Env,
+        caller: Address,
+        payments: SorobanVec<(Address, i128)>,
+    ) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+
+        let n = payments.len();
+        if n == 0 {
+            panic!("batch is empty");
+        }
+        let max_batch = limits::MAX_BATCH_SIZE;
+        if n > max_batch {
+            panic!("batch exceeds max batch size");
+        }
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .expect(ERR_NOT_INITIALIZED);
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+        let max_distribute = Self::get_max_distribute(env.clone());
+
+        // Phase 1 — validate all legs and compute total
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let (ref to, amount) = payments.get(i).expect("payment leg");
+            if amount <= 0 {
+                panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
+            }
+            if amount > max_distribute {
+                panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
+            }
+            Self::validate_recipient(to, &contract_address);
+            // Overflow-safe accumulation
+            total = total.checked_add(amount).expect("overflow in batch_distribute total");
+        }
+
+        // Phase 2 — check total balance
+        if usdc.balance(&contract_address) < total {
+            panic!("{}", ERR_INSUFFICIENT_BALANCE);
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        // Phase 3 — emit started event
+        env.events().publish(
+            (events::event_batch_distribute_started(&env), caller.clone()),
+            (total, n),
+        );
+
+        // Phase 4 — execute transfers
+        for i in 0..n {
+            let (to, amount) = payments.get(i).expect("payment leg");
+            usdc.transfer(&contract_address, &to, &amount);
+        }
+
+        // Phase 5 — emit completed event
+        env.events().publish(
+            (events::event_batch_distribute_completed(&env), caller),
+            (total, n),
         );
     }
 

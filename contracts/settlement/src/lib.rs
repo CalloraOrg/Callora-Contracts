@@ -4,14 +4,22 @@ pub mod archive;
 pub mod batch;
 pub mod errors;
 pub mod events;
+pub mod freeze;
 pub mod limits;
 pub mod migrate;
 pub mod pagination;
+pub mod price_registry;
 pub mod replay_guard;
 pub mod timelock;
 mod types;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+
+/// Maximum number of items allowed in a single `batch_receive_payment` call.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum number of developer balances returned per page in paginated queries.
+pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 
 pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
@@ -221,15 +229,6 @@ impl CalloraSettlement {
                     amount,
                 },
             );
-            events::emit_deposit(
-                &env,
-                &dev_address.clone(),
-                DepositEvent {
-                    developer: dev_address,
-                    token,
-                    amount,
-                },
-            );
         }
     }
 
@@ -411,7 +410,11 @@ impl CalloraSettlement {
     ///
     /// Performs a direct O(1) persistent storage lookup for the specified
     /// developer's balance denominated in `token`. Bumps instance and persistent TTL on read.
-    pub fn get_developer_balance(env: Env, developer: Address, token: Address) -> Result<i128, SettlementError> {
+    pub fn get_developer_balance(
+        env: Env,
+        developer: Address,
+        token: Address,
+    ) -> Result<i128, SettlementError> {
         if !env.storage().instance().has(&StorageKey::Admin) {
             return Err(SettlementError::NotInitialized);
         }
@@ -511,6 +514,9 @@ impl CalloraSettlement {
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         developer.require_auth();
+        if freeze::is_developer_frozen(env.clone(), developer.clone()) {
+            return Err(SettlementError::DeveloperFrozen);
+        }
         if amount <= 0 {
             return Err(SettlementError::AmountNotPositive);
         }
@@ -587,7 +593,7 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&balance_key, 50000, 50000);
 
-        daily.amount = daily.amount.saturating_add(amount);
+        daily.amount = daily.amount.checked_add(amount).ok_or(SettlementError::DailyWithdrawCapExceeded)?;
         env.storage().persistent().set(&today_key, &daily);
         env.storage()
             .persistent()
@@ -606,6 +612,92 @@ impl CalloraSettlement {
         );
 
         Ok(())
+    }
+
+    /// Simulate a developer claim without side effects.
+    ///
+    /// This read-only view previews the outcome of `withdraw_developer_balance`
+    /// for the configured USDC token. It intentionally does not require
+    /// developer authorization and does not transfer tokens, mutate balances,
+    /// update daily withdrawal counters, extend TTLs, or emit events.
+    ///
+    /// The view returns the same typed errors as a real claim for amount, claim
+    /// window, developer balance, daily cap, USDC configuration, and contract
+    /// token-liquidity failures. If `to` is `None`, the simulated recipient is
+    /// the developer address.
+    pub fn simulate_claim(
+        env: Env,
+        developer: Address,
+        amount: i128,
+        to: Option<Address>,
+    ) -> Result<ClaimSimulation, SettlementError> {
+        if amount <= 0 {
+            return Err(SettlementError::AmountNotPositive);
+        }
+
+        let recipient = to.unwrap_or_else(|| developer.clone());
+        let contract_address = env.current_contract_address();
+        if recipient == contract_address {
+            panic!("invalid recipient: cannot withdraw to contract itself");
+        }
+
+        Self::require_claim_window_open(&env, &developer)?;
+
+        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let current_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DeveloperBalance(
+                developer.clone(),
+                usdc_address.clone(),
+            ))
+            .unwrap_or(0);
+        if amount > current_balance {
+            return Err(SettlementError::InsufficientDeveloperBalance);
+        }
+
+        let today = env.ledger().timestamp() / 86400;
+        let cap: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::DailyWithdrawCap(developer.clone()))
+            .unwrap_or(0);
+        let daily = env
+            .storage()
+            .persistent()
+            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+            .unwrap_or(DailyWithdrawState {
+                day: today,
+                amount: 0,
+            });
+        let withdrawn_today = if daily.day == today { daily.amount } else { 0 };
+        let withdrawn_today_after = withdrawn_today
+            .checked_add(amount)
+            .ok_or(SettlementError::DailyWithdrawCapExceeded)?;
+        if cap > 0 && withdrawn_today_after > cap {
+            return Err(SettlementError::DailyWithdrawCapExceeded);
+        }
+
+        let remaining_balance = current_balance
+            .checked_sub(amount)
+            .ok_or(SettlementError::DeveloperBalanceUnderflow)?;
+        let contract_balance = token::Client::new(&env, &usdc_address).balance(&contract_address);
+        if contract_balance < amount {
+            return Err(SettlementError::InsufficientContractBalance);
+        }
+
+        Ok(ClaimSimulation {
+            developer,
+            amount,
+            recipient,
+            token: usdc_address,
+            current_balance,
+            remaining_balance,
+            contract_balance,
+            daily_withdraw_cap: cap,
+            withdrawn_today,
+            withdrawn_today_after,
+        })
     }
 
     /// Configure the inclusive claim window for a developer.
@@ -1260,7 +1352,72 @@ impl CalloraSettlement {
         batch::batch_settle(&env, settlements)
     }
 
-    // ─── Internal helpers ───────────────────────────────────────────────────
+    /// Freeze a developer's withdrawals.
+    ///
+    /// Only the admin may call. Sets the developer's `FrozenDeveloper` flag
+    /// to `true`, blocking `withdraw_developer_balance` for that developer.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to freeze.
+    /// * `reason` - Opaque label emitted in the event for off-chain indexers.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperFrozen`] — developer is already frozen.
+    pub fn freeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+        reason: Symbol,
+    ) -> Result<(), SettlementError> {
+        freeze::freeze_developer(env, caller, developer, reason)
+    }
+
+    /// Unfreeze a developer's withdrawals.
+    ///
+    /// Only the admin may call.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the admin; must authorize.
+    /// * `developer` - The developer address to unfreeze.
+    ///
+    /// # Errors
+    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
+    /// * [`SettlementError::DeveloperNotFrozen`] — developer is not frozen.
+    pub fn unfreeze_developer(
+        env: Env,
+        caller: Address,
+        developer: Address,
+    ) -> Result<(), SettlementError> {
+        freeze::unfreeze_developer(env, caller, developer)
+    }
+
+    /// Return `true` if the developer's withdrawals are currently frozen.
+    ///
+    /// Read-only; no auth required.
+    pub fn is_developer_frozen(env: Env, developer: Address) -> bool {
+        freeze::is_developer_frozen(env, developer)
+    }
+
+    pub fn set_price(
+        env: Env,
+        caller: Address,
+        offering_id: soroban_sdk::String,
+        price: soroban_sdk::String,
+    ) {
+        price_registry::set_price(&env, caller, offering_id, price);
+    }
+
+    pub fn remove_price(env: Env, caller: Address, offering_id: soroban_sdk::String) {
+        price_registry::remove_price(&env, caller, offering_id);
+    }
+
+    pub fn get_price(env: Env, offering_id: soroban_sdk::String) -> Option<soroban_sdk::String> {
+        price_registry::get_price(&env, offering_id)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Internal helpers ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
     fn require_authorized_caller(env: Env, caller: Address) {
@@ -1288,6 +1445,9 @@ impl CalloraSettlement {
         index.insert(pos, addr);
     }
 }
+
+#[cfg(test)]
+mod test_freeze;
 
 #[cfg(test)]
 // Legacy suites targeting the pre-nonce payment API are intentionally not
