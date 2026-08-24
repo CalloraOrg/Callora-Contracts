@@ -34,3 +34,12 @@ pub fn event_claims_settled(env: &Env) -> Symbol {
 pub fn event_claim_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "claim_cancelled")
 }
+
+/// Returns the Symbol for the `"claim_consumed"` event topic.
+///
+/// Emitted when a claim identifier is permanently consumed (marked spent) by
+/// [`crate::CalloraBatchClaim::batch_claim`].  Off-chain indexers can use this
+/// event to track which identifiers are no longer replayable.
+pub fn event_claim_consumed(env: &Env) -> Symbol {
+    Symbol::new(env, "claim_consumed")
+}

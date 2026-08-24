@@ -11,6 +11,8 @@ use soroban_sdk::contracterror;
 /// | 5    | AlreadySettled       | Claim has already been collected                  |
 /// | 6    | InvalidAmount        | Claim amount must be positive                     |
 /// | 7    | Overflow             | Arithmetic overflow in pending-amount accumulation|
+/// | 8    | ClaimIdAlreadyUsed   | The claim identifier has already been consumed    |
+/// | 9    | ClaimIdMismatch      | Provided claim_id does not match stored record    |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -29,4 +31,8 @@ pub enum BatchClaimError {
     InvalidAmount = 6,
     /// Arithmetic overflow in pending-amount accumulation (code 7).
     Overflow = 7,
+    /// The claim identifier has already been consumed; replay rejected (code 8).
+    ClaimIdAlreadyUsed = 8,
+    /// The provided claim_id does not match the stored record (code 9).
+    ClaimIdMismatch = 9,
 }
