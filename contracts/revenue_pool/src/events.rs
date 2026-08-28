@@ -110,6 +110,13 @@ pub fn event_pause_set(env: &Env) -> Symbol {
     Symbol::new(env, "pause_set")
 }
 
+/// Returns the Symbol for the `"emergency_pause_set"` event topic.
+///
+/// Emitted when recovery-only emergency mode is entered or cleared.
+pub fn event_emergency_pause_set(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_pause_set")
+}
+
 /// Returns the Symbol for the `"receive_payment"` event topic.
 ///
 /// Emitted when the admin calls `receive_payment` to log an incoming payment
@@ -323,6 +330,15 @@ mod tests {
     fn test_event_pause_set_bytes() {
         let env = Env::default();
         assert_eq!(event_pause_set(&env), Symbol::new(&env, "pause_set"));
+    }
+
+    #[test]
+    fn test_event_emergency_pause_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_pause_set(&env),
+            Symbol::new(&env, "emergency_pause_set")
+        );
     }
 
     /// Snapshot: proves event_receive_payment still maps to exactly the bytes for "receive_payment".
