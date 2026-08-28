@@ -129,6 +129,11 @@ pub fn event_default_limits_set(env: &Env) -> Symbol {
     Symbol::new(env, "default_limits_set")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 /// Returns the Symbol for the `"account_limits_set"` event topic.
 ///
 /// Emitted when the admin sets (or overwrites) per-account caps via

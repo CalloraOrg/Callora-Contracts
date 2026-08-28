@@ -76,6 +76,11 @@ pub fn event_admin_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "admin_cancelled")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

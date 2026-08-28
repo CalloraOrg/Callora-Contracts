@@ -37,3 +37,8 @@ pub fn event_topic_registered(env: &Env) -> Symbol {
 pub fn event_topic_deactivated(env: &Env) -> Symbol {
     Symbol::new(env, "topic_deactivated")
 }
+
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}

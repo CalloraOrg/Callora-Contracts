@@ -152,6 +152,11 @@ pub fn event_rescue_capped(env: &Env) -> Symbol {
     Symbol::new(env, "rescue_capped")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 /// Emit `"initialized"` once when the rescue contract is first set up.
