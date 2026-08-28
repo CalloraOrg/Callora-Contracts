@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Every variant is paired with its **stable numeric discriminant**.  If a
 /// discriminant changes (accidentally or intentionally), this test fails
 /// with a diff-friendly message identifying the regressed variant.
-const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 35] = [
+const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
     (1, VaultError::NotInitialized),
     (2, VaultError::AlreadyInitialized),
     (3, VaultError::Unauthorized),
