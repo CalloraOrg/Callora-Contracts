@@ -23,4 +23,6 @@ pub enum RegistryError {
     OfferingNotFound = 8,
     /// Admin action cooldown has not yet expired (code 9).
     AdminCooldownActive = 9,
+    /// String contains non-visible-ASCII bytes or violates encoding policy (code 10).
+    InvalidEncoding = 10,
 }

@@ -82,4 +82,6 @@ pub enum SettlementError {
     FreezeUnauthorized = 32,
     /// Admin attempted a price write before the minimum interval elapsed.
     WriteRateLimitExceeded = 33,
+    /// String contains non-visible-ASCII bytes or violates encoding policy.
+    InvalidEncoding = 34,
 }
