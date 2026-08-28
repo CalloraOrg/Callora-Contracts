@@ -245,10 +245,10 @@ impl CalloraCheckpoint {
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("no admin transfer pending"));
+            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
 
         if caller != pending {
-            panic!("unauthorized: caller is not pending admin");
+            env.panic_with_error(CheckpointError::Unauthorized);
         }
 
         let old_admin = Self::admin(&env)?;
@@ -281,14 +281,14 @@ impl CalloraCheckpoint {
         Self::require_admin(&env, &caller)?;
 
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
-            panic!("no admin transfer pending");
+            env.panic_with_error(CheckpointError::NoAdminTransferPending);
         }
 
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("no admin transfer pending"));
+            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
 
         env.storage().instance().remove(&StorageKey::PendingAdmin);
 
@@ -577,7 +577,7 @@ impl CalloraCheckpoint {
     /// Allows the admin to "top up" the persistent storage lifetime of a
     /// checkpoint so that important audit records do not expire. After the
     /// call the checkpoint's TTL is reset to [`BUMP_AMOUNT`] ledgers
-    /// (≈6 months).
+    /// (â‰ˆ6 months).
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
