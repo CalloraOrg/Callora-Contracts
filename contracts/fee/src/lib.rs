@@ -8,6 +8,10 @@ pub use errors::ContractError;
 /// Maximum fee rate in basis points (100% = 10_000 bps).
 const MAX_BASIS_POINTS: u32 = 10_000;
 
+/// StrKey of the zero contract address (all 32 bytes are zero).
+/// Rejected as a fee-withdrawal destination to avoid burning accumulated fees.
+const ZERO_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 /// Storage key for the fee configuration.
 #[contracttype]
 pub enum DataKey {
@@ -107,6 +111,25 @@ impl FeeContract {
         Ok(())
     }
 
+    /// Validate that a recipient is a legitimate destination for withdrawn fees.
+    ///
+    /// Rejects the contract's own address (which would self-credit accumulated
+    /// fees) and the zero address (which would burn them), ensuring the check
+    /// runs before any value moves. See [`Self::withdraw`].
+    ///
+    /// # Errors
+    /// - `InvalidRecipient` if `recipient` is the contract itself or the zero address.
+    fn validate_recipient(env: &Env, recipient: &Address) -> Result<(), ContractError> {
+        if recipient == &env.current_contract_address() {
+            return Err(ContractError::InvalidRecipient);
+        }
+        let zero = Address::from_str(env, ZERO_CONTRACT_ADDRESS);
+        if recipient == &zero {
+            return Err(ContractError::InvalidRecipient);
+        }
+        Ok(())
+    }
+
     /// Withdraw accumulated fees to a recipient.
     ///
     /// # Arguments
@@ -118,6 +141,7 @@ impl FeeContract {
     /// - `NotInitialized` if the contract is not initialised.
     /// - `Unauthorized` if the caller is not the stored admin.
     /// - `InvalidAmount` if `amount` is not positive.
+    /// - `InvalidRecipient` if `recipient` is the contract itself or the zero address.
     /// - `InsufficientBalance` if accumulated fees are less than `amount`.
     /// - `Overflow` if the remaining balance would underflow.
     pub fn withdraw(env: Env, admin: Address, recipient: Address, amount: i128) -> Result<(), ContractError> {
@@ -131,6 +155,7 @@ impl FeeContract {
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
         }
+        Self::validate_recipient(&env, &recipient)?;
 
         let accumulated: i128 = env.storage().instance().get(&DataKey::Accumulated)
             .unwrap_or(0);
@@ -357,5 +382,70 @@ mod test {
             client.try_deposit(&caller, &1).unwrap_err().unwrap(),
             ContractError::Overflow
         );
+    }
+
+    #[test]
+    fn test_withdraw_to_contract_self_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let caller = Address::generate(&env);
+
+        client.init(&admin);
+        client.deposit(&caller, &1000);
+
+        assert_eq!(
+            client
+                .try_withdraw(&admin, &contract_id, &400)
+                .unwrap_err()
+                .unwrap(),
+            ContractError::InvalidRecipient
+        );
+        assert_eq!(client.get_accumulated(), 1000);
+    }
+
+    #[test]
+    fn test_withdraw_to_zero_address_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let caller = Address::generate(&env);
+
+        client.init(&admin);
+        client.deposit(&caller, &1000);
+
+        let zero = Address::from_str(&env, ZERO_CONTRACT_ADDRESS);
+        assert_eq!(
+            client
+                .try_withdraw(&admin, &zero, &400)
+                .unwrap_err()
+                .unwrap(),
+            ContractError::InvalidRecipient
+        );
+        assert_eq!(client.get_accumulated(), 1000);
+    }
+
+    #[test]
+    fn test_withdraw_to_valid_recipient_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.init(&admin);
+        client.deposit(&caller, &1000);
+
+        client.withdraw(&admin, &recipient, &400);
+        assert_eq!(client.get_accumulated(), 600);
     }
 }
