@@ -24,6 +24,7 @@ members = [
     "contracts/registry",
     "contracts/hot",
     "contracts/yield",
+    "contracts/vault",
 ]
 default-members = [
     "contracts/revenue_pool",
