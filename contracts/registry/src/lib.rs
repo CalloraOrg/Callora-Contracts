@@ -79,12 +79,18 @@ impl CalloraRegistry {
         if offering_id.is_empty() || offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(RegistryError::InvalidOfferingId);
         }
+        if !callora_validators::is_visible_ascii_metadata(offering_id) {
+            return Err(RegistryError::InvalidEncoding);
+        }
         Ok(())
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
         if metadata.is_empty() || metadata.len() > MAX_METADATA_LEN {
             return Err(RegistryError::InvalidOfferingId);
+        }
+        if !callora_validators::is_visible_ascii_metadata(metadata) {
+            return Err(RegistryError::InvalidEncoding);
         }
         Ok(())
     }

@@ -12,6 +12,7 @@ pub mod price_registry;
 pub mod replay_guard;
 pub mod timelock;
 mod types;
+pub mod validation;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
@@ -1252,6 +1253,8 @@ impl CalloraSettlement {
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+        validation::require_valid_message(&message)
+            .unwrap_or_else(|e| env.panic_with_error(e));
         events::emit_admin_broadcast(&env, &caller, AdminBroadcast { severity, message });
     }
 
@@ -1406,6 +1409,10 @@ impl CalloraSettlement {
         offering_id: soroban_sdk::String,
         price: soroban_sdk::String,
     ) {
+        validation::require_valid_offering_id(&offering_id)
+            .unwrap_or_else(|e| env.panic_with_error(e));
+        validation::require_valid_price(&price)
+            .unwrap_or_else(|e| env.panic_with_error(e));
         price_registry::set_price(&env, caller, offering_id, price);
     }
 
