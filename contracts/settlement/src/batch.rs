@@ -35,18 +35,24 @@ impl From<SettlementError> for SettleOutcome {
 }
 
 pub fn batch_settle(env: &Env, settlements: Vec<SettleInput>) -> Vec<SettleOutcome> {
-    let mut outcomes = Vec::new(env);
-
     if settlements.len() > 64 {
-        for _ in 0..settlements.len() {
-            outcomes.push_back(SettleOutcome::OtherError);
-        }
-        return outcomes;
+        panic!("batch exceeds max batch size");
     }
 
+    let mut seen_developers = soroban_sdk::Map::<Address, ()>::new(env);
     for input in settlements.iter() {
-        // We use CalloraSettlement::withdraw_developer_balance internally
-        // but we must catch the error to allow partial success.
+        if input.amount <= 0 {
+            panic!("amount must be positive");
+        }
+        if seen_developers.contains_key(input.developer.clone()) {
+            panic!("duplicate developer in batch");
+        }
+        seen_developers.set(input.developer.clone(), ());
+    }
+
+    let mut outcomes = Vec::new(env);
+
+    for input in settlements.iter() {
         let res = CalloraSettlement::withdraw_developer_balance(
             env.clone(),
             input.developer.clone(),
@@ -55,7 +61,7 @@ pub fn batch_settle(env: &Env, settlements: Vec<SettleInput>) -> Vec<SettleOutco
         );
         match res {
             Ok(_) => outcomes.push_back(SettleOutcome::Success),
-            Err(e) => outcomes.push_back(e.into()),
+            Err(e) => panic!("batch settle failed: {:?}", e),
         }
     }
 
@@ -68,6 +74,7 @@ mod test {
     use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
 
     #[test]
+    #[should_panic(expected = "batch exceeds max batch size")]
     fn test_batch_settle_cap_enforced() {
         let env = Env::default();
         let mut settlements = Vec::new(&env);
@@ -81,11 +88,44 @@ mod test {
             });
         }
 
-        let outcomes = batch_settle(&env, settlements);
-
-        assert_eq!(outcomes.len(), 65);
-        for i in 0..65 {
-            assert_eq!(outcomes.get(i).unwrap(), SettleOutcome::OtherError);
-        }
+        batch_settle(&env, settlements);
     }
+
+    #[test]
+    #[should_panic(expected = "duplicate developer in batch")]
+    fn test_batch_settle_rejects_duplicates() {
+        let env = Env::default();
+        let mut settlements = Vec::new(&env);
+        let dev = Address::generate(&env);
+
+        settlements.push_back(SettleInput {
+            developer: dev.clone(),
+            amount: 100,
+            to: None,
+        });
+        settlements.push_back(SettleInput {
+            developer: dev.clone(),
+            amount: 200,
+            to: None,
+        });
+
+        batch_settle(&env, settlements);
+    }
+
+    #[test]
+    #[should_panic(expected = "amount must be positive")]
+    fn test_batch_settle_rejects_zero_amount() {
+        let env = Env::default();
+        let mut settlements = Vec::new(&env);
+        let dev = Address::generate(&env);
+
+        settlements.push_back(SettleInput {
+            developer: dev.clone(),
+            amount: 0,
+            to: None,
+        });
+
+        batch_settle(&env, settlements);
+    }
+
 }

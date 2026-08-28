@@ -1,10 +1,11 @@
 #![no_std]
 
+pub mod errors;
 pub mod events;
 pub mod limits;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,17 @@ const ERR_PAUSED: &str = "contract is paused";
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+
+// ---------------------------------------------------------------------------
+// Payment Types
+// ---------------------------------------------------------------------------
+
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaymentLeg {
+    pub to: Address,
+    pub amount: i128,
+}
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -307,7 +319,7 @@ impl Distribute {
     }
 
     /// Return the configured maximum batch size.
-    pub fn get_max_batch_size(env: Env) -> u32 {
+    pub fn get_max_batch_size(_env: Env) -> u32 {
         limits::MAX_BATCH_SIZE
     }
 
@@ -426,7 +438,7 @@ impl Distribute {
     pub fn batch_distribute(
         env: Env,
         caller: Address,
-        payments: SorobanVec<(Address, i128)>,
+        payments: Vec<PaymentLeg>,
     ) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -452,15 +464,22 @@ impl Distribute {
 
         // Phase 1 — validate all legs and compute total
         let mut total: i128 = 0;
+        let mut seen_recipients = soroban_sdk::Map::<Address, ()>::new(&env);
         for i in 0..n {
-            let (ref to, amount) = payments.get(i).expect("payment leg");
+            let leg = payments.get(i).expect("payment leg");
+            let to = leg.to;
+            let amount = leg.amount;
             if amount <= 0 {
                 panic!("{}", ERR_AMOUNT_NOT_POSITIVE);
             }
             if amount > max_distribute {
                 panic!("{}", ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE);
             }
-            Self::validate_recipient(to, &contract_address);
+            Self::validate_recipient(&to, &contract_address);
+            if seen_recipients.contains_key(to.clone()) {
+                panic!("duplicate recipient in batch");
+            }
+            seen_recipients.set(to.clone(), ());
             // Overflow-safe accumulation
             total = total.checked_add(amount).expect("overflow in batch_distribute total");
         }
@@ -482,7 +501,9 @@ impl Distribute {
 
         // Phase 4 — execute transfers
         for i in 0..n {
-            let (to, amount) = payments.get(i).expect("payment leg");
+            let leg = payments.get(i).expect("payment leg");
+            let to = leg.to;
+            let amount = leg.amount;
             usdc.transfer(&contract_address, &to, &amount);
         }
 
@@ -557,3 +578,6 @@ mod test;
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod test_batch;
