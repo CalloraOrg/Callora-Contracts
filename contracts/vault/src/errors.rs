@@ -95,7 +95,9 @@ pub enum VaultError {
     BatchEmpty = 21,
     /// Batch size exceeds maximum allowed (code 22).
     BatchTooLarge = 22,
-    // codes 23-24 reserved (were NewOwnerSameAsCurrent, NoOwnershipTransferPending)
+    // code 23 reserved (was NewOwnerSameAsCurrent)
+    /// No ownership transfer is pending (code 24).
+    NoOwnershipTransferPending = 24,
     /// No admin transfer is pending (code 25).
     NoAdminTransferPending = 25,
     // codes 26-27 reserved (were OfferingIdTooLong, MetadataTooLong)
