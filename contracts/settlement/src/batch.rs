@@ -128,4 +128,11 @@ mod test {
         batch_settle(&env, settlements);
     }
 
+    #[test]
+    fn test_batch_settle_empty() {
+        let env = Env::default();
+        let settlements = Vec::new(&env);
+        let outcomes = batch_settle(&env, settlements);
+        assert_eq!(outcomes.len(), 0);
+    }
 }

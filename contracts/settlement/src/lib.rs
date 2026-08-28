@@ -1466,3 +1466,4 @@ mod test_overflow_safe_math;
 mod test_ttl_bump;
 #[cfg(test)]
 mod test_views;
+pub mod test_batch;
