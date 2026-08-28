@@ -338,8 +338,6 @@ fn require_auth_on_all_state_changing_functions() {
     client.init(&admin, &usdc_addr);
 
     // Fund the contract for distribute tests
-    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
-    usdc_admin.mint(&contract_addr, &1000);
 
     // Non-admin should fail on all state-changing functions
     let intruder = Address::generate(&env);
