@@ -6,8 +6,14 @@ extern crate std;
 pub mod errors;
 pub mod events;
 
+use callora_storage_migration::StorageMigrationValidator;
 use errors::CheckpointError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+
+/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
+/// contract. Bumped whenever the on-ledger schema changes so that the
+/// pre-upgrade validation gate can enforce ordered, single-step migrations.
+const STORAGE_MIGRATION_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -671,6 +677,32 @@ impl CalloraCheckpoint {
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+
+        // ── Pre-upgrade storage-migration validation ──────────────────────
+        // Runs in the *current* (old) code, before the WASM is swapped, and
+        // never mutates business state. It enforces ordered, single-step
+        // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
+        // rollbacks — ensuring existing deployed data stays readable and no
+        // implicit destructive transformation occurs.
+        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
+        if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &placeholder_layout,
+            &new_wasm_hash,
+            false,
+        ) {
+            env.panic_with_error(e);
+        }
+        if let Err(e) = StorageMigrationValidator::finalize_migration(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &new_wasm_hash,
+        ) {
+            env.panic_with_error(e);
+        }
 
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
