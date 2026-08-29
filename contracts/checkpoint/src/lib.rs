@@ -6,8 +6,14 @@ extern crate std;
 pub mod errors;
 pub mod events;
 
+use callora_storage_migration::StorageMigrationValidator;
 use errors::CheckpointError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+
+/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
+/// contract. Bumped whenever the on-ledger schema changes so that the
+/// pre-upgrade validation gate can enforce ordered, single-step migrations.
+const STORAGE_MIGRATION_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -245,10 +251,10 @@ impl CalloraCheckpoint {
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("no admin transfer pending"));
+            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
 
         if caller != pending {
-            panic!("unauthorized: caller is not pending admin");
+            env.panic_with_error(CheckpointError::Unauthorized);
         }
 
         let old_admin = Self::admin(&env)?;
@@ -281,14 +287,14 @@ impl CalloraCheckpoint {
         Self::require_admin(&env, &caller)?;
 
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
-            panic!("no admin transfer pending");
+            env.panic_with_error(CheckpointError::NoAdminTransferPending);
         }
 
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("no admin transfer pending"));
+            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
 
         env.storage().instance().remove(&StorageKey::PendingAdmin);
 
@@ -577,7 +583,7 @@ impl CalloraCheckpoint {
     /// Allows the admin to "top up" the persistent storage lifetime of a
     /// checkpoint so that important audit records do not expire. After the
     /// call the checkpoint's TTL is reset to [`BUMP_AMOUNT`] ledgers
-    /// (≈6 months).
+    /// (â‰ˆ6 months).
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
@@ -671,6 +677,32 @@ impl CalloraCheckpoint {
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+
+        // ── Pre-upgrade storage-migration validation ──────────────────────
+        // Runs in the *current* (old) code, before the WASM is swapped, and
+        // never mutates business state. It enforces ordered, single-step
+        // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
+        // rollbacks — ensuring existing deployed data stays readable and no
+        // implicit destructive transformation occurs.
+        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
+        if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &placeholder_layout,
+            &new_wasm_hash,
+            false,
+        ) {
+            env.panic_with_error(e);
+        }
+        if let Err(e) = StorageMigrationValidator::finalize_migration(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &new_wasm_hash,
+        ) {
+            env.panic_with_error(e);
+        }
 
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());

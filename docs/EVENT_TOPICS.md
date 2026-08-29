@@ -154,23 +154,24 @@ Source: [`contracts/revenue_pool/src/events.rs`](../contracts/revenue_pool/src/e
 | 6  | `pause_guardian_set`            | `event_pause_guardian_set`            | Emergency pause guardian set                 |
 | 7  | `pause_guardian_cleared`        | `event_pause_guardian_cleared`        | Emergency pause guardian cleared             |
 | 8  | `pause_set`                     | `event_pause_set`                     | Pool pause state toggled                     |
-| 9  | `receive_payment`               | `event_receive_payment`               | Inbound payment logged                       |
-| 10 | `yield_deposited`               | `event_yield_deposited`               | Treasury deposits protocol yield             |
-| 11 | `treasury_transfer_started`     | `event_treasury_transfer_started`     | Treasury role nominated                      |
-| 12 | `treasury_transfer_completed`   | `event_treasury_transfer_completed`   | Treasury accepts role                        |
-| 13 | `treasury_cancelled`            | `event_treasury_cancelled`            | Treasury nomination cancelled                |
-| 14 | `set_max_distribute`            | `event_set_max_distribute`            | Per-leg distribution cap updated             |
-| 15 | `distribute`                    | `event_distribute`                    | USDC distributed to a single developer       |
-| 16 | `batch_distribute`              | `event_batch_distribute`              | One payment leg in a batch distribution      |
-| 17 | `distribute_started`            | `event_distribute_started`            | Validated distribution transfer is starting  |
-| 18 | `distribute_completed`          | `event_distribute_completed`          | Distribution transfer completed              |
-| 19 | `upgraded`                      | `event_upgraded`                      | Contract upgraded to new WASM                |
-| 20 | `admin_broadcast`               | `event_admin_broadcast`               | Admin emergency broadcast                    |
-| 21 | `emergency_drain_proposed`      | `event_emergency_drain_proposed`      | Timelocked emergency drain proposed          |
-| 22 | `emergency_drain_executed`      | `event_emergency_drain_executed`      | Pending emergency drain executed             |
-| 23 | `emergency_drain_cancelled`     | `event_emergency_drain_cancelled`     | Pending emergency drain cancelled            |
+| 9  | `emergency_pause_set`           | `event_emergency_pause_set`           | Recovery-only emergency mode toggled         |
+| 10 | `receive_payment`               | `event_receive_payment`               | Inbound payment logged                       |
+| 11 | `yield_deposited`               | `event_yield_deposited`               | Treasury deposits protocol yield             |
+| 12 | `treasury_transfer_started`     | `event_treasury_transfer_started`     | Treasury role nominated                      |
+| 13 | `treasury_transfer_completed`   | `event_treasury_transfer_completed`   | Treasury accepts role                        |
+| 14 | `treasury_cancelled`            | `event_treasury_cancelled`            | Treasury nomination cancelled                |
+| 15 | `set_max_distribute`            | `event_set_max_distribute`            | Per-leg distribution cap updated             |
+| 16 | `distribute`                    | `event_distribute`                    | USDC distributed to a single developer       |
+| 17 | `batch_distribute`              | `event_batch_distribute`              | One payment leg in a batch distribution      |
+| 18 | `distribute_started`            | `event_distribute_started`            | Validated distribution transfer is starting  |
+| 19 | `distribute_completed`          | `event_distribute_completed`          | Distribution transfer completed              |
+| 20 | `upgraded`                      | `event_upgraded`                      | Contract upgraded to new WASM                |
+| 21 | `admin_broadcast`               | `event_admin_broadcast`               | Admin emergency broadcast                    |
+| 22 | `emergency_drain_proposed`      | `event_emergency_drain_proposed`      | Timelocked emergency drain proposed          |
+| 23 | `emergency_drain_executed`      | `event_emergency_drain_executed`      | Pending emergency drain executed             |
+| 24 | `emergency_drain_cancelled`     | `event_emergency_drain_cancelled`     | Pending emergency drain cancelled            |
 
-**Total: 23 topics**
+**Total: 24 topics**
 
 ---
 
@@ -208,6 +209,7 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 **Revenue Pool-specific** (not shared with other contracts):
 `admin_changed`, `admin_transfer_started`, `admin_transfer_completed`,
 `pause_guardian_set`, `pause_guardian_cleared`, `pause_set`,
+`emergency_pause_set`,
 `receive_payment`, `yield_deposited`, `treasury_transfer_started`,
 `treasury_transfer_completed`, `treasury_cancelled`, `set_max_distribute`,
 `batch_distribute`, `distribute_started`, `distribute_completed`,

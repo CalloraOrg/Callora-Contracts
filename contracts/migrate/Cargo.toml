@@ -11,6 +11,7 @@ doctest = false
 
 [dependencies]
 callora-settlement = { path = "../settlement" }
+callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]

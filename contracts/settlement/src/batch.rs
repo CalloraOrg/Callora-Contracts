@@ -37,11 +37,25 @@ impl From<SettlementError> for SettleOutcome {
 pub fn batch_settle(env: &Env, settlements: Vec<SettleInput>) -> Vec<SettleOutcome> {
     let mut outcomes = Vec::new(env);
 
+    if settlements.is_empty() {
+        return outcomes;
+    }
+
     if settlements.len() > 64 {
         for _ in 0..settlements.len() {
             outcomes.push_back(SettleOutcome::OtherError);
         }
         return outcomes;
+    }
+
+    // Explicit per-claimant authorization and cross-tenant validation before mutation
+    let claimant = settlements.get_unchecked(0).developer.clone();
+    claimant.require_auth();
+
+    for input in settlements.iter() {
+        if input.developer != claimant {
+            panic!("cross-tenant batch settlement not allowed");
+        }
     }
 
     for input in settlements.iter() {
@@ -87,5 +101,32 @@ mod test {
         for i in 0..65 {
             assert_eq!(outcomes.get(i).unwrap(), SettleOutcome::OtherError);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "cross-tenant batch settlement not allowed")]
+    fn test_batch_settle_cross_tenant_fails() {
+        let env = Env::default();
+        let mut settlements = Vec::new(&env);
+
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+
+        // Add item for Alice
+        settlements.push_back(SettleInput {
+            developer: alice,
+            amount: 100,
+            to: None,
+        });
+
+        // Add item for Bob
+        settlements.push_back(SettleInput {
+            developer: bob,
+            amount: 100,
+            to: None,
+        });
+
+        // Should panic
+        batch_settle(&env, settlements);
     }
 }

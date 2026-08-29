@@ -34,7 +34,7 @@ pub enum DistributeError {
     Paused = 4,
     /// Account would exceed the per-account state cap (code 5).
     AccountLimitExceeded = 5,
-    /// Cannot close a state entry that does not exist — count is zero (code 6).
+    /// Cannot close a state entry that does not exist â€” count is zero (code 6).
     AccountStateEmpty = 6,
     /// Batch operation received an empty items list (code 7).
     BatchEmpty = 7,
@@ -48,6 +48,14 @@ pub enum DistributeError {
     NewAdminSameAsCurrent = 11,
     /// No admin transfer is pending to cancel (code 12).
     NoAdminTransferPending = 12,
+
+    InvalidConfig = 13,
+    InvalidRecipient = 14,
+    AmountNotPositive = 15,
+    AmountExceedsMaxDistribute = 16,
+    InsufficientBalance = 17,
+    AlreadyPaused = 18,
+    NotPaused = 19,
 }
 
 #[cfg(test)]
@@ -57,7 +65,7 @@ mod tests {
     /// Verify that every error discriminant is unique and sequential.
     #[test]
     fn error_codes_are_unique_and_sequential() {
-        let codes: [u32; 12] = [
+        let codes: [u32; 19] = [
             DistributeError::NotInitialized as u32,
             DistributeError::AlreadyInitialized as u32,
             DistributeError::Unauthorized as u32,
@@ -70,8 +78,15 @@ mod tests {
             DistributeError::CapNotPositive as u32,
             DistributeError::NewAdminSameAsCurrent as u32,
             DistributeError::NoAdminTransferPending as u32,
+            DistributeError::InvalidConfig as u32,
+            DistributeError::InvalidRecipient as u32,
+            DistributeError::AmountNotPositive as u32,
+            DistributeError::AmountExceedsMaxDistribute as u32,
+            DistributeError::InsufficientBalance as u32,
+            DistributeError::AlreadyPaused as u32,
+            DistributeError::NotPaused as u32,
         ];
-        let mut seen = [false; 13];
+        let mut seen = [false; 20];
         for (i, &code) in codes.iter().enumerate() {
             assert_eq!(
                 code,

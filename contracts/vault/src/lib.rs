@@ -52,9 +52,7 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
 /// persistent, they do not silently archive. To prevent state bloat, an owner
 /// can explicitly prune old markers using `prune_processed_requests`.
-use soroban_sdk::{
-    contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod admin;
 pub mod timelock;
@@ -65,6 +63,14 @@ pub use callora_validators as validators;
 
 mod errors;
 pub use errors::VaultError;
+
+/// A single item in a batch deduction.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeductItem {
+    pub amount: i128,
+    pub request_id: Option<Symbol>,
+}
 
 #[contracttype]
 #[derive(Clone)]
@@ -115,7 +121,7 @@ pub enum StorageKey {
     LastCriticalAdminAction,
     /// Settlement contract address.
     Settlement,
-    /// Monotonic nonce guarding authorized-caller rotation against replay.
+    /// Monotonic rotation nonce guarding authorized-caller rotation against replay.
     AuthCallerNonce,
 }
 
@@ -256,8 +262,8 @@ impl CalloraVault {
         authorized_caller: Option<Address>,
         min_deposit: Option<i128>,
         revenue_pool: Option<Address>,
-        max_deduct: i128,
-        settlement: Address,
+        max_deduct: Option<i128>,
+        settlement: Option<Address>,
     ) -> Result<(), VaultError> {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
@@ -266,10 +272,11 @@ impl CalloraVault {
         if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
         }
-        if max_deduct <= 0 {
+        let max_deduct_val = max_deduct.unwrap_or(i128::MAX);
+        if max_deduct_val <= 0 {
             return Err(VaultError::MaxDeductNotPositive);
         }
-        if min_dep_val > max_deduct {
+        if min_dep_val > max_deduct_val {
             return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
 
@@ -298,10 +305,10 @@ impl CalloraVault {
 
         env.storage()
             .instance()
-            .set(&DataKey::MaxDeduct, &max_deduct);
-        env.storage()
-            .instance()
-            .set(&DataKey::Settlement, &settlement);
+            .set(&DataKey::MaxDeduct, &max_deduct_val);
+        if let Some(s) = settlement {
+            env.storage().instance().set(&DataKey::Settlement, &s);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
 
         env.events()
@@ -842,6 +849,19 @@ impl CalloraVault {
             return Err(VaultError::Unauthorized);
         }
 
+        // Idempotent: if already paused, succeed without emitting a
+        // duplicate `vault_paused` event. This lets operators safely
+        // re-broadcast a `pause` call after interrupted administration
+        // without polluting event logs.
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
         env.storage().instance().set(&DataKey::Paused, &true);
 
         env.events()
@@ -880,11 +900,182 @@ impl CalloraVault {
             return Err(VaultError::Unauthorized);
         }
 
+        // Idempotent: if already unpaused, succeed without emitting a
+        // duplicate `vault_unpaused` event.
+        if !env
+            .storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
         env.storage().instance().set(&DataKey::Paused, &false);
 
         env.events()
             .publish((events::event_vault_unpaused(&env), caller), ());
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Recovery mode functions (allowed when paused)
+    // -----------------------------------------------------------------------
+
+    /// Withdraw USDC from the vault to the owner's address (owner only).
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery.
+    /// The owner can withdraw tracked funds even during a circuit-breaker event.
+    ///
+    /// # Parameters
+    /// - `amount` — USDC stroops to withdraw; must be > 0.
+    ///
+    /// # Returns
+    /// The new vault balance after the withdrawal.
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"insufficient balance"` — vault balance < `amount`.
+    pub fn withdraw(env: Env, amount: i128) -> i128 {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        Self::require_positive_amount(amount).unwrap();
+
+        let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
+
+        if current_bal < amount {
+            panic!("insufficient balance");
+        }
+
+        let new_bal = current_bal.checked_sub(amount).unwrap();
+        env.storage().instance().set(&DataKey::Balance, &new_bal);
+        Self::bump_instance(&env);
+
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::UsdcToken)
+            .expect("vault not initialized");
+
+        token::Client::new(&env, &usdc_addr).transfer(
+            &env.current_contract_address(),
+            &owner,
+            &amount,
+        );
+
+        env.events()
+            .publish((events::event_withdraw(&env), owner), (amount, new_bal));
+
+        new_bal
+    }
+
+    /// Withdraw USDC from the vault to an arbitrary recipient address (owner only).
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery.
+    /// The owner can withdraw tracked funds to any valid recipient even during
+    /// a circuit-breaker event.
+    ///
+    /// ## Recipient Validation
+    /// The recipient address is validated to prevent common mistakes:
+    /// - Cannot send to the vault contract itself.
+    /// - Cannot send to the USDC token contract.
+    ///
+    /// # Parameters
+    /// - `to` — recipient address.
+    /// - `amount` — USDC stroops to withdraw; must be > 0.
+    ///
+    /// # Returns
+    /// The new vault balance after the withdrawal.
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"insufficient balance"` — vault balance < `amount`.
+    /// - `"cannot withdraw to vault address"` — `to == vault_address`.
+    /// - `"cannot withdraw to token address"` — `to == usdc_token`.
+    pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
+        let owner = Self::get_owner(env.clone());
+        owner.require_auth();
+        Self::require_positive_amount(amount).unwrap();
+
+        // Recipient validation
+        assert!(
+            to != env.current_contract_address(),
+            "cannot withdraw to vault address"
+        );
+
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::UsdcToken)
+            .expect("vault not initialized");
+
+        assert!(to != usdc_addr, "cannot withdraw to token address");
+
+        let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
+
+        if current_bal < amount {
+            panic!("insufficient balance");
+        }
+
+        let new_bal = current_bal.checked_sub(amount).unwrap();
+        env.storage().instance().set(&DataKey::Balance, &new_bal);
+        Self::bump_instance(&env);
+
+        token::Client::new(&env, &usdc_addr).transfer(
+            &env.current_contract_address(),
+            &to,
+            &amount,
+        );
+
+        env.events().publish(
+            (events::event_withdraw_to(&env), owner, to),
+            (amount, new_bal),
+        );
+
+        new_bal
+    }
+
+    /// Admin distribute USDC surplus to a recipient (admin only).
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery of
+    /// untracked on-ledger surplus.
+    ///
+    /// # Parameters
+    /// - `caller` — must be the current admin.
+    /// - `to` — recipient address.
+    /// - `amount` — USDC stroops to distribute; must be > 0.
+    ///
+    /// # Panics
+    /// - `"amount must be positive"` — `amount <= 0`.
+    /// - `"insufficient USDC balance"` — on-ledger balance < `amount`.
+    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
+        Self::require_admin(&env, &caller).unwrap();
+        Self::require_positive_amount(amount).unwrap();
+
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
+
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::UsdcToken)
+            .expect("USDC Token not set");
+
+        let usdc = token::Client::new(&env, &usdc_addr);
+        let on_ledger = usdc.balance(&env.current_contract_address());
+
+        if on_ledger < amount {
+            panic!("insufficient USDC balance");
+        }
+
+        usdc.transfer(&env.current_contract_address(), &to, &amount);
+
+        env.events()
+            .publish((events::event_distribute(&env), to), amount);
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -1275,7 +1466,6 @@ impl CalloraVault {
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_ownership_nominated(&env), caller), new_owner);
-        Ok(())
     }
 
     /// Accept pending ownership (new owner only).
@@ -1432,10 +1622,29 @@ impl CalloraVault {
     /// Emits `pause_executed` with `caller` as topic, then `vault_paused`.
     pub fn execute_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
+
         let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
         }
+
+        // Idempotent: if the vault is already paused (e.g. from a prior
+        // direct `pause()` call or a previous `execute_pause` whose
+        // transaction completed but the cooldown fired again), just clear
+        // the stale proposal without arming the admin cooldown.  This
+        // ensures recovery mode remains accessible after interrupted
+        // administration.
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            timelock::clear_pending_pause(&env);
+            Self::bump_instance_ttl(&env);
+            return Ok(());
+        }
+
         admin::guard(&env, Symbol::new(&env, "pause"))?;
         env.storage().instance().set(&DataKey::Paused, &true);
         timelock::clear_pending_pause(&env);
@@ -1474,7 +1683,7 @@ impl CalloraVault {
         timelock::clear_pending_pause(&env);
         env.events().publish(
             (events::event_pause_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1606,7 +1815,7 @@ impl CalloraVault {
         timelock::clear_pending_upgrade(&env);
         env.events().publish(
             (events::event_upgrade_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1691,6 +1900,7 @@ impl CalloraVault {
         if usdc.balance(&env.current_contract_address()) < proposal.amount {
             return Err(VaultError::InsufficientBalance);
         }
+
         admin::guard(&env, Symbol::new(&env, "sweep"))?;
         usdc.transfer(
             &env.current_contract_address(),
@@ -1736,7 +1946,7 @@ impl CalloraVault {
         timelock::clear_pending_sweep(&env);
         env.events().publish(
             (events::event_sweep_cancelled(&env), caller.clone()),
-            (existing.is_some()),
+            existing.is_some(),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1817,6 +2027,47 @@ impl CalloraVault {
             REQUEST_ID_BUMP_THRESHOLD,
             REQUEST_ID_BUMP_AMOUNT,
         );
+    }
+
+    /// Remove processed-request markers for the given request IDs.
+    ///
+    /// Owner-only. Idempotent: removing a non-existent marker is a no-op.
+    ///
+    /// ## Pause Policy
+    /// This function is **ALLOWED when paused** for emergency recovery.
+    ///
+    /// ### Parameters
+    /// - `caller` — must be the vault owner.
+    /// - `ids` — vector of request-id symbols to prune.
+    ///
+    /// ### Events
+    /// Emits `request_id_pruned` for each successfully pruned marker.
+    pub fn prune_processed_requests(
+        env: Env,
+        caller: Address,
+        ids: Vec<Symbol>,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller)?;
+
+        for id in ids.iter() {
+            let key = StorageKey::ProcessedRequest(id.clone());
+            let removed_persistent = env.storage().persistent().has(&key);
+            let removed_temporary = env.storage().temporary().has(&key);
+            if removed_persistent {
+                env.storage().persistent().remove(&key);
+            }
+            if removed_temporary {
+                env.storage().temporary().remove(&key);
+            }
+            if removed_persistent || removed_temporary {
+                env.events()
+                    .publish((events::event_request_id_pruned(&env), id), ());
+            }
+        }
+
+        Self::bump_instance_ttl(&env);
+        Ok(())
     }
 
     fn transfer_funds(env: &Env, usdc_token: &Address, to: &Address, amount: i128) {
@@ -2133,6 +2384,9 @@ pub mod rescue;
 /// `deduct` / `batch_deduct` / `execute_sweep` / `cancel_sweep`.
 #[cfg(test)]
 mod test_value_conservation;
+
+#[cfg(test)]
+mod test_recovery_idempotency;
 
 // #[cfg(test)]
 // mod test_gas_budget;
