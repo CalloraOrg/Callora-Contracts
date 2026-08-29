@@ -82,4 +82,12 @@ pub enum SettlementError {
     FreezeUnauthorized = 32,
     /// Admin attempted a price write before the minimum interval elapsed.
     WriteRateLimitExceeded = 33,
+    InvalidConfigDistinct = 34,
+    InvalidConfigAdminContract = 35,
+    InvalidConfigVaultContract = 36,
+    InvalidUsdcToken = 37,
+    InvalidRecipient = 38,
+    NoAdminTransferPending = 39,
+    InvalidVault = 40,
+    NoVaultRotationPending = 41,
 }

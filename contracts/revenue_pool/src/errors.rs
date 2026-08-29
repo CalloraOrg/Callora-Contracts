@@ -30,6 +30,9 @@ use soroban_sdk::contracterror;
 /// | 20   | MessageTooLong                | Admin broadcast message exceeds the length limit     |
 /// | 21   | NoPendingEmergencyDrain       | No emergency drain proposal is pending               |
 /// | 22   | TimelockNotExpired            | Emergency drain timelock has not elapsed             |
+/// | 23   | EmergencyPaused               | Recovery-only emergency mode is active               |
+/// | 24   | AlreadyEmergencyPaused        | Emergency pause was already active                   |
+/// | 25   | NotEmergencyPaused            | Emergency recovery was requested while inactive      |
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -78,4 +81,10 @@ pub enum RevenuePoolError {
     NoPendingEmergencyDrain = 21,
     /// Emergency drain timelock has not elapsed (code 22).
     TimelockNotExpired = 22,
+    /// Recovery-only emergency mode is active (code 23).
+    EmergencyPaused = 23,
+    /// Emergency pause was already active (code 24).
+    AlreadyEmergencyPaused = 24,
+    /// Emergency recovery was requested while inactive (code 25).
+    NotEmergencyPaused = 25,
 }
