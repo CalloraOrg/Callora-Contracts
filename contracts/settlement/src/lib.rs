@@ -3,10 +3,8 @@ pub mod admin;
 pub mod archive;
 pub mod batch;
 pub mod errors;
-pub mod errors;
 pub mod events;
 
-use crate::errors::SettlementError;
 pub mod freeze;
 pub mod limits;
 pub mod migrate;
@@ -23,6 +21,12 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+
+/// Maximum byte length of an admin broadcast message.
+///
+/// Keeps per-call resource consumption (event payload size, transaction size)
+/// bounded and predictable for a public admin entry point.
+pub const MAX_BROADCAST_MESSAGE_LEN: u32 = 1024;
 
 pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
@@ -596,7 +600,10 @@ impl CalloraSettlement {
             .persistent()
             .extend_ttl(&balance_key, 50000, 50000);
 
-        daily.amount = daily.amount.checked_add(amount).ok_or(SettlementError::DailyWithdrawCapExceeded)?;
+        daily.amount = daily
+            .amount
+            .checked_add(amount)
+            .ok_or(SettlementError::DailyWithdrawCapExceeded)?;
         env.storage().persistent().set(&today_key, &daily);
         env.storage()
             .persistent()
@@ -1255,6 +1262,9 @@ impl CalloraSettlement {
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+        if message.len() > MAX_BROADCAST_MESSAGE_LEN {
+            env.panic_with_error(SettlementError::BroadcastMessageTooLong);
+        }
         events::emit_admin_broadcast(&env, &caller, AdminBroadcast { severity, message });
     }
 
@@ -1340,6 +1350,9 @@ impl CalloraSettlement {
         let count = developers.len();
         if count != amounts.len() {
             return Err(SettlementError::AmountNotPositive);
+        }
+        if count > MAX_BATCH_SIZE {
+            return Err(SettlementError::BatchTooLarge);
         }
         Ok((0, true))
     }
