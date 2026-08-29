@@ -273,6 +273,11 @@ pub fn event_admin_migration(env: &Env) -> Symbol {
     Symbol::new(env, "admin_migration")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 /// Returns the Symbol for the `"developer_min_balance_changed"` event topic.
 ///
 /// **What**: Returns the canonical symbol for developer minimum balance change events.
