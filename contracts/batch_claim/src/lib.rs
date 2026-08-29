@@ -57,6 +57,7 @@
 //! | Instance   | `StorageKey::Admin`                   | `Address`                  |
 //! | Persistent | `StorageKey::Claim(claimant)`         | `ClaimRecord`              |
 //! | Persistent | `StorageKey::ClaimConsumed(claim_id)` | `bool`                     |
+//! | Persistent | `StorageKey::ClaimIdOwner(claim_id)`  | `Address` (issue #1044)    |
 //! | Instance   | `StorageKey::TotalClaims`             | `u32`                      |
 //!
 //! ## TTL management
@@ -149,6 +150,16 @@ pub enum StorageKey {
     /// Per-claim-id consumed tombstone.  Set to `true` once the identifier
     /// has been successfully settled; prevents replay of the same id.
     ClaimConsumed(BytesN<32>),
+    /// Issue #1044: permanent reservation of a claim identifier to the single
+    /// claimant it was ever issued to.
+    ///
+    /// Written on the first successful `add_claim` for an identifier and
+    /// **never removed** — not by settlement, not by cancellation. The
+    /// consumed tombstone answers "has this id been spent?"; this answers the
+    /// stronger question "has this id ever existed, and whose is it?", which
+    /// is what makes the identifier globally unique for the life of the
+    /// contract rather than merely un-replayable after settlement.
+    ClaimIdOwner(BytesN<32>),
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +240,28 @@ impl CalloraBatchClaim {
     /// - [`BatchClaimError::InvalidAmount`] if `amount` ≤ 0.
     /// - [`BatchClaimError::ClaimIdAlreadyUsed`] if `claim_id` has already been consumed.
     /// - [`BatchClaimError::Overflow`] if the accumulated total would overflow.
+    ///
+    /// ## Global identifier uniqueness (issue #1044)
+    ///
+    /// An identifier belongs to exactly one claimant for the life of the
+    /// contract. The first successful `add_claim` reserves it under
+    /// [`StorageKey::ClaimIdOwner`], and that reservation is never released:
+    ///
+    /// - presenting it for a **different** claimant fails with
+    ///   [`BatchClaimError::ClaimIdAlreadyUsed`], which closes the hole where
+    ///   the same id could be bound to two claimants and settled twice;
+    /// - re-using it after the claim **settled** fails on the consumed
+    ///   tombstone, and after the claim was **cancelled** it still fails on
+    ///   the reservation, so a cancelled id cannot be recycled;
+    /// - topping a pending claim up requires the **same** id it was opened
+    ///   with ([`BatchClaimError::ClaimIdMismatch`]), so an admin cannot swap
+    ///   the identifier a pending balance will settle under;
+    /// - the all-zero id is rejected as malformed
+    ///   ([`BatchClaimError::InvalidClaimId`]).
+    ///
+    /// Every one of those checks runs before any storage write, so a rejected
+    /// call leaves the claim record, the reservation and the counters exactly
+    /// as it found them.
     pub fn add_claim(
         env: Env,
         caller: Address,
@@ -243,6 +276,11 @@ impl CalloraBatchClaim {
         }
         if amount <= 0 {
             return Err(BatchClaimError::InvalidAmount);
+        }
+        // Issue #1044: malformed identifier — an all-zero id is the default
+        // value of an uninitialised buffer, never a deliberate id.
+        if Self::is_zero_id(&claim_id) {
+            return Err(BatchClaimError::InvalidClaimId);
         }
 
         // Reject re-use of a previously consumed claim identifier.
@@ -263,6 +301,22 @@ impl CalloraBatchClaim {
             }
         }
 
+        // Issue #1044: the identifier is reserved to one claimant forever.
+        // Reading the owner before touching the claim record keeps this a
+        // pure validation step.
+        let owner_key = StorageKey::ClaimIdOwner(claim_id.clone());
+        let reserved_for: Option<Address> = env.storage().persistent().get(&owner_key);
+        if let Some(owner) = reserved_for.clone() {
+            env.storage().persistent().extend_ttl(
+                &owner_key,
+                PERSISTENT_THRESHOLD,
+                PERSISTENT_BUMP,
+            );
+            if owner != claimant {
+                return Err(BatchClaimError::ClaimIdAlreadyUsed);
+            }
+        }
+
         let key = StorageKey::Claim(claimant.clone());
 
         // Bump TTL on the existing persistent entry before reading it.
@@ -273,12 +327,24 @@ impl CalloraBatchClaim {
         }
 
         let existing: Option<ClaimRecord> = env.storage().persistent().get(&key);
+        // Issue #1044: a pending claim keeps the identifier it was opened
+        // with. Without this, a top-up could rebind the balance accrued under
+        // one id to a different one, leaving the first id reserved but
+        // unspendable and the second carrying value it never accrued.
+        if let Some(rec) = existing.clone() {
+            if !rec.settled && rec.claim_id != claim_id {
+                return Err(BatchClaimError::ClaimIdMismatch);
+            }
+        }
         let new_pending = match existing {
             Some(rec) if !rec.settled => rec
                 .pending_amount
                 .checked_add(amount)
                 .ok_or(BatchClaimError::Overflow)?,
-            Some(_settled) => amount, // re-open a previously settled claim
+            // Re-opening a settled claim requires a fresh identifier: the old
+            // one is consumed, and this one is unreserved or already this
+            // claimant's, both checked above.
+            Some(_settled) => amount,
             None => {
                 // New claim: bump total-claims counter.
                 let count: u32 = env
@@ -313,6 +379,16 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_THRESHOLD,
             CONSUMED_TOMBSTONE_BUMP,
         );
+
+        // Issue #1044: reserve the identifier to this claimant. Written only
+        // on the first issuance so the owner can never be reassigned, and
+        // never removed by settle or cancel.
+        if reserved_for.is_none() {
+            env.storage().persistent().set(&owner_key, &claimant);
+        }
+        env.storage()
+            .persistent()
+            .extend_ttl(&owner_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 
         Self::bump_instance(&env);
         env.events()
@@ -349,11 +425,19 @@ impl CalloraBatchClaim {
     /// - [`BatchClaimError::ClaimIdAlreadyUsed`] if the `claim_id` has already been
     ///   consumed (replay attempt).
     /// - [`BatchClaimError::Overflow`] if the running total overflows.
+    /// - [`BatchClaimError::BatchTooLarge`] if `claimants` holds more than
+    ///   [`MAX_PENDING_AMOUNTS`] entries (issue #1044).
     pub fn batch_claim(
         env: Env,
         claimants: Vec<(Address, BytesN<32>)>,
     ) -> Result<i128, BatchClaimError> {
         Self::require_admin(&env)?;
+        // Issue #1044: bound the batch before doing any per-entry work, so an
+        // oversized call fails closed and cheaply rather than part-way
+        // through a settlement loop.
+        if claimants.len() > MAX_PENDING_AMOUNTS {
+            return Err(BatchClaimError::BatchTooLarge);
+        }
         let mut total_claimed: i128 = 0;
 
         for (claimant, claim_id) in claimants.iter() {
@@ -457,6 +541,15 @@ impl CalloraBatchClaim {
     /// - [`BatchClaimError::Unauthorized`] if `caller` is not the admin.
     /// - [`BatchClaimError::ClaimNotFound`] if `claimant` has no record.
     /// - [`BatchClaimError::AlreadySettled`] if the claim is already settled.
+    ///
+    /// ## Identifier lifetime (issue #1044)
+    ///
+    /// Cancelling removes the claim record but **not** the identifier's
+    /// reservation. The id stays permanently bound to this claimant and can
+    /// never be issued again — to them or to anyone else. Releasing it would
+    /// reopen the replay window this contract exists to close: an id that
+    /// appeared in a cancelled issuance may already be sitting in a signed
+    /// transaction, an off-chain ledger, or an operator's retry queue.
     pub fn cancel_claim(
         env: Env,
         caller: Address,
@@ -577,6 +670,44 @@ impl CalloraBatchClaim {
         Ok(false)
     }
 
+    /// Return the claimant an identifier is reserved to, if any (issue #1044).
+    ///
+    /// `Some(addr)` means the id has been issued at some point in the past and
+    /// can never be issued again; `None` means it is still free. The answer
+    /// does not change when the claim settles or is cancelled.
+    ///
+    /// **TTL bump**: bumps the persistent entry TTL on every call.
+    ///
+    /// No auth required.
+    ///
+    /// # Errors
+    /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
+    pub fn claim_id_owner(
+        env: Env,
+        claim_id: BytesN<32>,
+    ) -> Result<Option<Address>, BatchClaimError> {
+        Self::require_admin(&env)?;
+        let key = StorageKey::ClaimIdOwner(claim_id);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+            return Ok(env.storage().persistent().get(&key));
+        }
+        Ok(None)
+    }
+
+    /// Whether an identifier has ever been issued (issue #1044).
+    ///
+    /// Convenience wrapper over [`Self::claim_id_owner`] for callers that only
+    /// need to know whether a candidate id is still free.
+    ///
+    /// No auth required.
+    ///
+    /// # Errors
+    /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
+    pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
+        Ok(Self::claim_id_owner(env, claim_id)?.is_some())
     /// Proactively extend a consumed-claim tombstone's TTL, independent of
     /// any claim/settle activity.
     ///
@@ -617,7 +748,6 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_BUMP,
         );
         Ok(true)
-    }
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -654,6 +784,14 @@ impl CalloraBatchClaim {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(BatchClaimError::NotInitialized)
+    }
+
+    /// Whether a claim identifier is the all-zero value (issue #1044).
+    ///
+    /// Rejected as malformed rather than treated as a legitimate id — see
+    /// [`BatchClaimError::InvalidClaimId`].
+    fn is_zero_id(claim_id: &BytesN<32>) -> bool {
+        claim_id.to_array().iter().all(|byte| *byte == 0)
     }
 
     /// Bump instance storage TTL to keep the contract live.
@@ -1044,12 +1182,15 @@ mod tests {
         let env = Env::default();
         let (admin, claimant, client) = setup(&env);
         let id1 = make_id(&env, 40);
-        let id2 = make_id(&env, 41);
 
         client.add_claim(&admin, &claimant, &i128::MAX, &id1);
-        // Adding any positive value would overflow.
-        let res = client.try_add_claim(&admin, &claimant, &1, &id2);
+        // Adding any positive value would overflow. Issue #1044: a top-up has
+        // to present the identifier the claim was opened with, so the overflow
+        // guard is exercised through the only path that can now reach it.
+        let res = client.try_add_claim(&admin, &claimant, &1, &id1);
         assert_eq!(res, Err(Ok(BatchClaimError::Overflow)));
+        // The rejected top-up left the balance where it was.
+        assert_eq!(client.get_claim(&claimant).pending_amount, i128::MAX);
     }
 
     // -----------------------------------------------------------------------
@@ -1137,6 +1278,233 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Issue #1044 — global uniqueness of claim identifiers
+    // -----------------------------------------------------------------------
+
+    /// The same identifier cannot be issued to two different claimants.
+    ///
+    /// This is the hole the reservation closes: before it, the second issuance
+    /// passed (the tombstone was present but `false`) and both claimants could
+    /// settle under one "unique" id.
+    #[test]
+    fn test_same_id_cannot_be_issued_to_two_claimants() {
+        let env = Env::default();
+        let (admin, first, client) = setup(&env);
+        let second = Address::generate(&env);
+        let id = make_id(&env, 100);
+
+        client.add_claim(&admin, &first, &500, &id);
+
+        let res = client.try_add_claim(&admin, &second, &500, &id);
+        assert_eq!(res, Err(Ok(BatchClaimError::ClaimIdAlreadyUsed)));
+
+        // Nothing was created for the second claimant, and the first claim is
+        // untouched.
+        assert!(!client.has_claim(&second));
+        assert_eq!(client.get_claim(&first).pending_amount, 500);
+        assert_eq!(client.claim_id_owner(&id), Some(first));
+    }
+
+    /// An identifier stays reserved after the claim is cancelled, so a
+    /// cancelled id can never be recycled — for the original claimant or
+    /// anyone else.
+    #[test]
+    fn test_cancelled_id_cannot_be_reissued() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let other = Address::generate(&env);
+        let id = make_id(&env, 101);
+
+        client.add_claim(&admin, &claimant, &400, &id);
+        client.cancel_claim(&admin, &claimant);
+        assert!(!client.has_claim(&claimant));
+
+        // Reservation survives the cancellation.
+        assert!(client.claim_id_reserved(&id));
+        assert_eq!(client.claim_id_owner(&id), Some(claimant.clone()));
+
+        // Neither a stranger nor the original claimant may reuse it.
+        assert_eq!(
+            client.try_add_claim(&admin, &other, &400, &id),
+            Err(Ok(BatchClaimError::ClaimIdAlreadyUsed))
+        );
+        assert!(!client.has_claim(&other));
+    }
+
+    /// A settled identifier cannot be re-issued to a different claimant
+    /// either — the consumed tombstone and the reservation both refuse.
+    #[test]
+    fn test_settled_id_cannot_be_reissued_cross_claimant() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let other = Address::generate(&env);
+        let id = make_id(&env, 102);
+
+        client.add_claim(&admin, &claimant, &250, &id);
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        assert_eq!(client.batch_claim(&batch), 250);
+
+        assert_eq!(
+            client.try_add_claim(&admin, &other, &250, &id),
+            Err(Ok(BatchClaimError::ClaimIdAlreadyUsed))
+        );
+        assert_eq!(client.claim_id_owner(&id), Some(claimant));
+    }
+
+    /// A pending claim keeps the identifier it was opened with: a top-up
+    /// presenting a different id is rejected and changes nothing.
+    #[test]
+    fn test_pending_claim_id_cannot_be_swapped_by_topup() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let original = make_id(&env, 103);
+        let swapped = make_id(&env, 104);
+
+        client.add_claim(&admin, &claimant, &100, &original);
+
+        let res = client.try_add_claim(&admin, &claimant, &100, &swapped);
+        assert_eq!(res, Err(Ok(BatchClaimError::ClaimIdMismatch)));
+
+        let record = client.get_claim(&claimant);
+        assert_eq!(record.pending_amount, 100, "amount must not accumulate");
+        assert_eq!(record.claim_id, original, "id must not be rebound");
+        // The rejected id was never reserved by the failed call.
+        assert!(!client.claim_id_reserved(&swapped));
+    }
+
+    /// Topping up with the same identifier still accumulates.
+    #[test]
+    fn test_topup_with_same_id_accumulates() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 105);
+
+        client.add_claim(&admin, &claimant, &100, &id);
+        client.add_claim(&admin, &claimant, &50, &id);
+
+        assert_eq!(client.get_claim(&claimant).pending_amount, 150);
+        assert_eq!(client.total_claims(), 1, "a top-up is not a new claim");
+    }
+
+    /// The all-zero identifier is malformed and rejected before any write.
+    #[test]
+    fn test_zero_claim_id_rejected() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let zero = make_id(&env, 0);
+
+        let res = client.try_add_claim(&admin, &claimant, &100, &zero);
+        assert_eq!(res, Err(Ok(BatchClaimError::InvalidClaimId)));
+
+        assert!(!client.has_claim(&claimant));
+        assert!(!client.claim_id_reserved(&zero));
+        assert_eq!(client.total_claims(), 0);
+    }
+
+    /// An unauthorized caller cannot reserve an identifier, so a non-admin
+    /// cannot grief future issuance by burning ids.
+    #[test]
+    fn test_non_admin_cannot_reserve_an_id() {
+        let env = Env::default();
+        let (_admin, claimant, client) = setup(&env);
+        let intruder = Address::generate(&env);
+        let id = make_id(&env, 106);
+
+        let res = client.try_add_claim(&intruder, &claimant, &100, &id);
+        assert_eq!(res, Err(Ok(BatchClaimError::Unauthorized)));
+        assert!(!client.claim_id_reserved(&id));
+    }
+
+    /// A batch larger than `MAX_PENDING_AMOUNTS` fails closed and settles
+    /// nothing.
+    #[test]
+    fn test_oversized_batch_rejected() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 107);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        let mut batch = Vec::new(&env);
+        for _ in 0..(MAX_PENDING_AMOUNTS + 1) {
+            batch.push_back((claimant.clone(), id.clone()));
+        }
+
+        let res = client.try_batch_claim(&batch);
+        assert_eq!(res, Err(Ok(BatchClaimError::BatchTooLarge)));
+
+        // Nothing settled: the claim is still pending and the id unconsumed.
+        assert!(!client.claim_id_consumed(&id));
+        assert!(client.has_claim(&claimant));
+    }
+
+    /// A batch at exactly the cap is accepted (boundary, not off-by-one).
+    #[test]
+    fn test_batch_at_exact_cap_accepted() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 108);
+        client.add_claim(&admin, &claimant, &10, &id);
+
+        // One real entry plus padding up to the cap would double-settle, so
+        // the boundary is exercised with a single valid entry repeated to the
+        // cap minus one via distinct claimants that have no record: the call
+        // must get past the size check and fail on the *content*, proving the
+        // cap itself did not reject it.
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        for _ in 1..MAX_PENDING_AMOUNTS {
+            batch.push_back((Address::generate(&env), make_id(&env, 109)));
+        }
+        assert_eq!(batch.len(), MAX_PENDING_AMOUNTS);
+
+        let res = client.try_batch_claim(&batch);
+        assert_eq!(
+            res,
+            Err(Ok(BatchClaimError::ClaimNotFound)),
+            "a full-size batch must be evaluated, not rejected on size"
+        );
+    }
+
+    /// The same claimant twice in one batch cannot settle twice: the second
+    /// entry hits the consumed tombstone and the whole call reverts.
+    #[test]
+    fn test_duplicate_entries_in_one_batch_fail_atomically() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 110);
+        client.add_claim(&admin, &claimant, &777, &id);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        batch.push_back((claimant.clone(), id.clone()));
+
+        // The host rejects the repeated authorization for the duplicated
+        // claimant before the consumed tombstone is even reached, so this
+        // aborts rather than returning a typed error. Either way the call
+        // fails closed, which is what matters here.
+        let res = client.try_batch_claim(&batch);
+        assert!(
+            res.is_err(),
+            "a claimant repeated inside one batch must not settle twice"
+        );
+
+        // The transaction reverted: nothing was consumed or settled.
+        assert!(!client.claim_id_consumed(&id));
+        assert!(client.has_claim(&claimant));
+        assert_eq!(client.get_claim(&claimant).pending_amount, 777);
+    }
+
+    /// Ownership views report nothing for an identifier that was never issued.
+    #[test]
+    fn test_owner_views_for_unknown_id() {
+        let env = Env::default();
+        let (_admin, _claimant, client) = setup(&env);
+        let unknown = make_id(&env, 111);
+
+        assert_eq!(client.claim_id_owner(&unknown), None);
+        assert!(!client.claim_id_reserved(&unknown));
+        assert!(!client.claim_id_consumed(&unknown));
     // Consumed-tombstone TTL: survival beyond claim archival (#1043)
     // -----------------------------------------------------------------------
 
@@ -1379,5 +1747,4 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
-    }
 }

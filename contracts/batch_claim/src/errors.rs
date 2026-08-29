@@ -13,6 +13,8 @@ use soroban_sdk::contracterror;
 /// | 7    | Overflow             | Arithmetic overflow in pending-amount accumulation|
 /// | 8    | ClaimIdAlreadyUsed   | The claim identifier has already been consumed    |
 /// | 9    | ClaimIdMismatch      | Provided claim_id does not match stored record    |
+/// | 10   | InvalidClaimId       | Identifier is malformed (all-zero)                |
+/// | 11   | BatchTooLarge        | Batch exceeds `MAX_PENDING_AMOUNTS` entries       |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -35,4 +37,17 @@ pub enum BatchClaimError {
     ClaimIdAlreadyUsed = 8,
     /// The provided claim_id does not match the stored record (code 9).
     ClaimIdMismatch = 9,
+    /// The claim identifier is malformed (code 10).
+    ///
+    /// Issue #1044: the all-zero identifier is rejected because it is what an
+    /// uninitialised buffer, a defaulted struct field, or a truncated encoding
+    /// produces. Accepting it would let two unrelated bugs collide on the same
+    /// "unique" id.
+    InvalidClaimId = 10,
+    /// The batch exceeds [`crate::MAX_PENDING_AMOUNTS`] entries (code 11).
+    ///
+    /// Issue #1044: bounds the work a single `batch_claim` invocation can do,
+    /// so an oversized batch fails closed and cheaply instead of running the
+    /// ledger out of resources part-way through a settlement.
+    BatchTooLarge = 11,
 }
