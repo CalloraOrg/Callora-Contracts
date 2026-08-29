@@ -384,3 +384,239 @@ fn test_new_admin_can_perform_guarded_actions_after_rotation() {
     client.unpause(&new_admin);
     client.release(&new_admin, &recipient);
 }
+
+/// An approved-asset flag is never set by default (deny-by-default).
+#[test]
+fn test_is_asset_approved_deny_by_default() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    assert!(!client.is_asset_approved(&asset));
+}
+
+/// Approving an asset flips the deny-by-default flag to `true`.
+#[test]
+fn test_add_approved_asset_flips_flag() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    assert!(!client.is_asset_approved(&asset));
+    client.add_approved_asset(&admin, &asset);
+    assert!(client.is_asset_approved(&asset));
+}
+
+/// Only the admin may approve an asset.
+#[test]
+fn test_add_approved_asset_requires_admin() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    let intruder = Address::generate(&env);
+    let asset = Address::generate(&env);
+    assert_eq!(
+        client.try_add_approved_asset(&intruder, &asset),
+        Err(Ok(EscrowError::Unauthorized))
+    );
+}
+
+/// Approving the contract's own address is rejected as malformed.
+#[test]
+fn test_add_approved_asset_rejects_self() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(60));
+
+    assert_eq!(
+        client.try_add_approved_asset(&admin, &contract_id),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+}
+
+/// Revoking an approved asset flips the flag back to `false`.
+#[test]
+fn test_remove_approved_asset_revokes() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    assert!(client.is_asset_approved(&asset));
+    client.remove_approved_asset(&admin, &asset);
+    assert!(!client.is_asset_approved(&asset));
+}
+
+/// Only the admin may revoke an asset approval.
+#[test]
+fn test_remove_approved_asset_requires_admin() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    let intruder = Address::generate(&env);
+    let asset = Address::generate(&env);
+    assert_eq!(
+        client.try_remove_approved_asset(&intruder, &asset),
+        Err(Ok(EscrowError::Unauthorized))
+    );
+}
+
+/// Revoking the contract's own address is rejected as malformed.
+#[test]
+fn test_remove_approved_asset_rejects_self() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(60));
+
+    assert_eq!(
+        client.try_remove_approved_asset(&admin, &contract_id),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+}
+
+/// Creating an escrow against an approved asset records it and emits an event.
+#[test]
+fn test_create_escrow_success_and_record() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+
+    let now = env.ledger().timestamp();
+    client.create_escrow(&admin, &asset, &recipient, &1000);
+
+    let record = client.get_escrow(&asset, &recipient).unwrap();
+    assert_eq!(record.payment_asset, asset);
+    assert_eq!(record.recipient, recipient);
+    assert_eq!(record.amount, 1000);
+    assert_eq!(record.created_at, now);
+}
+
+/// An unapproved asset is rejected and nothing is recorded (fail closed).
+#[test]
+fn test_create_escrow_unapproved_asset_fails_closed() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &1000),
+        Err(Ok(EscrowError::AssetNotApproved))
+    );
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+}
+
+/// Only the admin may create an escrow.
+#[test]
+fn test_create_escrow_requires_admin() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    let intruder = Address::generate(&env);
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    assert_eq!(
+        client.try_create_escrow(&intruder, &asset, &recipient, &1000),
+        Err(Ok(EscrowError::Unauthorized))
+    );
+}
+
+/// Using the contract itself as the payment asset is rejected as malformed.
+#[test]
+fn test_create_escrow_rejects_self_payment_asset() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(60));
+
+    let recipient = Address::generate(&env);
+    assert_eq!(
+        client.try_create_escrow(&admin, &contract_id, &recipient, &1000),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+}
+
+/// Using the contract itself as the recipient is rejected as malformed.
+#[test]
+fn test_create_escrow_rejects_self_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(60));
+
+    let asset = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &contract_id, &1000),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+}
+
+/// A non-positive amount is rejected before any state is written.
+#[test]
+fn test_create_escrow_rejects_non_positive_amount() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &0),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &-1),
+        Err(Ok(EscrowError::InvalidInput))
+    );
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+}
+
+/// Replaying the same creation inputs fails closed with `EscrowExists`.
+#[test]
+fn test_create_escrow_rejects_replay() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    client.create_escrow(&admin, &asset, &recipient, &1000);
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &2000),
+        Err(Ok(EscrowError::EscrowExists))
+    );
+}
+
+/// A stale (revoked) approval is no longer honored for new escrows.
+#[test]
+fn test_create_escrow_after_revoke_fails_closed() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    client.remove_approved_asset(&admin, &asset);
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &1000),
+        Err(Ok(EscrowError::AssetNotApproved))
+    );
+}
+
+/// Approval is scoped to each escrow instance (cross-tenant isolation).
+#[test]
+fn test_approval_registry_is_scoped_per_instance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    let c1 = env.register(CalloraEscrow, ());
+    let client1 = CalloraEscrowClient::new(&env, &c1);
+    client1.init(&admin, &signer, &Some(60));
+
+    let c2 = env.register(CalloraEscrow, ());
+    let client2 = CalloraEscrowClient::new(&env, &c2);
+    client2.init(&admin, &signer, &Some(60));
+
+    client1.add_approved_asset(&admin, &asset);
+    assert!(client1.is_asset_approved(&asset));
+    assert!(!client2.is_asset_approved(&asset));
+}

@@ -47,6 +47,30 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"asset_approved"` event topic.
+///
+/// Emitted when the admin marks a payment asset as approved for escrow
+/// creation via [`crate::CalloraEscrow::add_approved_asset`].
+pub fn event_asset_approved(env: &Env) -> Symbol {
+    Symbol::new(env, "asset_approved")
+}
+
+/// Returns the Symbol for the `"asset_removed"` event topic.
+///
+/// Emitted when the admin revokes a payment asset approval via
+/// [`crate::CalloraEscrow::remove_approved_asset`].
+pub fn event_asset_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "asset_removed")
+}
+
+/// Returns the Symbol for the `"escrow_created"` event topic.
+///
+/// Emitted when a new escrow is successfully created against an approved
+/// payment asset via [`crate::CalloraEscrow::create_escrow`].
+pub fn event_escrow_created(env: &Env) -> Symbol {
+    Symbol::new(env, "escrow_created")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -95,6 +119,36 @@ mod tests {
         assert_eq!(
             event_admin_accepted(&env),
             Symbol::new(&env, "admin_accepted")
+        );
+    }
+
+    /// Snapshot: proves event_asset_approved still maps to exactly the bytes for "asset_approved".
+    #[test]
+    fn test_event_asset_approved_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_asset_approved(&env),
+            Symbol::new(&env, "asset_approved")
+        );
+    }
+
+    /// Snapshot: proves event_asset_removed still maps to exactly the bytes for "asset_removed".
+    #[test]
+    fn test_event_asset_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_asset_removed(&env),
+            Symbol::new(&env, "asset_removed")
+        );
+    }
+
+    /// Snapshot: proves event_escrow_created still maps to exactly the bytes for "escrow_created".
+    #[test]
+    fn test_event_escrow_created_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_escrow_created(&env),
+            Symbol::new(&env, "escrow_created")
         );
     }
 }
