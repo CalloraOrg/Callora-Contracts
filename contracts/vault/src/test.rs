@@ -271,6 +271,165 @@ fn set_admin_unauthorized_fails() {
 
 // Cross-contract conservation invariant E2E fuzz test
 #[test]
+fn escrow_conservation_fuzz() {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    // Deterministic seed
+    let seed: u64 = 0x_escrow_beef_u64;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let steps: usize = 300;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let owner = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let developer = Address::generate(&env);
+
+    let (vault_address, vault_client) = create_vault(&env);
+    let settlement_contract = env.register(CalloraSettlement, ());
+    let settlement_client = CalloraSettlementClient::new(&env, &settlement_contract);
+    let settlement_address = settlement_contract;
+
+    let revenue_contract = env.register(RevenuePool, ());
+    let revenue_client = RevenuePoolClient::new(&env, &revenue_contract);
+    let revenue_address = revenue_contract;
+
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+
+    fund_vault(&usdc_admin, &vault_address, 10_000_000);
+    vault_client.init(
+        &owner,
+        &usdc,
+        &Some(10_000_000),
+        &None,
+        &None,
+        &Some(revenue_address),
+        &None,
+    );
+
+    settlement_client.init(&admin, &vault_address);
+    revenue_client.init(&admin, &usdc);
+
+    let mut expected_vault_internal: i128 = vault_client.balance();
+    let mut expected_onchain_vault: i128 = usdc_client.balance(&vault_address);
+    let mut total_deductions: i128 = 0;
+    let mut ledger_seq = 0u32;
+
+    for i in 0..steps {
+        let choice: u8 = rng.gen_range(0..100);
+        let inject_failure = rng.gen_bool(0.1);
+
+        if choice < 50 {
+            let amt_u64: u64 = rng.gen_range(1..5_000);
+            let amt = amt_u64 as i128;
+            
+            // Negative path / Boundary check
+            let deduct_amt = if inject_failure {
+                if rng.gen_bool(0.5) { 0 } else { expected_vault_internal + 1 }
+            } else { amt };
+
+            let res = vault_client.try_deduct(&owner, &deduct_amt, &None);
+            if res.is_ok() {
+                expected_vault_internal -= deduct_amt;
+                expected_onchain_vault -= deduct_amt;
+                
+                // If vault succeeded, we must succeed in settlement to maintain invariant.
+                // However, failure injection for dependency: simulate rollback by reverting local state
+                if rng.gen_bool(0.05) { // simulate dependency error/rollback
+                    // We catch and rollback our expectations as if the orchestrator reverted the tx
+                    expected_vault_internal += deduct_amt;
+                    expected_onchain_vault += deduct_amt;
+                    continue; // transaction reverted
+                }
+                
+                total_deductions += deduct_amt;
+                ledger_seq += 1;
+                
+                if rng.gen_bool(0.5) {
+                    settlement_client.receive_payment(
+                        &vault_address,
+                        &deduct_amt,
+                        &true,
+                        &None,
+                        &ledger_seq,
+                    );
+                } else {
+                    settlement_client.receive_payment(
+                        &vault_address,
+                        &deduct_amt,
+                        &false,
+                        &Some(developer.clone()),
+                    );
+                }
+            }
+        } else {
+            // Batch deduct
+            let mut items = soroban_sdk::Vec::new(&env);
+            let item_count = rng.gen_range(1..5);
+            let per_item = rng.gen_range(1..1000) as i128;
+            for _ in 0..item_count {
+                items.push_back((per_item, None));
+            }
+
+            let deduct_amt = per_item * (item_count as i128);
+            if inject_failure {
+                 items.push_back((0, None)); // Intentionally bad item
+            }
+
+            let res = vault_client.try_batch_deduct(&owner, &items);
+            if res.is_ok() {
+                expected_vault_internal -= deduct_amt;
+                expected_onchain_vault -= deduct_amt;
+                
+                if rng.gen_bool(0.05) { 
+                    expected_vault_internal += deduct_amt;
+                    expected_onchain_vault += deduct_amt;
+                    continue; 
+                }
+                
+                total_deductions += deduct_amt;
+                ledger_seq += 1;
+                
+                settlement_client.receive_payment(
+                    &vault_address,
+                    &deduct_amt,
+                    &true,
+                    &None,
+                    &ledger_seq,
+                );
+            }
+        }
+
+        // Assert escrow invariant
+        let g = settlement_client.get_global_pool();
+        let mut settlement_sum: i128 = g.total_balance;
+        let devs = settlement_client.get_all_developer_balances(&admin);
+        for db in devs.iter() {
+            settlement_sum = settlement_sum.checked_add(db.balance).unwrap();
+        }
+        
+        assert_eq!(
+            settlement_sum, total_deductions,
+            "seed={}: step {}: settlement accounting mismatch",
+            seed, i
+        );
+        assert_eq!(
+            vault_client.balance(), expected_vault_internal,
+            "seed={}: step {}: vault internal mismatch",
+            seed, i
+        );
+        assert_eq!(
+            usdc_client.balance(&vault_address), expected_onchain_vault,
+            "seed={}: step {}: vault onchain mismatch",
+            seed, i
+        );
+    }
+}
+
+#[test]
 fn cross_contract_conservation_fuzz() {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};

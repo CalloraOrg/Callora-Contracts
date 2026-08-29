@@ -43,6 +43,7 @@ members = [
     "contracts/vault",
     "contracts/whitelist",
     "contracts/yield",
+    "contracts/vault",
 ]
 
 default-members = [
