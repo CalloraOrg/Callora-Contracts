@@ -30,6 +30,9 @@ pub mod errors;
 
 pub use errors::MigrationError;
 
+use callora_storage_migration::{
+    zero_layout_hash, StorageMigrationError, StorageMigrationValidator,
+};
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 /// Maximum `initial_version` accepted by `init`.
@@ -239,6 +242,47 @@ impl EmergencyMigration {
             _ => false,
         }
     }
+
+    /// Deterministic storage-migration validation that must run **before** the
+    /// upgraded code is swapped in via `update_current_contract_wasm`.
+    ///
+    /// This is the canonical pre-upgrade gate. It verifies, without mutating any
+    /// business state, that:
+    ///
+    /// * the replacement WASM hash is well-formed (rejects all-zero hashes);
+    /// * the target version is a single forward step (no skipped migrations)
+    ///   or, when `allow_rollback` is set, a sanctioned downgrade with a backup;
+    /// * any pinned source / target storage layouts are consistent.
+    ///
+    /// On success it records an authorization guard that deployment tooling can
+    /// verify via [`StorageMigrationValidator::is_upgrade_authorized`] before
+    /// performing the platform-level upgrade. The function returns
+    /// [`StorageMigrationError`] rather than panicking.
+    ///
+    /// # Errors
+    /// * [`StorageMigrationError::WasmHashZero`] — `wasm_hash` is all-zero.
+    /// * [`StorageMigrationError::VersionSkip`] — target skips an intermediate version.
+    /// * [`StorageMigrationError::RollbackNotAllowed`] — downgrade without `allow_rollback`.
+    /// * [`StorageMigrationError::BackupMissing`] — downgrade without a backup marker.
+    /// * [`StorageMigrationError::SchemaMismatch`] / [`StorageMigrationError::SilentLayoutChange`]
+    ///   — storage-layout incompatibility.
+    pub fn validate_before_upgrade(
+        env: Env,
+        target_version: u32,
+        wasm_hash: BytesN<32>,
+        allow_rollback: bool,
+    ) -> Result<(), StorageMigrationError> {
+        let zero = zero_layout_hash(&env);
+        StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            target_version,
+            &zero,
+            &zero,
+            &wasm_hash,
+            allow_rollback,
+        )
+        .map(|_| ())
+    }
 }
 
 #[cfg(test)]
@@ -440,5 +484,39 @@ mod tests {
         assert_eq!(MigrationError::InvalidInitialVersion as u32, 11);
         assert_eq!(MigrationError::WasmHashZero as u32, 12);
         assert_eq!(MigrationError::MigrationDataCorrupted as u32, 13);
+    }
+
+    #[test]
+    fn pre_upgrade_validation_records_authorization() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract = env.register(EmergencyMigration, ());
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        client.init(&admin, &7);
+
+        let hash = BytesN::from_array(&env, &[9u8; 32]);
+        // Runs as a pre-upgrade gate and records an authorization guard.
+        client.validate_before_upgrade(&7, &hash, &false);
+        // The recorded authorization can be checked by off-chain tooling.
+        let authorized = env.as_contract(&contract, || {
+            StorageMigrationValidator::is_upgrade_authorized(&env, 7, &hash)
+        });
+        assert!(authorized);
+    }
+
+    #[test]
+    fn pre_upgrade_validation_rejects_zero_wasm_hash() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract = env.register(EmergencyMigration, ());
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        client.init(&admin, &7);
+
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        assert!(client
+            .try_validate_before_upgrade(&7, &zero_hash, &false)
+            .is_err());
     }
 }

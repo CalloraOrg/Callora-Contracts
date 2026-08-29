@@ -32,6 +32,24 @@
 //! so the consumed tombstone outlives the `ClaimRecord` if the record is later
 //! archived or re-opened.
 //!
+//! ### Tombstone survival beyond claim archival
+//!
+//! A `ClaimRecord` stays "hot" for as long as its claimant keeps polling
+//! `get_claim`/`has_claim`, or the admin keeps calling `add_claim` for that
+//! claimant — every one of those calls bumps its TTL. A `ClaimConsumed`
+//! tombstone has no such natural traffic: once a `claim_id` is spent, nobody
+//! has a reason to keep asking whether it's spent, so nothing incidentally
+//! refreshes it. If it shared the `ClaimRecord`'s comparatively short
+//! `PERSISTENT_BUMP` window, it would typically be the *first* entry to hit
+//! Soroban's archival threshold — which is exactly backwards, since the
+//! tombstone is the sole guard against `add_claim` re-issuing (and
+//! `batch_claim` re-paying) an already-settled `claim_id`. To fix that,
+//! `ClaimConsumed` gets its own, far longer `CONSUMED_TOMBSTONE_BUMP`
+//! (~6 months) on every touch, and [`CalloraBatchClaim::extend_claim_consumed_ttl`]
+//! lets anyone — typically an off-chain keeper on a schedule — refresh a
+//! specific tombstone's TTL directly, without needing any claim activity to
+//! happen to trigger it.
+//!
 //! ## Storage layout
 //!
 //! | Scope      | Key                                   | Value                      |
@@ -51,12 +69,15 @@
 //! To prevent this:
 //!
 //! - **Every hot read** (`get_claim`, `has_claim`, and the internal reads
-//!   inside `batch_claim`) calls `extend_ttl` on the persistent entry with a
-//!   `PERSISTENT_BUMP` of 10 000 ledgers (≈16 days).
+//!   inside `batch_claim`) calls `extend_ttl` on the `ClaimRecord` entry with
+//!   a `PERSISTENT_BUMP` of 10 000 ledgers (≈16 days).
 //! - **Every write** also bumps the instance-storage TTL via
 //!   `extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT)`.
 //! - The `ClaimConsumed` persistent entry is bumped alongside the `Claim`
-//!   entry on every relevant read/write.
+//!   entry on every relevant read/write, but with its own much larger
+//!   `CONSUMED_TOMBSTONE_BUMP` (~6 months) rather than `PERSISTENT_BUMP`, and
+//!   can additionally be refreshed on demand via `extend_claim_consumed_ttl`
+//!   — see "Tombstone survival beyond claim archival" above.
 //!
 //! ## Events
 //!
@@ -92,6 +113,23 @@ pub const LIFETIME_THRESHOLD: u32 = 1_000;
 pub const PERSISTENT_BUMP: u32 = 10_000;
 /// Minimum remaining persistent TTL before triggering a claim-entry bump (≈1.5 days).
 pub const PERSISTENT_THRESHOLD: u32 = 1_000;
+
+/// Extend a **consumed-claim tombstone** (`StorageKey::ClaimConsumed`) TTL by
+/// this many ledgers (~6 months) on every touch — matching the long-lived
+/// archive-entry convention used elsewhere in this workspace (see
+/// `settlement::archive::ARCHIVE_TTL_LEDGERS`), rather than the much shorter
+/// `PERSISTENT_BUMP` used for actively-polled `ClaimRecord` entries.
+///
+/// A tombstone permanently records that a `claim_id` has already been paid;
+/// unlike a `ClaimRecord`, nothing about normal usage guarantees it gets read
+/// (and therefore refreshed) once the claim it guards is old news, so it
+/// needs enough headroom to survive long stretches of silence on its own.
+pub const CONSUMED_TOMBSTONE_BUMP: u32 = 3_110_400; // ~6 months
+/// Minimum remaining TTL before a consumed-tombstone bump is triggered
+/// (~30 days) — generous relative to `PERSISTENT_THRESHOLD` so a tombstone
+/// refreshes well before its much larger bump window would otherwise let it
+/// run down near expiry.
+pub const CONSUMED_TOMBSTONE_THRESHOLD: u32 = 518_400; // ~30 days
 
 /// Maximum number of individual pending amounts a single claim accumulates.
 pub const MAX_PENDING_AMOUNTS: u32 = 50;
@@ -248,9 +286,11 @@ impl CalloraBatchClaim {
         // Reject re-use of a previously consumed claim identifier.
         let consumed_key = StorageKey::ClaimConsumed(claim_id.clone());
         if env.storage().persistent().has(&consumed_key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&consumed_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+            env.storage().persistent().extend_ttl(
+                &consumed_key,
+                CONSUMED_TOMBSTONE_THRESHOLD,
+                CONSUMED_TOMBSTONE_BUMP,
+            );
             let already_consumed: bool = env
                 .storage()
                 .persistent()
@@ -333,12 +373,12 @@ impl CalloraBatchClaim {
             .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 
         // Initialise the consumed tombstone (false = not yet consumed).
-        env.storage()
-            .persistent()
-            .set(&consumed_key, &false);
-        env.storage()
-            .persistent()
-            .extend_ttl(&consumed_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        env.storage().persistent().set(&consumed_key, &false);
+        env.storage().persistent().extend_ttl(
+            &consumed_key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
 
         // Issue #1044: reserve the identifier to this claimant. Written only
         // on the first issuance so the owner can never be reassigned, and
@@ -431,9 +471,11 @@ impl CalloraBatchClaim {
             //    consumed tombstone is the authoritative replay guard.
             //    Bump consumed-tombstone TTL on every read (hot path).
             if env.storage().persistent().has(&consumed_key) {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&consumed_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+                env.storage().persistent().extend_ttl(
+                    &consumed_key,
+                    CONSUMED_TOMBSTONE_THRESHOLD,
+                    CONSUMED_TOMBSTONE_BUMP,
+                );
                 let already_consumed: bool = env
                     .storage()
                     .persistent()
@@ -461,12 +503,12 @@ impl CalloraBatchClaim {
             // This is the concurrency-safety invariant: if two transactions
             // race, the one that commits this write second will read
             // `already_consumed = true` and fail with ClaimIdAlreadyUsed.
-            env.storage()
-                .persistent()
-                .set(&consumed_key, &true);
-            env.storage()
-                .persistent()
-                .extend_ttl(&consumed_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+            env.storage().persistent().set(&consumed_key, &true);
+            env.storage().persistent().extend_ttl(
+                &consumed_key,
+                CONSUMED_TOMBSTONE_THRESHOLD,
+                CONSUMED_TOMBSTONE_BUMP,
+            );
 
             // Now mark the claim record itself as settled.
             record.settled = true;
@@ -476,10 +518,8 @@ impl CalloraBatchClaim {
                 .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 
             // Emit consumed event so off-chain indexers can track spent ids.
-            env.events().publish(
-                (events::event_claim_consumed(&env),),
-                claim_id.clone(),
-            );
+            env.events()
+                .publish((events::event_claim_consumed(&env),), claim_id.clone());
 
             // Emit settled event with claimant + amount.
             env.events().publish(
@@ -620,14 +660,12 @@ impl CalloraBatchClaim {
         let key = StorageKey::ClaimConsumed(claim_id);
 
         if env.storage().persistent().has(&key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
-            return Ok(env
-                .storage()
-                .persistent()
-                .get(&key)
-                .unwrap_or(false));
+            env.storage().persistent().extend_ttl(
+                &key,
+                CONSUMED_TOMBSTONE_THRESHOLD,
+                CONSUMED_TOMBSTONE_BUMP,
+            );
+            return Ok(env.storage().persistent().get(&key).unwrap_or(false));
         }
         Ok(false)
     }
@@ -670,7 +708,46 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
-    }
+    /// Proactively extend a consumed-claim tombstone's TTL, independent of
+    /// any claim/settle activity.
+    ///
+    /// `ClaimConsumed` tombstones are the sole permanent record that a
+    /// `claim_id` has already been paid out (see the module-level docs,
+    /// "Tombstone survival beyond claim archival"). Normal contract usage
+    /// gives nothing a reason to keep reading — and therefore refreshing —
+    /// an old, already-spent id, so this entrypoint lets anyone (typically
+    /// an off-chain keeper running on a schedule) refresh a specific
+    /// tombstone's TTL directly, without needing a claim, settlement, or any
+    /// other side-effecting call to trigger it.
+    ///
+    /// Bumps the same way the hot-path reads above do: only if the entry's
+    /// remaining TTL is below [`CONSUMED_TOMBSTONE_THRESHOLD`], extending it
+    /// out to [`CONSUMED_TOMBSTONE_BUMP`]. This never reveals or mutates the
+    /// consumed value itself — it can only ever extend a TTL — so no
+    /// authorization is required, matching the other read-only views above.
+    ///
+    /// Returns `true` if a tombstone exists for `claim_id` (and was
+    /// refreshed), `false` if no tombstone is registered for that id —
+    /// there is nothing to keep alive.
+    ///
+    /// # Errors
+    /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
+    pub fn extend_claim_consumed_ttl(
+        env: Env,
+        claim_id: BytesN<32>,
+    ) -> Result<bool, BatchClaimError> {
+        Self::require_admin(&env)?;
+        let key = StorageKey::ClaimConsumed(claim_id);
+
+        if !env.storage().persistent().has(&key) {
+            return Ok(false);
+        }
+        env.storage().persistent().extend_ttl(
+            &key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
+        Ok(true)
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -735,7 +812,8 @@ extern crate std;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, BytesN, Env, Vec};
 
     // -----------------------------------------------------------------------
@@ -746,6 +824,19 @@ mod tests {
     fn make_id(env: &Env, seed: u8) -> BytesN<32> {
         let mut raw = [0u8; 32];
         raw[31] = seed;
+        BytesN::from_array(env, &raw)
+    }
+
+    /// Build a filler claim id for `advance_ledger_keeping_instance_alive`'s
+    /// keep-alive loop, guaranteed never to collide with any id produced by
+    /// `make_id` (which only ever sets the *last* byte, leaving every other
+    /// byte zero). A loop advancing the ledger by millions of ledgers can run
+    /// through thousands of these, so collision-by-construction matters more
+    /// than a merely-improbable random-looking counter would.
+    fn make_filler_id(env: &Env, counter: u32) -> BytesN<32> {
+        let mut raw = [0u8; 32];
+        raw[0] = 0xEE; // sentinel byte make_id() never sets
+        raw[28..32].copy_from_slice(&counter.to_be_bytes());
         BytesN::from_array(env, &raw)
     }
 
@@ -1414,5 +1505,246 @@ mod tests {
         assert_eq!(client.claim_id_owner(&unknown), None);
         assert!(!client.claim_id_reserved(&unknown));
         assert!(!client.claim_id_consumed(&unknown));
+    // Consumed-tombstone TTL: survival beyond claim archival (#1043)
+    // -----------------------------------------------------------------------
+
+    /// Reads the raw remaining TTL (in ledgers) of a `ClaimConsumed` entry,
+    /// executed inside the contract's own storage context.
+    fn consumed_ttl(env: &Env, contract_id: &Address, claim_id: &BytesN<32>) -> u32 {
+        let key = StorageKey::ClaimConsumed(claim_id.clone());
+        env.as_contract(contract_id, || env.storage().persistent().get_ttl(&key))
     }
+
+    /// Advances the ledger by `total` ledgers in hops no larger than
+    /// `BUMP_AMOUNT`, calling a harmless, unrelated `add_claim` between hops
+    /// to refresh the contract's own *instance* TTL — simulating an
+    /// ordinarily-active contract (other transactions keep the instance
+    /// alive) across a long gap, without ever touching the specific
+    /// claim/tombstone under test. Soroban's test host errors out entirely
+    /// if the instance itself is allowed to archive mid-simulation, so this
+    /// is required for any jump larger than a single `BUMP_AMOUNT` window —
+    /// see the "Tombstone survival beyond claim archival" section of the
+    /// module docs for why the tombstone and the instance/record don't share
+    /// a TTL budget.
+    fn advance_ledger_keeping_instance_alive(
+        env: &Env,
+        admin: &Address,
+        client: &CalloraBatchClaimClient,
+        total: u32,
+    ) {
+        const SAFETY_MARGIN: u32 = 200;
+        let mut advanced: u32 = 0;
+        let mut counter: u32 = 0;
+        while advanced < total {
+            // Measure the *actual* remaining instance TTL rather than
+            // assuming a fixed post-bump baseline: a freshly-created entry
+            // can start below BUMP_AMOUNT (Soroban's default minimum TTL
+            // for a new entry sits above LIFETIME_THRESHOLD, so the very
+            // first bump_instance() call is a no-op) — sizing a hop off the
+            // wrong assumption jumps straight past expiry instead of
+            // landing below the threshold that would trigger a real bump.
+            let instance_ttl: u32 =
+                env.as_contract(&client.address, || env.storage().instance().get_ttl());
+            let max_safe_hop = instance_ttl.saturating_sub(SAFETY_MARGIN).max(1);
+            let step = max_safe_hop.min(total - advanced);
+
+            let seq = env.ledger().sequence();
+            env.ledger().set_sequence_number(seq + step);
+            advanced += step;
+
+            let filler = Address::generate(env);
+            client.add_claim(admin, &filler, &1, &make_filler_id(env, counter));
+            counter += 1;
+        }
+    }
+
+    /// `add_claim` initialises the consumed tombstone with `CONSUMED_TOMBSTONE_BUMP`
+    /// (~6 months) as soon as its remaining TTL first drops below
+    /// `CONSUMED_TOMBSTONE_THRESHOLD` — far more headroom than the
+    /// comparatively short `PERSISTENT_BUMP` (~16 days) the `ClaimRecord`
+    /// itself gets.
+    #[test]
+    fn test_add_claim_tombstone_gets_far_larger_ttl_than_claim_record() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 80);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        // A freshly written entry starts with the host's default minimum
+        // persistent TTL, which sits above PERSISTENT_THRESHOLD but below
+        // CONSUMED_TOMBSTONE_THRESHOLD — so add_claim's own pre-check bump
+        // already lands the tombstone on CONSUMED_TOMBSTONE_BUMP here, while
+        // the claim record (whose threshold the default TTL does clear) is
+        // intentionally left at its smaller starting point until it's later
+        // read close to expiry. See `test_..._on_settlement` /
+        // `test_..._archival_horizon` below for the record-vs-tombstone
+        // comparison once both have actually decayed.
+        assert_eq!(
+            consumed_ttl(&env, &client.address, &id),
+            CONSUMED_TOMBSTONE_BUMP
+        );
+        assert!(CONSUMED_TOMBSTONE_BUMP > PERSISTENT_BUMP);
+    }
+
+    /// `batch_claim` re-bumps the tombstone to `CONSUMED_TOMBSTONE_BUMP` at the
+    /// moment it is actually consumed (write-before-settle), not just at
+    /// `add_claim` time.
+    #[test]
+    fn test_batch_claim_tombstone_gets_far_larger_ttl_on_settlement() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 81);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        client.batch_claim(&batch);
+
+        assert_eq!(
+            consumed_ttl(&env, &client.address, &id),
+            CONSUMED_TOMBSTONE_BUMP
+        );
+    }
+
+    /// The core regression for #1043: advance the ledger well past a single
+    /// `PERSISTENT_BUMP` window (~16 days) — the `ClaimRecord`'s own
+    /// archival horizon — while ordinary contract activity (unrelated
+    /// `add_claim` calls) keeps the instance alive in the background, and
+    /// confirm the consumed tombstone — bumped with the much larger
+    /// `CONSUMED_TOMBSTONE_BUMP` (~6 months) — is still comfortably alive
+    /// and still enforces replay protection. Replay protection must outlive
+    /// the claim record it guards, not share its archival horizon.
+    #[test]
+    fn test_consumed_tombstone_survives_past_claim_record_archival_horizon() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 82);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        client.batch_claim(&batch);
+
+        // Advance well past a single PERSISTENT_BUMP window without ever
+        // reading/writing this claim_id's record or tombstone directly.
+        advance_ledger_keeping_instance_alive(&env, &admin, &client, 2 * PERSISTENT_BUMP);
+
+        let remaining = consumed_ttl(&env, &client.address, &id);
+        assert!(
+            remaining > 0,
+            "consumed tombstone must still be alive well past a claim record's archival horizon"
+        );
+        // The replay guard itself must still hold at this point.
+        assert_eq!(client.claim_id_consumed(&id), true);
+    }
+
+    /// `extend_claim_consumed_ttl` refreshes an existing, decaying tombstone
+    /// back out to `CONSUMED_TOMBSTONE_BUMP`, independent of any claim or
+    /// settlement activity — the keeper-facing keep-alive path.
+    #[test]
+    fn test_extend_claim_consumed_ttl_refreshes_decaying_tombstone() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 83);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        client.batch_claim(&batch);
+
+        // Advance until the tombstone's remaining TTL is below its bump
+        // threshold, mirroring the repo's established TTL-bump test pattern
+        // — keeping the instance alive via unrelated filler activity along
+        // the way, exactly as ordinary contract usage would.
+        advance_ledger_keeping_instance_alive(
+            &env,
+            &admin,
+            &client,
+            CONSUMED_TOMBSTONE_BUMP - CONSUMED_TOMBSTONE_THRESHOLD + 10,
+        );
+        assert!(consumed_ttl(&env, &client.address, &id) < CONSUMED_TOMBSTONE_THRESHOLD);
+
+        let refreshed = client.extend_claim_consumed_ttl(&id);
+        assert_eq!(refreshed, true);
+        assert_eq!(
+            consumed_ttl(&env, &client.address, &id),
+            CONSUMED_TOMBSTONE_BUMP
+        );
+    }
+
+    /// Calling the keep-alive entrypoint for an id with no registered
+    /// tombstone is a safe no-op that reports `false` rather than erroring —
+    /// boundary case for an identifier that was never issued.
+    #[test]
+    fn test_extend_claim_consumed_ttl_returns_false_for_unregistered_id() {
+        let env = Env::default();
+        let (_admin, _claimant, client) = setup(&env);
+        let never_issued = make_id(&env, 84);
+
+        let refreshed = client.extend_claim_consumed_ttl(&never_issued);
+        assert_eq!(refreshed, false);
+    }
+
+    /// Extreme boundary identifier values (all-zero, all-`0xFF`) are handled
+    /// like any other unregistered id — no panics, no special-casing.
+    #[test]
+    fn test_extend_claim_consumed_ttl_extreme_id_boundaries() {
+        let env = Env::default();
+        let (_admin, _claimant, client) = setup(&env);
+
+        let all_zero = BytesN::from_array(&env, &[0u8; 32]);
+        let all_max = BytesN::from_array(&env, &[0xFFu8; 32]);
+
+        assert_eq!(client.extend_claim_consumed_ttl(&all_zero), false);
+        assert_eq!(client.extend_claim_consumed_ttl(&all_max), false);
+    }
+
+    /// Lifecycle precondition: the keep-alive entrypoint must fail with
+    /// `NotInitialized` before `init` has ever been called, same as every
+    /// other read-only view.
+    #[test]
+    fn test_extend_claim_consumed_ttl_before_init_fails_not_initialized() {
+        let env = Env::default();
+        let id = env.register(CalloraBatchClaim, ());
+        let client = CalloraBatchClaimClient::new(&env, &id);
+        let claim_id = make_id(&env, 85);
+
+        let res = client.try_extend_claim_consumed_ttl(&claim_id);
+        assert_eq!(res, Err(Ok(BatchClaimError::NotInitialized)));
+    }
+
+    /// The keep-alive entrypoint only ever extends TTL metadata — it must
+    /// never flip, reveal, or otherwise mutate the underlying consumed
+    /// value, and must be safe to call repeatedly (idempotent retries).
+    #[test]
+    fn test_extend_claim_consumed_ttl_never_mutates_consumed_value() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 86);
+        client.add_claim(&admin, &claimant, &100, &id);
+
+        // Not yet settled: tombstone exists and reads false.
+        assert_eq!(client.claim_id_consumed(&id), false);
+
+        // Repeated keep-alive calls (simulating retries / a keeper firing
+        // more often than strictly necessary) must not change that, nor
+        // touch unrelated state such as the claim record or total-claims
+        // counter.
+        for _ in 0..3 {
+            assert_eq!(client.extend_claim_consumed_ttl(&id), true);
+            assert_eq!(client.claim_id_consumed(&id), false);
+        }
+        assert_eq!(client.total_claims(), 1);
+        assert!(client.has_claim(&claimant));
+
+        // Now settle, and confirm the same idempotent-refresh property holds
+        // once the tombstone actually reads true.
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        client.batch_claim(&batch);
+
+        for _ in 0..3 {
+            assert_eq!(client.extend_claim_consumed_ttl(&id), true);
+            assert_eq!(client.claim_id_consumed(&id), true);
+        }
 }

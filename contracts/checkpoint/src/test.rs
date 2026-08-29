@@ -703,6 +703,17 @@ fn test_upgrade_fails_for_non_admin() {
     assert!(result.is_err(), "expected Unauthorized error");
 }
 
+/// The pre-upgrade storage-migration gate must reject an all-zero WASM hash
+/// before any upgraded code is swapped in, even when the caller is the admin.
+#[test]
+fn test_upgrade_rejects_zero_wasm_hash_via_migration_guard() {
+    let (env, admin, client) = setup();
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+    let result = client.try_upgrade(&admin, &zero_hash);
+    assert!(result.is_err());
+}
+
 // ===========================================================================
 // Edge-case & invariant tests
 // ===========================================================================
@@ -971,7 +982,11 @@ fn test_fuzz_discovered_batch_atomic_rollback_on_negative_item() {
 
     let res = client.try_batch_create_checkpoints(&admin, &items);
     assert!(res.is_err(), "expected error due to negative balance");
-    assert_eq!(client.get_checkpoint_count(), 0, "count mutated despite error");
+    assert_eq!(
+        client.get_checkpoint_count(),
+        0,
+        "count mutated despite error"
+    );
     assert_eq!(client.get_latest_checkpoint_id(), 0);
 }
 
@@ -1008,4 +1023,3 @@ fn test_fuzz_discovered_unauthenticated_auth_gate() {
     let res = client.try_create_checkpoint(&admin, &subject, &token, &100i128, &meta);
     assert!(res.is_err(), "expected auth failure when unauthenticated");
 }
-

@@ -192,6 +192,9 @@ const REVENUE_POOL_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("pause_set", |e| {
         callora_revenue_pool::events::event_pause_set(e)
     }),
+    ("emergency_pause_set", |e| {
+        callora_revenue_pool::events::event_emergency_pause_set(e)
+    }),
     ("receive_payment", |e| {
         callora_revenue_pool::events::event_receive_payment(e)
     }),
@@ -350,7 +353,7 @@ fn topic_counts_match_catalog_documentation() {
     );
     assert_eq!(
         REVENUE_POOL_TOPICS.len(),
-        21,
+        22,
         "revenue_pool topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
@@ -359,8 +362,11 @@ fn topic_counts_match_catalog_documentation() {
         "distribute topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
-        VAULT_TOPICS.len() + SETTLEMENT_TOPICS.len() + REVENUE_POOL_TOPICS.len() + DISTRIBUTE_TOPICS.len(),
-        84,
+        VAULT_TOPICS.len()
+            + SETTLEMENT_TOPICS.len()
+            + REVENUE_POOL_TOPICS.len()
+            + DISTRIBUTE_TOPICS.len(),
+        85,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }

@@ -1,17 +1,19 @@
 [package]
-name = "callora-checkpoint"
+name = "callora-storage-migration"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Deterministic storage-migration validation that runs before upgraded contract code executes."
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
-callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-proptest = "1.4"
+
+[features]
+testutils = ["soroban-sdk/testutils"]

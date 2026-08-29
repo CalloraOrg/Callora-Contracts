@@ -294,6 +294,7 @@ dependencies = [
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "callora-storage-migration",
  "proptest",
  "soroban-sdk",
 ]
@@ -394,10 +395,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-limits"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-migrate"
 version = "0.1.0"
 dependencies = [
  "callora-settlement",
+ "callora-storage-migration",
  "soroban-sdk",
 ]
 
@@ -437,6 +448,7 @@ dependencies = [
 name = "callora-revenue-pool"
 version = "0.0.1"
 dependencies = [
+ "callora-storage-migration",
  "proptest",
  "soroban-sdk",
 ]
@@ -472,6 +484,13 @@ name = "callora-stake"
 version = "0.1.0"
 dependencies = [
  "callora-stake",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-storage-migration"
+version = "0.1.0"
+dependencies = [
  "soroban-sdk",
 ]
 
