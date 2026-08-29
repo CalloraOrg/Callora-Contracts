@@ -433,6 +433,7 @@ dependencies = [
 name = "callora-registry"
 version = "0.1.0"
 dependencies = [
+ "callora-validators",
  "criterion",
  "soroban-sdk",
 ]
