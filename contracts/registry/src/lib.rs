@@ -83,10 +83,19 @@ impl CalloraRegistry {
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
-        if metadata.is_empty() || metadata.len() > MAX_METADATA_LEN {
-            return Err(RegistryError::InvalidOfferingId);
+        // Bound the metadata byte length explicitly and reject invalid
+        // encodings (C0/DEL controls, zero-width / bidi controls, Unicode
+        // confusables, and leading or trailing whitespace) *before* any
+        // cross-contract `put_offering` call or registry storage write.
+        // `callora_validators::normalize_visible_ascii` enforces the same
+        // 256-byte cap as `MAX_METADATA_LEN`, so the two bounds cannot drift
+        // and the rejection reason (`InvalidMetadata`) is unambiguous.
+        if metadata.len() > MAX_METADATA_LEN {
+            return Err(RegistryError::InvalidMetadata);
         }
-        Ok(())
+        callora_validators::normalize_visible_ascii(metadata)
+            .map(|_| ())
+            .map_err(|_| RegistryError::InvalidMetadata)
     }
 
     /// Register an offering after publishing metadata to the catalog contract.
