@@ -343,6 +343,23 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
 /// atomically, and emits a single `admin_changed` event describing the
 /// before/after state for indexers.
 ///
+/// # Validation Order (Issue #1047)
+///
+/// **All authorization and lifecycle preconditions are checked before any
+/// state mutation** to ensure atomicity and prevent partial commits:
+///
+/// 1. **Authorization**: `caller.require_auth()` ensures the caller signed
+/// 2. **Pending existence**: Verify a rotation is in progress (read-only)
+/// 3. **Identity**: Verify caller equals pending admin (read-only)
+/// 4. **Timing bounds** (issue #1045):
+///    - Verify `now <= expires_at` (not expired)
+///    - Verify `now >= eta` (timelock elapsed)
+/// 5. **Active admin**: Read the current admin (read-only)
+/// 6. **State mutation**: Only after all checks pass, update both slots and emit event
+///
+/// This design ensures that if any check fails, **no state is changed and no
+/// events are emitted**, so the entire transaction reverts atomically.
+///
 /// # Arguments
 /// * `env` — Soroban environment.
 /// * `caller` — Must equal the pending admin address; must authorize.
@@ -370,17 +387,21 @@ pub fn accept_admin(env: &Env, caller: &Address) {
     caller.require_auth();
 
     let inst = env.storage().instance();
+
+    // Read pending rotation; fail fast if none exists (read-only).
     let rotation: PendingRotation = inst
         .get(&Symbol::new(env, PENDING_ADMIN_KEY))
         .expect(ERR_NO_PENDING_ADMIN);
 
-    // Order matters (issue #1045): identity first, schedule second. Every
-    // check below is read-only, so any rejection leaves the pending slot,
-    // the admin slot and the rotation counter exactly as they were found.
+    // Order matters (issue #1045 & #1047): identity first, schedule second.
+    // Every check below is read-only, so any rejection leaves the pending
+    // slot, the admin slot and the rotation counter exactly as they were
+    // found, achieving atomic all-or-nothing semantics.
     if caller != &rotation.new_admin {
         panic!("{}", ERR_UNAUTHORIZED_PENDING);
     }
 
+    // Validate end-time boundaries before state mutation (issue #1047).
     let now = env.ledger().timestamp();
     if now > rotation.expires_at {
         panic!("{}", ERR_NOMINATION_EXPIRED);
@@ -389,18 +410,21 @@ pub fn accept_admin(env: &Env, caller: &Address) {
         panic!("{}", ERR_TIMELOCK_NOT_ELAPSED);
     }
 
+    // Read active admin; fail if not initialized (read-only).
     let previous_admin: Address = inst
         .get(&Symbol::new(env, ADMIN_KEY))
         .expect(ERR_NOT_INITIALIZED);
 
+    // All preconditions passed. Perform atomic state mutation pair:
+    // 1. Update active admin to pending admin
+    // 2. Clear pending slot
+    // Both updates complete or both revert (single transaction).
     let pending = rotation.new_admin;
     inst.set(&Symbol::new(env, ADMIN_KEY), &pending);
-    // Clearing the pending slot in the same call is what makes a second
-    // `accept_admin` with the same nomination fail with ERR_NO_PENDING_ADMIN
-    // instead of re-running the promotion.
     inst.remove(&Symbol::new(env, PENDING_ADMIN_KEY));
     inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+    // Emit completion event only after state is successfully committed.
     env.events().publish(
         (events::event_admin_changed(env), caller),
         (previous_admin, pending),

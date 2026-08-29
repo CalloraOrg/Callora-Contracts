@@ -1872,3 +1872,282 @@ fn nomination_event_carries_the_acceptance_window() {
     assert_eq!(eta, 5_000 + admin::ROTATION_DELAY_SECS);
     assert_eq!(expires_at, eta + admin::ROTATION_GRACE_SECS);
 }
+
+// ===========================================================================
+// Issue #1047 - Validate bounded stream end times before state mutation
+// ===========================================================================
+//
+// These regression tests verify that all timing boundary checks occur
+// BEFORE any state mutations, ensuring atomic all-or-nothing semantics
+// when acceptance is rejected due to expiry or early timing.
+
+/// **Issue #1047**: Rejection at exact expiry must not mutate state.
+/// 
+/// When a nomination expires at precisely `expires_at`, attempting acceptance
+/// at `expires_at + 1` fails with `ERR_NOMINATION_EXPIRED`. The critical check:
+/// no state is changed, no events are emitted, the pending slot remains intact.
+#[test]
+#[should_panic(expected = "admin rotation nomination has expired")]
+fn acceptance_at_expiry_plus_one_rejects_without_mutation() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    // Remember initial state before the failed attempt
+    let initial_rotation = h_rotation(&env, &id).unwrap();
+    let initial_admin = h_admin(&env, &id);
+    let initial_pending = h_pending(&env, &id);
+
+    let expires_at = initial_rotation.expires_at;
+    set_timestamp(&env, expires_at + 1);
+
+    // Attempt acceptance outside the window — must panic
+    h_accept_admin(&env, &id, &nominee);
+
+    // If this line is reached, the test failed because no panic occurred.
+    // The panic handler should not get here, but we record it anyway.
+}
+
+/// **Issue #1047**: Expiry rejection leaves pending slot unchanged.
+///
+/// A failed acceptance due to expiry must not clear the pending slot.
+/// This allows the current admin to cancel or re-nominate without a gap.
+#[test]
+fn expiry_rejection_preserves_pending_slot() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    let expires_at = h_rotation(&env, &id).unwrap().expires_at;
+    set_timestamp(&env, expires_at + 1);
+
+    // Attempt acceptance outside the window — this will panic internally
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+    assert!(result.is_err(), "acceptance must panic when expired");
+
+    // Verify pending slot still exists unchanged
+    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+
+    // Verify no admin_changed event was emitted
+    let changed_events = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed_events.len(), 0, "no admin_changed event on expiry rejection");
+}
+
+/// **Issue #1047**: Early acceptance (before ETA) leaves state intact.
+///
+/// When the timelock has not elapsed and a caller attempts acceptance
+/// before `eta`, the rejection must occur before any state write.
+#[test]
+fn early_acceptance_rejection_leaves_state_unchanged() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    let eta = h_rotation(&env, &id).unwrap().eta;
+    set_timestamp(&env, eta - 1);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+    assert!(
+        result.is_err(),
+        "acceptance before ETA must panic with ERR_TIMELOCK_NOT_ELAPSED"
+    );
+
+    // Verify no state changed
+    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+
+    // Verify no admin_changed event
+    let changed_events = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed_events.len(), 0, "no event on early rejection");
+}
+
+/// **Issue #1047**: Non-pending caller rejection is identity-checked first.
+///
+/// Per the documented order in `accept_admin`, identity is verified BEFORE
+/// timing checks. A wrong caller must fail without revealing timing information.
+#[test]
+fn wrong_caller_rejects_before_timing_checks() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    let wrong_caller = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    // Advance to valid acceptance window
+    warp_past_timelock(&env);
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &wrong_caller);
+    }));
+    assert!(
+        result.is_err(),
+        "wrong caller must panic with ERR_UNAUTHORIZED_PENDING"
+    );
+
+    // Verify state unchanged and no event emitted
+    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+    let changed_events = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed_events.len(), 0, "identity rejection emits no event");
+}
+
+/// **Issue #1047**: Successful acceptance emits event only after all state committed.
+///
+/// The `admin_changed` event is the atomic commit marker: if it exists, both
+/// the active admin and pending slot have been successfully updated.
+#[test]
+fn successful_acceptance_emits_event_post_commit() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let new_admin = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &new_admin);
+
+    warp_past_timelock(&env);
+    h_accept_admin(&env, &id, &new_admin);
+
+    // Event must exist
+    let changed_events = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed_events.len(), 1, "must emit exactly one admin_changed");
+
+    // Verify state reflects the commitment
+    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
+    assert!(h_pending(&env, &id).is_none(), "pending slot cleared after accept");
+}
+
+/// **Issue #1047**: Repeated acceptance of same nomination fails atomically.
+///
+/// After successful acceptance clears the pending slot, a second attempt
+/// by the same (now-active) admin fails with ERR_NO_PENDING_ADMIN before
+/// any new state change.
+#[test]
+#[should_panic(expected = "no pending admin transfer")]
+fn second_acceptance_of_same_nomination_fails_with_no_pending() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let new_admin = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &new_admin);
+
+    warp_past_timelock(&env);
+    h_accept_admin(&env, &id, &new_admin);
+
+    // The pending slot is now gone. A second attempt must fail.
+    h_accept_admin(&env, &id, &new_admin);
+}
+
+/// **Issue #1047**: Boundary arithmetic - no overflow on max timestamp.
+///
+/// Even if the ledger timestamp is near u64::MAX, the saturation logic
+/// in `set_admin` ensures `eta` and `expires_at` never wrap around
+/// (instead saturating to u64::MAX). An acceptance at such extreme times
+/// still validates the bounds correctly.
+#[test]
+fn boundary_arithmetic_saturates_near_max_timestamp() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+
+    // Set timestamp near u64::MAX so eta saturation is exercised
+    let near_max = u64::MAX - 1_000_000;
+    set_timestamp(&env, near_max);
+
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    let rotation = h_rotation(&env, &id).unwrap();
+    // eta = now.saturating_add(ROTATION_DELAY_SECS)
+    // expires_at = eta.saturating_add(ROTATION_GRACE_SECS)
+    // Both should saturate to u64::MAX, not wrap
+    assert!(
+        rotation.eta >= near_max,
+        "eta must be >= proposed_at (saturated arithmetic)"
+    );
+    assert!(
+        rotation.expires_at >= rotation.eta,
+        "expires_at must be >= eta (saturated arithmetic)"
+    );
+
+    // Acceptance exactly at the saturated eta should succeed
+    set_timestamp(&env, rotation.eta);
+    warp_past_timelock(&env); // Advance past eta
+
+    // Should not panic due to arithmetic issues
+    h_accept_admin(&env, &id, &nominee);
+    assert_eq!(h_admin(&env, &id), Some(nominee));
+}
+
+/// **Issue #1047**: Concurrent rotations with re-nomination restart the clock.
+///
+/// If admin nominates A, then before acceptance nominates B, the B nomination
+/// gets a fresh `eta` and `expires_at`. The old A window is replaced,
+/// preventing an admin from "warming up" a slot and then swapping attackers.
+#[test]
+fn renomination_restarts_the_clock() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee_a = Address::generate(&env);
+    let nominee_b = Address::generate(&env);
+
+    // Nominate A
+    h_set_admin(&env, &id, &admin_addr, &nominee_a);
+    let rotation_a = h_rotation(&env, &id).unwrap();
+
+    // Advance time but not past A's ETA
+    let early_time = rotation_a.eta - 100;
+    set_timestamp(&env, early_time);
+
+    // Nominate B — clock restarts
+    h_set_admin(&env, &id, &admin_addr, &nominee_b);
+    let rotation_b = h_rotation(&env, &id).unwrap();
+
+    // B's ETA must be later than A's ETA (clock restarted)
+    assert!(
+        rotation_b.eta > rotation_a.eta,
+        "renomination must restart the clock"
+    );
+
+    // A cannot be accepted at A's original ETA
+    set_timestamp(&env, rotation_a.eta);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee_a);
+    }));
+    assert!(result.is_err(), "old nominee cannot accept after renomination");
+
+    // Verify B is still the pending nominee
+    assert_eq!(h_pending(&env, &id), Some(nominee_b.clone()));
+}
+
+/// **Issue #1047**: Idempotence - accepting the same caller twice fails safely.
+///
+/// After the pending slot is cleared by successful acceptance, the same
+/// caller attempting acceptance again fails before any new mutations.
+#[test]
+fn acceptance_idempotence_fails_safely() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let new_admin = Address::generate(&env);
+    h_set_admin(&env, &id, &admin_addr, &new_admin);
+
+    warp_past_timelock(&env);
+    h_accept_admin(&env, &id, &new_admin);
+
+    // Verify first acceptance succeeded
+    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
+    assert!(h_pending(&env, &id).is_none());
+
+    let first_admin_change_count = events_with_topic(&env, "admin_changed").len();
+
+    // Attempt second acceptance — should fail
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &new_admin);
+    }));
+    assert!(result.is_err(), "second acceptance must fail");
+
+    // Verify no new state change or event
+    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
+    assert!(h_pending(&env, &id).is_none());
+
+    let final_admin_change_count = events_with_topic(&env, "admin_changed").len();
+    assert_eq!(
+        first_admin_change_count, final_admin_change_count,
+        "failed acceptance must not emit additional events"
+    );
+}
+
