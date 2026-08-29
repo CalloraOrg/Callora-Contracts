@@ -48,9 +48,11 @@ pub fn batch_settle(env: &Env, settlements: Vec<SettleInput>) -> Vec<SettleOutco
         return outcomes;
     }
 
-    // Explicit per-claimant authorization and cross-tenant validation before mutation
+    // Cross-tenant validation before mutation: every item must belong to the
+    // same claimant. Per-item authorization is enforced inside
+    // `withdraw_developer_balance` (each item requires the claimant's auth), so
+    // no extra top-level `require_auth` is needed here.
     let claimant = settlements.get_unchecked(0).developer.clone();
-    claimant.require_auth();
 
     for input in settlements.iter() {
         if input.developer != claimant {

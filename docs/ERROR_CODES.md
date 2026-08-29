@@ -97,6 +97,21 @@ must not be reassigned once released.
 | 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
 | 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
 | 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |
+| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |
+| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |
+| 30 | `DeveloperFrozen` | Settlement | Developer is frozen and cannot withdraw |
+| 31 | `DeveloperNotFrozen` | Settlement | Developer is not frozen; cannot unfreeze |
+| 32 | `FreezeUnauthorized` | Settlement | Caller is not authorized to freeze/unfreeze |
+| 33 | `WriteRateLimitExceeded` | Settlement | Admin wrote prices too frequently |
+| 34 | `InvalidConfigDistinct` | Settlement | Init config requires distinct admin and vault |
+| 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |
+| 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |
+| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |
+| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |
+| 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |
+| 40 | `InvalidVault` | Settlement | Vault address is invalid |
+| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
+| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |
 
 ## Revenue Pool
 
