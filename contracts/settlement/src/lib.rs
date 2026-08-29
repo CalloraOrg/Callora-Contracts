@@ -3,7 +3,10 @@ pub mod admin;
 pub mod archive;
 pub mod batch;
 pub mod errors;
+pub mod errors;
 pub mod events;
+
+use crate::errors::SettlementError;
 pub mod freeze;
 pub mod limits;
 pub mod migrate;
@@ -48,14 +51,14 @@ impl CalloraSettlement {
             env.panic_with_error(SettlementError::AlreadyInitialized);
         }
         if admin == vault_address {
-            panic!("invalid config: admin and vault_address must be distinct");
+            env.panic_with_error(SettlementError::InvalidConfigDistinct);
         }
         let contract_address = env.current_contract_address();
         if admin == contract_address {
-            panic!("invalid config: admin cannot be the contract itself");
+            env.panic_with_error(SettlementError::InvalidConfigAdminContract);
         }
         if vault_address == contract_address {
-            panic!("invalid config: vault_address cannot be the contract itself");
+            env.panic_with_error(SettlementError::InvalidConfigVaultContract);
         }
 
         let inst = env.storage().instance();
@@ -236,7 +239,7 @@ impl CalloraSettlement {
     ///
     /// # Arguments
     /// * `caller` - Must be the registered vault address or admin
-    /// * `items` - Vec of `(developer_address, amount)` pairs; 1–[`MAX_BATCH_SIZE`] entries
+    /// * `items` - Vec of `(developer_address, amount)` pairs; 1â€“[`MAX_BATCH_SIZE`] entries
     /// * `token` - The token contract address for this batch payment
     ///
     /// # Validation
@@ -468,10 +471,10 @@ impl CalloraSettlement {
         caller.require_auth();
         let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
-            panic!("unauthorized: caller is not admin");
+            env.panic_with_error(SettlementError::Unauthorized);
         }
         if usdc_address == env.current_contract_address() {
-            panic!("invalid config: usdc_token cannot be the contract itself");
+            env.panic_with_error(SettlementError::InvalidUsdcToken);
         }
         env.storage()
             .instance()
@@ -524,7 +527,7 @@ impl CalloraSettlement {
         let recipient = to.unwrap_or_else(|| developer.clone());
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
-            panic!("invalid recipient: cannot withdraw to contract itself");
+            env.panic_with_error(SettlementError::InvalidRecipient);
         }
 
         Self::require_claim_window_open(&env, &developer)?;
@@ -638,7 +641,7 @@ impl CalloraSettlement {
         let recipient = to.unwrap_or_else(|| developer.clone());
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
-            panic!("invalid recipient: cannot withdraw to contract itself");
+            env.panic_with_error(SettlementError::InvalidRecipient);
         }
 
         Self::require_claim_window_open(&env, &developer)?;
@@ -923,9 +926,9 @@ impl CalloraSettlement {
     /// move on-ledger tokens and is treated as an audited administrative inflow.
     ///
     /// # Panics
-    /// * `Unauthorized` — caller is not admin.
-    /// * `AmountNotPositive` — amount is zero or negative.
-    /// * `DeveloperOverflow` — i128 overflow on developer balance.
+    /// * `Unauthorized` â€” caller is not admin.
+    /// * `AmountNotPositive` â€” amount is zero or negative.
+    /// * `DeveloperOverflow` â€” i128 overflow on developer balance.
     ///
     /// # Events
     /// Emits `developer_force_credited`.
@@ -1140,7 +1143,7 @@ impl CalloraSettlement {
     /// Finalize a pending admin transfer. Must be called by the nominated admin.
     ///
     /// # Panics
-    /// * `"no admin transfer pending"` — `set_admin` was not called first.
+    /// * `"no admin transfer pending"` â€” `set_admin` was not called first.
     ///
     /// # Events
     /// Emits `admin_accepted` with `(old_admin, new_admin)`.
@@ -1161,7 +1164,7 @@ impl CalloraSettlement {
     /// Cancel a pending admin transfer (admin only).
     ///
     /// # Panics
-    /// * `"no admin transfer pending"` — no nomination is in progress.
+    /// * `"no admin transfer pending"` â€” no nomination is in progress.
     ///
     /// # Events
     /// Emits `admin_cancelled`.
@@ -1172,7 +1175,7 @@ impl CalloraSettlement {
             env.panic_with_error(SettlementError::Unauthorized);
         }
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
-            panic!("no admin transfer pending");
+            env.panic_with_error(SettlementError::NoAdminTransferPending);
         }
         env.storage().instance().remove(&StorageKey::PendingAdmin);
         events::emit_admin_cancelled(&env, &admin);
@@ -1190,7 +1193,7 @@ impl CalloraSettlement {
             env.panic_with_error(SettlementError::Unauthorized);
         }
         if new_vault == env.current_contract_address() {
-            panic!("invalid vault: cannot be the contract itself");
+            env.panic_with_error(SettlementError::InvalidVault);
         }
         let current_vault = Self::get_vault(env.clone()).unwrap();
         env.storage()
@@ -1215,7 +1218,7 @@ impl CalloraSettlement {
     /// proposed vault or the current admin.
     ///
     /// # Panics
-    /// * `"no vault rotation pending"` — `propose_vault` was not called first.
+    /// * `"no vault rotation pending"` â€” `propose_vault` was not called first.
     ///
     /// # Events
     /// Emits `vault_accepted` with [`VaultAcceptedEvent`].
@@ -1363,8 +1366,8 @@ impl CalloraSettlement {
     /// * `reason` - Opaque label emitted in the event for off-chain indexers.
     ///
     /// # Errors
-    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
-    /// * [`SettlementError::DeveloperFrozen`] — developer is already frozen.
+    /// * [`SettlementError::FreezeUnauthorized`] â€” caller is not the admin.
+    /// * [`SettlementError::DeveloperFrozen`] â€” developer is already frozen.
     pub fn freeze_developer(
         env: Env,
         caller: Address,
@@ -1383,8 +1386,8 @@ impl CalloraSettlement {
     /// * `developer` - The developer address to unfreeze.
     ///
     /// # Errors
-    /// * [`SettlementError::FreezeUnauthorized`] — caller is not the admin.
-    /// * [`SettlementError::DeveloperNotFrozen`] — developer is not frozen.
+    /// * [`SettlementError::FreezeUnauthorized`] â€” caller is not the admin.
+    /// * [`SettlementError::DeveloperNotFrozen`] â€” developer is not frozen.
     pub fn unfreeze_developer(
         env: Env,
         caller: Address,
@@ -1417,7 +1420,7 @@ impl CalloraSettlement {
         price_registry::get_price(&env, offering_id)
     }
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ Internal helpers ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â” Internal helpers â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 
     /// Abort with `Unauthorized` unless `caller` is the registered vault or admin.
     fn require_authorized_caller(env: Env, caller: Address) {
