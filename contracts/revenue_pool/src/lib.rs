@@ -34,6 +34,7 @@ pub enum DataKey {
 const ADMIN_KEY: &str = "admin";
 const USDC_KEY: &str = "usdc";
 const PAUSED_KEY: &str = "paused";
+const EMERGENCY_PAUSED_KEY: &str = "emergency_paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
@@ -131,6 +132,7 @@ impl RevenuePool {
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_init(&env), admin), usdc_token);
@@ -163,6 +165,7 @@ impl RevenuePool {
     }
 
     fn require_not_paused(env: &Env) {
+        Self::require_not_emergency_paused(env);
         if env
             .storage()
             .instance()
@@ -170,6 +173,17 @@ impl RevenuePool {
             .unwrap_or(false)
         {
             env.panic_with_error(RevenuePoolError::Paused);
+        }
+    }
+
+    fn require_not_emergency_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, EMERGENCY_PAUSED_KEY))
+            .unwrap_or(false)
+        {
+            env.panic_with_error(RevenuePoolError::EmergencyPaused);
         }
     }
 
@@ -220,6 +234,7 @@ impl RevenuePool {
     /// `admin_transfer_started` with `new_admin`.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let current = Self::admin(&env);
         if caller != current {
             env.panic_with_error(RevenuePoolError::Unauthorized);
@@ -247,6 +262,7 @@ impl RevenuePool {
     /// Emits `admin_transfer_completed` with the new admin as topic.
     pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let inst = env.storage().instance();
         let pending: Address = inst
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
@@ -283,6 +299,7 @@ impl RevenuePool {
     /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let current = Self::admin(&env);
         if caller != current {
             env.panic_with_error(RevenuePoolError::Unauthorized);
@@ -321,6 +338,7 @@ impl RevenuePool {
     /// Emits `pause_guardian_set` with `caller` as topic and `guardian` as data.
     pub fn set_pause_guardian(env: Env, caller: Address, guardian: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         env.storage()
             .instance()
@@ -342,6 +360,7 @@ impl RevenuePool {
     /// Emits `pause_guardian_cleared` with `caller` as topic and the previous guardian as data.
     pub fn clear_pause_guardian(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         let inst = env.storage().instance();
         let guardian: Address = inst
@@ -379,6 +398,7 @@ impl RevenuePool {
     /// Emits `pause_set` with `caller` as topic and `true` as data.
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let admin = Self::admin(&env);
         let guardian = Self::get_pause_guardian(env.clone());
         if caller != admin && guardian.as_ref() != Some(&caller) {
@@ -407,6 +427,7 @@ impl RevenuePool {
     /// Emits `pause_set` with `caller` as topic and `false` as data.
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if !Self::is_paused(env.clone()) {
             env.panic_with_error(RevenuePoolError::NotPaused);
@@ -430,6 +451,71 @@ impl RevenuePool {
             .unwrap_or(false)
     }
 
+    /// Activate recovery-only emergency mode.
+    ///
+    /// The admin or configured pause guardian may call. Once active, normal
+    /// sensitive mutations fail closed; only admin recovery and drain
+    /// cancellation remain available.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is neither admin nor guardian.
+    /// * [`RevenuePoolError::AlreadyEmergencyPaused`] - emergency mode is already active.
+    ///
+    /// # Events
+    /// Emits `emergency_pause_set` with `caller` as topic and `true` as data.
+    pub fn emergency_pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::admin(&env);
+        let guardian = Self::get_pause_guardian(env.clone());
+        if caller != admin && guardian.as_ref() != Some(&caller) {
+            env.panic_with_error(RevenuePoolError::Unauthorized);
+        }
+        if Self::is_emergency_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::AlreadyEmergencyPaused);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &true);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &true);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_emergency_pause_set(&env), caller), true);
+    }
+
+    /// Clear recovery-only emergency mode after operator remediation.
+    ///
+    /// Only the current admin may recover the pool. Recovery also clears the
+    /// regular pause flag so normal operations resume in a single authorised
+    /// action.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NotEmergencyPaused`] - emergency mode is not active.
+    ///
+    /// # Events
+    /// Emits `emergency_pause_set` with `caller` as topic and `false` as data.
+    pub fn recover_from_emergency(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        if !Self::is_emergency_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::NotEmergencyPaused);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_emergency_pause_set(&env), caller), false);
+    }
+
+    /// Return `true` when recovery-only emergency mode is active.
+    pub fn is_emergency_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(&env, EMERGENCY_PAUSED_KEY))
+            .unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Yield deposit
     // -----------------------------------------------------------------------
@@ -445,6 +531,7 @@ impl RevenuePool {
     /// Emits `receive_payment` with `caller` as topic and `(amount, from_vault)` as data.
     pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         env.events().publish(
             (events::event_receive_payment(&env), caller),
@@ -470,6 +557,7 @@ impl RevenuePool {
     /// `(amount, source, cumulative_yield_deposited)` as data.
     pub fn deposit_yield(env: Env, treasury: Address, amount: i128, source: Symbol) {
         treasury.require_auth();
+        Self::require_not_emergency_paused(&env);
         if treasury != Self::admin(&env) {
             env.panic_with_error(RevenuePoolError::Unauthorized);
         }
@@ -536,6 +624,7 @@ impl RevenuePool {
     /// Emits `set_max_distribute` with `(old_max, new_max)`.
     pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if max_distribute <= 0 {
             env.panic_with_error(RevenuePoolError::MaxDistributeNotPositive);
@@ -755,6 +844,7 @@ impl RevenuePool {
     /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
 
         // ── Pre-upgrade storage-migration validation ──────────────────────
@@ -825,6 +915,7 @@ impl RevenuePool {
     /// Emits `admin_broadcast` with `caller` as topic and `AdminBroadcast` as data.
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         let len = message.len();
         if len == 0 {
@@ -902,6 +993,7 @@ impl RevenuePool {
     /// [`PendingEmergencyDrain`] snapshot as data.
     pub fn propose_emergency_drain(env: Env, caller: Address, treasury: Address, amount: i128) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if amount <= 0 {
             env.panic_with_error(RevenuePoolError::AmountNotPositive);
@@ -952,6 +1044,7 @@ impl RevenuePool {
     /// `(to, amount, proposed_at, executed_at)` as data.
     pub fn execute_emergency_drain(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
 
         let inst = env.storage().instance();

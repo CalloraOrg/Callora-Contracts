@@ -121,6 +121,67 @@ fn pause_state_errors_are_typed() {
 }
 
 #[test]
+fn emergency_pause_errors_are_typed() {
+    let env = Env::default();
+    let (admin, _, client, _, _) = setup_pool(&env);
+    let attacker = Address::generate(&env);
+
+    assert_eq!(
+        client.try_recover_from_emergency(&admin),
+        Err(Ok(RevenuePoolError::NotEmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_emergency_pause(&attacker),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+
+    client.emergency_pause(&admin);
+    assert_eq!(
+        client.try_emergency_pause(&admin),
+        Err(Ok(RevenuePoolError::AlreadyEmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_recover_from_emergency(&attacker),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert_eq!(
+        client.try_unpause(&admin),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+}
+
+#[test]
+fn emergency_pause_blocks_sensitive_mutations_without_transfer_or_state_change() {
+    let env = Env::default();
+    let (admin, pool, client, usdc, usdc_admin) = setup_pool(&env);
+    let recipient = Address::generate(&env);
+    let source = Symbol::new(&env, "fees");
+
+    usdc_admin.mint(&pool, &100);
+    usdc_admin.mint(&admin, &100);
+    client.emergency_pause(&admin);
+
+    assert_eq!(
+        client.try_set_max_distribute(&admin, &50),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_deposit_yield(&admin, &10, &source),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_distribute(&admin, &recipient, &10),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+
+    assert_eq!(usdc.balance(&pool), 100);
+    assert_eq!(usdc.balance(&admin), 100);
+    assert_eq!(usdc.balance(&recipient), 0);
+    assert_eq!(client.get_max_distribute(), DEFAULT_MAX_DISTRIBUTE);
+    assert!(client.is_emergency_paused());
+}
+
+#[test]
 fn single_distribution_errors_are_typed() {
     let env = Env::default();
     let (admin, pool, client, _, _) = setup_pool(&env);
