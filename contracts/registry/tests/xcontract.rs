@@ -17,7 +17,7 @@ extern crate std;
 use callora_registry::{CalloraRegistry, CalloraRegistryClient, RegistryError};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token;
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol};
 
 // ---------------------------------------------------------------------------
 // Mock callees - each in separate modules to avoid symbol conflicts
@@ -75,6 +75,38 @@ pub mod revert_catalog {
             _metadata: String,
         ) {
             panic!("catalog callee revert");
+        }
+    }
+}
+
+/// Catalog that enforces the cross-contract caller identity contract from
+/// `catalog.rs` (issue #1060): `registry.require_auth()` must succeed before
+/// anything is recorded. This is the reference implementation of what a
+/// production catalog must do.
+pub mod identity_catalog {
+    use super::*;
+
+    #[contract]
+    pub struct IdentityCatalog;
+
+    #[contractimpl]
+    impl IdentityCatalog {
+        pub fn put_offering(env: Env, registry: Address, _offering_id: String, _metadata: String) {
+            // Identity check FIRST: only the real registry contract may
+            // publish. A spoofing caller that passes the registry address as
+            // an argument does not satisfy this check and fails closed.
+            registry.require_auth();
+            let key = Symbol::new(&env, "published");
+            let count: u32 = env.storage().instance().get(&key).unwrap_or(0);
+            env.storage().instance().set(&key, &(count + 1));
+        }
+
+        /// Number of offerings successfully published (identity-verified).
+        pub fn published_count(env: Env) -> u32 {
+            env.storage()
+                .instance()
+                .get(&Symbol::new(&env, "published"))
+                .unwrap_or(0)
         }
     }
 }
@@ -290,4 +322,58 @@ fn balance_gate_insufficient_balance_does_not_call_catalog() {
 
     assert_eq!(client.registered_count(), 0);
     assert!(!client.is_offering_registered(&oid));
+}
+
+// ---------------------------------------------------------------------------
+// Cross-contract caller identity (issue #1060)
+// ---------------------------------------------------------------------------
+//
+// The catalog is a trust boundary: it must only accept `put_offering` calls
+// that genuinely originate from the registry contract. `registry.require_auth()`
+// is the identity check — it succeeds only when the immediate caller is the
+// registry (the host authorizes the contract caller) and fails closed for any
+// other caller, even one that passes the registry's address as an argument.
+
+/// A spoofing caller (here, the test acting as an external account) that
+/// passes the real registry's address as `registry` must be rejected by an
+/// identity-enforcing catalog, and nothing may be recorded.
+#[test]
+fn identity_enforcing_catalog_rejects_spoofed_registry() {
+    let env = Env::default();
+    let catalog = env.register(identity_catalog::IdentityCatalog, ());
+    let registry_addr = env.register(CalloraRegistry, ());
+    let catalog_client = identity_catalog::IdentityCatalogClient::new(&env, &catalog);
+
+    let oid = offering_id(&env, "spoof");
+    let meta = metadata(&env);
+
+    // Deliberately no `mock_all_auths()`: an external caller invoking the
+    // catalog directly with the registry's address is NOT the registry.
+    let result = catalog_client.try_put_offering(&registry_addr, &oid, &meta);
+    assert!(
+        result.is_err(),
+        "catalog must reject a caller that is not the registry contract"
+    );
+    // Fail closed: nothing was recorded at the boundary.
+    assert_eq!(catalog_client.published_count(), 0);
+}
+
+/// The real registry can still publish through an identity-enforcing catalog:
+/// its own cross-contract call satisfies `registry.require_auth()`.
+#[test]
+fn registry_publishes_through_identity_enforcing_catalog() {
+    let env = Env::default();
+    let catalog_id = env.register(identity_catalog::IdentityCatalog, ());
+    let (admin, client, developer) = setup_registry(&env, catalog_id.clone());
+
+    let oid = offering_id(&env, "real");
+    let meta = metadata(&env);
+
+    client.register_offering(&admin, &developer, &oid, &meta);
+
+    assert_eq!(client.registered_count(), 1);
+    assert!(client.is_offering_registered(&oid));
+    // The identity-enforcing catalog recorded exactly one verified offering.
+    let catalog_client = identity_catalog::IdentityCatalogClient::new(&env, &catalog_id);
+    assert_eq!(catalog_client.published_count(), 1);
 }
