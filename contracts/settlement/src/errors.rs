@@ -41,6 +41,15 @@ use soroban_sdk::contracterror;
 /// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
 /// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
 /// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
+/// | 34   | InvalidConfigDistinct        | Init config requires distinct admin and vault        |
+/// | 35   | InvalidConfigAdminContract   | Init config forbids the admin being the contract     |
+/// | 36   | InvalidConfigVaultContract   | Init config forbids the vault being the contract     |
+/// | 37   | InvalidUsdcToken             | USDC token address is invalid                        |
+/// | 38   | InvalidRecipient             | Withdrawal recipient cannot be the contract          |
+/// | 39   | NoAdminTransferPending       | No admin transfer is pending                         |
+/// | 40   | InvalidVault                 | Vault address is invalid                             |
+/// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
+/// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -82,4 +91,14 @@ pub enum SettlementError {
     FreezeUnauthorized = 32,
     /// Admin attempted a price write before the minimum interval elapsed.
     WriteRateLimitExceeded = 33,
+    InvalidConfigDistinct = 34,
+    InvalidConfigAdminContract = 35,
+    InvalidConfigVaultContract = 36,
+    InvalidUsdcToken = 37,
+    InvalidRecipient = 38,
+    NoAdminTransferPending = 39,
+    InvalidVault = 40,
+    NoVaultRotationPending = 41,
+    /// Admin broadcast message exceeds the maximum allowed length.
+    BroadcastMessageTooLong = 42,
 }

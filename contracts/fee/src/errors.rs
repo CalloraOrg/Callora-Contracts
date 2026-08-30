@@ -19,4 +19,6 @@ pub enum ContractError {
     FeeTooHigh = 6,
     /// Insufficient balance to satisfy the request.
     InsufficientBalance = 7,
+    /// Recipient address is invalid (contract itself or zero address).
+    InvalidRecipient = 8,
 }

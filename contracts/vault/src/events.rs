@@ -349,6 +349,15 @@ pub fn event_swept(env: &Env) -> Symbol {
     Symbol::new(env, "swept")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+///
+/// This symbol is emitted as the second topic slot (after the legacy topic)
+/// to enable explicit version handling by indexers while preserving the
+/// original first-slot byte identity for backward compatibility.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
