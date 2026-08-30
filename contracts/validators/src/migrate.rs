@@ -205,12 +205,7 @@ pub fn migrate_v1_to_v2(env: &Env, caller: &Address) {
 /// |-----------|-------|
 /// | Caller is not the admin | contract panic (`require_auth` failure) |
 /// | `target_version` ≠ stored version | contract panic |
-pub fn authorize_upgrade(
-    env: &Env,
-    caller: &Address,
-    target_version: u32,
-    wasm_hash: BytesN<32>,
-) {
+pub fn authorize_upgrade(env: &Env, caller: &Address, target_version: u32, wasm_hash: BytesN<32>) {
     caller.require_auth();
     require_admin(env, caller);
 
@@ -224,8 +219,10 @@ pub fn authorize_upgrade(
         &(target_version, wasm_hash.clone()),
     );
 
-    env.events()
-        .publish((Symbol::new(env, "upg_authorised"), wasm_hash), target_version);
+    env.events().publish(
+        (Symbol::new(env, "upg_authorised"), wasm_hash),
+        target_version,
+    );
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -392,9 +389,10 @@ mod tests {
         assert_eq!(stored.0, version);
         assert_eq!(stored.1, hash);
         let other_hash = BytesN::from_array(&env, &[0xCDu8; 32]);
-        env.storage()
-            .instance()
-            .set(&StorageKey::AuthorisedUpgrade, &(version, other_hash.clone()));
+        env.storage().instance().set(
+            &StorageKey::AuthorisedUpgrade,
+            &(version, other_hash.clone()),
+        );
         let updated: (u32, BytesN<32>) = env
             .storage()
             .instance()
@@ -454,8 +452,7 @@ mod tests {
         migrate_v1_to_v2(&env, &admin);
         let events = env.events().all();
         assert_eq!(events.len(), 1);
-        let (topic, payload): ((Symbol,), u32) =
-            events.into_iter().next().unwrap().tuple();
+        let (topic, payload): ((Symbol,), u32) = events.into_iter().next().unwrap().tuple();
         assert_eq!(topic.0, Symbol::new(&env, "mig_v1_v2_done"));
         assert_eq!(payload, STORAGE_VERSION_V2);
     }
@@ -507,9 +504,10 @@ mod tests {
         env.storage()
             .instance()
             .set(&StorageKey::StorageVersion, &STORAGE_VERSION_V2);
-        env.storage()
-            .instance()
-            .set(&StorageKey::AuthorisedUpgrade, &(STORAGE_VERSION_V2, hash.clone()));
+        env.storage().instance().set(
+            &StorageKey::AuthorisedUpgrade,
+            &(STORAGE_VERSION_V2, hash.clone()),
+        );
         let stored_admin: Address = env.storage().instance().get(&StorageKey::Admin).unwrap();
         let stored_ver: u32 = env
             .storage()
@@ -617,8 +615,12 @@ mod tests {
         let admin = Address::generate(&env);
         let fake_admin = Address::generate(&env);
         env.storage().instance().set(&StorageKey::Admin, &admin);
-        env.storage().persistent().set(&StorageKey::Admin, &fake_admin);
-        env.storage().temporary().set(&StorageKey::Admin, &fake_admin);
+        env.storage()
+            .persistent()
+            .set(&StorageKey::Admin, &fake_admin);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::Admin, &fake_admin);
         super::require_admin(&env, &admin);
     }
 

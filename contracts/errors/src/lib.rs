@@ -1,4 +1,5 @@
 #![no_std]
+
 use soroban_sdk::{Address, Env, String, contract, contracterror, contractimpl, contracttype};
 
 #[contracterror]
@@ -74,3 +75,18 @@ impl ErrorsContract {
 
 #[cfg(test)]
 mod test;
+
+pub mod ns {
+    pub use callora_helpers::{
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult, accounting_key, config_key, ephemeral_key, idempotency_key, migration_key,
+        state_key,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Errors;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
+    }
+}

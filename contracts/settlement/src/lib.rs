@@ -1,4 +1,5 @@
 #![no_std]
+
 pub mod admin;
 pub mod archive;
 pub mod batch;
@@ -1482,3 +1483,18 @@ mod test_overflow_safe_math;
 mod test_ttl_bump;
 #[cfg(test)]
 mod test_views;
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Settlement;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
+    }
+}

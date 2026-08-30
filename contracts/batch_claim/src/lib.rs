@@ -1,4 +1,5 @@
 #![no_std]
+
 //! Callora Batch-Claim contract.
 //!
 //! Allows a claimant to register pending reward claims and batch-collect them
@@ -708,6 +709,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
+    }
     /// Proactively extend a consumed-claim tombstone's TTL, independent of
     /// any claim/settle activity.
     ///
@@ -748,6 +750,7 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_BUMP,
         );
         Ok(true)
+    }
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -1505,6 +1508,7 @@ mod tests {
         assert_eq!(client.claim_id_owner(&unknown), None);
         assert!(!client.claim_id_reserved(&unknown));
         assert!(!client.claim_id_consumed(&unknown));
+    }
     // Consumed-tombstone TTL: survival beyond claim archival (#1043)
     // -----------------------------------------------------------------------
 
@@ -1747,4 +1751,20 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
+    }
+}
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::BatchClaim;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
+    }
 }

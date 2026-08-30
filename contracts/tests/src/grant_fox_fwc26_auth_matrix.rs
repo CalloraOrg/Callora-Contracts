@@ -29,10 +29,6 @@
 //! `propose_emergency_drain`, `cancel_emergency_drain`,
 //! `execute_emergency_drain` (after 24 h timelock)
 
-#![no_std]
-
-extern crate std;
-
 use soroban_sdk::token as soroban_token;
 use soroban_sdk::{
     testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env, Symbol, Vec,

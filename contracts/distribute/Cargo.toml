@@ -12,6 +12,7 @@ doctest = false
 testutils = []
 
 [dependencies]
+callora-helpers = { path = "../helpers" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]

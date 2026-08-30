@@ -9,6 +9,7 @@ crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
+callora-helpers = { path = "../helpers" }
 soroban-sdk = { workspace = true }
 callora-revenue-pool = { path = "../revenue_pool" }
 
