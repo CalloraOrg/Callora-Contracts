@@ -63,6 +63,28 @@ pub enum StorageKey {
     Paused,
     /// Instance: the currently-authorized escrow signer [`Address`].
     Signer,
+    /// Instance: approval flag for an escrow payment asset (`bool`).
+    /// Deny-by-default: absent means the asset is not approved.
+    ApprovedAsset(Address),
+    /// Instance: escrow record keyed by `(payment_asset, recipient)`.
+    Escrow(Address, Address),
+}
+
+/// A recorded escrow created under a specific approved payment asset.
+///
+/// Stored in instance storage, keyed by `(payment_asset, recipient)`, so a
+/// repeated creation attempt with the same inputs is rejected as a replay.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRecord {
+    /// The payment asset contract bound to this escrow.
+    pub payment_asset: Address,
+    /// The designated recipient of the escrowed funds.
+    pub recipient: Address,
+    /// Escrow amount denominated in the payment asset micro-units.
+    pub amount: i128,
+    /// Ledger timestamp at which the escrow was created.
+    pub created_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +376,178 @@ impl CalloraEscrow {
         env.events()
             .publish((events::event_action(&env), caller), action);
 
+        Ok(())
+    }
+
+    /// Return whether `asset` is approved for use as a payment asset when
+    /// creating an escrow.
+    ///
+    /// This is a deny-by-default boundary: any asset that has not been
+    /// explicitly approved by the admin returns `false` and is therefore not
+    /// accepted by [`CalloraEscrow::create_escrow`].
+    pub fn is_asset_approved(env: Env, asset: Address) -> bool {
+        env.storage()
+            .instance()
+            .get(&StorageKey::ApprovedAsset(asset))
+            .unwrap_or(false)
+    }
+
+    /// Return the escrow record for a `(payment_asset, recipient)` pair.
+    ///
+    /// Returns `None` when no escrow has been created for the pair. This is a
+    /// read-only view for on-chain auditability of created escrows.
+    pub fn get_escrow(
+        env: Env,
+        payment_asset: Address,
+        recipient: Address,
+    ) -> Option<EscrowRecord> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::Escrow(payment_asset, recipient))
+    }
+
+    /// Approve `asset` as a payment asset for future escrow creation.
+    ///
+    /// Only the current admin may grant approval; the check runs before any
+    /// state is written. Approving an already-approved asset is idempotent.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `asset` -- The payment asset contract to approve.
+    ///
+    /// # Errors
+    /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
+    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::InvalidInput`] -- `asset` resolves to the contract itself.
+    ///
+    /// # Events
+    /// Emits `asset_approved` with `caller` as topic and `asset` as data.
+    pub fn add_approved_asset(
+        env: Env,
+        caller: Address,
+        asset: Address,
+    ) -> Result<(), EscrowError> {
+        Self::require_admin(&env, &caller)?;
+        Self::validate_asset(&env, &asset)?;
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::ApprovedAsset(asset.clone()), &true);
+
+        env.events()
+            .publish((events::event_asset_approved(&env), caller), asset);
+
+        Ok(())
+    }
+
+    /// Revoke approval for a previously approved payment asset.
+    ///
+    /// Only the current admin may revoke approval. After revocation the asset
+    /// can no longer be used to create new escrows, but existing escrows are
+    /// left intact. Revoking an asset that is not approved is a no-op.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `asset` -- The payment asset contract to revoke.
+    ///
+    /// # Errors
+    /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
+    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::InvalidInput`] -- `asset` resolves to the contract itself.
+    ///
+    /// # Events
+    /// Emits `asset_removed` with `caller` as topic and `asset` as data.
+    pub fn remove_approved_asset(
+        env: Env,
+        caller: Address,
+        asset: Address,
+    ) -> Result<(), EscrowError> {
+        Self::require_admin(&env, &caller)?;
+        Self::validate_asset(&env, &asset)?;
+
+        let key = StorageKey::ApprovedAsset(asset.clone());
+        if env.storage().instance().has(&key) {
+            env.storage().instance().remove(&key);
+        }
+
+        env.events()
+            .publish((events::event_asset_removed(&env), caller), asset);
+
+        Ok(())
+    }
+
+    /// Create a new escrow bound to an approved payment asset.
+    ///
+    /// Authorization, validation, and least-privilege checks all run before any
+    /// state is written. The `payment_asset` must have been approved via
+    /// [`CalloraEscrow::add_approved_asset`]; unapproved, malformed, and replay
+    /// inputs fail closed without leaking protected detail.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `payment_asset` -- The approved payment asset for this escrow.
+    /// * `recipient` -- The designated recipient of the escrowed funds.
+    /// * `amount` -- Escrow amount in payment asset micro-units; must be > 0.
+    ///
+    /// # Errors
+    /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
+    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::InvalidInput`] -- `payment_asset` or `recipient` resolve
+    ///   to the contract itself, or `amount` is not positive.
+    /// * [`EscrowError::AssetNotApproved`] -- `payment_asset` is not approved.
+    /// * [`EscrowError::EscrowExists`] -- an escrow for the same
+    ///   `(payment_asset, recipient)` already exists (replay).
+    ///
+    /// # Events
+    /// Emits `escrow_created` with `caller` as topic and the new
+    /// [`EscrowRecord`] as data.
+    pub fn create_escrow(
+        env: Env,
+        caller: Address,
+        payment_asset: Address,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<(), EscrowError> {
+        Self::require_admin(&env, &caller)?;
+        Self::validate_asset(&env, &payment_asset)?;
+        if recipient == env.current_contract_address() {
+            return Err(EscrowError::InvalidInput);
+        }
+        if amount <= 0 {
+            return Err(EscrowError::InvalidInput);
+        }
+        if !Self::is_asset_approved(env.clone(), payment_asset.clone()) {
+            return Err(EscrowError::AssetNotApproved);
+        }
+
+        let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
+        if env.storage().instance().has(&key) {
+            return Err(EscrowError::EscrowExists);
+        }
+
+        let record = EscrowRecord {
+            payment_asset: payment_asset.clone(),
+            recipient: recipient.clone(),
+            amount,
+            created_at: env.ledger().timestamp(),
+        };
+        env.storage().instance().set(&key, &record);
+
+        env.events()
+            .publish((events::event_escrow_created(&env), caller), record);
+
+        Ok(())
+    }
+
+    /// Reject `asset` when it resolves to the contract's own address.
+    ///
+    /// A payment asset must never be the escrow contract itself, which would
+    /// otherwise allow funds to be routed back into the escrow in an unintended
+    /// way. Returns [`EscrowError::InvalidInput`] when the asset is self.
+    fn validate_asset(env: &Env, asset: &Address) -> Result<(), EscrowError> {
+        if asset == &env.current_contract_address() {
+            return Err(EscrowError::InvalidInput);
+        }
         Ok(())
     }
 
