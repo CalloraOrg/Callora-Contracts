@@ -481,7 +481,9 @@ impl Distribute {
             }
             Self::validate_recipient(&env, to, &contract_address);
             // Overflow-safe accumulation
-            total = total.checked_add(amount).expect("overflow in batch_distribute total");
+            total = total
+                .checked_add(amount)
+                .unwrap_or_else(|| panic!("arithmetic overflow in batch_distribute total"));
         }
 
         // Phase 2 â€” check total balance
