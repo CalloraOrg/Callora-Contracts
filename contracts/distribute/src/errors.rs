@@ -56,6 +56,8 @@ pub enum DistributeError {
     InsufficientBalance = 17,
     AlreadyPaused = 18,
     NotPaused = 19,
+    /// Two legs in a batch paid to the same recipient (code 20).
+    DuplicateRecipient = 20,
 }
 
 #[cfg(test)]
@@ -65,7 +67,7 @@ mod tests {
     /// Verify that every error discriminant is unique and sequential.
     #[test]
     fn error_codes_are_unique_and_sequential() {
-        let codes: [u32; 19] = [
+        let codes: [u32; 20] = [
             DistributeError::NotInitialized as u32,
             DistributeError::AlreadyInitialized as u32,
             DistributeError::Unauthorized as u32,
@@ -85,8 +87,9 @@ mod tests {
             DistributeError::InsufficientBalance as u32,
             DistributeError::AlreadyPaused as u32,
             DistributeError::NotPaused as u32,
+            DistributeError::DuplicateRecipient as u32,
         ];
-        let mut seen = [false; 20];
+        let mut seen = [false; 21];
         for (i, &code) in codes.iter().enumerate() {
             assert_eq!(
                 code,

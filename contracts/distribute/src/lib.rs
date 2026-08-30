@@ -7,7 +7,7 @@ pub mod limits;
 use crate::errors::DistributeError;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
+    contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -413,18 +413,39 @@ impl Distribute {
     /// Distribute USDC from this contract to multiple recipients in a single
     /// atomic transaction.
     ///
-    /// Each leg is a `(Address, i128)` tuple of `(recipient, amount)`.  The
-    /// function validates every leg before transferring any USDC â€” if *any*
-    /// leg fails validation the entire batch is reverted (fail-early / all-or-nothing).
+    /// A batch is described by two parallel, equal-length lists: `recipients`
+    /// (each an `Address`) and `amounts` (each an `i128`). The `i`-th leg pays
+    /// `amounts[i]` units of USDC to `recipients[i]`.  The function
+    /// **validates the entire batch before transferring any USDC** — if *any*
+    /// leg fails validation the whole batch is reverted
+    /// (fail-early / all-or-nothing).  Because every transfer runs inside this
+    /// single contract call and each transfer is itself atomic on the Stellar
+    /// token, a transfer failure mid-batch also reverts the entire call leaving
+    /// no partial distribution.
+    ///
+    /// # Atomicity model: all-or-nothing
+    /// - **Validate before mutate.** Phase 1 checks every leg (positive
+    ///   amount, per-leg cap, valid recipient, no duplicate recipient) and
+    ///   Phase 2 checks the total against the contract's USDC balance, all
+    ///   *before* any state change or transfer.
+    /// - **Fail atomicity.** If any leg is invalid, or the batch total exceeds
+    ///   the contract balance, or a transfer fails, the ENTIRE batch reverts
+    ///   (no partial accounting).
+    /// - **Value conservation.** The batch is a strict sum of per-leg amounts
+    ///   (overflow-checked); the contract's balance after a successful batch
+    ///   is exactly `prior_balance - total`. No rounding, fees, or mint/burn.
     ///
     /// # Validation (per-leg, fail-early)
-    /// - `amount` must be positive.
-    /// - `amount` must not exceed `max_distribute` (per-leg cap).
-    /// - `recipient` must not be the contract address itself.
+    /// - `amounts[i]` must be positive.
+    /// - `amounts[i]` must not exceed `max_distribute` (per-leg cap).
+    /// - `recipients[i]` must not be the contract address itself.
+    /// - `recipients[i]` must not repeat within the batch (duplicates rejected
+    ///   before any state change).
     ///
     /// # Validation (batch-level)
     /// - Caller must be authorised admin.
     /// - Contract must not be paused.
+    /// - `recipients` and `amounts` must be the same length.
     /// - Batch must not be empty.
     /// - Batch size must not exceed `MAX_BATCH_SIZE`.
     /// - The sum of all amounts must not exceed the contract's USDC balance.
@@ -432,11 +453,13 @@ impl Distribute {
     /// # Panics
     /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
     /// * `ERR_PAUSED` â€” contract is paused.
+    /// * `"batch leg count mismatch"` â€” `recipients.len() != amounts.len()`.
     /// * `"batch is empty"` â€” no payment legs provided.
     /// * `"batch exceeds max batch size"` â€” more than `MAX_BATCH_SIZE` legs.
     /// * `ERR_AMOUNT_NOT_POSITIVE` â€” any leg has amount â‰¤ 0.
     /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` â€” any leg exceeds per-leg cap.
     /// * `"invalid recipient: cannot distribute to the contract itself"`.
+    /// * `ERR_DUPLICATE_RECIPIENT` â€” the same recipient appears twice.
     /// * `ERR_INSUFFICIENT_BALANCE` â€” contract holds less than `total`.
     ///
     /// # Events
@@ -445,13 +468,17 @@ impl Distribute {
     pub fn batch_distribute(
         env: Env,
         caller: Address,
-        payments: SorobanVec<(Address, i128)>,
+        recipients: Vec<Address>,
+        amounts: Vec<i128>,
     ) {
         caller.require_auth();
         Self::require_not_paused(&env);
         Self::require_admin(&env, &caller);
 
-        let n = payments.len();
+        let n = recipients.len();
+        if n != amounts.len() {
+            panic!("batch leg count mismatch");
+        }
         if n == 0 {
             env.panic_with_error(DistributeError::BatchEmpty);
         }
@@ -469,17 +496,25 @@ impl Distribute {
         let contract_address = env.current_contract_address();
         let max_distribute = Self::get_max_distribute(env.clone());
 
-        // Phase 1 â€” validate all legs and compute total
+        // Phase 1 â€” validate all legs, reject duplicates, compute total.
+        // No state is mutated here; the whole batch is validated up-front so a
+        // duplicate or invalid leg reverts BEFORE any transfer occurs.
         let mut total: i128 = 0;
+        let mut seen_recipients: Map<Address, ()> = Map::new(&env);
         for i in 0..n {
-            let (ref to, amount) = payments.get(i).expect("payment leg");
+            let to = recipients.get(i).expect("payment leg recipient");
+            let amount = amounts.get(i).expect("payment leg amount");
             if amount <= 0 {
                 env.panic_with_error(DistributeError::AmountNotPositive);
             }
             if amount > max_distribute {
                 env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
             }
-            Self::validate_recipient(&env, to, &contract_address);
+            Self::validate_recipient(&env, &to, &contract_address);
+            if seen_recipients.contains_key(to.clone()) {
+                env.panic_with_error(DistributeError::DuplicateRecipient);
+            }
+            seen_recipients.set(to.clone(), ());
             // Overflow-safe accumulation
             total = total
                 .checked_add(amount)
@@ -507,7 +542,8 @@ impl Distribute {
 
         // Phase 4 â€” execute transfers
         for i in 0..n {
-            let (to, amount) = payments.get(i).expect("payment leg");
+            let to = recipients.get(i).expect("payment leg recipient");
+            let amount = amounts.get(i).expect("payment leg amount");
             usdc.transfer(&contract_address, &to, &amount);
         }
 
@@ -579,6 +615,9 @@ impl Distribute {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_batch;
 
 #[cfg(test)]
 extern crate std;
