@@ -32,6 +32,31 @@
 //! so the consumed tombstone outlives the `ClaimRecord` if the record is later
 //! archived or re-opened.
 //!
+//! ## Atomic batch semantics (issue #1046)
+//!
+//! `batch_claim` uses a **two-phase** approach to guarantee all-or-nothing
+//! execution:
+//!
+//! **Phase 1 — Validate everything** (pure reads, no state mutation):
+//! - Authorization preconditions (`claimant.require_auth`).
+//! - `ClaimRecord` existence and `claim_id` match.
+//! - Consumed-tombstone check.
+//! - Settlement status.
+//! - Arithmetic safety (overflow).
+//!
+//! Only after every entry in the batch passes validation does the contract
+//! proceed to Phase 2.
+//!
+//! **Phase 2 — Commit all writes** (only reached on full validation success):
+//! - Mark every `claim_id` consumed.
+//! - Mark every `ClaimRecord` settled.
+//! - Emit events.
+//!
+//! This structure means a late-failing entry (e.g. entry N of an N-entry
+//! batch) never leaves earlier entries partially consumed: the validation
+//! phase is a pure read pass, so if it returns an error, no storage has been
+//! modified.
+//!
 //! ### Tombstone survival beyond claim archival
 //!
 //! A `ClaimRecord` stays "hot" for as long as its claimant keeps polling
@@ -185,6 +210,22 @@ pub struct ClaimRecord {
     /// (`ClaimIdMismatch`) and permanently rejects any call once
     /// `ClaimConsumed(claim_id) == true` (`ClaimIdAlreadyUsed`).
     pub claim_id: BytesN<32>,
+}
+
+// ---------------------------------------------------------------------------
+// Internal helper types for two-phase batch_claim
+// ---------------------------------------------------------------------------
+
+/// Validated, ready-to-commit data for one batch entry.
+///
+/// Produced during Phase 1 (validation) of `batch_claim` so that Phase 2
+/// (writes) never needs to re-read storage — and therefore cannot fail
+/// after the first write has been committed.
+struct ValidatedEntry {
+    claimant: Address,
+    claim_id: BytesN<32>,
+    record: ClaimRecord,
+    amount: i128,
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +443,31 @@ impl CalloraBatchClaim {
     /// `claimant` must authorize their own collection, and the supplied
     /// `claim_id` must match the one stored in their [`ClaimRecord`].
     ///
+    /// ## Atomic rollback on failure (issue #1046)
+    ///
+    /// This function uses a strict **two-phase** execution model:
+    ///
+    /// **Phase 1 — Validate all entries** (read-only, no state mutation):
+    /// - Each claimant's authorization is checked via `require_auth`.
+    /// - Each `ClaimRecord` is loaded and validated:
+    ///   - `claim_id` must match the stored record.
+    ///   - The consumed tombstone must not be set.
+    ///   - The record must not already be settled.
+    /// - The running total is accumulated to catch arithmetic overflow.
+    ///
+    /// If **any** entry fails validation, the function returns an error
+    /// immediately. Because Phase 1 performs no writes, no storage has been
+    /// modified, and the entire batch is left untouched — a late failure on
+    /// entry N does not partially consume entries 0..N-1.
+    ///
+    /// **Phase 2 — Commit all writes** (only reached when Phase 1 succeeds):
+    /// - Mark every `claim_id` consumed (write-before-settle invariant).
+    /// - Mark every `ClaimRecord` settled.
+    /// - Emit per-entry consumed and settled events.
+    ///
+    /// This guarantees that either *all* claims in the batch settle or *none*
+    /// do, satisfying the atomicity acceptance criterion for issue #1046.
+    ///
     /// ## Replay-safe semantics
     ///
     /// The consumed flag for each `claim_id` is set to `true` **before** the
@@ -432,44 +498,58 @@ impl CalloraBatchClaim {
         claimants: Vec<(Address, BytesN<32>)>,
     ) -> Result<i128, BatchClaimError> {
         Self::require_admin(&env)?;
+
         // Issue #1044: bound the batch before doing any per-entry work, so an
         // oversized call fails closed and cheaply rather than part-way
         // through a settlement loop.
         if claimants.len() > MAX_PENDING_AMOUNTS {
             return Err(BatchClaimError::BatchTooLarge);
         }
+
+        // ---------------------------------------------------------------
+        // Phase 1: Validate ALL entries — pure reads, zero state mutation.
+        //
+        // Authorization and lifecycle preconditions are checked here before
+        // any value or state mutation occurs (acceptance criterion 1).
+        //
+        // If this phase returns an error, no storage has been touched, so
+        // the batch rolls back completely (acceptance criterion 2).
+        // ---------------------------------------------------------------
+        let mut validated: Vec<ValidatedEntry> = Vec::new(&env);
         let mut total_claimed: i128 = 0;
 
         for (claimant, claim_id) in claimants.iter() {
+            // Authorization precondition — checked before any read that
+            // depends on settled state, so an unauthorized caller cannot
+            // probe claim existence through timing.
             claimant.require_auth();
+
             let key = StorageKey::Claim(claimant.clone());
             let consumed_key = StorageKey::ClaimConsumed(claim_id.clone());
 
-            // --- Hot-read path TTL bump on claim record ---
+            // Bump TTL on hot read paths to prevent archival during
+            // validation.  These are TTL-only operations; they do not
+            // mutate the stored values.
             if env.storage().persistent().has(&key) {
                 env.storage()
                     .persistent()
                     .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
             }
 
-            let mut record: ClaimRecord = env
+            let record: ClaimRecord = env
                 .storage()
                 .persistent()
                 .get(&key)
                 .ok_or(BatchClaimError::ClaimNotFound)?;
 
-            // Validation checks — none of these mutate state, so a failed
-            // call leaves storage exactly as it was found.
-
-            // 1. Verify the claim_id matches the stored record.
+            // Validation check 1: claim_id must match the stored record.
             if record.claim_id != claim_id {
                 return Err(BatchClaimError::ClaimIdMismatch);
             }
 
-            // 2. Verify the claim_id has not been consumed by a prior call.
-            //    This check MUST precede the settled check so that the
-            //    consumed tombstone is the authoritative replay guard.
-            //    Bump consumed-tombstone TTL on every read (hot path).
+            // Validation check 2: the claim_id must not have been consumed
+            // by a prior call.  This MUST precede the settled check so the
+            // consumed tombstone is the authoritative replay guard.
             if env.storage().persistent().has(&consumed_key) {
                 env.storage().persistent().extend_ttl(
                     &consumed_key,
@@ -486,20 +566,40 @@ impl CalloraBatchClaim {
                 }
             }
 
-            // 3. Verify the record has not already been settled.
-            //    This is a secondary consistency check; the consumed tombstone
-            //    above is the primary replay guard.
+            // Validation check 3: the record must not already be settled.
+            // Secondary consistency check; the consumed tombstone above is
+            // the primary replay guard.
             if record.settled {
                 return Err(BatchClaimError::AlreadySettled);
             }
 
-            // All validation passed.  Accumulate into running total before
-            // writing any state so an overflow error is also non-mutating.
+            // Accumulate the running total here so an overflow error is also
+            // non-mutating (still inside the read-only phase).
             total_claimed = total_claimed
                 .checked_add(record.pending_amount)
                 .ok_or(BatchClaimError::Overflow)?;
 
-            // Write-before-settle: mark the claim_id as consumed FIRST.
+            validated.push_back(ValidatedEntry {
+                claimant: claimant.clone(),
+                claim_id: claim_id.clone(),
+                amount: record.pending_amount,
+                record,
+            });
+        }
+
+        // ---------------------------------------------------------------
+        // Phase 2: Commit all writes.
+        //
+        // Reached only when every entry in the batch passed Phase 1.
+        // A failure here (which cannot happen in correct usage — all
+        // storage reads were already done above) would still be a clean
+        // abort because Soroban panics revert the entire transaction.
+        // ---------------------------------------------------------------
+        for entry in validated.iter() {
+            let key = StorageKey::Claim(entry.claimant.clone());
+            let consumed_key = StorageKey::ClaimConsumed(entry.claim_id.clone());
+
+            // Write-before-settle: mark the claim_id consumed FIRST.
             // This is the concurrency-safety invariant: if two transactions
             // race, the one that commits this write second will read
             // `already_consumed = true` and fail with ClaimIdAlreadyUsed.
@@ -511,20 +611,23 @@ impl CalloraBatchClaim {
             );
 
             // Now mark the claim record itself as settled.
-            record.settled = true;
-            env.storage().persistent().set(&key, &record);
+            let mut settled_record = entry.record.clone();
+            settled_record.settled = true;
+            env.storage().persistent().set(&key, &settled_record);
             env.storage()
                 .persistent()
                 .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 
             // Emit consumed event so off-chain indexers can track spent ids.
-            env.events()
-                .publish((events::event_claim_consumed(&env),), claim_id.clone());
+            env.events().publish(
+                (events::event_claim_consumed(&env),),
+                entry.claim_id.clone(),
+            );
 
             // Emit settled event with claimant + amount.
             env.events().publish(
                 (events::event_claims_settled(&env),),
-                (claimant.clone(), record.pending_amount),
+                (entry.claimant.clone(), entry.amount),
             );
         }
 
@@ -708,6 +811,8 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
+    }
+
     /// Proactively extend a consumed-claim tombstone's TTL, independent of
     /// any claim/settle activity.
     ///
@@ -748,6 +853,7 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_BUMP,
         );
         Ok(true)
+    }
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -1254,6 +1360,11 @@ mod tests {
     /// if the call rolls back — but in Soroban, panics/errors inside a contract
     /// invocation revert the whole transaction.  This test verifies the
     /// error is surfaced and the overall state is consistent after the revert.
+    ///
+    /// With the two-phase design (issue #1046), the validation phase finds the
+    /// failure before any write is committed, so no partial state is ever
+    /// written — c1's id is unconsumed and the claim is still pending even
+    /// inside the same contract invocation.
     #[test]
     fn test_batch_partial_failure_is_atomic() {
         let env = Env::default();
@@ -1272,9 +1383,101 @@ mod tests {
         let res = client.try_batch_claim(&batch);
         assert_eq!(res, Err(Ok(BatchClaimError::ClaimNotFound)));
 
-        // c1's id should be unconsumed because the transaction reverted.
+        // c1's id must be unconsumed: with two-phase validation, the failure
+        // on c2 (Phase 1) happens before any write is committed, so c1's
+        // tombstone was never set.
         assert_eq!(client.claim_id_consumed(&id1), false);
         assert!(client.has_claim(&c1));
+    }
+
+    /// A batch where the LAST entry fails must leave all earlier entries
+    /// unconsumed — the hallmark test for issue #1046.
+    ///
+    /// This test sets up N-1 valid claims and one invalid last entry.  With a
+    /// naive loop that writes state per-entry, entries 0..N-2 would already be
+    /// consumed before the failure is discovered.  With the two-phase design
+    /// the failure is caught in Phase 1 before any write, so all entries
+    /// remain pending.
+    #[test]
+    fn test_late_failure_in_batch_leaves_all_entries_unconsumed() {
+        let env = Env::default();
+        let (admin, c1, client) = setup(&env);
+        let c2 = Address::generate(&env);
+        let c3 = Address::generate(&env);
+        let id1 = make_id(&env, 72);
+        let id2 = make_id(&env, 73);
+        let id_missing = make_id(&env, 74); // c3 has no claim
+
+        client.add_claim(&admin, &c1, &100, &id1);
+        client.add_claim(&admin, &c2, &200, &id2);
+        // c3 intentionally has no claim registered.
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((c1.clone(), id1.clone()));
+        batch.push_back((c2.clone(), id2.clone()));
+        batch.push_back((c3.clone(), id_missing.clone())); // last entry fails
+
+        let res = client.try_batch_claim(&batch);
+        assert_eq!(
+            res,
+            Err(Ok(BatchClaimError::ClaimNotFound)),
+            "batch must fail on the missing last entry"
+        );
+
+        // All entries must be unconsumed — Phase 1 caught the error before
+        // any write was committed.
+        assert_eq!(
+            client.claim_id_consumed(&id1),
+            false,
+            "id1 must be unconsumed after late failure"
+        );
+        assert_eq!(
+            client.claim_id_consumed(&id2),
+            false,
+            "id2 must be unconsumed after late failure"
+        );
+        assert!(
+            client.has_claim(&c1),
+            "c1 claim must still be pending after late failure"
+        );
+        assert!(
+            client.has_claim(&c2),
+            "c2 claim must still be pending after late failure"
+        );
+    }
+
+    /// Verify that after a failed batch, all entries can still be successfully
+    /// claimed in a clean subsequent batch — rollback must not corrupt state.
+    #[test]
+    fn test_failed_batch_entries_can_be_claimed_in_subsequent_batch() {
+        let env = Env::default();
+        let (admin, c1, client) = setup(&env);
+        let c2 = Address::generate(&env);
+        let id1 = make_id(&env, 75);
+        let id2 = make_id(&env, 76);
+        let id_bad = make_id(&env, 77);
+        let c_bad = Address::generate(&env); // no claim registered
+
+        client.add_claim(&admin, &c1, &150, &id1);
+        client.add_claim(&admin, &c2, &250, &id2);
+
+        // First attempt: fails because c_bad has no claim.
+        let mut failing_batch = Vec::new(&env);
+        failing_batch.push_back((c1.clone(), id1.clone()));
+        failing_batch.push_back((c2.clone(), id2.clone()));
+        failing_batch.push_back((c_bad.clone(), id_bad.clone()));
+        let res = client.try_batch_claim(&failing_batch);
+        assert_eq!(res, Err(Ok(BatchClaimError::ClaimNotFound)));
+
+        // Second attempt: only the valid entries, must succeed.
+        let mut clean_batch = Vec::new(&env);
+        clean_batch.push_back((c1.clone(), id1.clone()));
+        clean_batch.push_back((c2.clone(), id2.clone()));
+        let total = client.batch_claim(&clean_batch);
+        assert_eq!(total, 400);
+
+        assert_eq!(client.claim_id_consumed(&id1), true);
+        assert_eq!(client.claim_id_consumed(&id2), true);
     }
 
     // -----------------------------------------------------------------------
@@ -1505,6 +1708,9 @@ mod tests {
         assert_eq!(client.claim_id_owner(&unknown), None);
         assert!(!client.claim_id_reserved(&unknown));
         assert!(!client.claim_id_consumed(&unknown));
+    }
+
+    // -----------------------------------------------------------------------
     // Consumed-tombstone TTL: survival beyond claim archival (#1043)
     // -----------------------------------------------------------------------
 
@@ -1747,4 +1953,5 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
+    }
 }
