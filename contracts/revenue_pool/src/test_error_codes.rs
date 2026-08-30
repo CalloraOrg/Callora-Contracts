@@ -31,6 +31,7 @@ fn revenue_pool_error_codes_are_stable_and_unique() {
         (23, RevenuePoolError::EmergencyPaused),
         (24, RevenuePoolError::AlreadyEmergencyPaused),
         (25, RevenuePoolError::NotEmergencyPaused),
+        (26, RevenuePoolError::BelowMinDistribute),
     ];
 
     let mut seen = BTreeSet::new();
@@ -42,7 +43,7 @@ fn revenue_pool_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 25);
+    assert_eq!(seen.len(), 26);
 }
 
 #[test]
@@ -74,6 +75,7 @@ fn error_code_docs_list_every_revenue_pool_code() {
         "| 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |",
         "| 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |",
         "| 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |",
+        "| 26 | `BelowMinDistribute` | Revenue Pool | Payout amount is below the configured minimum |",
     ];
 
     for line in expected_lines {

@@ -10,6 +10,7 @@ crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
+callora-helpers = { path = "../helpers" }
 callora-settlement = { path = "../settlement" }
 callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }

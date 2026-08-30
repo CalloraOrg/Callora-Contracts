@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+callora-helpers = { path = "../helpers" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]

@@ -254,6 +254,32 @@ fn set_max_distribute_requires_auth() {
     assert!(res.is_err(), "set_max_distribute must require auth");
 }
 
+/// Verify that `set_min_distribute` requires auth on `caller`.
+#[test]
+fn set_min_distribute_requires_auth() {
+    let env = Env::default();
+    let (admin, _, client, _, _, _) = setup_pool(&env);
+
+    env.set_auths(&[]);
+    let res = client.try_set_min_distribute(&admin, &50_i128);
+    assert!(res.is_err(), "set_min_distribute must require auth");
+}
+
+/// Verify that `flush_dust` requires auth on `caller`.
+#[test]
+fn flush_dust_requires_auth() {
+    let env = Env::default();
+    let (admin, pool_addr, client, _, _, usdc_admin) = setup_pool(&env);
+
+    env.mock_all_auths();
+    fund_pool(&usdc_admin, &pool_addr, 1_000);
+    let dev = Address::generate(&env);
+
+    env.set_auths(&[]);
+    let res = client.try_flush_dust(&admin, &dev);
+    assert!(res.is_err(), "flush_dust must require auth");
+}
+
 /// Verify that `distribute` requires auth on `caller`.
 #[test]
 fn distribute_requires_auth() {
@@ -457,6 +483,29 @@ fn get_max_distribute_does_not_require_auth() {
     assert_eq!(cap, i128::MAX);
 }
 
+/// `get_min_distribute` is a view — it must not require auth.
+#[test]
+fn get_min_distribute_does_not_require_auth() {
+    let env = Env::default();
+    let (_, _, client, _, _, _) = setup_pool(&env);
+
+    env.set_auths(&[]);
+    let min = client.get_min_distribute();
+    assert_eq!(min, 1);
+}
+
+/// `get_dust_balance` is a view — it must not require auth.
+#[test]
+fn get_dust_balance_does_not_require_auth() {
+    let env = Env::default();
+    let (_, _, client, _, _, _) = setup_pool(&env);
+    let dev = Address::generate(&env);
+
+    env.set_auths(&[]);
+    let dust = client.get_dust_balance(&dev);
+    assert_eq!(dust, 0);
+}
+
 /// `balance` is a view — it must not require auth.
 #[test]
 fn balance_does_not_require_auth() {
@@ -579,10 +628,21 @@ fn admin_with_auth_can_call_all_entrypoints() {
     client.set_max_distribute(&admin, &10_000);
     assert_eq!(client.get_max_distribute(), 10_000);
 
-    // --- Distribution ---
+    client.set_min_distribute(&admin, &100);
+    assert_eq!(client.get_min_distribute(), 100);
+
+    // --- Distribution & Dust ---
     let dev = Address::generate(&env);
     client.distribute(&admin, &dev, &500);
     assert_eq!(client.balance(), 50_000 + 2_000 - 500); // initial + yield - distribute
+
+    // Sub-threshold distribute accumulates dust
+    let dust_dev = Address::generate(&env);
+    client.distribute(&admin, &dust_dev, &60);
+    client.distribute(&admin, &dust_dev, &50); // total 110 >= 100
+    assert_eq!(client.get_dust_balance(&dust_dev), 110);
+    client.flush_dust(&admin, &dust_dev);
+    assert_eq!(client.get_dust_balance(&dust_dev), 0);
 
     let mut payments: Vec<(Address, i128)> = Vec::new(&env);
     payments.push_back((Address::generate(&env), 100_i128));

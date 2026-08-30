@@ -9,8 +9,8 @@ crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
-# Documentation / registry crate — runtime limit logic lives in settlement,
-# revenue_pool, and vault. This package owns the auth-snapshot regression suite.
+soroban-sdk = { workspace = true }
+callora-helpers = { path = "../helpers" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

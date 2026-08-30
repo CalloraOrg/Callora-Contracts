@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+callora-helpers = { path = "../helpers" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]

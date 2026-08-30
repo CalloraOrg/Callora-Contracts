@@ -45,7 +45,10 @@ fn test_init_already_initialized() {
 
     client.init(&admin, &250, &100);
     let result = client.try_init(&admin, &250, &100);
-    assert_eq!(result.unwrap_err().unwrap(), RefundError::AlreadyInitialized);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        RefundError::AlreadyInitialized
+    );
 }
 
 #[test]

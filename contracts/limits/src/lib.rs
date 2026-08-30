@@ -1,4 +1,5 @@
 #![no_std]
+
 //! Limits auth-surface registry for Callora contracts.
 //!
 //! # Purpose
@@ -27,3 +28,18 @@
 //! | Settlement | `get_withdrawal_today` |
 //! | Revenue pool | `get_max_distribute` |
 //! | Vault | `get_reserve_cap` — covered when vault builds |
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Limits;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
+    }
+}

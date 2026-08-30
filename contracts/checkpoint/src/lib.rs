@@ -251,10 +251,10 @@ impl CalloraCheckpoint {
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
+            .unwrap_or_else(|| panic!("no admin transfer pending"));
 
         if caller != pending {
-            env.panic_with_error(CheckpointError::Unauthorized);
+            panic!("unauthorized: caller is not pending admin");
         }
 
         let old_admin = Self::admin(&env)?;
@@ -287,14 +287,14 @@ impl CalloraCheckpoint {
         Self::require_admin(&env, &caller)?;
 
         if !env.storage().instance().has(&StorageKey::PendingAdmin) {
-            env.panic_with_error(CheckpointError::NoAdminTransferPending);
+            panic!("no admin transfer pending");
         }
 
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
+            .unwrap_or_else(|| panic!("no admin transfer pending"));
 
         env.storage().instance().remove(&StorageKey::PendingAdmin);
 
@@ -757,5 +757,20 @@ mod rustdoc_tests {
                 trimmed
             );
         }
+    }
+}
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Checkpoint;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
     }
 }

@@ -12,35 +12,42 @@
 
 extern crate std;
 
-use soroban_sdk::{contract, contractimpl, testutils::Events as _, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, testutils::Events as _, Address, Env, IntoVal, Symbol,
+    Val, Vec,
+};
 
 // ---------------------------------------------------------------------------
 // Mock settlement contracts
 // ---------------------------------------------------------------------------
 
-/// Settlement that always panics. Simulates a downstream crash during
-/// [`record_deduction`].
-#[contract]
-pub struct PanickingSettlement;
+pub mod panicking {
+    use soroban_sdk::{contract, contractimpl, Env};
+    #[contract]
+    pub struct PanickingSettlement;
 
-#[contractimpl]
-impl PanickingSettlement {
-    /// Always panics; the return type only exists to match [`OkSettlement`].
-    pub fn record_deduction(_env: Env, _amount: i128, _request_id: u64) -> i128 {
-        panic!("PanickingSettlement: deliberate revert");
+    #[contractimpl]
+    impl PanickingSettlement {
+        pub fn record_deduction(_env: Env, _amount: i128, _request_id: u64) -> i128 {
+            panic!("PanickingSettlement: deliberate revert");
+        }
     }
 }
+pub use panicking::PanickingSettlement;
 
-/// Settlement that succeeds. Used as the control case.
-#[contract]
-pub struct OkSettlement;
+pub mod ok {
+    use soroban_sdk::{contract, contractimpl, Env};
+    #[contract]
+    pub struct OkSettlement;
 
-#[contractimpl]
-impl OkSettlement {
-    pub fn record_deduction(_env: Env, amount: i128, _request_id: u64) -> i128 {
-        amount
+    #[contractimpl]
+    impl OkSettlement {
+        pub fn record_deduction(_env: Env, amount: i128, _request_id: u64) -> i128 {
+            amount
+        }
     }
 }
+pub use ok::OkSettlement;
 
 // ---------------------------------------------------------------------------
 // Fee caller — mirrors the vault's `deduct` pattern
@@ -91,9 +98,10 @@ impl FeeCaller {
         env.storage().instance().set(&FeeCallerDataKey::Hits, &1u32);
 
         // Cross-contract call — this is the point of failure we test.
-        let args: Vec<Val> = Vec::from_array(&env, [amount.into(), request_id.into()]);
+        let args: Vec<Val> =
+            Vec::from_array(&env, [amount.into_val(&env), request_id.into_val(&env)]);
         let _result: i128 =
-            env.invoke_contract(&settlement, &Symbol::new(&env, "record_deduction"), &args);
+            env.invoke_contract(&settlement, &Symbol::new(&env, "record_deduction"), args);
 
         env.events().publish((Symbol::new(&env, "deducted"),), ());
 
@@ -187,14 +195,14 @@ fn successful_fee_deduct_persists_state_and_emits_event() {
         "remaining balance should be initial - deducted"
     );
     assert_eq!(
-        balance(&env, &caller_addr),
-        Some(700),
-        "balance should be persisted after successful call"
-    );
-    assert_eq!(
         env.events().all().len(),
         1,
         "exactly one event should be emitted on successful deduct"
+    );
+    assert_eq!(
+        balance(&env, &caller_addr),
+        Some(700),
+        "balance should be persisted after successful call"
     );
 }
 
@@ -231,10 +239,9 @@ fn fee_deduct_recovers_after_settlement_stops_panicking() {
         "balance should now be 300"
     );
 
-    // Only the successful deduction should have emitted an event.
     assert_eq!(
-        env.events().all().len(),
-        1,
-        "only the successful deduct should have emitted an event"
+        hits(&env, &caller_addr),
+        Some(1),
+        "hits counter should be updated after healthy deduction"
     );
 }

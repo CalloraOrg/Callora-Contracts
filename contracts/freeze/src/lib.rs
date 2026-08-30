@@ -169,8 +169,7 @@ impl CalloraFreeze {
         let admin = Self::get_admin(env.clone())?;
         let operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
 
-        let is_authorized = caller == admin
-            || operator.map_or(false, |op| caller == op);
+        let is_authorized = caller == admin || operator.map_or(false, |op| caller == op);
         if !is_authorized {
             return Err(FreezeError::Unauthorized);
         }
@@ -208,7 +207,11 @@ impl CalloraFreeze {
     ///
     /// # Errors
     /// * [`FreezeError::Unauthorized`] — caller is not the admin.
-    pub fn set_freeze_operator(env: Env, caller: Address, operator: Option<Address>) -> Result<(), FreezeError> {
+    pub fn set_freeze_operator(
+        env: Env,
+        caller: Address,
+        operator: Option<Address>,
+    ) -> Result<(), FreezeError> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
@@ -229,3 +232,18 @@ impl CalloraFreeze {
 
 #[cfg(test)]
 mod test;
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Freeze;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
+    }
+}

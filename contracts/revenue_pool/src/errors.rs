@@ -33,6 +33,7 @@ use soroban_sdk::contracterror;
 /// | 23   | EmergencyPaused               | Recovery-only emergency mode is active               |
 /// | 24   | AlreadyEmergencyPaused        | Emergency pause was already active                   |
 /// | 25   | NotEmergencyPaused            | Emergency recovery was requested while inactive      |
+/// | 26   | BelowMinDistribute            | Payout amount is below the configured minimum        |
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -87,4 +88,6 @@ pub enum RevenuePoolError {
     AlreadyEmergencyPaused = 24,
     /// Emergency recovery was requested while inactive (code 25).
     NotEmergencyPaused = 25,
+    /// Payout amount is below the configured minimum transfer unit (code 26).
+    BelowMinDistribute = 26,
 }

@@ -11,8 +11,35 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
-callora-settlement = { path = "../settlement" }
+callora-admin = { path = "../admin" }
+callora-allowlist = { path = "../allowlist" }
+callora-batch-claim = { path = "../batch_claim" }
+callora-checkpoint = { path = "../checkpoint" }
+callora-cold = { path = "../cold" }
+callora-distribute = { path = "../distribute" }
+callora-emergency = { path = "../emergency" }
+errors = { path = "../errors" }
+callora-escrow = { path = "../escrow" }
+callora-fee = { path = "../fee" }
+callora-freeze = { path = "../freeze" }
+callora-helpers = { path = "../helpers" }
+callora-hot = { path = "../hot" }
+callora-limits = { path = "../limits" }
+callora-migrate = { path = "../migrate" }
+callora-recipient = { path = "../recipient" }
+callora-refund = { path = "../refund" }
+callora-registry = { path = "../registry" }
+callora-rescue = { path = "../rescue" }
 callora-revenue-pool = { path = "../revenue_pool" }
+callora-settlement = { path = "../settlement" }
+callora-stake = { path = "../stake" }
+callora-storage-migration = { path = "../storage_migration" }
+callora-topics = { path = "../topics" }
+callora-upgrade = { path = "../upgrade" }
+callora-validators = { path = "../validators" }
+callora-vault = { path = "../vault" }
+callora-whitelist = { path = "../whitelist" }
+callora-yield = { path = "../yield" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
