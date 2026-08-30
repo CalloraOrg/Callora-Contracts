@@ -26,7 +26,7 @@
 use soroban_sdk::{contractimpl, Address, Env, Symbol};
 
 use crate::errors::VaultError;
-use crate::{CalloraVault, CalloraVaultClient, CalloraVaultArgs};
+use crate::{CalloraVault, CalloraVaultArgs, CalloraVaultClient};
 
 /// Read-only pre-flight of [`crate::CalloraVault::deduct`].
 ///
@@ -132,19 +132,15 @@ impl CalloraVault {
         //    `max_fee_bps == u16::MAX` (sentinel = no limit) or when the
         //    balance is zero (division-by-zero guard).
         if max_fee_bps < u32::MAX && balance > 0 {
-            let calculated_fee_bps = amount
-                .checked_mul(10_000)
-                .ok_or(VaultError::Overflow)?
-                / balance;
+            let calculated_fee_bps =
+                amount.checked_mul(10_000).ok_or(VaultError::Overflow)? / balance;
             if calculated_fee_bps > max_fee_bps as i128 {
                 return Err(VaultError::Slippage);
             }
         }
 
         // Projected new balance — same shape as `deduct`'s `Ok(..)` payload.
-        let new_balance = balance
-            .checked_sub(amount)
-            .ok_or(VaultError::Overflow)?;
+        let new_balance = balance.checked_sub(amount).ok_or(VaultError::Overflow)?;
         Ok(new_balance)
     }
 }

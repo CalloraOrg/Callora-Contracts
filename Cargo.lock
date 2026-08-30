@@ -262,6 +262,7 @@ dependencies = [
 name = "callora-admin"
 version = "0.0.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -269,6 +270,7 @@ dependencies = [
 name = "callora-allowlist"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "callora-settlement",
  "callora-vault",
  "soroban-sdk",
@@ -278,6 +280,7 @@ dependencies = [
 name = "callora-batch-claim"
 version = "0.0.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -294,6 +297,7 @@ dependencies = [
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "callora-storage-migration",
  "proptest",
  "soroban-sdk",
@@ -312,6 +316,7 @@ dependencies = [
 name = "callora-cold"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -329,8 +334,35 @@ dependencies = [
 name = "callora-cross-contract-tests"
 version = "0.0.1"
 dependencies = [
+ "callora-admin",
+ "callora-allowlist",
+ "callora-batch-claim",
+ "callora-checkpoint",
+ "callora-cold",
+ "callora-distribute",
+ "callora-emergency",
+ "callora-escrow",
+ "callora-fee",
+ "callora-freeze",
+ "callora-helpers",
+ "callora-hot",
+ "callora-limits",
+ "callora-migrate",
+ "callora-recipient",
+ "callora-refund",
+ "callora-registry",
+ "callora-rescue",
  "callora-revenue-pool",
  "callora-settlement",
+ "callora-stake",
+ "callora-storage-migration",
+ "callora-topics",
+ "callora-upgrade",
+ "callora-validators",
+ "callora-vault",
+ "callora-whitelist",
+ "callora-yield",
+ "errors",
  "rand 0.8.7",
  "soroban-sdk",
 ]
@@ -339,6 +371,7 @@ dependencies = [
 name = "callora-distribute"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -352,9 +385,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-emergency"
+version = "0.1.0"
+dependencies = [
+ "callora-helpers",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-escrow"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -362,6 +404,7 @@ dependencies = [
 name = "callora-fee"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -369,6 +412,7 @@ dependencies = [
 name = "callora-freeze"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "callora-revenue-pool",
  "soroban-sdk",
 ]
@@ -376,11 +420,15 @@ dependencies = [
 [[package]]
 name = "callora-helpers"
 version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
 
 [[package]]
 name = "callora-hot"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "criterion",
  "soroban-sdk",
 ]
@@ -398,6 +446,7 @@ dependencies = [
 name = "callora-limits"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "callora-revenue-pool",
  "callora-settlement",
  "soroban-sdk",
@@ -407,6 +456,7 @@ dependencies = [
 name = "callora-migrate"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "callora-settlement",
  "callora-storage-migration",
  "soroban-sdk",
@@ -416,6 +466,7 @@ dependencies = [
 name = "callora-recipient"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -430,9 +481,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-refund"
+version = "0.1.0"
+dependencies = [
+ "callora-helpers",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-registry"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "callora-validators",
  "criterion",
  "soroban-sdk",
@@ -442,6 +502,7 @@ dependencies = [
 name = "callora-rescue"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -449,6 +510,7 @@ dependencies = [
 name = "callora-revenue-pool"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "callora-storage-migration",
  "proptest",
  "soroban-sdk",
@@ -467,6 +529,7 @@ dependencies = [
 name = "callora-settlement"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "proptest",
  "soroban-sdk",
 ]
@@ -484,6 +547,7 @@ dependencies = [
 name = "callora-stake"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "callora-stake",
  "soroban-sdk",
 ]
@@ -492,6 +556,7 @@ dependencies = [
 name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -499,6 +564,7 @@ dependencies = [
 name = "callora-topics"
 version = "0.0.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -506,6 +572,7 @@ dependencies = [
 name = "callora-upgrade"
 version = "0.0.0"
 dependencies = [
+ "callora-helpers",
  "soroban-sdk",
 ]
 
@@ -513,6 +580,7 @@ dependencies = [
 name = "callora-validators"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "proptest",
  "soroban-sdk",
 ]
@@ -521,6 +589,7 @@ dependencies = [
 name = "callora-vault"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "callora-revenue-pool",
  "callora-settlement",
  "callora-validators",
@@ -532,6 +601,7 @@ dependencies = [
 name = "callora-whitelist"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "criterion",
  "soroban-sdk",
 ]
@@ -540,6 +610,7 @@ dependencies = [
 name = "callora-yield"
 version = "0.0.1"
 dependencies = [
+ "callora-helpers",
  "callora-revenue-pool",
  "soroban-sdk",
 ]
@@ -1012,6 +1083,7 @@ dependencies = [
 name = "errors"
 version = "0.1.0"
 dependencies = [
+ "callora-helpers",
  "proptest",
  "soroban-sdk",
 ]

@@ -20,10 +20,6 @@
 //! - Settlement: 20+ entrypoints
 //! - Revenue Pool: 15+ entrypoints
 
-#![no_std]
-
-extern crate std;
-
 use soroban_sdk::token as soroban_token;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Symbol, Vec};
 

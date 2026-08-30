@@ -1,4 +1,5 @@
 #![no_std]
+
 //! Callora emergency capability surface.
 //!
 //! This crate exposes a **read-only** [`views::capabilities`] bitmap so
@@ -22,12 +23,13 @@
 //! let removed = before & !after;
 //! ```
 
-mod views;
 pub mod migrate;
+mod views;
 
 pub use views::{
     capabilities, ALL_CAPABILITIES, CAP_EMERGENCY_DRAIN_CANCEL, CAP_EMERGENCY_DRAIN_EXECUTE,
-    CAP_EMERGENCY_DRAIN_PROPOSE, CAP_EMERGENCY_PAUSE, CAP_EMERGENCY_UNPAUSE, CAP_PENDING_DRAIN_VIEW,
+    CAP_EMERGENCY_DRAIN_PROPOSE, CAP_EMERGENCY_PAUSE, CAP_EMERGENCY_UNPAUSE,
+    CAP_PENDING_DRAIN_VIEW,
 };
 
 use soroban_sdk::{contract, contractimpl, Env};
@@ -52,5 +54,20 @@ impl CalloraEmergency {
     /// Pure view: no auth, no storage writes, no TTL bump.
     pub fn capabilities(env: Env) -> u64 {
         views::capabilities(&env)
+    }
+}
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Emergency;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
     }
 }

@@ -246,7 +246,11 @@ fn distribute_lifecycle_events() {
     let events = env.events().all();
     // Should emit 3 events: distribute_started, distribute, distribute_completed
     // (plus potentially other events depending on test environment)
-    assert!(events.len() >= 3, "expected at least 3 events, got {}", events.len());
+    assert!(
+        events.len() >= 3,
+        "expected at least 3 events, got {}",
+        events.len()
+    );
 
     // Find and verify distribute_started event
     let mut found_started = false;
@@ -256,7 +260,7 @@ fn distribute_lifecycle_events() {
     for event in events.iter() {
         let topics: &Vec<Val> = &event.1;
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        
+
         if topic0 == Symbol::new(&env, "distribute_started") {
             found_started = true;
             let topic1: Address = topics.get(1).unwrap().into_val(&env);
@@ -312,7 +316,10 @@ fn all_event_constructors_return_correct_symbols() {
         events::event_set_max_distribute(&env),
         Symbol::new(&env, "set_max_distribute")
     );
-    assert_eq!(events::event_distribute(&env), Symbol::new(&env, "distribute"));
+    assert_eq!(
+        events::event_distribute(&env),
+        Symbol::new(&env, "distribute")
+    );
     assert_eq!(
         events::event_distribute_started(&env),
         Symbol::new(&env, "distribute_started")
@@ -373,10 +380,16 @@ fn require_auth_on_all_state_changing_functions() {
 
     // accept_admin / claim_admin (no pending transfer — auth checked first)
     let result = client.try_accept_admin(&intruder);
-    assert!(result.is_err(), "non-admin should not be able to accept_admin");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to accept_admin"
+    );
 
     let result = client.try_claim_admin(&intruder);
-    assert!(result.is_err(), "non-admin should not be able to claim_admin");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to claim_admin"
+    );
 
     // upgrade (auth checked before wasm verification)
     let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
@@ -516,7 +529,10 @@ fn init_rejects_usdc_token_as_contract() {
     let client = DistributeClient::new(&env, &contract_addr);
 
     let result = client.try_init(&admin, &contract_addr);
-    assert!(result.is_err(), "init with usdc_token == contract should fail");
+    assert!(
+        result.is_err(),
+        "init with usdc_token == contract should fail"
+    );
 }
 
 #[test]

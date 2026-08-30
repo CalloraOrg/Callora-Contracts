@@ -1,4 +1,5 @@
 #![no_std]
+
 //! Callora cold-storage capability surface.
 //!
 //! The hot/cold balance split lives as an accounting partition inside the
@@ -39,5 +40,20 @@ impl CalloraCold {
     /// Pure view: no auth, no storage writes, no TTL bump.
     pub fn capabilities(env: Env) -> u64 {
         views::capabilities(&env)
+    }
+}
+
+pub mod ns {
+    pub use callora_helpers::{
+        accounting_key, config_key, ephemeral_key, idempotency_key, migration_key, state_key,
+        ContractNamespace, KeyCategory, KeyOwnershipMarker, NamespacedKey, NamespacedStorage,
+        ReadResult,
+    };
+
+    pub const CONTRACT_NS: ContractNamespace = ContractNamespace::Cold;
+
+    #[inline]
+    pub fn storage(env: &soroban_sdk::Env) -> NamespacedStorage<'_> {
+        NamespacedStorage::new(env, CONTRACT_NS)
     }
 }
