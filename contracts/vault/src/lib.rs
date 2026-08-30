@@ -567,7 +567,12 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::UsdcToken)
             .unwrap_or_else(|| panic!("USDC Token not set"));
         let usdc_client = token::Client::new(&env, &usdc_addr);
-        let total_amount: i128 = items.iter().map(|item| item.0).sum();
+        let mut total_amount: i128 = 0;
+        for item in items.iter() {
+            total_amount = total_amount
+                .checked_add(item.0)
+                .ok_or(VaultError::Overflow)?;
+        }
         usdc_client.transfer(
             &env.current_contract_address(),
             &settlement_addr,
