@@ -38,6 +38,10 @@ const EMERGENCY_PAUSED_KEY: &str = "emergency_paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+/// Per-leg minimum payout floor — configurable by the admin.
+const MIN_DISTRIBUTE_KEY: &str = "min_distribute";
+/// Persistent-storage key prefix for per-recipient dust balances.
+const DUST_BALANCE_PREFIX: &str = "dust_bal";
 const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield";
 const VERSION_KEY: &str = "version";
 
@@ -47,6 +51,14 @@ const VERSION_KEY: &str = "version";
 
 /// Default per-leg distribution cap — effectively unlimited until explicitly set.
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
+
+/// Default per-leg minimum payout threshold.
+///
+/// The value `1` means any positive amount is accepted by default,
+/// preserving backward compatibility. Operators can raise this floor via
+/// [`RevenuePool::set_min_distribute`] to avoid economic waste from
+/// transferring sub-unit amounts.
+pub const DEFAULT_MIN_DISTRIBUTE: i128 = 1;
 
 /// Maximum number of payments in a single `batch_distribute` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
@@ -643,10 +655,169 @@ impl RevenuePool {
     }
 
     // -----------------------------------------------------------------------
+    // Minimum distribute (dust floor)
+    // -----------------------------------------------------------------------
+
+    /// Return the per-leg minimum payout threshold. Defaults to `1` when unset.
+    ///
+    /// When a leg amount is below this value the amount is accumulated as dust
+    /// in persistent storage rather than transferred. No value is lost — call
+    /// [`RevenuePool::flush_dust`] once the balance reaches the threshold.
+    pub fn get_min_distribute(env: Env) -> i128 {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MIN_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MIN_DISTRIBUTE)
+    }
+
+    /// Set the per-leg minimum payout threshold. Must be positive. Admin only.
+    ///
+    /// Raising this value activates dust accumulation: any distribute leg below
+    /// the threshold is stored persistently under the recipient's key rather than
+    /// transferred. Existing dust balances are not dropped when the threshold
+    /// changes — they remain claimable via [`RevenuePool::flush_dust`].
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::AmountNotPositive`] - `min_distribute` is ≤ 0.
+    ///
+    /// # Events
+    /// Emits `min_distribute_set` with `caller` as topic and `(old_min, new_min)` as data.
+    pub fn set_min_distribute(env: Env, caller: Address, min_distribute: i128) {
+        caller.require_auth();
+        Self::require_not_emergency_paused(&env);
+        Self::require_admin(&env, &caller);
+        if min_distribute <= 0 {
+            env.panic_with_error(RevenuePoolError::AmountNotPositive);
+        }
+        let old_min = Self::get_min_distribute(env.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MIN_DISTRIBUTE_KEY), &min_distribute);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_min_distribute_set(&env), caller),
+            (old_min, min_distribute),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Dust balance helpers (private)
+    // -----------------------------------------------------------------------
+
+    /// Build the persistent-storage key for `recipient`'s dust balance.
+    #[inline]
+    fn dust_key(env: &Env, recipient: &Address) -> (Symbol, Address) {
+        (Symbol::new(env, DUST_BALANCE_PREFIX), recipient.clone())
+    }
+
+    /// Read accumulated dust for `recipient`. Returns 0 if no dust exists.
+    #[inline]
+    fn read_dust(env: &Env, recipient: &Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&Self::dust_key(env, recipient))
+            .unwrap_or(0_i128)
+    }
+
+    /// Persist updated dust for `recipient`.
+    #[inline]
+    fn write_dust(env: &Env, recipient: &Address, amount: i128) {
+        env.storage()
+            .persistent()
+            .set(&Self::dust_key(env, recipient), &amount);
+    }
+
+    /// Remove `recipient`'s dust entry (used after a successful flush).
+    #[inline]
+    fn remove_dust(env: &Env, recipient: &Address) {
+        env.storage()
+            .persistent()
+            .remove(&Self::dust_key(env, recipient));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dust view & flush
+    // -----------------------------------------------------------------------
+
+    /// Return the accumulated sub-unit dust balance for `recipient`.
+    ///
+    /// Returns `0` when no dust has accrued. Dust is created when a
+    /// `distribute` or `batch_distribute` leg amount is below `min_distribute`.
+    pub fn get_dust_balance(env: Env, recipient: Address) -> i128 {
+        Self::bump_instance_ttl(&env);
+        Self::read_dust(&env, &recipient)
+    }
+
+    /// Transfer accumulated dust for `recipient` when it meets or exceeds `min_distribute`.
+    ///
+    /// This entry point is **permissionless at the caller level**: any address may
+    /// trigger a flush, but the USDC is always sent to `recipient`, not `caller`.
+    /// The pool must not be paused at the time of the call.
+    ///
+    /// # Authorization
+    /// The `caller` must provide `require_auth`. Any address (admin, developer,
+    /// third-party relayer) may call.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::NotInitialized`] - USDC token not configured.
+    /// * [`RevenuePoolError::Paused`] - pool is paused.
+    /// * [`RevenuePoolError::BelowMinDistribute`] - accumulated dust has not yet
+    ///   reached the minimum threshold.
+    /// * [`RevenuePoolError::InsufficientBalance`] - pool USDC balance below dust amount.
+    ///
+    /// # Events
+    /// Emits `dust_flushed` with `recipient` as topic and `(amount, caller)` as data.
+    pub fn flush_dust(env: Env, caller: Address, recipient: Address) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+
+        let min_distribute = Self::get_min_distribute(env.clone());
+        let dust = Self::read_dust(&env, &recipient);
+
+        if dust < min_distribute {
+            env.panic_with_error(RevenuePoolError::BelowMinDistribute);
+        }
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+
+        if usdc.balance(&contract_address) < dust {
+            env.panic_with_error(RevenuePoolError::InsufficientBalance);
+        }
+
+        // Remove before transfer to prevent re-entrancy replay.
+        Self::remove_dust(&env, &recipient);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        usdc.transfer(&contract_address, &recipient, &dust);
+
+        env.events().publish(
+            (events::event_dust_flushed(&env), recipient.clone()),
+            (dust, caller),
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Distribution
     // -----------------------------------------------------------------------
 
     /// Distribute USDC from this contract to a single developer wallet.
+    ///
+    /// When `amount` is below the configured `min_distribute` threshold the
+    /// amount is accumulated as persistent dust for `to` instead of being
+    /// transferred. No value is lost. Call [`RevenuePool::flush_dust`] once
+    /// the dust balance reaches the threshold.
     ///
     /// # Errors
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
@@ -658,6 +829,7 @@ impl RevenuePool {
     /// * [`RevenuePoolError::NotInitialized`] - the USDC token is not configured.
     ///
     /// # Events
+    /// Emits `dust_accrued` when the amount is below `min_distribute`.
     /// Emits `distribute_started` and `distribute_completed` with a versioned
     /// payload around the transfer. The legacy `distribute` event is preserved.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
@@ -671,14 +843,33 @@ impl RevenuePool {
         if amount > max_distribute {
             env.panic_with_error(RevenuePoolError::AmountExceedsMaxDistribute);
         }
+        let contract_address = env.current_contract_address();
+        Self::validate_recipient(&env, &to, &contract_address);
+
+        // --- Dust accumulation: amounts below min_distribute are stored, not sent ---
+        let min_distribute = Self::get_min_distribute(env.clone());
+        if amount < min_distribute {
+            let current_dust = Self::read_dust(&env, &to);
+            let new_dust = current_dust
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+            Self::write_dust(&env, &to, new_dust);
+            env.storage()
+                .instance()
+                .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+            env.events().publish(
+                (events::event_dust_accrued(&env), to.clone()),
+                (amount, new_dust, caller),
+            );
+            return;
+        }
+
         let usdc_address: Address = env
             .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
             .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
-        let contract_address = env.current_contract_address();
-        Self::validate_recipient(&env, &to, &contract_address);
         if usdc.balance(&contract_address) < amount {
             env.panic_with_error(RevenuePoolError::InsufficientBalance);
         }
@@ -702,10 +893,11 @@ impl RevenuePool {
 
     /// Distribute USDC to multiple developer wallets in a single atomic transaction.
     ///
-    /// All payments are validated upfront before any USDC transfer occurs.
-    /// If **any** payment fails validation **no** transfers are executed and the
-    /// entire call reverts. If all payments pass validation every transfer is
-    /// executed and a `batch_distribute` event is emitted per payment leg.
+    /// All payments are validated upfront before any USDC transfer or dust-write
+    /// occurs. Legs **at or above** `min_distribute` are transferred immediately.
+    /// Legs **below** `min_distribute` are accumulated as persistent dust for
+    /// the recipient without loss. The batch total checked against pool balance
+    /// covers only the legs that will actually be transferred (not dust legs).
     ///
     /// # Arguments
     /// * `caller` — must be the current admin and provide `require_auth`.
@@ -721,20 +913,19 @@ impl RevenuePool {
     /// * [`RevenuePoolError::AmountExceedsMaxDistribute`] — a leg exceeds the cap.
     /// * [`RevenuePoolError::DuplicateRecipient`] — recipients are duplicated.
     /// * [`RevenuePoolError::Overflow`] — total amount overflows `i128`.
-    /// * [`RevenuePoolError::InsufficientBalance`] — balance is below the total.
+    /// * [`RevenuePoolError::InsufficientBalance`] — balance is below the transfer total.
     /// * [`RevenuePoolError::InvalidRecipient`] — a recipient is the pool contract.
     /// * [`RevenuePoolError::NotInitialized`] — the USDC token is not configured.
     ///
     /// # Events
+    /// Emits `dust_accrued` for each leg below `min_distribute`.
     /// Emits structured `distribute_started` and `distribute_completed` events
-    /// around each transfer. The legacy [`events::event_batch_distribute`] event
-    /// is preserved for every payment leg.
+    /// around each normal transfer. The legacy `batch_distribute` event is preserved.
     ///
     /// # Atomicity
-    /// The function is **all-or-nothing**: either every payment succeeds and every
-    /// event is emitted, or the entire transaction reverts. No partial state is
-    /// observable. Indexers can verify atomicity by checking that all
-    /// `batch_distribute` events share the same `(ledger, tx)` pair.
+    /// The function is **all-or-nothing**: either every payment (transfer or
+    /// dust-write) succeeds and every event is emitted, or the entire transaction
+    /// reverts. No partial state is observable.
     pub fn batch_distribute(
         env: Env,
         caller: Address,
@@ -753,10 +944,13 @@ impl RevenuePool {
         }
 
         let max_distribute = Self::get_max_distribute(env.clone());
+        let min_distribute = Self::get_min_distribute(env.clone());
         let mut seen: Map<Address, bool> = Map::new(&env);
-        let mut total_amount: i128 = 0;
+        // Only legs >= min_distribute count toward the balance check.
+        let mut transfer_total: i128 = 0;
         let contract_address = env.current_contract_address();
 
+        // Phase 1 — validate all legs
         for payment in payments.iter() {
             let (to, amount) = payment;
             Self::validate_recipient(&env, &to, &contract_address);
@@ -770,9 +964,11 @@ impl RevenuePool {
             if amount > max_distribute {
                 env.panic_with_error(RevenuePoolError::AmountExceedsMaxDistribute);
             }
-            total_amount = total_amount
-                .checked_add(amount)
-                .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+            if amount >= min_distribute {
+                transfer_total = transfer_total
+                    .checked_add(amount)
+                    .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+            }
         }
 
         let usdc_address: Address = env
@@ -782,7 +978,8 @@ impl RevenuePool {
             .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
 
-        if usdc.balance(&contract_address) < total_amount {
+        // Phase 2 — check transfer balance (dust legs are internal writes, not token debits)
+        if usdc.balance(&contract_address) < transfer_total {
             env.panic_with_error(RevenuePoolError::InsufficientBalance);
         }
 
@@ -790,22 +987,37 @@ impl RevenuePool {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+        // Phase 3 — execute: transfer normal legs, accumulate dust legs
         let mut batch_index = 0_u32;
         for payment in payments.iter() {
             let (to, amount) = payment;
 
-            let lifecycle = events::DistributionLifecycleEvent::new(
-                &env,
-                amount,
-                events::DistributionMode::Batch,
-                batch_index,
-                n,
-            );
-            events::emit_distribute_started(&env, &caller, &to, &lifecycle);
-            usdc.transfer(&contract_address, &to, &amount);
-            env.events()
-                .publish((events::event_batch_distribute(&env), to.clone()), amount);
-            events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            if amount < min_distribute {
+                // Dust leg: accumulate without transferring.
+                let current_dust = Self::read_dust(&env, &to);
+                let new_dust = current_dust
+                    .checked_add(amount)
+                    .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+                Self::write_dust(&env, &to, new_dust);
+                env.events().publish(
+                    (events::event_dust_accrued(&env), to.clone()),
+                    (amount, new_dust, caller.clone()),
+                );
+            } else {
+                // Normal leg: transfer and emit lifecycle events.
+                let lifecycle = events::DistributionLifecycleEvent::new(
+                    &env,
+                    amount,
+                    events::DistributionMode::Batch,
+                    batch_index,
+                    n,
+                );
+                events::emit_distribute_started(&env, &caller, &to, &lifecycle);
+                usdc.transfer(&contract_address, &to, &amount);
+                env.events()
+                    .publish((events::event_batch_distribute(&env), to.clone()), amount);
+                events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            }
             batch_index = batch_index.saturating_add(1);
         }
 
@@ -1197,6 +1409,9 @@ mod test_reentrancy;
 
 #[cfg(test)]
 mod test_storage_migration;
+
+#[cfg(test)]
+mod test_dust;
 
 #[cfg(test)]
 extern crate std;

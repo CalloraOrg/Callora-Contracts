@@ -253,6 +253,31 @@ pub fn event_emergency_drain_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "emergency_drain_cancelled")
 }
 
+/// Returns the Symbol for the `"dust_accrued"` event topic.
+///
+/// Emitted when a payout leg amount is below the configured `min_distribute`
+/// threshold and the amount is accumulated in persistent dust storage instead
+/// of being transferred. No value is lost — the dust can be flushed later.
+pub fn event_dust_accrued(env: &Env) -> Symbol {
+    Symbol::new(env, "dust_accrued")
+}
+
+/// Returns the Symbol for the `"dust_flushed"` event topic.
+///
+/// Emitted when accumulated dust for a recipient crosses the `min_distribute`
+/// threshold and is transferred out via [`RevenuePool::flush_dust`].
+pub fn event_dust_flushed(env: &Env) -> Symbol {
+    Symbol::new(env, "dust_flushed")
+}
+
+/// Returns the Symbol for the `"min_distribute_set"` event topic.
+///
+/// Emitted when the admin updates the per-leg minimum payout threshold via
+/// [`RevenuePool::set_min_distribute`].
+pub fn event_min_distribute_set(env: &Env) -> Symbol {
+    Symbol::new(env, "min_distribute_set")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -491,6 +516,33 @@ mod tests {
         assert_eq!(
             event_emergency_drain_cancelled(&env),
             Symbol::new(&env, "emergency_drain_cancelled")
+        );
+    }
+
+    /// Snapshot: proves event_dust_accrued maps to exactly "dust_accrued".
+    #[test]
+    fn test_event_dust_accrued_bytes() {
+        let env = Env::default();
+        assert_eq!(event_dust_accrued(&env), Symbol::new(&env, "dust_accrued"));
+    }
+
+    /// Snapshot: proves event_dust_flushed maps to exactly "dust_flushed".
+    #[test]
+    fn test_event_dust_flushed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_dust_flushed(&env),
+            Symbol::new(&env, "dust_flushed")
+        );
+    }
+
+    /// Snapshot: proves event_min_distribute_set maps to exactly "min_distribute_set".
+    #[test]
+    fn test_event_min_distribute_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_min_distribute_set(&env),
+            Symbol::new(&env, "min_distribute_set")
         );
     }
 }
