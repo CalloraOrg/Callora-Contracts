@@ -52,10 +52,14 @@
 //!
 //! | Function                  | Topic                | Topics                          | Data                              |
 //! |---------------------------|----------------------|---------------------------------|-----------------------------------|
-//! | `init`                    | `admin_init`         | `(topic, initial_admin)`        | `()`                              |
-//! | `set_admin`               | `admin_nominated`    | `(topic, current_admin)`        | `(pending_admin, eta, expires_at)`|
-//! | `accept_admin`            | `admin_changed`      | `(topic, new_admin)`            | `(previous_admin, new_admin)`     |
-//! | `cancel_admin_transfer`   | `admin_cancelled`    | `(topic, current_admin)`        | `cancelled_pending_admin`         |
+//! | `init`                    | `admin_init`         | `(topic, initial_admin)`        | `AdminLifecycleEvent`             |
+//! | `set_admin`               | `admin_nominated`    | `(topic, current_admin)`        | `AdminLifecycleEvent`             |
+//! | `accept_admin`            | `admin_changed`      | `(topic, new_admin)`            | `AdminLifecycleEvent`             |
+//! | `cancel_admin_transfer`   | `admin_cancelled`    | `(topic, current_admin)`        | `AdminLifecycleEvent`             |
+//!
+//! All lifecycle events carry a monotonically increasing `sequence` number
+//! that enables indexers to reconstruct the full admin lifecycle even if
+//! events are delivered out-of-order. See issue #1053.
 //!
 //! Read-only helpers (`get_admin`, `get_pending_admin`) do **not** emit
 //! events.
@@ -63,6 +67,7 @@
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
 use crate::events;
+use callora_topics::next_event_sequence;
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -184,9 +189,9 @@ const ERR_NOMINATION_EXPIRED: &str = "admin rotation nomination has expired";
 /// * `ERR_ALREADY_INITIALIZED` — `init` has been called before.
 ///
 /// # Events
-/// Emits `admin_init` with `(admin_init, admin)` topics and `()` as the
-/// data payload. The initial admin identity is carried in topic[1], so
-/// there is no redundant address in `data`.
+/// Emits `admin_init` with `(admin_init, admin)` topics and an `AdminLifecycleEvent`
+/// as the data payload. The sequence number is captured at event time and enables
+/// event ordering (issue #1053).
 pub fn init(env: &Env, admin: &Address) {
     if env.storage().instance().has(&Symbol::new(env, ADMIN_KEY)) {
         panic!("{}", ERR_ALREADY_INITIALIZED);
@@ -195,8 +200,16 @@ pub fn init(env: &Env, admin: &Address) {
     inst.set(&Symbol::new(env, ADMIN_KEY), admin);
     inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+    let seq = next_event_sequence(env);
+    let lifecycle_event = events::AdminLifecycleEvent {
+        sequence: seq,
+        version: events::ADMIN_LIFECYCLE_VERSION,
+        mode: events::AdminLifecycleMode::Init,
+        admin: admin.clone(),
+    };
+
     env.events()
-        .publish((events::event_admin_init(env), admin), ());
+        .publish((events::event_admin_init(env), admin), lifecycle_event);
 }
 
 // ---------------------------------------------------------------------------
@@ -296,46 +309,53 @@ fn require_admin_addr(env: &Env) -> Address {
 ///
 /// # Events
 /// Emits exactly one `admin_nominated` event with
-/// `(admin_nominated, caller)` topics and `(new_admin, eta, expires_at)` as
-/// data, so an indexer learns the acceptance window from the nomination
-/// itself.
-pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
-    caller.require_auth();
+    /// `(admin_nominated, caller)` topics and an `AdminLifecycleEvent` as
+    /// data, so an indexer learns the nomination details and the acceptance
+    /// window from the event payload. The sequence number is captured at
+    /// event time and enables deterministic ordering (issue #1053).
+    pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
+        caller.require_auth();
 
-    // Authorization is resolved before anything is read for the write path or
-    // written: an unauthorized caller changes no state and learns nothing
-    // about the current rotation beyond the fact that they are not the admin.
-    let current = require_admin_addr(env);
-    if caller != &current {
-        panic!("{}", ERR_UNAUTHORIZED);
-    }
+        // Authorization is resolved before anything is read for the write path or
+        // written: an unauthorized caller changes no state and learns nothing
+        // about the current rotation beyond the fact that they are not the admin.
+        let current = require_admin_addr(env);
+        if caller != &current {
+            panic!("{}", ERR_UNAUTHORIZED);
+        }
 
-    let now = env.ledger().timestamp();
-    // Saturating rather than wrapping: a clock near u64::MAX must not produce
-    // an `eta` in the past, which would silently defeat the timelock.
-    let eta = now.saturating_add(ROTATION_DELAY_SECS);
-    let expires_at = eta.saturating_add(ROTATION_GRACE_SECS);
+        let now = env.ledger().timestamp();
+        // Saturating rather than wrapping: a clock near u64::MAX must not produce
+        // an `eta` in the past, which would silently defeat the timelock.
+        let eta = now.saturating_add(ROTATION_DELAY_SECS);
+        let expires_at = eta.saturating_add(ROTATION_GRACE_SECS);
 
-    let inst = env.storage().instance();
-    let rotation_id = get_rotation_id(env).saturating_add(1);
-    inst.set(&Symbol::new(env, ROTATION_ID_KEY), &rotation_id);
-    inst.set(
-        &Symbol::new(env, PENDING_ADMIN_KEY),
-        &PendingRotation {
-            new_admin: new_admin.clone(),
-            proposed_at: now,
-            eta,
-            expires_at,
-            rotation_id,
-        },
-    );
-    inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        let inst = env.storage().instance();
+        let rotation_id = get_rotation_id(env).saturating_add(1);
+        inst.set(&Symbol::new(env, ROTATION_ID_KEY), &rotation_id);
+        inst.set(
+            &Symbol::new(env, PENDING_ADMIN_KEY),
+            &PendingRotation {
+                new_admin: new_admin.clone(),
+                proposed_at: now,
+                eta,
+                expires_at,
+                rotation_id,
+            },
+        );
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-    env.events().publish(
-        (events::event_admin_nominated(env), caller),
-        (new_admin.clone(), eta, expires_at),
-    );
-}
+        let seq = next_event_sequence(env);
+        let lifecycle_event = events::AdminLifecycleEvent {
+            sequence: seq,
+            version: events::ADMIN_LIFECYCLE_VERSION,
+            mode: events::AdminLifecycleMode::Nominated,
+            admin: caller.clone(),
+        };
+
+        env.events().publish(
+            (events::event_admin_nominated(env), caller),
+            lifecycle_event,
 
 /// Complete the admin transfer. Only the **pending** admin may call.
 ///
@@ -380,57 +400,62 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
 /// # Events
 /// Emits exactly one `admin_changed` event with
 /// `(admin_changed, caller)` topics — at this point `caller` is the
-/// incoming admin who is about to become active — and the data payload is
-/// `(previous_admin, new_admin)` so an indexer can record the full
-/// handover from a single event.
-pub fn accept_admin(env: &Env, caller: &Address) {
-    caller.require_auth();
+    /// incoming admin who is about to become active — and an `AdminLifecycleEvent`
+    /// as the data payload. The sequence number is captured at event time
+    /// and enables deterministic ordering (issue #1053).
+    pub fn accept_admin(env: &Env, caller: &Address) {
+        caller.require_auth();
 
-    let inst = env.storage().instance();
+        let inst = env.storage().instance();
 
-    // Read pending rotation; fail fast if none exists (read-only).
-    let rotation: PendingRotation = inst
-        .get(&Symbol::new(env, PENDING_ADMIN_KEY))
-        .expect(ERR_NO_PENDING_ADMIN);
+        // Read pending rotation; fail fast if none exists (read-only).
+        let rotation: PendingRotation = inst
+            .get(&Symbol::new(env, PENDING_ADMIN_KEY))
+            .expect(ERR_NO_PENDING_ADMIN);
 
-    // Order matters (issue #1045 & #1047): identity first, schedule second.
-    // Every check below is read-only, so any rejection leaves the pending
-    // slot, the admin slot and the rotation counter exactly as they were
-    // found, achieving atomic all-or-nothing semantics.
-    if caller != &rotation.new_admin {
-        panic!("{}", ERR_UNAUTHORIZED_PENDING);
-    }
+        // Order matters (issue #1045 & #1047): identity first, schedule second.
+        // Every check below is read-only, so any rejection leaves the pending
+        // slot, the admin slot and the rotation counter exactly as they were
+        // found, achieving atomic all-or-nothing semantics.
+        if caller != &rotation.new_admin {
+            panic!("{}", ERR_UNAUTHORIZED_PENDING);
+        }
 
-    // Validate end-time boundaries before state mutation (issue #1047).
-    let now = env.ledger().timestamp();
-    if now > rotation.expires_at {
-        panic!("{}", ERR_NOMINATION_EXPIRED);
-    }
-    if now < rotation.eta {
-        panic!("{}", ERR_TIMELOCK_NOT_ELAPSED);
-    }
+        // Validate end-time boundaries before state mutation (issue #1047).
+        let now = env.ledger().timestamp();
+        if now > rotation.expires_at {
+            panic!("{}", ERR_NOMINATION_EXPIRED);
+        }
+        if now < rotation.eta {
+            panic!("{}", ERR_TIMELOCK_NOT_ELAPSED);
+        }
 
-    // Read active admin; fail if not initialized (read-only).
-    let previous_admin: Address = inst
-        .get(&Symbol::new(env, ADMIN_KEY))
-        .expect(ERR_NOT_INITIALIZED);
+        // Read active admin; fail if not initialized (read-only).
+        let previous_admin: Address = inst
+            .get(&Symbol::new(env, ADMIN_KEY))
+            .expect(ERR_NOT_INITIALIZED);
 
-    // All preconditions passed. Perform atomic state mutation pair:
-    // 1. Update active admin to pending admin
-    // 2. Clear pending slot
-    // Both updates complete or both revert (single transaction).
-    let pending = rotation.new_admin;
-    inst.set(&Symbol::new(env, ADMIN_KEY), &pending);
-    inst.remove(&Symbol::new(env, PENDING_ADMIN_KEY));
-    inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        // All preconditions passed. Perform atomic state mutation pair:
+        // 1. Update active admin to pending admin
+        // 2. Clear pending slot
+        // Both updates complete or both revert (single transaction).
+        let pending = rotation.new_admin;
+        inst.set(&Symbol::new(env, ADMIN_KEY), &pending);
+        inst.remove(&Symbol::new(env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-    // Emit completion event only after state is successfully committed.
-    env.events().publish(
-        (events::event_admin_changed(env), caller),
-        (previous_admin, pending),
-    );
-}
+        // Emit completion event only after state is successfully committed.
+        let seq = next_event_sequence(env);
+        let lifecycle_event = events::AdminLifecycleEvent {
+            sequence: seq,
+            version: events::ADMIN_LIFECYCLE_VERSION,
+            mode: events::AdminLifecycleMode::Changed,
+            admin: caller.clone(),
+        };
 
+        env.events().publish(
+            (events::event_admin_changed(env), caller),
+            lifecycle_event,
 /// Cancel a pending admin transfer. Only the **current** admin may call.
 ///
 /// Removes the pending slot and emits `admin_cancelled` so indexers know
@@ -457,9 +482,9 @@ pub fn accept_admin(env: &Env, caller: &Address) {
 ///
 /// # Events
 /// Emits exactly one `admin_cancelled` event with
-/// `(admin_cancelled, caller)` topics and the previously-pending admin
-/// address as data so an indexer can record which specific address had
-/// its nomination revoked.
+/// `(admin_cancelled, caller)` topics and an `AdminLifecycleEvent` as
+/// the data payload so an indexer can record which specific address had
+/// its nomination revoked with deterministic ordering (issue #1053).
 pub fn cancel_admin_transfer(env: &Env, caller: &Address) {
     caller.require_auth();
 
@@ -479,8 +504,16 @@ pub fn cancel_admin_transfer(env: &Env, caller: &Address) {
     // Event data stays the bare address it has always been, so existing
     // indexers keep working; the schedule was already published with the
     // nomination.
+    let seq = next_event_sequence(env);
+    let lifecycle_event = events::AdminLifecycleEvent {
+        sequence: seq,
+        version: events::ADMIN_LIFECYCLE_VERSION,
+        mode: events::AdminLifecycleMode::Cancelled,
+        admin: caller.clone(),
+    };
+
     env.events().publish(
         (events::event_admin_cancelled(env), &current),
-        rotation.new_admin,
+        lifecycle_event,
     );
 }
