@@ -35,8 +35,67 @@
 //!
 //! Off-chain indexers should filter on `topic[0]` (action) and scope queries
 //! to the emitting contract address to avoid cross-contract topic collisions.
+//!
+//! ## Event Ordering and Sequencing
+//!
+//! Lifecycle events (admin_init, admin_nominated, admin_changed, admin_cancelled)
+//! are guaranteed to be ordered by a monotonically increasing sequence number.
+//! See [`AdminLifecycleEvent`] for the sequenced payload structure.
 
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::{contracttype, Env, Symbol};
+
+/// Schema version for admin lifecycle event payloads.
+///
+/// Used to signal compatibility to downstream consumers and to allow
+/// gradual schema evolution without breaking existing indexers.
+///
+/// * Version 1: Initial release with sequence numbers for event ordering
+pub const ADMIN_LIFECYCLE_VERSION: u32 = 1;
+
+/// Identifies which admin entry point emitted a lifecycle event.
+///
+/// Used by indexers to quickly categorize events and to detect missing
+/// or out-of-order events in a sequence.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AdminLifecycleMode {
+    /// Contract initialization
+    Init,
+    /// Admin nomination proposed (set_admin)
+    Nominated,
+    /// Admin nomination accepted (accept_admin)
+    Changed,
+    /// Admin nomination cancelled
+    Cancelled,
+}
+
+/// Stable, versioned payload shared by admin lifecycle events.
+///
+/// Every lifecycle transition (init, nomination, acceptance, cancellation)
+/// is accompanied by an event carrying this payload along with topic[0] and
+/// topic[1]. The sequence number acts as an immutable identifier that enables
+/// reconstruction of the full admin lifecycle even if events arrive out-of-order.
+///
+/// Indexers should:
+/// 1. Collect all AdminLifecycleEvents for a contract
+/// 2. Sort by `sequence` (guaranteed monotonically increasing)
+/// 3. Filter by `mode` to detect the specific transitions
+/// 4. Group by `admin` address to track rotation history
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminLifecycleEvent {
+    /// Monotonically increasing sequence number for ordering.
+    /// Uniquely identifies this event for the contract's lifetime.
+    pub sequence: u64,
+    /// Schema version, currently ADMIN_LIFECYCLE_VERSION (1).
+    /// Allows consumers to handle future schema changes.
+    pub version: u32,
+    /// Which lifecycle transition this event represents.
+    pub mode: AdminLifecycleMode,
+    /// The admin address at the time of emission (usually topic[1]).
+    /// Included for payload completeness and to catch deserialization errors.
+    pub admin: soroban_sdk::Address,
+}
 
 /// Returns the Symbol for the `"admin_init"` event topic.
 ///

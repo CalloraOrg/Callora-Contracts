@@ -2151,3 +2151,170 @@ fn acceptance_idempotence_fails_safely() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Event Ordering and Sequencing Tests (Issue #1053)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These tests verify deterministic event ordering for lifecycle transitions.
+// Indexers depend on:
+// 1. Event topics being byte-identical across all invocations
+// 2. Event sequence numbers being monotonically increasing
+// 3. Payload structures containing version and sequence fields
+// 4. Retries not creating duplicate events with new sequence numbers
+
+/// Helper: Extract the sequence number from an admin lifecycle event
+fn extract_event_sequence(env: &Env, data: &soroban_sdk::Val) -> u64 {
+    let event: crate::events::AdminLifecycleEvent = data.clone().into_val(env);
+    event.sequence
+}
+
+/// Helper: Extract the lifecycle mode from an admin lifecycle event
+fn extract_event_mode(env: &Env, data: &soroban_sdk::Val) -> crate::events::AdminLifecycleMode {
+    let event: crate::events::AdminLifecycleEvent = data.clone().into_val(env);
+    event.mode
+}
+
+/// Helper: Extract the version from an admin lifecycle event
+fn extract_event_version(env: &Env, data: &soroban_sdk::Val) -> u32 {
+    let event: crate::events::AdminLifecycleEvent = data.clone().into_val(env);
+    event.version
+}
+
+#[test]
+fn event_ordering_init_emits_sequence_1() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+
+    admin::init(&env, &admin);
+
+    let matches = events_with_topic(&env, "admin_init");
+    assert_eq!(matches.len(), 1, "init must emit exactly one event");
+
+    let seq = extract_event_sequence(&env, &matches[0].1);
+    let version = extract_event_version(&env, &matches[0].1);
+    let mode = extract_event_mode(&env, &matches[0].1);
+
+    assert_eq!(seq, 1, "first event must have sequence=1");
+    assert_eq!(version, crate::events::ADMIN_LIFECYCLE_VERSION);
+    assert_eq!(mode, crate::events::AdminLifecycleMode::Init);
+}
+
+#[test]
+fn event_ordering_full_rotation_emits_ordered_sequences() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    admin::init(&env, &admin);
+    admin::set_admin(&env, &admin, &new_admin);
+    warp_past_timelock(&env);
+    admin::accept_admin(&env, &new_admin);
+
+    let init_events = events_with_topic(&env, "admin_init");
+    let nominated_events = events_with_topic(&env, "admin_nominated");
+    let changed_events = events_with_topic(&env, "admin_changed");
+
+    assert_eq!(init_events.len(), 1);
+    assert_eq!(nominated_events.len(), 1);
+    assert_eq!(changed_events.len(), 1);
+
+    let seq_init = extract_event_sequence(&env, &init_events[0].1);
+    let seq_nom = extract_event_sequence(&env, &nominated_events[0].1);
+    let seq_changed = extract_event_sequence(&env, &changed_events[0].1);
+
+    assert_eq!(seq_init, 1);
+    assert_eq!(seq_nom, 2);
+    assert_eq!(seq_changed, 3);
+    assert!(seq_init < seq_nom && seq_nom < seq_changed);
+
+    let mode_init = extract_event_mode(&env, &init_events[0].1);
+    let mode_nom = extract_event_mode(&env, &nominated_events[0].1);
+    let mode_changed = extract_event_mode(&env, &changed_events[0].1);
+
+    assert_eq!(mode_init, crate::events::AdminLifecycleMode::Init);
+    assert_eq!(mode_nom, crate::events::AdminLifecycleMode::Nominated);
+    assert_eq!(mode_changed, crate::events::AdminLifecycleMode::Changed);
+}
+
+#[test]
+fn event_ordering_repeated_nominations_have_unique_sequences() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let nominee_a = Address::generate(&env);
+    let nominee_b = Address::generate(&env);
+
+    admin::init(&env, &admin);
+    admin::set_admin(&env, &admin, &nominee_a);
+    admin::set_admin(&env, &admin, &nominee_b);
+
+    let nominated_events = events_with_topic(&env, "admin_nominated");
+    assert_eq!(nominated_events.len(), 2);
+
+    let seq_a = extract_event_sequence(&env, &nominated_events[0].1);
+    let seq_b = extract_event_sequence(&env, &nominated_events[1].1);
+
+    assert_ne!(seq_a, seq_b);
+    assert!(seq_a < seq_b);
+}
+
+#[test]
+fn event_ordering_cancelled_nomination_has_sequence() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let nominee = Address::generate(&env);
+
+    admin::init(&env, &admin);
+    admin::set_admin(&env, &admin, &nominee);
+    admin::cancel_admin_transfer(&env, &admin);
+
+    let cancelled_events = events_with_topic(&env, "admin_cancelled");
+    assert_eq!(cancelled_events.len(), 1);
+
+    let seq = extract_event_sequence(&env, &cancelled_events[0].1);
+    let mode = extract_event_mode(&env, &cancelled_events[0].1);
+
+    assert_eq!(seq, 3);
+    assert_eq!(mode, crate::events::AdminLifecycleMode::Cancelled);
+}
+
+#[test]
+fn event_ordering_failed_auth_emits_no_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    admin::init(&env, &admin);
+
+    let events_before = events_with_topic(&env, "admin_nominated").len();
+
+    env.set_auths(&[]);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        admin::set_admin(&env, &stranger, &new_admin);
+    }));
+    assert!(result.is_err());
+
+    env.mock_all_auths();
+    let events_after = events_with_topic(&env, "admin_nominated").len();
+    assert_eq!(events_before, events_after);
+}
+
+#[test]
+fn event_ordering_topic_strings_stable() {
+    let env = Env::default();
+
+    let topic_init = crate::events::event_admin_init(&env);
+    let topic_nominated = crate::events::event_admin_nominated(&env);
+    let topic_changed = crate::events::event_admin_changed(&env);
+    let topic_cancelled = crate::events::event_admin_cancelled(&env);
+
+    assert_eq!(topic_init, Symbol::new(&env, "admin_init"));
+    assert_eq!(topic_nominated, Symbol::new(&env, "admin_nominated"));
+    assert_eq!(topic_changed, Symbol::new(&env, "admin_changed"));
+    assert_eq!(topic_cancelled, Symbol::new(&env, "admin_cancelled"));
+}

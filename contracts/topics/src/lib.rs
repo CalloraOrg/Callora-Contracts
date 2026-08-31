@@ -31,8 +31,10 @@
 
 pub mod errors;
 pub mod events;
+pub mod sequencer;
 
 pub use errors::TopicsError;
+pub use sequencer::{current_event_sequence, next_event_sequence, EVENT_VERSION_V1};
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 
