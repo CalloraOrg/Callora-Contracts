@@ -6,6 +6,8 @@ publish = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
+callora-topics = { path = "../topics" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-topics = { path = "../topics" }
