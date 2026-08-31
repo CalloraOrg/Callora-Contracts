@@ -101,4 +101,6 @@ pub enum SettlementError {
     NoVaultRotationPending = 41,
     /// Admin broadcast message exceeds the maximum allowed length.
     BroadcastMessageTooLong = 42,
+    /// Token decimal normalization failed (overflow, invalid decimals, etc.).
+    InvalidDecimal = 43,
 }

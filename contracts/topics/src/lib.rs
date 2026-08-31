@@ -29,10 +29,12 @@
 //! | `register_topic` | `"topic_registered"`| `TopicRecord`                 |
 //! | `deactivate`     | `"topic_deactivated"`| `topic_name: Symbol`         |
 
+pub mod decimals;
 pub mod errors;
 pub mod events;
 pub mod sequencer;
 
+pub use decimals::{denormalize, normalize, DecimalError, CANONICAL_DECIMALS, MAX_TOKEN_DECIMALS};
 pub use errors::TopicsError;
 pub use sequencer::{current_event_sequence, next_event_sequence, EVENT_VERSION_V1};
 

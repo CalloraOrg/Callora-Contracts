@@ -15,6 +15,7 @@ pub mod timelock;
 mod types;
 
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use callora_topics::normalize;
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
@@ -108,26 +109,37 @@ impl CalloraSettlement {
     ///
     /// # Arguments
     /// * `caller` - Must be authorized vault address or admin
-    /// * `amount` - Payment amount in token micro-units; must be > 0
+    /// * `amount` - Payment amount in token's native decimal scale; must be > 0
+    /// * `token_decimals` - The number of decimal places for the token (0-18)
     /// * `to_pool` - If true, credit global pool; if false, credit a specific developer
     /// * `developer` - Required when `to_pool=false`; ignored when `to_pool=true`
     /// * `token` - The token contract address for this payment
+    /// * `ledger_seq` - Ledger sequence for replay protection
+    ///
+    /// # Decimal Normalization
+    /// The amount is normalized from the token's native decimal scale to the
+    /// canonical 18-decimal scale used internally. This ensures consistent
+    /// arithmetic across tokens with different decimal places.
     ///
     /// # Access Control
     /// Only the registered vault address or admin can call this function.
+    /// Authorization is checked before any state mutation.
     ///
     /// # Events
     /// Always emits `payment_received`. Also emits `balance_credited` and `deposit`
     /// when `to_pool=false`.
     ///
     /// # Arithmetic Safety
-    /// Credits use checked arithmetic:
-    /// - Pool credits panic with `PoolOverflow` on `i128` overflow.
-    /// - Developer credits panic with `DeveloperOverflow` on `i128` overflow.
+    /// All operations use checked arithmetic:
+    /// - Amount normalization panics with `DecimalError` if it would overflow
+    /// - Pool credits panic with `PoolOverflow` on `i128` overflow
+    /// - Developer credits panic with `DeveloperOverflow` on `i128` overflow
+    /// - All authorization and replay checks pass before any state mutation
     pub fn receive_payment(
         env: Env,
         caller: Address,
         amount: i128,
+        token_decimals: u32,
         to_pool: bool,
         developer: Option<Address>,
         token: Address,
@@ -138,6 +150,11 @@ impl CalloraSettlement {
         if amount <= 0 {
             env.panic_with_error(SettlementError::AmountNotPositive);
         }
+
+        // Normalize amount from token's native decimal scale to canonical 18-decimal scale.
+        // This is done before any state mutation to catch errors early.
+        let normalized_amount = normalize(amount, token_decimals)
+            .unwrap_or_else(|_| env.panic_with_error(SettlementError::InvalidDecimal));
 
         // Replay guard: reject duplicate / out-of-order settlement claims.
         if to_pool {
@@ -158,7 +175,7 @@ impl CalloraSettlement {
             let mut global_pool = Self::get_global_pool(env.clone()).unwrap();
             global_pool.total_balance = global_pool
                 .total_balance
-                .checked_add(amount)
+                .checked_add(normalized_amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow));
             global_pool.last_updated = env.ledger().timestamp();
             inst.set(&StorageKey::GlobalPool, &global_pool);
@@ -167,7 +184,7 @@ impl CalloraSettlement {
                 &caller,
                 PaymentReceivedEvent {
                     from_vault: caller.clone(),
-                    amount,
+                    amount: normalized_amount,
                     to_pool: true,
                     developer: None,
                     token: token.clone(),
@@ -187,7 +204,7 @@ impl CalloraSettlement {
                 .get(&balance_key)
                 .unwrap_or(0i128);
             let new_balance = current_balance
-                .checked_add(amount)
+                .checked_add(normalized_amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
 
             // Write to persistent storage with TTL extension
@@ -261,6 +278,7 @@ impl CalloraSettlement {
         env: Env,
         caller: Address,
         items: Vec<(Address, i128)>,
+        token_decimals: u32,
         token: Address,
         ledger_seq: u32,
     ) {
@@ -283,6 +301,19 @@ impl CalloraSettlement {
             }
         }
 
+        // Normalize all amounts to canonical scale before any state mutation.
+        // This ensures that decimal conversion errors fail atomically.
+        let normalized_items: Vec<(Address, i128)> = {
+            let mut result = Vec::new(&env);
+            for item in items.iter() {
+                let (dev, amount) = item;
+                let normalized = normalize(amount, token_decimals)
+                    .unwrap_or_else(|_| env.panic_with_error(SettlementError::InvalidDecimal));
+                result.push_back((dev, normalized));
+            }
+            result
+        };
+
         // Replay guard: validate ALL developer HWMs before any state change.
         for item in items.iter() {
             let (dev, _) = item;
@@ -292,12 +323,12 @@ impl CalloraSettlement {
 
         let inst = env.storage().instance();
 
-        for item in items.iter() {
-            let (dev, amount) = item;
+        for i in 0..normalized_items.len() {
+            let (dev, normalized_amount) = normalized_items.get(i).unwrap();
             let balance_key = StorageKey::DeveloperBalance(dev.clone(), token.clone());
             let current: i128 = env.storage().persistent().get(&balance_key).unwrap_or(0);
             let new_balance = current
-                .checked_add(amount)
+                .checked_add(normalized_amount)
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
             env.storage().persistent().set(&balance_key, &new_balance);
             env.storage().persistent().set(
@@ -320,7 +351,7 @@ impl CalloraSettlement {
                 &dev,
                 BalanceCreditedEvent {
                     developer: dev.clone(),
-                    amount,
+                    amount: normalized_amount,
                     new_balance,
                     token: token.clone(),
                 },
