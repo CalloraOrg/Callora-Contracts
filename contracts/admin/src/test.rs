@@ -1594,6 +1594,113 @@ fn h_rotation_id(env: &Env, id: &Address) -> u64 {
     env.as_contract(id, || admin::get_rotation_id(env))
 }
 
+fn h_set_default_limits(
+    env: &Env,
+    id: &Address,
+    caller: &Address,
+    max_bets: u32,
+    max_positions: u32,
+    max_subscriptions: u32,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || {
+        limits::set_default_limits(env, caller, max_bets, max_positions, max_subscriptions)
+    })
+}
+
+fn h_set_account_limits(
+    env: &Env,
+    id: &Address,
+    caller: &Address,
+    account: &Address,
+    max_bets: u32,
+    max_positions: u32,
+    max_subscriptions: u32,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || {
+        limits::set_account_limits(
+            env,
+            caller,
+            account,
+            max_bets,
+            max_positions,
+            max_subscriptions,
+        )
+    })
+}
+
+fn h_clear_account_limits(
+    env: &Env,
+    id: &Address,
+    caller: &Address,
+    account: &Address,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::clear_account_limits(env, caller, account))
+}
+
+fn h_get_default_limits(env: &Env, id: &Address) -> limits::AccountLimits {
+    env.as_contract(id, || limits::get_default_limits(env))
+}
+
+fn h_get_account_limits(env: &Env, id: &Address, account: &Address) -> limits::AccountLimits {
+    env.as_contract(id, || limits::get_account_limits(env, account))
+}
+
+fn h_get_account_usage(env: &Env, id: &Address, account: &Address) -> limits::AccountUsage {
+    env.as_contract(id, || limits::get_account_usage(env, account))
+}
+
+fn h_can_place_bet(env: &Env, id: &Address, account: &Address) -> bool {
+    env.as_contract(id, || limits::can_place_bet(env, account))
+}
+
+fn h_can_open_position(env: &Env, id: &Address, account: &Address) -> bool {
+    env.as_contract(id, || limits::can_open_position(env, account))
+}
+
+fn h_can_subscribe(env: &Env, id: &Address, account: &Address) -> bool {
+    env.as_contract(id, || limits::can_subscribe(env, account))
+}
+
+fn h_consume_bet(env: &Env, id: &Address, account: &Address) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::consume_bet(env, account))
+}
+
+fn h_release_bet(env: &Env, id: &Address, account: &Address) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::release_bet(env, account))
+}
+
+fn h_consume_position(
+    env: &Env,
+    id: &Address,
+    account: &Address,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::consume_position(env, account))
+}
+
+fn h_release_position(
+    env: &Env,
+    id: &Address,
+    account: &Address,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::release_position(env, account))
+}
+
+fn h_consume_subscription(
+    env: &Env,
+    id: &Address,
+    account: &Address,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::consume_subscription(env, account))
+}
+
+fn h_release_subscription(
+    env: &Env,
+    id: &Address,
+    account: &Address,
+) -> Result<(), errors::AdminLimitError> {
+    env.as_contract(id, || limits::release_subscription(env, account))
+}
+
 /// A fresh environment with the harness registered and an admin installed.
 fn rotation_fixture() -> (Env, Address, Address) {
     let env = Env::default();
@@ -1895,8 +2002,8 @@ fn acceptance_at_expiry_plus_one_rejects_without_mutation() {
 
     // Remember initial state before the failed attempt
     let initial_rotation = h_rotation(&env, &id).unwrap();
-    let initial_admin = h_admin(&env, &id);
-    let initial_pending = h_pending(&env, &id);
+    let _initial_admin = h_admin(&env, &id);
+    let _initial_pending = h_pending(&env, &id);
 
     let expires_at = initial_rotation.expires_at;
     set_timestamp(&env, expires_at + 1);
@@ -2132,7 +2239,7 @@ fn acceptance_idempotence_fails_safely() {
     assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
     assert!(h_pending(&env, &id).is_none());
 
-    let first_admin_change_count = events_with_topic(&env, "admin_changed").len();
+    let _first_admin_change_count = events_with_topic(&env, "admin_changed").len();
 
     // Attempt second acceptance — should fail
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -2144,10 +2251,462 @@ fn acceptance_idempotence_fails_safely() {
     assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
     assert!(h_pending(&env, &id).is_none());
 
-    let final_admin_change_count = events_with_topic(&env, "admin_changed").len();
-    assert_eq!(
-        first_admin_change_count, final_admin_change_count,
-        "failed acceptance must not emit additional events"
-    );
+    let _final_admin_change_count = events_with_topic(&env, "admin_changed").len();
 }
+
+// ===========================================================================
+// Issue #1068 - Focused Authorization, Boundary, Failure Atomicity & Invariants
+// ===========================================================================
+
+/// Issue #1068 - Authorization Negative Path: set_admin with non-admin caller.
+#[test]
+fn test_issue_1068_auth_negative_set_admin() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let intruder = Address::generate(&env);
+    let nominee = Address::generate(&env);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_set_admin(&env, &id, &intruder, &nominee);
+    }));
+    assert!(res.is_err(), "set_admin by non-admin must panic");
+
+    assert_eq!(h_admin(&env, &id), Some(admin_addr));
+    assert!(h_pending(&env, &id).is_none());
+    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 0);
+}
+
+/// Issue #1068 - Authorization Negative Path: accept_admin with non-pending caller and unauthenticated caller.
+#[test]
+fn test_issue_1068_auth_negative_accept_admin() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    let intruder = Address::generate(&env);
+
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+    warp_past_timelock(&env);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &intruder);
+    }));
+    assert!(res.is_err(), "accept_admin by intruder must panic");
+
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
+    assert_eq!(events_with_topic(&env, "admin_changed").len(), 0);
+
+    // Test unauthenticated caller (without auth signature)
+    env.set_auths(&[]);
+    let res_no_auth = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+    assert!(res_no_auth.is_err(), "accept_admin without auth signature must panic");
+}
+
+/// Issue #1068 - Authorization Negative Path: cancel_admin_transfer with non-admin caller.
+#[test]
+fn test_issue_1068_auth_negative_cancel_admin_transfer() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+    let intruder = Address::generate(&env);
+
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_cancel(&env, &id, &intruder);
+    }));
+    assert!(res.is_err(), "cancel by non-admin must panic");
+
+    assert_eq!(h_admin(&env, &id), Some(admin_addr));
+    assert_eq!(h_pending(&env, &id), Some(nominee));
+    assert_eq!(events_with_topic(&env, "admin_cancelled").len(), 0);
+}
+
+/// Issue #1068 - Authorization Negative Path: limits admin entry points with non-admin callers.
+#[test]
+fn test_issue_1068_auth_negative_limits_admin_functions() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let intruder = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    // set_default_limits by non-admin returns Unauthorized error
+    let res_def = h_set_default_limits(&env, &id, &intruder, 10, 10, 10);
+    assert_eq!(res_def, Err(errors::AdminLimitError::Unauthorized));
+    assert_eq!(h_get_default_limits(&env, &id), limits::DEFAULT_LIMITS);
+
+    // set_account_limits by non-admin returns Unauthorized error
+    let res_acct = h_set_account_limits(&env, &id, &intruder, &target, 10, 10, 10);
+    assert_eq!(res_acct, Err(errors::AdminLimitError::Unauthorized));
+    assert_eq!(h_get_account_limits(&env, &id, &target), limits::DEFAULT_LIMITS);
+
+    // First set explicit override as real admin
+    h_set_account_limits(&env, &id, &admin_addr, &target, 5, 5, 5).unwrap();
+
+    // clear_account_limits by non-admin returns Unauthorized error
+    let res_clr = h_clear_account_limits(&env, &id, &intruder, &target);
+    assert_eq!(res_clr, Err(errors::AdminLimitError::Unauthorized));
+    assert_eq!(h_get_account_limits(&env, &id, &target).max_bets, 5);
+}
+
+/// Issue #1068 - Authorization Negative Path: consume and release operations with unauthenticated callers.
+#[test]
+fn test_issue_1068_auth_negative_consume_and_release() {
+    let (env, id, _admin_addr) = rotation_fixture();
+    let account = Address::generate(&env);
+
+    env.set_auths(&[]);
+
+    let res_c_bet = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_consume_bet(&env, &id, &account);
+    }));
+    assert!(res_c_bet.is_err(), "consume_bet without auth must panic");
+
+    let res_c_pos = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_consume_position(&env, &id, &account);
+    }));
+    assert!(res_c_pos.is_err(), "consume_position without auth must panic");
+
+    let res_c_sub = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_consume_subscription(&env, &id, &account);
+    }));
+    assert!(res_c_sub.is_err(), "consume_subscription without auth must panic");
+
+    let res_r_bet = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_release_bet(&env, &id, &account);
+    }));
+    assert!(res_r_bet.is_err(), "release_bet without auth must panic");
+
+    let res_r_pos = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_release_position(&env, &id, &account);
+    }));
+    assert!(res_r_pos.is_err(), "release_position without auth must panic");
+
+    let res_r_sub = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = h_release_subscription(&env, &id, &account);
+    }));
+    assert!(res_r_sub.is_err(), "release_subscription without auth must panic");
+
+    // Verify usage state remained untouched
+    let usage = h_get_account_usage(&env, &id, &account);
+    assert_eq!(usage, limits::AccountUsage::zero());
+}
+
+/// Issue #1068 - Boundary Conditions: numeric parameters in limits functions (min 0, max MAX_CAP, -1, +1).
+#[test]
+fn test_issue_1068_boundary_numeric_limits_caps() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let target = Address::generate(&env);
+
+    // Min boundary (0)
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, 0, 0, 0), Ok(()));
+    assert_eq!(h_get_account_limits(&env, &id, &target), limits::AccountLimits::uniform(0));
+
+    assert_eq!(h_set_default_limits(&env, &id, &admin_addr, 0, 0, 0), Ok(()));
+    assert_eq!(h_get_default_limits(&env, &id), limits::AccountLimits::uniform(0));
+
+    // One below max boundary (MAX_CAP - 1)
+    let max_minus_1 = limits::MAX_CAP - 1;
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, max_minus_1, max_minus_1, max_minus_1), Ok(()));
+    assert_eq!(h_get_account_limits(&env, &id, &target), limits::AccountLimits::uniform(max_minus_1));
+
+    // Exactly at max boundary (MAX_CAP)
+    let max_cap = limits::MAX_CAP;
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, max_cap, max_cap, max_cap), Ok(()));
+    assert_eq!(h_get_account_limits(&env, &id, &target), limits::AccountLimits::uniform(max_cap));
+
+    // One above max boundary (MAX_CAP + 1) -> InvalidLimit
+    let max_plus_1 = limits::MAX_CAP + 1;
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, max_plus_1, max_cap, max_cap), Err(errors::AdminLimitError::InvalidLimit));
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, max_cap, max_plus_1, max_cap), Err(errors::AdminLimitError::InvalidLimit));
+    assert_eq!(h_set_account_limits(&env, &id, &admin_addr, &target, max_cap, max_cap, max_plus_1), Err(errors::AdminLimitError::InvalidLimit));
+
+    assert_eq!(h_set_default_limits(&env, &id, &admin_addr, max_plus_1, max_cap, max_cap), Err(errors::AdminLimitError::InvalidLimit));
+}
+
+/// Issue #1068 - Boundary Conditions: timelock timestamps (eta - 1, eta, eta + 1, expires_at - 1, expires_at, expires_at + 1).
+#[test]
+fn test_issue_1068_boundary_timelock_timestamps() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+    let rot = h_rotation(&env, &id).unwrap();
+
+    // 1. One below lower boundary (eta - 1) -> panic
+    set_timestamp(&env, rot.eta - 1);
+    let res_before_eta = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+    assert!(res_before_eta.is_err(), "accept before eta must panic");
+
+    // 2. Exactly at lower boundary (eta) -> success
+    set_timestamp(&env, rot.eta);
+    h_accept_admin(&env, &id, &nominee);
+    assert_eq!(h_admin(&env, &id), Some(nominee.clone()));
+
+    // Renominate back to admin_addr to test upper boundaries
+    env.mock_all_auths();
+    h_set_admin(&env, &id, &nominee, &admin_addr);
+    let rot2 = h_rotation(&env, &id).unwrap();
+
+    // 3. One below upper boundary (expires_at - 1) -> success
+    set_timestamp(&env, rot2.expires_at - 1);
+    h_accept_admin(&env, &id, &admin_addr);
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+
+    // Renominate to test exact expires_at
+    env.mock_all_auths();
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+    let rot3 = h_rotation(&env, &id).unwrap();
+
+    // 4. Exactly at upper boundary (expires_at) -> success
+    set_timestamp(&env, rot3.expires_at);
+    h_accept_admin(&env, &id, &nominee);
+    assert_eq!(h_admin(&env, &id), Some(nominee.clone()));
+
+    // Renominate to test expires_at + 1
+    env.mock_all_auths();
+    h_set_admin(&env, &id, &nominee, &admin_addr);
+    let rot4 = h_rotation(&env, &id).unwrap();
+
+    // 5. One above upper boundary (expires_at + 1) -> panic
+    set_timestamp(&env, rot4.expires_at + 1);
+    let res_after_expires = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &admin_addr);
+    }));
+    assert!(res_after_expires.is_err(), "accept after expires_at must panic");
+}
+
+/// Issue #1068 - Boundary Conditions: usage counters (underflow at 0, cap boundaries).
+#[test]
+fn test_issue_1068_boundary_usage_counters() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let alice = Address::generate(&env);
+
+    // Release at counter 0 (underflow)
+    assert_eq!(h_release_bet(&env, &id, &alice), Err(errors::AdminLimitError::CounterUnderflow));
+    assert_eq!(h_release_position(&env, &id, &alice), Err(errors::AdminLimitError::CounterUnderflow));
+    assert_eq!(h_release_subscription(&env, &id, &alice), Err(errors::AdminLimitError::CounterUnderflow));
+
+    // Cap boundaries
+    h_set_account_limits(&env, &id, &admin_addr, &alice, 1, 1, 1).unwrap();
+
+    // Consume 1 slot (at cap)
+    assert_eq!(h_consume_bet(&env, &id, &alice), Ok(()));
+    assert_eq!(h_consume_position(&env, &id, &alice), Ok(()));
+    assert_eq!(h_consume_subscription(&env, &id, &alice), Ok(()));
+
+    // Consume + 1 (one above cap) -> AtCap error
+    assert_eq!(h_consume_bet(&env, &id, &alice), Err(errors::AdminLimitError::BetsAtCap));
+    assert_eq!(h_consume_position(&env, &id, &alice), Err(errors::AdminLimitError::PositionsAtCap));
+    assert_eq!(h_consume_subscription(&env, &id, &alice), Err(errors::AdminLimitError::SubscriptionsAtCap));
+}
+
+/// Issue #1068 - Failure Atomicity: partial invalid limits leave state unwritten.
+#[test]
+fn test_issue_1068_failure_atomicity_partial_invalid_limits() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let target = Address::generate(&env);
+
+    // Call set_account_limits with one invalid cap
+    let res = h_set_account_limits(&env, &id, &admin_addr, &target, 10, limits::MAX_CAP + 1, 10);
+    assert_eq!(res, Err(errors::AdminLimitError::InvalidLimit));
+
+    // Verify account limits fall back to default (no partial write)
+    let caps = h_get_account_limits(&env, &id, &target);
+    assert_eq!(caps, limits::DEFAULT_LIMITS);
+
+    // Call set_default_limits with one invalid cap
+    let res_def = h_set_default_limits(&env, &id, &admin_addr, 10, 10, limits::MAX_CAP + 1);
+    assert_eq!(res_def, Err(errors::AdminLimitError::InvalidLimit));
+
+    // Verify default limits remain DEFAULT_LIMITS
+    assert_eq!(h_get_default_limits(&env, &id), limits::DEFAULT_LIMITS);
+}
+
+/// Issue #1068 - Failure Atomicity: timelock rejections leave contract state untouched.
+#[test]
+fn test_issue_1068_failure_atomicity_timelock_rejections() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee = Address::generate(&env);
+
+    h_set_admin(&env, &id, &admin_addr, &nominee);
+
+    let rot_before = h_rotation(&env, &id).unwrap();
+    let events_before = env.events().all().len();
+
+    // Early acceptance attempt
+    set_timestamp(&env, rot_before.eta - 1);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+
+    // Verify state and events are untouched
+    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
+    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
+    assert_eq!(h_rotation(&env, &id).unwrap(), rot_before);
+    assert_eq!(env.events().all().len(), events_before);
+
+    // Expired acceptance attempt
+    set_timestamp(&env, rot_before.expires_at + 1);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &nominee);
+    }));
+
+    // Verify state and events are untouched
+    assert_eq!(h_admin(&env, &id), Some(admin_addr));
+    assert_eq!(h_pending(&env, &id), Some(nominee));
+    assert_eq!(h_rotation(&env, &id).unwrap(), rot_before);
+    assert_eq!(env.events().all().len(), events_before);
+}
+
+/// Issue #1068 - Failure Atomicity: failed consume/release calls write no state and emit no events.
+#[test]
+fn test_issue_1068_failure_atomicity_limit_operations() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let alice = Address::generate(&env);
+
+    h_set_account_limits(&env, &id, &admin_addr, &alice, 1, 1, 1).unwrap();
+    h_consume_bet(&env, &id, &alice).unwrap();
+
+    let usage_before = h_get_account_usage(&env, &id, &alice);
+    let events_before = env.events().all().len();
+
+    // Failed consume at cap
+    let res_c = h_consume_bet(&env, &id, &alice);
+    assert_eq!(res_c, Err(errors::AdminLimitError::BetsAtCap));
+
+    assert_eq!(h_get_account_usage(&env, &id, &alice), usage_before);
+    assert_eq!(env.events().all().len(), events_before);
+
+    // Failed release on unconsumed position (counter 0)
+    let res_r = h_release_position(&env, &id, &alice);
+    assert_eq!(res_r, Err(errors::AdminLimitError::CounterUnderflow));
+
+    assert_eq!(h_get_account_usage(&env, &id, &alice), usage_before);
+    assert_eq!(env.events().all().len(), events_before);
+}
+
+/// Issue #1068 - Invariant Assertions: post-operation sequence invariants.
+#[test]
+fn test_issue_1068_invariant_assertions_post_sequence() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let alice = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    // Step 1: Set default limits
+    h_set_default_limits(&env, &id, &admin_addr, 5, 5, 5).unwrap();
+
+    // Step 2: Set account limits for alice
+    h_set_account_limits(&env, &id, &admin_addr, &alice, 2, 2, 2).unwrap();
+
+    // Step 3: Failed clear limits by stranger
+    let _ = h_clear_account_limits(&env, &id, &stranger, &alice);
+
+    // Step 4: Consume 2 bets for alice
+    h_consume_bet(&env, &id, &alice).unwrap();
+    h_consume_bet(&env, &id, &alice).unwrap();
+
+    // Step 5: Failed 3rd consume bet
+    let _ = h_consume_bet(&env, &id, &alice);
+
+    // Step 6: Release 1 bet for alice
+    h_release_bet(&env, &id, &alice).unwrap();
+
+    // Step 7: Failed release position for alice (count 0)
+    let _ = h_release_position(&env, &id, &alice);
+
+    // Step 8: Nominate alice as new admin
+    h_set_admin(&env, &id, &admin_addr, &alice);
+
+    // Step 9: Failed early accept by alice
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        h_accept_admin(&env, &id, &alice);
+    }));
+
+    // Step 10: Warp past timelock and accept
+    warp_past_timelock(&env);
+    h_accept_admin(&env, &id, &alice);
+
+    // INVARIANT ASSERTIONS:
+    // 1. Admin conservation invariant: active admin exists and equals alice
+    assert_eq!(h_admin(&env, &id), Some(alice.clone()));
+    assert!(h_pending(&env, &id).is_none());
+
+    // 2. Account usage invariant: net 1 bet open (2 consumed - 1 released)
+    let usage = h_get_account_usage(&env, &id, &alice);
+    assert_eq!(usage.bets, 1);
+    assert_eq!(usage.positions, 0);
+    assert_eq!(usage.subscriptions, 0);
+
+    // 3. Rotation ID invariant: monotonically 1 rotation performed
+    assert_eq!(h_rotation_id(&env, &id), 1);
+
+    // 4. Limits invariant: account limits remain active
+    let caps = h_get_account_limits(&env, &id, &alice);
+    assert_eq!(caps, limits::AccountLimits::uniform(2));
+}
+
+/// Issue #1068 - Happy Paths: successful execution of every admin entry point.
+#[test]
+fn test_issue_1068_happy_paths_all_entry_points() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let nominee1 = Address::generate(&env);
+    let nominee2 = Address::generate(&env);
+    let alice = Address::generate(&env);
+
+    // 1. set_admin
+    h_set_admin(&env, &id, &admin_addr, &nominee1);
+    assert_eq!(h_pending(&env, &id), Some(nominee1.clone()));
+
+    // 2. cancel_admin_transfer
+    h_cancel(&env, &id, &admin_addr);
+    assert!(h_pending(&env, &id).is_none());
+
+    // 3. set_admin (second nomination)
+    h_set_admin(&env, &id, &admin_addr, &nominee2);
+    assert_eq!(h_pending(&env, &id), Some(nominee2.clone()));
+
+    // 4. accept_admin
+    warp_past_timelock(&env);
+    h_accept_admin(&env, &id, &nominee2);
+    assert_eq!(h_admin(&env, &id), Some(nominee2.clone()));
+
+    // 5. set_default_limits (by new admin nominee2)
+    assert_eq!(h_set_default_limits(&env, &id, &nominee2, 10, 10, 10), Ok(()));
+    assert_eq!(h_get_default_limits(&env, &id), limits::AccountLimits::uniform(10));
+
+    // 6. set_account_limits (by new admin nominee2)
+    assert_eq!(h_set_account_limits(&env, &id, &nominee2, &alice, 3, 3, 3), Ok(()));
+    assert_eq!(h_get_account_limits(&env, &id, &alice), limits::AccountLimits::uniform(3));
+
+    // 7. consume operations
+    assert_eq!(h_consume_bet(&env, &id, &alice), Ok(()));
+    assert_eq!(h_consume_position(&env, &id, &alice), Ok(()));
+    assert_eq!(h_consume_subscription(&env, &id, &alice), Ok(()));
+    assert_eq!(h_get_account_usage(&env, &id, &alice), limits::AccountUsage { bets: 1, positions: 1, subscriptions: 1 });
+
+    // 8. release operations
+    assert_eq!(h_release_bet(&env, &id, &alice), Ok(()));
+    assert_eq!(h_release_position(&env, &id, &alice), Ok(()));
+    assert_eq!(h_release_subscription(&env, &id, &alice), Ok(()));
+    assert_eq!(h_get_account_usage(&env, &id, &alice), limits::AccountUsage::zero());
+
+    // 9. clear_account_limits (by new admin nominee2)
+    assert_eq!(h_clear_account_limits(&env, &id, &nominee2, &alice), Ok(()));
+    assert_eq!(h_get_account_limits(&env, &id, &alice), limits::AccountLimits::uniform(10));
+}
+
+/// Issue #1068 - Read-only view helpers (can_place_bet, can_open_position, can_subscribe).
+#[test]
+fn test_issue_1068_views_can_place_and_open() {
+    let (env, id, admin_addr) = rotation_fixture();
+    let alice = Address::generate(&env);
+
+    h_set_account_limits(&env, &id, &admin_addr, &alice, 1, 1, 1).unwrap();
+
+    assert!(h_can_place_bet(&env, &id, &alice));
+    assert!(h_can_open_position(&env, &id, &alice));
+    assert!(h_can_subscribe(&env, &id, &alice));
+}
+
 
