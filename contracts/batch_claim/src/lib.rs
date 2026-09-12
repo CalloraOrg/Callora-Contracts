@@ -708,6 +708,8 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
+    }
+
     /// Proactively extend a consumed-claim tombstone's TTL, independent of
     /// any claim/settle activity.
     ///
@@ -748,6 +750,7 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_BUMP,
         );
         Ok(true)
+    }
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -1505,6 +1508,8 @@ mod tests {
         assert_eq!(client.claim_id_owner(&unknown), None);
         assert!(!client.claim_id_reserved(&unknown));
         assert!(!client.claim_id_consumed(&unknown));
+    }
+
     // Consumed-tombstone TTL: survival beyond claim archival (#1043)
     // -----------------------------------------------------------------------
 
@@ -1747,4 +1752,5 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
+    }
 }

@@ -289,5 +289,225 @@
       "cpu": 43314,
       "mem": 504
     }
+  },
+  "callora-limits": {
+    "get_withdrawal_today": {
+      "cpu": 45304,
+      "mem": 472
+    },
+    "get_daily_withdraw_cap": {
+      "cpu": 45318,
+      "mem": 472
+    },
+    "get_developer_min_balance": {
+      "cpu": 45320,
+      "mem": 472
+    },
+    "set_daily_withdraw_cap": {
+      "cpu": 82573,
+      "mem": 696
+    },
+    "set_developer_min_balance": {
+      "cpu": 83750,
+      "mem": 700
+    },
+    "get_max_distribute": {
+      "cpu": 27547,
+      "mem": 324
+    },
+    "get_minimum_balance": {
+      "cpu": 45318,
+      "mem": 472
+    },
+    "set_minimum_balance": {
+      "cpu": 83748,
+      "mem": 700
+    },
+    "set_max_distribute": {
+      "cpu": 64951,
+      "mem": 712
+    }
+  },
+  "callora-cold": {
+    "capabilities": {
+      "cpu": 11385,
+      "mem": 104
+    }
+  },
+  "callora-distribute": {
+    "get_admin": {
+      "cpu": 16327,
+      "mem": 240
+    },
+    "balance": {
+      "cpu": 65347,
+      "mem": 708
+    },
+    "get_max_batch_size": {
+      "cpu": 14952,
+      "mem": 240
+    },
+    "cancel_admin_transfer": {
+      "cpu": 53407,
+      "mem": 668
+    },
+    "claim_admin": {
+      "cpu": 54463,
+      "mem": 668
+    },
+    "accept_admin": {
+      "cpu": 54463,
+      "mem": 668
+    },
+    "get_paused": {
+      "cpu": 16718,
+      "mem": 240
+    },
+    "get_pending_admin": {
+      "cpu": 17980,
+      "mem": 240
+    },
+    "get_usdc_token": {
+      "cpu": 16779,
+      "mem": 240
+    },
+    "get_max_distribute": {
+      "cpu": 18481,
+      "mem": 240
+    },
+    "batch_distribute": {
+      "cpu": 372064,
+      "mem": 1820
+    },
+    "distribute": {
+      "cpu": 237622,
+      "mem": 1596
+    },
+    "init": {
+      "cpu": 24923,
+      "mem": 396
+    },
+    "pause": {
+      "cpu": 43494,
+      "mem": 604
+    },
+    "set_admin": {
+      "cpu": 51820,
+      "mem": 668
+    },
+    "set_max_distribute": {
+      "cpu": 50824,
+      "mem": 648
+    },
+    "unpause": {
+      "cpu": 44515,
+      "mem": 604
+    },
+    "version": {
+      "cpu": 15459,
+      "mem": 240
+    }
+  },
+  "callora-freeze": {
+    "init": {
+      "cpu": 31499,
+      "mem": 388
+    },
+    "get_freeze_operator": {
+      "cpu": 22228,
+      "mem": 212
+    },
+    "set_freeze_operator": {
+      "cpu": 46498,
+      "mem": 572
+    },
+    "is_frozen": {
+      "cpu": 20575,
+      "mem": 212
+    },
+    "get_admin": {
+      "cpu": 21210,
+      "mem": 212
+    },
+    "freeze": {
+      "cpu": 47244,
+      "mem": 496
+    },
+    "unfreeze": {
+      "cpu": 45247,
+      "mem": 496
+    }
+  },
+  "callora-rescue": {
+    "init": {
+      "cpu": 37249,
+      "mem": 404
+    },
+    "get_admin": {
+      "cpu": 23385,
+      "mem": 228
+    },
+    "total_rescued": {
+      "cpu": 24517,
+      "mem": 228
+    },
+    "rescue": {
+      "cpu": 251485,
+      "mem": 1760
+    },
+    "rescue_capped": {
+      "cpu": 253012,
+      "mem": 1760
+    }
+  },
+  "callora-batch-claim": {
+    "get_admin": {
+      "cpu": 22675,
+      "mem": 216
+    },
+    "claim_id_consumed": {
+      "cpu": 43411,
+      "mem": 356
+    },
+    "claim_id_reserved": {
+      "cpu": 45086,
+      "mem": 384
+    },
+    "claim_id_owner": {
+      "cpu": 45084,
+      "mem": 384
+    },
+    "extend_claim_consumed_ttl": {
+      "cpu": 34796,
+      "mem": 356
+    },
+    "add_claim": {
+      "cpu": 137452,
+      "mem": 1180
+    },
+    "cancel_claim": {
+      "cpu": 66690,
+      "mem": 656
+    },
+    "batch_claim": {
+      "cpu": 127270,
+      "mem": 1252
+    },
+    "init": {
+      "cpu": 39442,
+      "mem": 444
+    },
+    "has_claim": {
+      "cpu": 40897,
+      "mem": 532
+    },
+    "get_claim": {
+      "cpu": 43399,
+      "mem": 532
+    },
+    "total_claims": {
+      "cpu": 26625,
+      "mem": 216
+    }
   }
 }

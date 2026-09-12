@@ -4,10 +4,10 @@ pub mod events;
 pub mod errors;
 pub mod limits;
 
-use crate::errors::DistributeError;
+pub use errors::DistributeError;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +50,9 @@ const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 #[contract]
 pub struct Distribute;
 
+pub use Distribute as CalloraDistribute;
+pub type CalloraDistributeClient<'a> = DistributeClient<'a>;
+
 #[contractimpl]
 impl Distribute {
     // -----------------------------------------------------------------------
@@ -84,7 +87,7 @@ impl Distribute {
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_init(&env), events::event_version_v1(&env), admin), usdc_token);
+            .publish((events::event_init(&env), admin), usdc_token);
     }
 
     // -----------------------------------------------------------------------
@@ -174,19 +177,11 @@ impl Distribute {
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (
-                events::event_admin_changed(&env),
-                events::event_version_v1(&env),
-                current.clone(),
-            ),
+            (events::event_admin_changed(&env), current.clone()),
             (current.clone(), new_admin.clone()),
         );
         env.events().publish(
-            (
-                events::event_admin_transfer_started(&env),
-                events::event_version_v1(&env),
-                current,
-            ),
+            (events::event_admin_transfer_started(&env), current),
             new_admin,
         );
     }
@@ -212,7 +207,7 @@ impl Distribute {
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_admin_transfer_completed(&env), events::event_version_v1(&env), pending), ());
+            .publish((events::event_admin_transfer_completed(&env), pending), ());
     }
 
     /// Alias for `accept_admin`.
@@ -241,7 +236,7 @@ impl Distribute {
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_admin_cancelled(&env), events::event_version_v1(&env), current, pending), ());
+            .publish((events::event_admin_cancelled(&env), current, pending), ());
     }
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
@@ -275,7 +270,7 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), true);
+            .publish((events::event_pause_set(&env), caller), true);
     }
 
     /// Deactivate the circuit-breaker. Only the admin may call.
@@ -297,7 +292,7 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), false);
+            .publish((events::event_pause_set(&env), caller), false);
     }
 
     /// Return `true` if the contract is currently paused.
@@ -342,11 +337,7 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (
-                events::event_set_max_distribute(&env),
-                events::event_version_v1(&env),
-                Self::admin(&env),
-            ),
+            (events::event_set_max_distribute(&env), Self::admin(&env)),
             (old_max, max_distribute),
         );
     }
@@ -395,17 +386,13 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (
-                events::event_distribute_started(&env),
-                events::event_version_v1(&env),
-                to.clone(),
-            ),
+            (events::event_distribute_started(&env), to.clone()),
             amount,
         );
         usdc.transfer(&contract_address, &to, &amount);
-        env.events().publish((events::event_distribute(&env), events::event_version_v1(&env), to.clone()), amount);
+        env.events().publish((events::event_distribute(&env), to.clone()), amount);
         env.events().publish(
-            (events::event_distribute_completed(&env), events::event_version_v1(&env), to),
+            (events::event_distribute_completed(&env), to),
             amount,
         );
     }
@@ -445,7 +432,7 @@ impl Distribute {
     pub fn batch_distribute(
         env: Env,
         caller: Address,
-        payments: SorobanVec<(Address, i128)>,
+        payments: Vec<(Address, i128)>,
     ) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -497,11 +484,7 @@ impl Distribute {
 
         // Phase 3 â€” emit started event
         env.events().publish(
-            (
-                events::event_batch_distribute_started(&env),
-                events::event_version_v1(&env),
-                caller.clone(),
-            ),
+            (events::event_batch_distribute_started(&env), caller.clone()),
             (total, n),
         );
 
@@ -513,7 +496,7 @@ impl Distribute {
 
         // Phase 5 â€” emit completed event
         env.events().publish(
-            (events::event_batch_distribute_completed(&env), events::event_version_v1(&env), caller),
+            (events::event_batch_distribute_completed(&env), caller),
             (total, n),
         );
     }
@@ -559,7 +542,7 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (events::event_upgraded(&env), events::event_version_v1(&env), Self::admin(&env)),
+            (events::event_upgraded(&env), Self::admin(&env)),
             new_wasm_hash,
         );
     }

@@ -558,7 +558,7 @@ mod test_events {
 
         let to = Address::generate(&env);
         let amount: i128 = 500;
-        let token_addr = create_token(&env, &admin, &cid, &amount);
+        let token_addr = create_token(&env, &admin, &cid, amount);
 
         // Clear init event.
         env.events().all();
@@ -608,7 +608,7 @@ mod test_events {
         let to = Address::generate(&env);
         let amount: i128 = 500;
         let cap: i128 = 1000;
-        let token_addr = create_token(&env, &admin, &cid, &amount);
+        let token_addr = create_token(&env, &admin, &cid, amount);
 
         env.events().all();
 
@@ -649,17 +649,14 @@ mod test_events {
         c.init(&admin);
 
         let to = Address::generate(&env);
-        let token_addr = create_token(&env, &admin, &cid, &1000);
+        let token_addr = create_token(&env, &admin, &cid, 1000);
 
         env.events().all();
 
         // First rescue: 300
         c.rescue(&admin, &token_addr, &to, &300_i128);
-        // Second rescue: 200
-        c.rescue(&admin, &token_addr, &to, &200_i128);
-
-        let all_events = env.events().all();
-        let rescue_events: std::vec::Vec<_> = all_events
+        let all_events1 = env.events().all();
+        let rescue_events1: std::vec::Vec<_> = all_events1
             .iter()
             .filter(|e| {
                 if e.0 != cid || e.1.is_empty() {
@@ -669,15 +666,28 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue")
             })
             .collect();
-
-        assert_eq!(rescue_events.len(), 2);
-
-        let payload1: events::RescueEvent = rescue_events[0].2.into_val(&env);
+        assert_eq!(rescue_events1.len(), 1);
+        let payload1: events::RescueEvent = rescue_events1[0].2.into_val(&env);
         assert_eq!(payload1.cumulative_rescued, 300);
 
-        let payload2: events::RescueEvent = rescue_events[1].2.into_val(&env);
+        // Second rescue: 200
+        c.rescue(&admin, &token_addr, &to, &200_i128);
+        let all_events2 = env.events().all();
+        let rescue_events2: std::vec::Vec<_> = all_events2
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+        assert_eq!(rescue_events2.len(), 1);
+        let payload2: events::RescueEvent = rescue_events2[0].2.into_val(&env);
         assert_eq!(payload2.cumulative_rescued, 500);
     }
+
 
     /// Failed rescue (invalid amount) must NOT emit a `rescue` event.
     #[test]
@@ -723,8 +733,7 @@ mod test_events {
         let c = CalloraRescueClient::new(&env, &cid);
 
         c.init(&admin);
-
-        let token_addr = create_token(&env, &admin, &cid, &500);
+        let token_addr = create_token(&env, &admin, &cid, 500);
         let to = Address::generate(&env);
 
         // Clear init event.
