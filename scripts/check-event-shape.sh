@@ -2,13 +2,24 @@
 # check-event-shape.sh
 # Verifies that every env.events().publish() call site across all contracts
 # uses a centralized events::event_*() constructor (never inline Symbol::new).
-# Also verifies that every constructor-exported topic appears in EVENT_TOPICS.md.
+# Also verifies that every constructor-exported topic is snapshot-tested and
+# appears in EVENT_TOPICS.md.
+#
+# Version markers (`event_version_*`, e.g. "callora.v1") describe the event
+# schema version rather than an action, are emitted next to topic 0 instead of
+# replacing it, and are therefore excluded from the snapshot-test and
+# documentation rules. The script still reports them so an invalid marker
+# literal (one that is not a valid Soroban symbol) stays visible.
 #
 # Exit 0 = all events are documented. Exit 1 = undocumented event found.
 set -euo pipefail
 
 SCHEMA="docs/EVENT_TOPICS.md"
 EVENTS_DIR="contracts"
+
+# Soroban topic strings are lowercase identifiers (see
+# tests/event_topic_catalog.rs::all_topic_strings_are_valid_identifiers).
+TOPIC_RE='^[a-z_][a-z0-9_]*$'
 
 if [[ ! -f "$SCHEMA" ]]; then
   echo "ERROR: $SCHEMA not found (run from repo root)" >&2
@@ -42,38 +53,75 @@ check_contract() {
     fi
   fi
 
-  # 2. Verify every event constructor in events.rs has a snapshot test
   if [[ -f "$events" ]]; then
+    # Constructors that produce a real event topic (version markers excluded).
     local CTOR_COUNT
-    CTOR_COUNT=$(grep -cP 'pub fn event_\w+' "$events" || true)
-    # Count unique Symbol literals covered by snapshot tests
-    # Some tests cover multiple symbols (e.g. migration events)
-    local TESTED_SYMBOLS
-    TESTED_SYMBOLS=$(grep -oP 'Symbol::new\(&env,\s*"\K[a-z_]+' "$events" | sort -u | wc -l)
-    if [[ "$CTOR_COUNT" -ne "$TESTED_SYMBOLS" ]]; then
-      echo "FAIL: $contract_name has $CTOR_COUNT constructors but tests cover $TESTED_SYMBOLS unique symbols"
+    CTOR_COUNT=$( { grep -oP 'pub fn \Kevent_(?!version)\w+' "$events" || true; } | wc -l | tr -d ' ')
+
+    # Topic literals produced by the constructors above. The whole literal is
+    # captured so a malformed symbol (e.g. one containing ".") cannot silently
+    # truncate into a different string.
+    local PRODUCED_TOPICS TESTED_TOPICS MARKERS
+    PRODUCED_TOPICS=$( { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' "$events" || true; } | grep -v '\.' | sort -u || true)
+    TESTED_TOPICS=$( { grep -oP 'Symbol::new\(&env,\s*"\K[^"]*' "$events" || true; } | grep -v '\.' | sort -u || true)
+    MARKERS=$( { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' "$events" || true; } | grep '\.' | sort -u || true)
+
+    local PRODUCED_COUNT TESTED_COUNT
+    PRODUCED_COUNT=$(echo "$PRODUCED_TOPICS" | sed '/^$/d' | wc -l | tr -d ' ')
+    TESTED_COUNT=$(echo "$TESTED_TOPICS" | sed '/^$/d' | wc -l | tr -d ' ')
+
+    # 2a. Every constructor must publish its own distinct topic literal.
+    if [[ "$CTOR_COUNT" -ne "$PRODUCED_COUNT" ]]; then
+      echo "FAIL: $contract_name has $CTOR_COUNT constructors but only $PRODUCED_COUNT distinct topic literals"
       FAIL=1
     else
-      echo "OK: $CTOR_COUNT constructors match $TESTED_SYMBOLS tested symbols"
+      echo "OK: $CTOR_COUNT constructors map to $PRODUCED_COUNT distinct topics"
     fi
-  fi
 
-  # 3. Verify every constructor-exported topic appears in EVENT_TOPICS.md
-  if [[ -f "$events" ]]; then
-    # Extract actual topic strings from Symbol::new(env, "...") calls
-    mapfile -t TOPIC_STRINGS < <(
-      grep -oP 'Symbol::new\(env,\s*"\K[a-z_]+' "$events" | sort -u
-    )
+    # 2b. Every produced topic must be covered by a snapshot test.
+    local UNTESTED=()
+    local topic
+    while IFS= read -r topic; do
+      [[ -z "$topic" ]] && continue
+      if ! printf '%s\n' "$TESTED_TOPICS" | grep -qx "$topic"; then
+        UNTESTED+=("$topic")
+      fi
+    done <<< "$PRODUCED_TOPICS"
+
+    if [[ ${#UNTESTED[@]} -gt 0 ]]; then
+      echo "FAIL: the following $contract_name topics have no snapshot test in events.rs:"
+      for topic in "${UNTESTED[@]}"; do
+        echo "  - $topic"
+      done
+      FAIL=1
+    else
+      echo "OK: all $PRODUCED_COUNT topics are snapshot-tested ($TESTED_COUNT unique tested)"
+    fi
+
+    # 2c. Report version markers, and flag marker literals that are not valid
+    # Soroban symbols (they panic at runtime and can never be snapshot-tested).
+    local marker
+    while IFS= read -r marker; do
+      [[ -z "$marker" ]] && continue
+      if [[ ! "$marker" =~ $TOPIC_RE ]]; then
+        echo "WARN: $contract_name version marker \"$marker\" is not a valid Soroban symbol"
+      else
+        echo "OK: $contract_name version marker \"$marker\""
+      fi
+    done <<< "$MARKERS"
+
+    # 3. Verify every constructor-exported topic appears in EVENT_TOPICS.md
     mapfile -t SCHEMA_TOPICS < <(
-      grep -oP '^\|\s*\d+\s*\|\s*`\K[a-z_]+(?=`)' "$SCHEMA" | sort -u
+      grep -oP '^\|\s*\d+\s*\|\s*`\K[^`]+' "$SCHEMA" | sort -u
     )
 
     local MISSING=()
-    for topic in "${TOPIC_STRINGS[@]}"; do
+    while IFS= read -r topic; do
+      [[ -z "$topic" ]] && continue
       if ! printf '%s\n' "${SCHEMA_TOPICS[@]}" | grep -qx "$topic"; then
         MISSING+=("$topic")
       fi
-    done
+    done <<< "$PRODUCED_TOPICS"
 
     if [[ ${#MISSING[@]} -gt 0 ]]; then
       echo "FAIL: the following $contract_name topics are in events.rs but not in EVENT_TOPICS.md:"
@@ -82,7 +130,7 @@ check_contract() {
       done
       FAIL=1
     else
-      echo "OK: all ${#TOPIC_STRINGS[@]} topics documented in EVENT_TOPICS.md"
+      echo "OK: all $PRODUCED_COUNT topics documented in EVENT_TOPICS.md"
     fi
   fi
 
@@ -92,6 +140,7 @@ check_contract() {
 check_contract "vault"
 check_contract "settlement"
 check_contract "revenue_pool"
+check_contract "distribute"
 
 if [[ "$FAIL" -ne 0 ]]; then
   echo "FAILED: some contracts have undocumented events. See above."
