@@ -1324,6 +1324,10 @@ impl CalloraVault {
         if !(timelock::MIN_TIMELOCK_SECONDS..=timelock::MAX_TIMELOCK_SECONDS).contains(&window) {
             return Err(VaultError::InvalidTimelockWindow);
         }
+        // Read the previous window BEFORE overwriting it so the event payload
+        // carries (old_window, new_window). Reading after the write would
+        // return the new value for both tuple elements (bug #1112).
+        let old_window = timelock::get_timelock_window(&env);
         timelock::set_timelock_window(&env, window);
         env.events().publish(
             (
@@ -1331,7 +1335,7 @@ impl CalloraVault {
                 events::event_version_v1(&env),
                 caller.clone(),
             ),
-            (timelock::get_timelock_window(&env), window),
+            (old_window, window),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -2451,6 +2455,9 @@ mod test_value_conservation;
 
 #[cfg(test)]
 mod test_recovery_idempotency;
+
+#[cfg(test)]
+mod test_timelock_window_event;
 
 // #[cfg(test)]
 // mod test_gas_budget;
