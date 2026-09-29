@@ -27,9 +27,6 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 // Action tags
 // ---------------------------------------------------------------------------
 
-/// Cool-off tag for the `pause` critical action.
-pub const ACTION_PAUSE: &str = "pause";
-
 /// Cool-off tag for the `unpause` critical action.
 pub const ACTION_UNPAUSE: &str = "unpause";
 
@@ -235,7 +232,8 @@ impl CalloraHot {
     // Guarded critical actions
     // -----------------------------------------------------------------------
 
-    /// Pause the contract. Cool-off-guarded critical action (tag `"pause"`).
+    /// Pause the contract. **Not** cooldown-gated — circuit-breakers must be
+    /// available instantly.
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
@@ -244,14 +242,12 @@ impl CalloraHot {
     /// * [`HotError::Unauthorized`] -- caller is not the current admin.
     /// * [`HotError::NotInitialized`] -- contract not initialized.
     /// * [`HotError::AlreadyPaused`] -- the contract is already paused.
-    /// * [`HotError::CooldownActive`] -- a `pause` ran within the cool-off window.
     ///
     /// # Events
     /// Emits `paused` with `caller` as topic.
     pub fn pause(env: Env, caller: Address) -> Result<(), HotError> {
         Self::require_admin(&env, &caller)?;
-        let action = Symbol::new(&env, ACTION_PAUSE);
-        pause::do_pause(&env, &caller, &action)
+        pause::do_pause(&env, &caller)
     }
 
     /// Unpause the contract. Cool-off-guarded critical action (tag `"unpause"`).

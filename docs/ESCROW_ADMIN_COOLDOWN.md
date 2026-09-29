@@ -39,7 +39,7 @@ is independent of block cadence.
 | `cooldown_remaining(action) -> u64` | — (view) | — | Seconds until `action` is available (0 = now). |
 | `is_ready(action) -> bool` | — (view) | — | Whether `action` may run now. |
 | `release(caller, recipient)` | admin | `"release"` | Release escrowed funds to the recipient. |
-| `pause(caller)` | admin | `"pause"` | Pause the escrow contract. |
+| `pause(caller)` | admin | **none** | Pause the escrow contract. Always available immediately. |
 | `unpause(caller)` | admin | `"unpause"` | Unpause the escrow contract. |
 | `rotate_signer(caller, new_signer)` | admin | `"rotate"` | Replace the escrow signer. |
 | `set_admin(caller, new_admin)` | admin | — | Nominate a new admin (two-step). |
@@ -95,14 +95,20 @@ safely shorten the cool-off in a genuine emergency.
 
 - The cool-off caps the *rate* of critical actions; it is a defense-in-depth layer
   complementing the two-step admin rotation, not a replacement for key hygiene.
-- The `release` action is independently cooled from `pause` and `rotate`, ensuring
-  that blocking an emergency pause never also blocks a fund release (and vice versa).
-- Distinct action tags are independently cooled so that an emergency `pause` is never
-  blocked by a recent `rotate`, and vice versa.
-- All windows are bounded, so a configuration mistake cannot brick critical actions for
-  longer than `MAX_COOLDOWN_SECS` (30 days).
-- The two-step admin rotation (nominate → accept) ensures no admin key rotation happens
-  accidentally or unilaterally.
+- The `release` action is independently cooled from `pause` and `rotate`,
+  ensuring that blocking an emergency pause never also blocks a fund release
+  (and vice versa). `pause` carries no cooldown tag at all — it is always
+  instantly available regardless of any prior admin action.
+- **Asymmetric pause/unpause cooldown.** `pause` is exempt from the cooldown
+  gate; `unpause` retains it. An attacker who triggers an `unpause` must not
+  be able to hold the contract live for an entire cooldown window by keeping
+  the `"pause"` slot armed.
+- Distinct action tags are independently cooled so that an emergency `pause`
+  is never blocked by a recent `rotate`, and vice versa.
+- All windows are bounded, so a configuration mistake cannot brick critical
+  actions for longer than `MAX_COOLDOWN_SECS` (30 days).
+- The two-step admin rotation (nominate → accept) ensures no admin key
+  rotation happens accidentally or unilaterally.
 
 ## Relation to `hot` contract
 
