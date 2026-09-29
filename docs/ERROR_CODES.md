@@ -112,6 +112,7 @@ must not be reassigned once released.
 | 40 | `InvalidVault` | Settlement | Vault address is invalid |
 | 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
 | 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |
+| 43 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 
 ## Revenue Pool
 

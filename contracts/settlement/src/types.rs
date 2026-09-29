@@ -58,6 +58,16 @@ pub enum StorageKey {
     PriceRegistryLastWrite(Address),
     /// Price entry for a given offering identifier.
     Price(soroban_sdk::String),
+    /// Persistent replay marker for an accounting-only vault deduction.
+    DeductionRequest(u64),
+}
+
+/// Accounting-only deduction recorded; does not imply a token transfer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeductionRecordedEvent {
+    pub amount: i128,
+    pub request_id: u64,
 }
 
 /// Read-only preview of a developer claim/withdrawal.
