@@ -6,7 +6,7 @@
 
 use soroban_sdk::{Env, Symbol};
 
-/// Returns the Symbol for the `\"init\"` event topic.
+/// Returns the Symbol for the `"init"` event topic.
 ///
 /// Emitted when the hot contract is first initialized with an admin address
 /// and a default cooldown window.
@@ -14,7 +14,7 @@ pub fn event_init(env: &Env) -> Symbol {
     Symbol::new(env, "init")
 }
 
-/// Returns the Symbol for the `\"cooldown_set\"` event topic.
+/// Returns the Symbol for the `"cooldown_set"` event topic.
 ///
 /// Emitted when the admin updates the global cool-off window via
 /// [`crate::CalloraHot::set_cooldown`].
@@ -22,7 +22,7 @@ pub fn event_cooldown_set(env: &Env) -> Symbol {
     Symbol::new(env, "cooldown_set")
 }
 
-/// Returns the Symbol for the `\"action\"` event topic.
+/// Returns the Symbol for the `"action"` event topic.
 ///
 /// Emitted every time a guarded critical action is successfully executed,
 /// recording the action tag so indexers can reconstruct the cool-off timeline.
@@ -30,17 +30,17 @@ pub fn event_action(env: &Env) -> Symbol {
     Symbol::new(env, "action")
 }
 
-/// Returns the Symbol for the `\"signer_rotated\"` event topic.
+/// Returns the Symbol for the `"signer_rotated"` event topic.
 ///
-/// Emitted when the admin rotates the signer address via
-/// [`crate::CalloraHot::rotate_signer`]. The event data is a
+/// Emitted when the admin rotates the signer via
+/// [`crate::CalloraHot::rotate_signer`]. The event data carries the
 /// `(old_signer, new_signer)` tuple so monitors can alert on unexpected
-/// signer values without reading storage after every event.
+/// signer values without reading storage.
 pub fn event_signer_rotated(env: &Env) -> Symbol {
     Symbol::new(env, "signer_rotated")
 }
 
-/// Returns the Symbol for the `\"admin_nominated\"` event topic.
+/// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via
 /// [`crate::CalloraHot::set_admin`]. The nominated admin must call
@@ -49,7 +49,7 @@ pub fn event_admin_nominated(env: &Env) -> Symbol {
     Symbol::new(env, "admin_nominated")
 }
 
-/// Returns the Symbol for the `\"admin_accepted\"` event topic.
+/// Returns the Symbol for the `"admin_accepted"` event topic.
 ///
 /// Emitted when the pending admin accepts the role via
 /// [`crate::CalloraHot::accept_admin`], completing the two-step handover.
@@ -57,7 +57,7 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
-/// Returns the Symbol for the `\"paused\"` event topic.
+/// Returns the Symbol for the `"paused"` event topic.
 ///
 /// Emitted by [`crate::pause::do_pause`] when the circuit-breaker is
 /// activated. Topic carries the `caller` address; data is `()`.
@@ -65,7 +65,7 @@ pub fn event_paused(env: &Env) -> Symbol {
     Symbol::new(env, "paused")
 }
 
-/// Returns the Symbol for the `\"unpaused\"` event topic.
+/// Returns the Symbol for the `"unpaused"` event topic.
 ///
 /// Emitted by [`crate::pause::do_unpause`] when the circuit-breaker is
 /// deactivated. Topic carries the `caller` address; data is `()`.
@@ -104,7 +104,7 @@ mod tests {
         assert_eq(event_action(&env), Symbol::new(&env, "action"));
     }
 
-    /// Snapshot: proves event_signer_rotated maps to exactly the bytes for "signer_rotated".
+    /// Snapshot: proves event_signer_rotated still maps to exactly the bytes for "signer_rotated".
     #[test]
     fn test_event_signer_rotated_bytes() {
         let env = Env::default();
