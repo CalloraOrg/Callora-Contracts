@@ -58,6 +58,10 @@ pub enum StorageKey {
     PriceRegistryLastWrite(Address),
     /// Price entry for a given offering identifier.
     Price(soroban_sdk::String),
+    /// Whether a token contract is accepted for settlement payments.
+    SupportedToken(Address),
+    /// Whether the configured-USDC allowlist backfill has run.
+    SupportedTokensMigrated,
 }
 
 /// Read-only preview of a developer claim/withdrawal.

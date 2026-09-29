@@ -135,8 +135,10 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 16 | `admin_migration_proposed`   | `event_admin_migration_proposed`   | Developer balance migration proposed           |
 | 17 | `admin_migration`            | `event_admin_migration`            | Developer balance migration executed           |
 | 18 | `developer_min_balance_changed` | `event_developer_min_balance_changed` | Developer minimum balance threshold set  |
+| 19 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
+| 20 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
 
-**Total: 18 topics**
+**Total: 20 topics**
 
 ---
 

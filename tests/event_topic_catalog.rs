@@ -163,6 +163,12 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_settlement::events::event_admin_migration(e)
     }),
     ("deposit", |e| callora_settlement::events::event_deposit(e)),
+    ("supported_token_added", |e| {
+        callora_settlement::events::event_supported_token_added(e)
+    }),
+    ("supported_token_removed", |e| {
+        callora_settlement::events::event_supported_token_removed(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
