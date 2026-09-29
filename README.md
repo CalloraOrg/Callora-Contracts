@@ -65,7 +65,7 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `get_settlement()` — View; returns settlement address. Panics if not set.
 - `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
 - `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.
-- `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
+- `is_authorized_depositor(caller)` — View; returns `true` if `caller` is the owner or on the deposit allowlist — the exact gate `deposit` applies — and `false` otherwise (including before `init`). Does not reflect pause/`min_deposit` state.
 - `dry_run_sweep_idle_balance()` — View; returns a `SweepPreview` describing the untracked on-ledger USDC surplus (`on_ledger_balance - tracked_balance`, saturating at 0). Use this to inspect what `distribute(_, _, idle_balance)` would move without committing the transfer. Read-only, no auth, no TTL bump. Returns `NotInitialized` before `init`.
 
 ## Architecture & Flow
