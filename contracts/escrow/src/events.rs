@@ -30,6 +30,16 @@ pub fn event_action(env: &Env) -> Symbol {
     Symbol::new(env, "action")
 }
 
+/// Returns the Symbol for the `\"signer_rotated\"` event topic.
+///
+/// Emitted when the admin rotates the signer address via
+/// [`crate::CalloraEscrow::rotate_signer`]. The event data is a
+/// `(old_signer, new_signer)` tuple so monitors can alert on unexpected
+/// signer values without reading storage after every event.
+pub fn event_signer_rotated(env: &Env) -> Symbol {
+    Symbol::new(env, "signer_rotated")
+}
+
 /// Returns the Symbol for the `\"admin_nominated\"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via
@@ -39,7 +49,7 @@ pub fn event_admin_nominated(env: &Env) -> Symbol {
     Symbol::new(env, "admin_nominated")
 }
 
-/// Returns the Symbol for the `\"admin_accepted\b` event topic.
+/// Returns the Symbol for the `\"admin_accepted\"` event topic.
 ///
 /// Emitted when the pending admin accepts the role via
 /// [`crate::CalloraEscrow::accept_admin`], completing the two-step handover.
@@ -71,16 +81,6 @@ pub fn event_escrow_created(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_created")
 }
 
-/// Returns the Symbol for the `\"signer_rotated\"` event topic.
-///
-/// Emitted when the admin rotates the signer via
-/// [`crate::CalloraEscrow::rotate_signer`]. Data carries the `(old_signer,
-/// new_signer)` pair so monitors can alert on unexpected signer values without
-/// reading storage after every event.
-pub fn event_signer_rotated(env: &Env) -> Symbol {
-    Symbol::new(env, "signer_rotated")
-}
-
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -110,6 +110,16 @@ mod tests {
     fn test_event_action_bytes() {
         let env = Env::default();
         assert_eq(event_action(&env), Symbol::new(&env, "action"));
+    }
+
+    /// Snapshot: proves event_signer_rotated maps to exactly the bytes for "signer_rotated".
+    #[test]
+    fn test_event_signer_rotated_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_signer_rotated(&env),
+            Symbol::new(&env, "signer_rotated")
+        );
     }
 
     /// Snapshot: proves event_admin_nominated still maps to exactly the bytes for "admin_nominated".
@@ -159,16 +169,6 @@ mod tests {
         assert_eq(
             event_escrow_created(&env),
             Symbol::new(&env, "escrow_created")
-        );
-    }
-
-    /// Snapshot: proves event_signer_rotated maps to exactly the bytes for "signer_rotated".
-    #[test]
-    fn test_event_signer_rotated_bytes() {
-        let env = Env::default();
-        assert_eq(
-            event_signer_rotated(&env),
-            Symbol::new(&env, "signer_rotated")
         );
     }
 }

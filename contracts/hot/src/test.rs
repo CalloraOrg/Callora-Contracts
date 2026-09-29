@@ -2,8 +2,7 @@
 //!
 //! Coverage targets: cooldown configuration bounds, per-action isolation,
 //! window enforcement across ledger time, auth/authorization gating, the
-//! two-step admin rotation, signer rotation event payloads, and the read-only
-//! views.
+//! two-step admin rotation, and the read-only views.
 
 use crate::admin::{DEFAULT_COOLDOWN_SECS, MAX_COOLDOWN_SECS, MIN_COOLDOWN_SECS};
 use crate::{CalloraHot, CalloraHotClient, HotError, ACTION_PAUSE, ACTION_ROTATE};
@@ -203,22 +202,24 @@ fn test_rotate_signer_rejects_same_signer() {
 
 #[test]
 fn test_rotate_signer_emits_old_and_new_signer() {
-    use soroban_sdk::testutils::Events as _;
-    use soroban_sdk::{symbol_short, IntoVal, TryFromVal};
-
     let (env, admin, old_signer, client) = setup(Some(60));
     let new_signer = Address::generate(&env);
-
     client.rotate_signer(&admin, &new_signer);
     assert_eq!(client.get_signer(), new_signer);
 
     let events = env.events().all();
-    let last = events.last().unwrap();
-    assert_eq!(last.0, client.address);
-    let topic: Symbol = Symbol::try_from_val(&env, &last.1.get(0).unwrap()).unwrap();
-    assert_eq!(topic, symbol_short!("signer_rot"));
-    let data: (Address, Address) = TryFromVal::try_from_val(&env, &last.2).unwrap();
-    assert_eq!(data, (old_signer, new_signer));
+    let mut found = false;
+    for (contract, topics, data) in events.iter() {
+        if contract == client.address {
+            let topic0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+            if topic0 == Symbol::new(&env, "signer_rotated") {
+                let payload: (Address, Address) = data.try_into_val(&env).unwrap();
+                assert_eq!(payload, (old_signer.clone(), new_signer.clone()));
+                found = true;
+            }
+        }
+    }
+    assert!(found, "signer_rotated event not emitted");
 }
 
 #[test]

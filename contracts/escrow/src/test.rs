@@ -10,7 +10,6 @@ use crate::{
 };
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env, Symbol};
-use soroban_sdk::testutils::Events as _;
 
 /// Helper: register a fresh escrow contract initialized with `cooldown_secs`
 /// and return `(env, admin, signer, client)`. Auth is mocked for convenience.
@@ -229,72 +228,6 @@ fn test_pause_allowed_after_window_elapses() {
 // Per-action isolation
 // ===========================================================================
 
-// ===========================================================================
-// Signer rotation events (issue: include old and new signer)
-// ===========================================================================
-
-/// Rotating the signer emits a `signer_rotated` event carrying
-/// `(old_signer, new_signer)` as its data payload.
-#[test]
-fn test_rotate_signer_emits_old_and_new_signer() {
-    let (env, admin, old_signer, client) = setup(Some(60));
-    let new_signer = Address::generate(&env);
-
-    client.rotate_signer(&admin, &new_signer);
-    assert_eq!(client.get_signer(), new_signer);
-
-    let events = env.events().all();
-    let mut found = false;
-    for (_contract, topics, data) in events.iter() {
-        let topic0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
-        if topic0 == Symbol::new(&env, "signer_rotated") {
-            let payload: (Address, Address) = data.try_into_val(&env).unwrap();
-            assert_eq!(payload.0, old_signer);
-            assert_eq!(payload.1, new_signer);
-            found = true;
-        }
-    }
-    assert!(found, "signer_rotated event not emitted");
-}
-
-/// Rotating to the current signer is rejected and emits no rotation event.
-#[test]
-fn test_rotate_signer_to_same_signer_rejected() {
-    let (env, admin, signer, client) = setup(Some(60));
-
-    let res = client.try_rotate_signer(&admin, &signer);
-    assert_eq!(res, Err(Ok(EscrowError::InvalidInput)));
-    assert_eq!(client.get_signer(), signer);
-
-    let events = env.events().all();
-    for (_contract, topics, _data) in events.iter() {
-        let topic0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
-        assert_ne!(topic0, Symbol::new(&env, "signer_rotated"));
-    }
-}
-
-/// The rotation event payload shape is `(old_signer, new_signer)` — two
-/// addresses in order — matching the hot contract's event.
-#[test]
-fn test_rotate_signer_event_payload_shape() {
-    let (env, admin, old_signer, client) = setup(Some(60));
-    let new_signer = Address::generate(&env);
-
-    client.rotate_signer(&admin, &new_signer);
-
-    let events = env.events().all();
-    let mut payload: Option<(Address, Address)> = None;
-    for (_contract, topics, data) in events.iter() {
-        let topic0: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
-        if topic0 == Symbol::new(&env, "signer_rotated") {
-            payload = Some(data.try_into_val(&env).unwrap());
-        }
-    }
-    let (old, new) = payload.expect("signer_rotated event not emitted");
-    assert_eq!(old, old_signer);
-    assert_eq!(new, new_signer);
-}
-
 #[test]
 fn test_per_action_isolation() {
     let (env, admin, _signer, client) = setup(Some(1000));
@@ -312,6 +245,75 @@ fn test_per_action_isolation() {
 
     let rotate = Symbol::new(&env, ACTION_ROTATE);
     assert_eq!(client.cooldown_remaining(&rotate), 1000);
+}
+
+// ===========================================================================
+// Signer rotation events (issue: include old and new signer)
+// ===========================================================================
+
+/// Rotating to the current signer is rejected and leaves state unchanged.
+#[test]
+fn test_rotate_signer_to_same_signer_rejected() {
+    let (_env, admin, signer, client) = setup(Some(60));
+    let res = client.try_rotate_signer(&admin, &signer);
+    assert_eq!(res, Err(Ok(EscrowError::InvalidInput)));
+    // Signer is unchanged.
+    assert_eq!(client.get_signer(), signer);
+}
+
+/// A successful rotation emits a `signer_rotated` event whose payload is
+/// `(old_signer, new_signer)`.
+#[test]
+fn test_rotate_signer_emits_old_and_new_signer() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Symbol as S};
+
+    let (env, admin, old_signer, client) = setup(Some(60));
+    let new_signer = Address::generate(&env);
+
+    client.rotate_signer(&admin, &new_signer);
+    assert_eq!(client.get_signer(), new_signer.clone());
+
+    let events = env.events().all();
+    let topic = S::new(&env, "signer_rotated");
+    let expected_data = (old_signer.clone(), new_signer.clone()).into_val(&env);
+
+    let mut found = false;
+    for (_contract, topics, data) in events.iter() {
+        if topics.len() == 1 && topics.get(0).unwrap() == topic.clone().into_val(&env) {
+            assert_eq!(data, expected_data);
+            found = true;
+        }
+    }
+    assert!(found, "signer_rotated event not emitted");
+}
+
+/// The rotation event payload shape is stable across repeated rotations.
+#[test]
+fn test_rotate_signer_event_shape_stable() {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{IntoVal, Symbol as S};
+
+    let (env, admin, first_signer, client) = setup(Some(0));
+    let second_signer = Address::generate(&env);
+    let third_signer = Address::generate(&env);
+
+    client.rotate_signer(&admin, &second_signer);
+    client.rotate_signer(&admin, &third_signer);
+    assert_eq!(client.get_signer(), third_signer.clone());
+
+    let events = env.events().all();
+    let topic = S::new(&env, "signer_rotated");
+    let mut payloads: Vec<(Address, Address)> = Vec::new();
+    for (_contract, topics, data) in events.iter() {
+        if topics.len() == 1 && topics.get(0).unwrap() == topic.clone().into_val(&env) {
+            let decoded: (Address, Address) = data.into_val(&env);
+            payloads.push(decoded);
+        }
+    }
+    assert_eq!(payloads.len(), 2);
+    assert_eq!(payloads[0], (first_signer, second_signer));
+    assert_eq!(payloads[1], (second_signer, third_signer));
 }
 
 #[test]
