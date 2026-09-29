@@ -69,7 +69,7 @@ mod tests {
             let events_before = env.events().all();
             assert_eq!(
                 client.try_batch_distribute(&admin, &payments(&env, &recipient, count)),
-                Err(Ok(error))
+                Err(Ok(soroban_sdk::Error::from_contract_error(error as u32)))
             );
             assert_eq!(client.balance(), 1_000);
             assert_eq!(token.balance(&recipient), 0);
