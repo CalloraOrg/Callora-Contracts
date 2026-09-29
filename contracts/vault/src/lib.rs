@@ -426,6 +426,8 @@ impl CalloraVault {
     /// - [`VaultError::ExceedsMaxDeduct`] — `amount > max_deduct`.
     /// - [`VaultError::InsufficientBalance`] — tracked balance < amount.
     /// - [`VaultError::Overflow`] — balance underflow.
+    /// - [`VaultError::SettlementNotSet`] — settlement address is not configured.
+    /// - [`VaultError::NotInitialized`] — USDC token address is not configured.
     ///
     /// ### Events
     /// Emits `deduct` with `caller` as topic and `(amount, new_balance)` as data.
@@ -454,6 +456,13 @@ impl CalloraVault {
         {
             return Err(VaultError::Paused);
         }
+        let settlement_addr = Self::require_settlement(&env)?;
+        let usdc_addr = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
+
         let min_dep = env
             .storage()
             .instance()
@@ -488,17 +497,6 @@ impl CalloraVault {
             (amount, new_bal),
         );
 
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap_or_else(|| panic!("Settlement not set"));
-
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
         let usdc_client = token::Client::new(&env, &usdc_addr);
         usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
@@ -545,6 +543,8 @@ impl CalloraVault {
     /// - [`VaultError::ExceedsMaxDeduct`] — any item exceeds `max_deduct`.
     /// - [`VaultError::InsufficientBalance`] — aggregate total > tracked balance.
     /// - [`VaultError::Overflow`] — total accumulation overflows `i128`.
+    /// - [`VaultError::SettlementNotSet`] — settlement address is not configured.
+    /// - [`VaultError::NotInitialized`] — USDC token address is not configured.
     ///
     /// ### Events
     /// Emits one `deduct` event per item with `caller` as topic carrying
@@ -574,6 +574,12 @@ impl CalloraVault {
         {
             return Err(VaultError::Paused);
         }
+        let settlement_addr = Self::require_settlement(&env)?;
+        let usdc_addr = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .ok_or(VaultError::NotInitialized)?;
 
         // Boundary / batch-limit preconditions — checked before mutation.
         if items.is_empty() {
@@ -625,18 +631,8 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let settlement_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Settlement)
-            .unwrap_or_else(|| panic!("Settlement not set"));
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
 
-        let usdc_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
         let usdc_client = token::Client::new(&env, &usdc_addr);
 
         // All preconditions passed. Now the value-conserving mutation pair is
@@ -976,8 +972,14 @@ impl CalloraVault {
             &amount,
         );
 
-        env.events()
-            .publish((events::event_withdraw(&env), owner), (amount, new_bal));
+        env.events().publish(
+            (
+                events::event_withdraw(&env),
+                events::event_version_v1(&env),
+                owner,
+            ),
+            (amount, new_bal),
+        );
 
         new_bal
     }
@@ -1042,7 +1044,7 @@ impl CalloraVault {
         );
 
         env.events().publish(
-            (events::event_withdraw_to(&env), owner, to),
+            (events::event_withdraw_to(&env), events::event_version_v1(&env), owner, to),
             (amount, new_bal),
         );
 
@@ -1087,7 +1089,10 @@ impl CalloraVault {
         usdc.transfer(&env.current_contract_address(), &to, &amount);
 
         env.events()
-            .publish((events::event_distribute(&env), to), amount);
+            .publish(
+                (events::event_distribute(&env), events::event_version_v1(&env), to),
+                amount,
+            );
     }
 
     /// Return `true` if the vault is currently paused, `false` otherwise.
@@ -2130,7 +2135,7 @@ impl CalloraVault {
             }
             if removed_persistent || removed_temporary {
                 env.events()
-                    .publish((events::event_request_id_pruned(&env), id), ());
+                    .publish((events::event_request_id_pruned(&env), events::event_version_v1(&env), id), ());
             }
         }
 
@@ -2331,7 +2336,6 @@ impl CalloraVault {
         to: Address,
         amount: i128,
     ) -> Result<(), VaultError> {
-        caller.require_auth();
         Self::require_admin(&env, &caller)?;
 
         // --- Hot read path: bump instance TTL before reading any storage ---
@@ -2350,7 +2354,7 @@ impl CalloraVault {
         rescue::rescue_funds(&env, &token_address, &to, amount, protected_balance)?;
 
         env.events().publish(
-            (events::event_rescue_funds(&env), caller, token_address),
+            (events::event_rescue_funds(&env), events::event_version_v1(&env), caller, token_address),
             (to, amount),
         );
 
@@ -2386,7 +2390,7 @@ impl CalloraVault {
         }
         let prev = limits::set(&env, &token, cap);
         env.events().publish(
-            (events::event_reserve_cap_set(&env), caller, token),
+            (events::event_reserve_cap_set(&env), events::event_version_v1(&env), caller, token),
             (prev, cap),
         );
         Self::bump_instance_ttl(&env);
@@ -2456,8 +2460,11 @@ mod test_value_conservation;
 #[cfg(test)]
 mod test_recovery_idempotency;
 
+/// Holistic event-shape audit: drives every vault function that emits an event
+/// and asserts the published topic list matches EVENT_SCHEMA.md.  Catches
+/// call sites that fire zero, twice, or with the wrong topic count / version.
 #[cfg(test)]
-mod test_timelock_window_event;
+mod test_event_schema;
 
 // #[cfg(test)]
 // mod test_gas_budget;
