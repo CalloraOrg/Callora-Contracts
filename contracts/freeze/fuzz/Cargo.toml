@@ -1,0 +1,21 @@
+[package]
+name = "callora-freeze-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-revenue-pool = { path = "../../revenue_pool" }
+callora-freeze = { path = ".." }
+
+[[bin]]
+name = "main"
+path = "targets/main.rs"
+test = false
+doc = false

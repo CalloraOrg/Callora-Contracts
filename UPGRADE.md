@@ -614,3 +614,8 @@ For detailed storage layouts, see:
 - [Vault Storage Layout](contracts/vault/STORAGE.md)
 - [Vault Access Control](contracts/vault/ACCESS_CONTROL.md)
 - [Core Contracts README](contracts/README.md)
+
+### Upgrade Cooldown
+As of the GrantFox FWC26 campaign, a cool-off window is enforced between admin actions on upgrade to prevent rapid abuse.
+This is implemented in the `contracts/upgrade/src/admin.rs` module.
+Admins must wait at least 24 hours (configurable) between consecutive upgrades.

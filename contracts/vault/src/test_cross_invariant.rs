@@ -47,7 +47,7 @@ fn setup(
     settle_client.init(&owner, &vault_addr);
 
     // Point vault at settlement.
-    vault_client.set_settlement(&owner, &settle_addr);
+
 
     (vault_client, settle_client, owner)
 }

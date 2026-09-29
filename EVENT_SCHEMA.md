@@ -1,4 +1,4 @@
-﻿# Event Schema
+# Event Schema
 
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
@@ -20,6 +20,29 @@ All inline `Symbol::new(&env, "...")` event topic literals have been extracted f
 Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
 a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
 No topic strings were renamed; this refactor is a zero-semantic-change migration.
+
+## Change Note (2026-09) — Issue #1118: version topic added to six vault events
+
+Six vault events previously published without the `"callora_v1"` version marker at
+topic[1]. Indexers filtering on the version topic were silently dropping these
+fund-moving events. All six now carry `"callora_v1"` at topic[1]:
+
+| Event | Function | Old topic count | New topic count |
+|-------|----------|-----------------|-----------------|
+| `withdraw` | `withdraw()` | 2 | 3 |
+| `withdraw_to` | `withdraw_to()` | 3 | 4 |
+| `distribute` | `distribute()` | 2 | 3 |
+| `rescue_funds` | `admin_rescue()` | 3 | 4 |
+| `reserve_cap_set` | `set_reserve_cap()` | 3 | 4 |
+| `request_id_pruned` | `prune_processed_requests()` | 2 | 3 |
+
+The version symbol string is `"callora_v1"` (underscore, not dot — Soroban `Symbol`
+only allows `a-zA-Z0-9_`; the previous `"callora.v1"` string was invalid and would
+panic when passed through the Soroban host's XDR layer).
+
+**Breaking change for indexers:** Any consumer matching on topic count or positional
+topic index for these six events must update its filters. The `"callora_v1"` symbol
+is always at topic[1]; the subject address (owner/caller/token) shifts to topic[2]+.
 
 
 ## Contract: Callora Vault
@@ -106,21 +129,16 @@ transfer, or `deduct` event is emitted.
 
 Emitted when the vault owner withdraws to their own address.
 
-| Field         | Location | Type   | Description                                          |
-|---------------|----------|--------|------------------------------------------------------|
-| topic 0       | topics   | Symbol | `"withdraw"`                                         |
-| topic 1       | topics   | Address| vault owner                                          |
-| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
-| `new_balance` | data     | i128   | vault balance after withdrawal                       |
-| Index   | Location | Type         | Description           |
-|---------|----------|--------------|-----------------------|
-| topic 0 | topics   | Symbol       | `"withdraw"`          |
-| topic 1 | topics   | Address      | vault owner           |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Index   | Location | Type         | Description                         |
+|---------|----------|--------------|-------------------------------------|
+| topic 0 | topics   | Symbol       | `"withdraw"`                        |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)     |
+| topic 2 | topics   | Address      | vault owner                         |
+| data    | data     | (i128, i128) | (amount, new_balance)               |
 
 ```json
 {
-  "topics": ["withdraw", "GOWNER..."],
+  "topics": ["withdraw", "callora_v1", "GOWNER..."],
   "data": [200000, 700000]
 }
 ```
@@ -131,23 +149,17 @@ Emitted when the vault owner withdraws to their own address.
 
 Emitted when the vault owner withdraws to a designated recipient.
 
-| Field         | Location | Type   | Description                                          |
-|---------------|----------|--------|------------------------------------------------------|
-| topic 0       | topics   | Symbol | `"withdraw_to"`                                      |
-| topic 1       | topics   | Address| vault owner                                          |
-| topic 2       | topics   | Address| recipient `to`                                       |
-| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
-| `new_balance` | data     | i128   | vault balance after withdrawal                       |
-| Index   | Location | Type         | Description           |
-|---------|----------|--------------|-----------------------|
-| topic 0 | topics   | Symbol       | `"withdraw_to"`       |
-| topic 1 | topics   | Address      | vault owner           |
-| topic 2 | topics   | Address      | recipient             |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Index   | Location | Type         | Description                         |
+|---------|----------|--------------|-------------------------------------|
+| topic 0 | topics   | Symbol       | `"withdraw_to"`                     |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)     |
+| topic 2 | topics   | Address      | vault owner                         |
+| topic 3 | topics   | Address      | recipient                           |
+| data    | data     | (i128, i128) | (amount, new_balance)               |
 
 ```json
 {
-  "topics": ["withdraw_to", "GOWNER...", "GRECIPIENT..."],
+  "topics": ["withdraw_to", "callora_v1", "GOWNER...", "GRECIPIENT..."],
   "data": [150000, 550000]
 }
 ```
@@ -471,6 +483,97 @@ Emitted when the nominee accepts the admin role.
 | topic 1 | topics   | Address| old admin     |
 | topic 2 | topics   | Address| new admin     |
 | data    | data     | ()     | empty         |
+
+---
+
+### `distribute` (vault)
+
+Emitted when the admin distributes on-ledger USDC surplus to a recipient via
+`distribute()`. Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type    | Description                          |
+|---------|----------|---------|--------------------------------------|
+| topic 0 | topics   | Symbol  | `"distribute"`                       |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)      |
+| topic 2 | topics   | Address | `to` — recipient address             |
+| data    | data     | i128    | `amount` in USDC micro-units         |
+
+```json
+{
+  "topics": ["distribute", "callora_v1", "GRECIPIENT..."],
+  "data": 1000000
+}
+```
+
+---
+
+### `rescue_funds`
+
+Emitted when the admin rescues tokens from the vault via `admin_rescue()`.
+Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type    | Description                               |
+|---------|----------|---------|-------------------------------------------|
+| topic 0 | topics   | Symbol  | `"rescue_funds"`                          |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)           |
+| topic 2 | topics   | Address | `caller` — admin address                  |
+| topic 3 | topics   | Address | `token_address` — token being rescued     |
+| data    | data     | (Address, i128) | `(to, amount)` — destination and amount |
+
+```json
+{
+  "topics": ["rescue_funds", "callora_v1", "GADMIN...", "GTOKEN..."],
+  "data": ["GRECIPIENT...", 3000000]
+}
+```
+
+---
+
+### `reserve_cap_set`
+
+Emitted when the owner sets or updates the deposit reserve cap for a token via
+`set_reserve_cap()`. Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type         | Description                             |
+|---------|----------|--------------|-----------------------------------------|
+| topic 0 | topics   | Symbol       | `"reserve_cap_set"`                     |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)         |
+| topic 2 | topics   | Address      | `caller` — owner address                |
+| topic 3 | topics   | Address      | `token` — token the cap applies to      |
+| data    | data     | (Option\<i128\>, i128) | `(prev_cap, new_cap)` — previous cap (None if unset) and new cap |
+
+```json
+{
+  "topics": ["reserve_cap_set", "callora_v1", "GOWNER...", "GTOKEN..."],
+  "data": [null, 999999]
+}
+```
+
+---
+
+### `request_id_pruned`
+
+Emitted once per successfully removed idempotency marker when the owner calls
+`prune_processed_requests()`. Updated in Issue #1118 to include the version marker
+at topic[1].
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"request_id_pruned"`                    |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)          |
+| topic 2 | topics   | Symbol  | `id` — the pruned request ID             |
+| data    | data     | ()      | empty                                    |
+
+```json
+{
+  "topics": ["request_id_pruned", "callora_v1", "req_abc123"],
+  "data": null
+}
+```
+
+**Indexer note:** One `request_id_pruned` event is emitted per marker that was
+actually found and removed. IDs not present in storage are silently skipped (no
+event).
 
 ---
 
@@ -809,7 +912,7 @@ the WASM swap and `ContractVersion` write were rolled back.
 }
 ```
 
-#### `upgraded` (legacy)
+### `upgraded` (legacy)
 
 | Index   | Location | Type       | Description                                       |
 |---------|----------|------------|---------------------------------------------------|
@@ -925,6 +1028,99 @@ No tokens are moved; this is an out-of-band signaling channel for indexers and f
 
 ---
 
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain via
+`propose_emergency_drain()`. The drain cannot be executed until the 24-hour
+timelock has elapsed.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_proposed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that proposed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details (see below)                 |
+
+`PendingEmergencyDrain` fields:
+
+| Field           | Type      | Description                                              |
+|-----------------|-----------|----------------------------------------------------------|
+| `to`            | `Address` | Destination address for the drained USDC                 |
+| `amount`        | `i128`    | Amount of USDC to drain                                  |
+| `proposed_at`   | `u64`     | Ledger timestamp when the proposal was created           |
+| `execute_after` | `u64`     | Earliest timestamp at which the drain may be executed    |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> Only one emergency drain may be pending at a time. Re-proposing replaces
+> the previous proposal and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a pending emergency drain after the
+timelock has expired via `execute_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_executed"`                 |
+| topic 1 | topics   | Address                 | `admin` — current admin that executed        |
+| data    | data     | `PendingEmergencyDrain` | proposal details at time of execution         |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, the pending drain is cleared. The USDC has been
+> transferred to `to`.
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain via
+`cancel_emergency_drain()`.
+
+| Index   | Location | Type                    | Description                                  |
+|---------|----------|-------------------------|----------------------------------------------|
+| topic 0 | topics   | Symbol                  | `"emergency_drain_cancelled"`                |
+| topic 1 | topics   | Address                 | `admin` — current admin that cancelled       |
+| data    | data     | `PendingEmergencyDrain` | proposal details of the cancelled drain       |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": {
+    "to": "GTREASURY...",
+    "amount": 10000000,
+    "proposed_at": 1700000000,
+    "execute_after": 1700086400
+  }
+}
+```
+
+> After this event, `get_pending_emergency_drain()` returns `None`.
+
+---
+
 ### `swept`
 
 Emitted when the vault owner sweeps surplus USDC to a sibling contract via
@@ -963,6 +1159,72 @@ has left the vault on-ledger; `sweep_idle_balance` does **not** call
 
 ---
 
+### `emergency_drain_proposed`
+
+Emitted when the admin proposes a timelocked emergency drain of USDC to a
+designated address via `propose_emergency_drain()`. No tokens are moved yet;
+the drain becomes executable after `EMERGENCY_DRAIN_TIMELOCK_SECONDS` (24 hours).
+
+| Index   | Location | Type                  | Description                                    |
+|---------|----------|-----------------------|-------------------------------------------------|
+| topic 0 | topics   | Symbol                | `"emergency_drain_proposed"`                    |
+| topic 1 | topics   | Address                | `admin` — current admin who proposed the drain  |
+| data    | data     | `PendingEmergencyDrain`| struct with `to`, `amount`, `proposed_at`, `execute_after` |
+
+```json
+{
+  "topics": ["emergency_drain_proposed", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
+
+> Re-proposing while a drain is already pending replaces the prior proposal
+> and restarts the timelock.
+
+---
+
+### `emergency_drain_executed`
+
+Emitted when the admin executes a previously proposed emergency drain after
+its timelock has expired via `execute_emergency_drain()`. The proposed USDC
+amount is transferred from the contract to the destination address, and the
+proposal is consumed to prevent replay.
+
+| Index   | Location | Type    | Description                                          |
+|---------|----------|---------|-------------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"emergency_drain_executed"`                          |
+| topic 1 | topics   | Address | `admin` — current admin who executed the drain        |
+| data    | data     | `(Address, i128, u64, u64)` | `(to, amount, proposed_at, executed_at)` |
+
+```json
+{
+  "topics": ["emergency_drain_executed", "GADMIN..."],
+  "data": ["GTREASURY...", 5000000, 1700000000, 1700086400]
+}
+```
+
+---
+
+### `emergency_drain_cancelled`
+
+Emitted when the admin cancels a pending emergency drain proposal via
+`cancel_emergency_drain()` before it is executed. No tokens are moved.
+
+| Index   | Location | Type                   | Description                                     |
+|---------|----------|------------------------|--------------------------------------------------|
+| topic 0 | topics   | Symbol                 | `"emergency_drain_cancelled"`                    |
+| topic 1 | topics   | Address                 | `admin` — current admin who cancelled the drain  |
+| data    | data     | `PendingEmergencyDrain` | the cancelled proposal, unchanged                |
+
+```json
+{
+  "topics": ["emergency_drain_cancelled", "GADMIN..."],
+  "data": { "to": "GTREASURY...", "amount": 5000000, "proposed_at": 1700000000, "execute_after": 1700086400 }
+}
+```
+
+---
+
 ## Contract: `callora-settlement` (v0.1.0)
 
 Source: [`contracts/settlement/src/lib.rs`](contracts/settlement/src/lib.rs).
@@ -991,6 +1253,32 @@ no events are emitted and state is rolled back.
 - `to_pool = true` with `developer = Some(_)` â€” `"developer address must be None when to_pool=true"`.
 - `to_pool = false` with `developer = None` â€” `"developer address required when to_pool=false"`.
 - Arithmetic overflow on pool or developer balance â€” `"pool balance overflow"` / `"developer balance overflow"`.
+
+---
+
+### `initialized`
+
+Emitted once by `init()` when the settlement contract is first configured.
+
+| Index   | Location | Type    | Description                                     |
+|---------|----------|---------|-------------------------------------------------|
+| topic 0 | topics   | Symbol  | `"initialized"`                                 |
+| topic 1 | topics   | Address | `admin` — initial admin address                 |
+| topic 2 | topics   | Address | `vault_address` — initial authorized vault      |
+| data    | data     | GlobalPool | pool snapshot at init time (`total_balance=0`) |
+
+```json
+{
+  "topics": ["initialized", "GADMIN...", "GVAULT..."],
+  "data": { "total_balance": 0, "last_updated": 1700000000 }
+}
+```
+
+**Indexer guidance.**
+- `initialized` is emitted exactly once per contract lifetime; a second `init`
+  call panics with `AlreadyInitialized` before reaching this emit.
+- Use this event to index the contract's admin and vault addresses from genesis
+  without querying `get_admin()` / `get_vault()` separately.
 
 ---
 
@@ -1095,7 +1383,41 @@ after the matching `payment_received` event.
 
 ---
 
-### `vault_changed`
+### `deposit`
+
+Emitted alongside every `balance_credited` event, once per developer credit in
+both `receive_payment()` (`to_pool = false`) and `batch_receive_payment()`.
+It provides a compact deposit-centric view for indexers that don't need the
+full `PaymentReceivedEvent` context.
+
+| Index       | Location | Type    | Description                                          |
+|-------------|----------|---------|------------------------------------------------------|
+| topic 0     | topics   | Symbol  | `"deposit"`                                          |
+| topic 1     | topics   | Address | `developer` — address receiving the credit           |
+| `developer` | data     | Address | same as topic 1; duplicated for data-only indexers   |
+| `token`     | data     | Address | token contract address for this deposit              |
+| `amount`    | data     | i128    | deposit amount in USDC micro-units; invariant `> 0`  |
+
+```json
+{
+  "topics": ["deposit", "GDEV..."],
+  "data": {
+    "developer": "GDEV...",
+    "token": "GUSDC...",
+    "amount": 2500000
+  }
+}
+```
+
+**Indexer guidance.**
+- `deposit` is always emitted **after** `balance_credited` for the same
+  developer credit within the same transaction.
+- `deposit` is **never** emitted for pool credits (`to_pool = true`).
+- For batch credits, `N` items produce exactly `N` `deposit` events.
+- The `token` field identifies which asset was deposited; required for
+  multi-asset environments.
+
+---
 
 Emitted by `set_vault()` when the admin updates the registered vault address.
 
@@ -1225,6 +1547,9 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `treasury_cancelled`   | revenue-pool    | `cancel_treasury_transfer()`             |
 | `yield_deposited`        | revenue-pool    | `deposit_yield()`                        |
 | `admin_broadcast`        | revenue-pool    | `broadcast()`                            |
+| `emergency_drain_proposed` | revenue-pool  | `propose_emergency_drain()`              |
+| `emergency_drain_executed` | revenue-pool  | `execute_emergency_drain()`              |
+| `emergency_drain_cancelled` | revenue-pool | `cancel_emergency_drain()`               |
 | `payment_received`       | settlement      | `receive_payment()`                      |
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
@@ -1244,3 +1569,7 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
 | 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |
+| 0.2.0   | revenue-pool  | Added `emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled` events |
+| 0.2.0   | settlement    | Added `developer_min_balance_changed` event on `set_developer_min_balance()` (Issue #633) |
+| 0.3.0   | vault         | Added `"callora_v1"` version marker at topic[1] for `withdraw`, `withdraw_to`, `distribute`, `rescue_funds`, `reserve_cap_set`, `request_id_pruned` (Issue #1118) |
+| 0.3.0   | vault         | Version symbol renamed `"callora.v1"` → `"callora_v1"` (dot not allowed in Soroban Symbol charset) |

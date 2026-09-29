@@ -393,6 +393,119 @@
           "data": "void"
         }
       ]
+    },
+
+    {
+      "name": "propose_emergency_drain",
+      "description": "Propose a timelocked USDC emergency drain to a treasury address. Stores a PendingEmergencyDrain snapshot; execution is only possible after EMERGENCY_DRAIN_TIMELOCK_SECONDS (86 400 s = 24 h) have elapsed. A new proposal replaces any existing one, resetting the clock. When the admin is a Stellar multisig account, require_auth enforces the native multi-signature threshold automatically, providing Multisig + timelock protection.",
+      "access": "admin (must sign; multisig threshold enforced by Soroban host when admin is a multisig account)",
+      "params": [
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        },
+        {
+          "name": "treasury",
+          "type": "Address",
+          "optional": false,
+          "description": "Destination address for drained USDC. Cannot be the contract itself."
+        },
+        {
+          "name": "amount",
+          "type": "i128",
+          "optional": false,
+          "description": "USDC amount in base units. Must be positive."
+        }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"amount must be positive\" — amount <= 0.",
+        "\"invalid recipient: cannot drain to the contract itself\" — treasury == contract address.",
+        "\"timelock overflow\" — proposed_at + 86400 would overflow u64."
+      ],
+      "events": [
+        {
+          "topics": ["\"emergency_drain_proposed\"", "caller"],
+          "data": "PendingEmergencyDrain { to, amount, proposed_at, execute_after }"
+        }
+      ]
+    },
+
+    {
+      "name": "execute_emergency_drain",
+      "description": "Execute a pending emergency drain after the 24-hour timelock has expired. Transfers the proposed USDC amount to the destination address and removes the pending snapshot (replay protection).",
+      "access": "admin (must sign)",
+      "params": [
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"no pending emergency drain\" — propose_emergency_drain was not called first.",
+        "\"emergency drain timelock has not expired\" — current timestamp < execute_after.",
+        "\"insufficient USDC balance\" — contract holds less than the proposed amount."
+      ],
+      "events": [
+        {
+          "topics": ["\"emergency_drain_executed\"", "caller"],
+          "data": "(to, amount, proposed_at, executed_at) tuple"
+        }
+      ]
+    },
+
+    {
+      "name": "cancel_emergency_drain",
+      "description": "Cancel a pending emergency drain. May be called at any time before execution, including before the timelock expires. Removes the snapshot and emits an audit event.",
+      "access": "admin (must sign)",
+      "params": [
+        {
+          "name": "caller",
+          "type": "Address",
+          "optional": false,
+          "description": "Must be the current admin; must authorize."
+        }
+      ],
+      "returns": "void",
+      "panics": [
+        "\"unauthorized: caller is not admin\" — caller != current admin.",
+        "\"no pending emergency drain\" — no proposal exists to cancel."
+      ],
+      "events": [
+        {
+          "topics": ["\"emergency_drain_cancelled\"", "caller"],
+          "data": "PendingEmergencyDrain { to, amount, proposed_at, execute_after }"
+        }
+      ]
+    },
+
+    {
+      "name": "get_pending_emergency_drain",
+      "description": "Return the pending emergency drain proposal snapshot, or null if none exists. Off-chain monitors and the admin can poll this to verify or cancel a pending drain before the timelock expires.",
+      "access": "any",
+      "params": [],
+      "returns": "Option<PendingEmergencyDrain>",
+      "panics": [],
+      "events": []
     }
-  ]
+  ],
+
+  "types_detail": {
+    "PendingEmergencyDrain": {
+      "description": "Immutable snapshot of a pending emergency drain proposal.",
+      "fields": {
+        "to": { "type": "Address", "description": "Destination address for the drained USDC." },
+        "amount": { "type": "i128", "description": "USDC amount in base units to drain." },
+        "proposed_at": { "type": "u64", "description": "Ledger timestamp (seconds) when the proposal was created." },
+        "execute_after": { "type": "u64", "description": "Earliest ledger timestamp at which execute_emergency_drain may succeed. Equals proposed_at + 86400." }
+      }
+    }
+  }
 }

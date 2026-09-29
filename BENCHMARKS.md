@@ -56,3 +56,93 @@ Soroban fees are configured per network (e.g. Pubnet). They are applied to:
 - Rent for persistent/temporary storage
 
 See [Stellar documentation on Fees and Resource Limits](https://developers.stellar.org/docs/encyclopedia/fees-and-resource-limits) for current fee parameters and a detailed breakdown of metering operations.
+
+# Hot Contract Criterion Benchmarks
+
+The `callora-hot` contract includes `criterion` benchmarks for its hot entrypoints to track performance over time. Benchmarks are located at `contracts/hot/benches/main.rs`.
+
+## Running
+
+```bash
+cargo bench -p callora-hot
+```
+
+This runs all registered benchmarks and prints per-entrypoint timing statistics.
+
+## Benchmark Targets
+
+| Target | Description |
+|---|---|
+| `hot/is_paused` | Read paused flag from instance storage |
+| `hot/get_admin` | Read current admin address |
+| `hot/get_signer` | Read current hot signer address |
+| `hot/get_cooldown` | Read configured cool-off window |
+| `hot/get_pending_admin` | Read pending admin (two-step rotation) |
+| `hot/cooldown_remaining` | Compute remaining cooldown for an action |
+| `hot/is_ready` | Check whether an action may run now |
+| `hot/pause` | Critical action: set paused flag (cooldown-guarded) |
+| `hot/unpause` | Critical action: clear paused flag (cooldown-guarded) |
+| `hot/rotate_signer` | Critical action: rotate hot signer (cooldown-guarded) |
+| `hot/set_cooldown` | Update global cool-off window |
+| `hot/set_admin` | Nominate new admin (two-step rotation) |
+| `hot/accept_admin` | Accept pending admin transfer |
+
+Cooldown-guarded critical actions (`pause`, `unpause`, `rotate_signer`) advance the ledger timestamp by `COOLDOWN_SECS + 1` between iterations so each invocation is accepted.
+
+## Baseline
+
+Run `cargo bench -p callora-hot -- --save-baseline main` to capture a baseline. Future runs can be compared with:
+
+```bash
+cargo bench -p callora-hot -- --baseline main
+```
+
+## Dev-Dependency
+
+`criterion = "0.5"` is added as a dev-dependency in `contracts/hot/Cargo.toml`. This does not affect the production WASM artifact.
+
+# Whitelist Criterion Benchmarks
+
+The `callora-whitelist` package benchmarks the contract's public whitelist
+entrypoints with Criterion. The harness is located at
+`contracts/whitelist/benches/main.rs`.
+
+## Running
+
+```bash
+cargo bench -p callora-whitelist
+```
+
+## Benchmark Targets
+
+| Target | Description |
+|---|---|
+| `whitelist/is_whitelisted/member/32` | Check a member at the end of a 32-address whitelist |
+| `whitelist/is_whitelisted/miss/32` | Check a missing address against a 32-address whitelist |
+| `whitelist/get_whitelist/32` | Return a 32-address whitelist |
+| `whitelist/add_address/empty` | Add the first address |
+| `whitelist/add_address/32` | Add an address after 32 existing entries |
+| `whitelist/remove_address/32` | Remove the final address from 32 entries |
+| `whitelist/clear_all/32` | Clear a 32-address whitelist |
+
+Each state-changing sample uses a newly initialized fixture. Initialization,
+list population, and cooldown advancement stay outside the measured operation,
+while the measured invocation still executes the entrypoint's authorization
+and cooldown checks.
+
+## Baseline
+
+Save a comparison baseline with:
+
+```bash
+cargo bench -p callora-whitelist -- --save-baseline main
+```
+
+Compare a later run with:
+
+```bash
+cargo bench -p callora-whitelist -- --baseline main
+```
+
+`criterion = "0.5"` is a development-only dependency and does not affect the
+production contract WASM.

@@ -6,28 +6,77 @@ publish = false
 
 [workspace]
 resolver = "2"
+
 members = [
-    "contracts/vault",
-    "contracts/revenue_pool",
-    "contracts/settlement",
+    "contracts/admin",
+    "contracts/allowlist",
+    "contracts/batch_claim",
+    "contracts/batch_distribute/fuzz",
+    "contracts/checkpoint",
+    "contracts/checkpoint/fuzz",
+    "contracts/cold",
+    "contracts/distribute",
+    "contracts/distribute/fuzz",
+    "contracts/errors",
+    "contracts/escrow",
+    "contracts/fee",
+    "contracts/freeze",
     "contracts/helpers",
+    "contracts/hot",
+    "contracts/hot/fuzz",
+    "contracts/limits",
+    "contracts/migrate",
+    "contracts/recipient",
+    "contracts/recipient/fuzz",
+    "contracts/registry",
+    "contracts/rescue",
+    "contracts/revenue_pool",
     "contracts/revenue_pool/fuzz",
-]
-default-members = [
-    "contracts/vault",
-    "contracts/revenue_pool",
     "contracts/settlement",
-    "contracts/helpers",
+    "contracts/settlement/fuzz",
+    "contracts/stake",
+    "contracts/storage_migration",
+    "contracts/tests",
+    "contracts/topics",
+    "contracts/upgrade",
+    "contracts/validators",
+    "contracts/vault",
+    "contracts/whitelist",
+    "contracts/yield",
+    "contracts/vault",
 ]
 
+default-members = [
+    "contracts/checkpoint",
+    "contracts/cold",
+    "contracts/distribute",
+    "contracts/escrow",
+    "contracts/freeze",
+    "contracts/helpers",
+    "contracts/hot",
+    "contracts/limits",
+    "contracts/migrate",
+    "contracts/registry",
+    "contracts/rescue",
+    "contracts/revenue_pool",
+    "contracts/settlement",
+    "contracts/stake",
+    "contracts/storage_migration",
+    "contracts/topics",
+    "contracts/upgrade",
+    "contracts/validators",
+    "contracts/vault",
+    "contracts/whitelist",
+    "contracts/yield",
+]
 
 [workspace.dependencies]
 soroban-sdk = "22"
 
 [dev-dependencies]
-callora-vault = { path = "contracts/vault" }
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
+callora-distribute = { path = "contracts/distribute" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
@@ -43,3 +92,4 @@ debug-assertions = false  # Disable debug assertions in release
 panic = "abort"           # Smaller panic handler (no unwinding)
 codegen-units = 1         # Better optimization (slower compile, smaller binary)
 lto = true                # Link-time optimization across all crates
+

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! # Hot/Cold Balance Split
 //!
 //! This module implements a configurable hot/cold balance split for the
@@ -50,6 +51,7 @@ use crate::VaultError;
 /// If the hot pool's actual share of total balance drifts more than this
 /// many basis points from the configured target (`hot_bps`), a deposit
 /// triggers an automatic rebalance.
+#[allow(dead_code)]
 pub const DEFAULT_REBALANCE_THRESHOLD_BPS: u32 = 500; // 5%
 
 /// Basis-point denominator (10_000 bps = 100%).
@@ -140,6 +142,7 @@ impl ColdBalances {
 
 /// Computes the hot pool's current share of `total`, in basis points.
 /// Returns `0` if `total` is `0` (no funds, no drift).
+#[allow(dead_code)]
 fn hot_share_bps(hot: i128, total: i128) -> Result<i128, VaultError> {
     if total == 0 {
         return Ok(0);
@@ -152,6 +155,7 @@ fn hot_share_bps(hot: i128, total: i128) -> Result<i128, VaultError> {
 
 /// Public wrapper around `target_hot`, for use from `lib.rs` during
 /// `init_cold_storage` to compute the initial split.
+#[allow(dead_code)]
 pub fn target_hot_pub(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
     target_hot(total, hot_bps)
 }
@@ -159,6 +163,7 @@ pub fn target_hot_pub(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
 /// Computes the target hot amount for a given `total`, per `hot_bps`.
 /// Uses integer division (floor); any remainder stays in cold, which is
 /// the conservative direction (keeps slightly more in cold, never less).
+#[allow(dead_code)]
 fn target_hot(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
     total
         .checked_mul(hot_bps as i128)
@@ -174,6 +179,7 @@ fn target_hot(total: i128, hot_bps: u32) -> Result<i128, VaultError> {
 /// surplus into cold. Pulling cold back into hot requires the explicit,
 /// multisig-gated cold-sweep-to-hot path, never an automatic side effect
 /// of a deposit.
+#[allow(dead_code)]
 pub fn maybe_rebalance(
     balances: &ColdBalances,
     config: &ColdConfig,
@@ -185,7 +191,17 @@ pub fn maybe_rebalance(
 
     let current_share = hot_share_bps(balances.hot, total)?;
     let target_share = config.hot_bps as i128;
-    let drift = (current_share - target_share).abs();
+    // Overflow-safe drift. Both shares are basis-point values in
+    // `0..=BPS_DENOMINATOR`, so in practice this cannot overflow — but we
+    // route it through `checked_sub`/`checked_abs` so the entire cold
+    // rebalance path is uniformly overflow-safe and never relies on debug
+    // assertions or silent wrapping in release builds. `checked_abs` also
+    // guards the `i128::MIN` edge case, where `.abs()` would panic.
+    let drift = current_share
+        .checked_sub(target_share)
+        .ok_or(VaultError::Overflow)?
+        .checked_abs()
+        .ok_or(VaultError::Overflow)?;
 
     if drift <= config.rebalance_threshold_bps as i128 {
         // Within tolerance — no rebalance.
@@ -218,6 +234,7 @@ pub fn maybe_rebalance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
 
     fn addr(env: &Env, seed: u8) -> Address {
@@ -451,5 +468,100 @@ mod tests {
             cold: 1,
         };
         assert_eq!(balances.total(), Err(VaultError::Overflow));
+    }
+
+    #[test]
+    fn hot_share_bps_overflow_is_caught() {
+        // hot * BPS_DENOMINATOR overflows i128 before the division.
+        assert_eq!(
+            hot_share_bps(i128::MAX, i128::MAX),
+            Err(VaultError::Overflow)
+        );
+    }
+
+    #[test]
+    fn target_hot_overflow_is_caught() {
+        // total * hot_bps overflows i128 before the division.
+        assert_eq!(target_hot(i128::MAX, 10_000), Err(VaultError::Overflow));
+    }
+
+    #[test]
+    fn target_hot_pub_matches_target_hot() {
+        // The public wrapper must return exactly what the private helper does.
+        assert_eq!(
+            target_hot_pub(10_000, 2000).unwrap(),
+            target_hot(10_000, 2000).unwrap()
+        );
+        assert_eq!(target_hot_pub(i128::MAX, 10_000), Err(VaultError::Overflow));
+    }
+
+    #[test]
+    fn maybe_rebalance_total_overflow_is_caught() {
+        let env = Env::default();
+        let config = ColdConfig {
+            hot_bps: 2000,
+            rebalance_threshold_bps: 500,
+            cold_signers: {
+                let mut v = Vec::new(&env);
+                v.push_back(addr(&env, 1));
+                v
+            },
+            cold_threshold: 1,
+        };
+        // hot + cold overflows i128 inside `balances.total()`.
+        let balances = ColdBalances {
+            hot: i128::MAX,
+            cold: 1,
+        };
+        assert_eq!(
+            maybe_rebalance(&balances, &config),
+            Err(VaultError::Overflow)
+        );
+    }
+
+    #[test]
+    fn maybe_rebalance_drift_is_overflow_safe() {
+        // Exercises the checked drift computation on a well-formed split.
+        // current share 40%, target 20% => drift 20% (2000 bps) which
+        // exceeds the 5% (500 bps) tolerance, so hot surplus moves to cold.
+        let env = Env::default();
+        let config = ColdConfig {
+            hot_bps: 2000,
+            rebalance_threshold_bps: 500,
+            cold_signers: {
+                let mut v = Vec::new(&env);
+                v.push_back(addr(&env, 1));
+                v
+            },
+            cold_threshold: 1,
+        };
+        let balances = ColdBalances {
+            hot: 4000,
+            cold: 6000,
+        };
+        let result = maybe_rebalance(&balances, &config).unwrap();
+        assert_eq!(result.hot, 2000);
+        assert_eq!(result.cold, 8000);
+        // Conservation invariant preserved by the overflow-safe path.
+        assert_eq!(result.total().unwrap(), balances.total().unwrap());
+    }
+
+    #[test]
+    fn is_cold_signer_detects_membership() {
+        let env = Env::default();
+        let signer = addr(&env, 1);
+        let outsider = addr(&env, 2);
+        let config = ColdConfig {
+            hot_bps: 2000,
+            rebalance_threshold_bps: 500,
+            cold_signers: {
+                let mut v = Vec::new(&env);
+                v.push_back(signer.clone());
+                v
+            },
+            cold_threshold: 1,
+        };
+        assert!(config.is_cold_signer(&signer));
+        assert!(!config.is_cold_signer(&outsider));
     }
 }

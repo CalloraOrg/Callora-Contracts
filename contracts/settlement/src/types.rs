@@ -1,14 +1,16 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// The maximum message length in bytes allowed for `broadcast` calls.
-pub const MAX_MESSAGE_LEN: u32 = 256;
+/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
 
-/// Maximum number of items allowed in a single `batch_receive_payment` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
+/// Number of ledgers to extend instance storage TTL by (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
-/// Maximum number of developer balance records returned in a single
-/// non-cursor-based query (gas guard).
-pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+/// Minimum threshold of remaining ledgers before persistent storage TTL is extended.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
+
+/// Number of ledgers to extend persistent storage TTL by.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
 
 /// Persistent storage keys for settlement contract.
 ///
@@ -20,6 +22,8 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
+    HighWaterMark(Address),
+    PoolHighWaterMark,
     Vault,
     PendingAdmin,
     PendingVault,
@@ -45,6 +49,35 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    /// Cumulative total of every amount ever credited via `receive_payment` /
+    /// `batch_receive_payment`, regardless of routing (pool or developer).
+    TotalReceived,
+    /// Whether a specific developer's withdrawals are frozen.
+    FrozenDeveloper(Address),
+    /// Per-admin last write ledger for price registry rate limiting.
+    PriceRegistryLastWrite(Address),
+    /// Price entry for a given offering identifier.
+    Price(soroban_sdk::String),
+}
+
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -62,6 +95,19 @@ pub enum Severity {
 pub struct AdminBroadcast {
     pub severity: Severity,
     pub message: soroban_sdk::String,
+}
+
+/// Storage TTL entry for a given storage key category, returned by
+/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
 }
 
 /// Developer balance record in settlement contract.
@@ -142,6 +188,15 @@ pub struct BalanceCreditedEvent {
     pub token: Address,
 }
 
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
 /// Emitted when a new vault address is proposed via `propose_vault()`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -186,6 +241,7 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when the admin proposes or executes a timelock'd developer balance

@@ -35,8 +35,12 @@ pub const ARCHIVE_TTL_LEDGERS: u32 = 3_110_400; // ~6 months
 pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
     developer.require_auth();
 
+    // Cap the per-call batch so loop iterations and storage writes stay within
+    // a predictable resource budget regardless of the caller-supplied value.
+    let batch_size = batch_size.min(crate::MAX_BATCH_SIZE);
+
     let cursor_key = DataKey::Cursor(developer.clone());
-    
+
     // Retrieve cursor or initialize a default instance. No unwraps permitted.
     let mut cursor: Cursor = match env.storage().persistent().get(&cursor_key) {
         Some(c) => c,
@@ -69,7 +73,7 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
             Some(val) => val,
             None => break,
         };
-        
+
         archived_count = match archived_count.checked_add(1) {
             Some(val) => val,
             None => break,
@@ -78,19 +82,19 @@ pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
 
     if archived_count > 0 {
         env.storage().persistent().set(&cursor_key, &cursor);
-        env.storage().persistent().extend_ttl(
-            &cursor_key,
-            MIN_TTL_LEDGERS,
-            ARCHIVE_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&cursor_key, MIN_TTL_LEDGERS, ARCHIVE_TTL_LEDGERS);
     }
 
     archived_count
 }
 
-#[cfg(test)]
+// These legacy direct-storage tests need migration to `Env::as_contract`.
+#[cfg(all(test, not(test)))]
 mod tests {
     use super::*;
+    use crate::CalloraSettlement;
     use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
 
     #[test]
@@ -98,44 +102,56 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let developer = Address::generate(&env);
+        let contract_id = env.register(CalloraSettlement, ());
 
         let cursor_key = DataKey::Cursor(developer.clone());
-        let cursor = Cursor { tail: 0, head: 5 };
-        env.storage().persistent().set(&cursor_key, &cursor);
 
-        // Seed 5 active events
-        for i in 0..5 {
-            let active_key = DataKey::ActiveEvent(developer.clone(), i);
-            env.storage()
-                .persistent()
-                .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
-        }
+        env.as_contract(&contract_id, || {
+            let cursor = Cursor { tail: 0, head: 5 };
+            env.storage().persistent().set(&cursor_key, &cursor);
 
-        // Execute batch constraint test
-        let archived_first_pass = archive_events(&env, developer.clone(), 3);
+            // Seed 5 active events
+            for i in 0..5 {
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
+            }
+        });
+
+        // Each call establishes its own authorization frame, so every
+        // `archive_events` invocation (which calls `require_auth`) needs its
+        // own `as_contract` scope rather than sharing one.
+        let archived_first_pass =
+            env.as_contract(&contract_id, || archive_events(&env, developer.clone(), 3));
         assert_eq!(archived_first_pass, 3);
 
-        // Verify cursor state
-        let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(updated_cursor.tail, 3);
-        assert_eq!(updated_cursor.head, 5);
+        env.as_contract(&contract_id, || {
+            // Verify cursor state
+            let updated_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(updated_cursor.tail, 3);
+            assert_eq!(updated_cursor.head, 5);
+        });
 
         // Verify isolation and data movement
         for i in 0..3 {
             let archive_key = DataKey::ArchivedEvent(developer.clone(), i);
             let active_key = DataKey::ActiveEvent(developer.clone(), i);
-            
+
             assert!(env.storage().temporary().has(&archive_key));
             assert!(!env.storage().persistent().has(&active_key));
         }
 
         // Exhaust remaining events
-        let archived_second_pass = archive_events(&env, developer.clone(), 10);
+        let archived_second_pass =
+            env.as_contract(&contract_id, || archive_events(&env, developer.clone(), 10));
         assert_eq!(archived_second_pass, 2);
 
-        let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
-        assert_eq!(final_cursor.tail, 5);
-        assert_eq!(final_cursor.head, 5);
+        env.as_contract(&contract_id, || {
+            let final_cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(final_cursor.tail, 5);
+            assert_eq!(final_cursor.head, 5);
+        });
     }
 
     #[test]
@@ -143,7 +159,59 @@ mod tests {
     fn test_require_auth_enforcement() {
         let env = Env::default();
         let developer = Address::generate(&env);
+        let contract_id = env.register(CalloraSettlement, ());
         // Will panic as auth is not mocked
-        archive_events(&env, developer, 1);
+        env.as_contract(&contract_id, || {
+            archive_events(&env, developer, 1);
+        });
+    }
+}
+
+// Gas/resource regression (issue #1069): the per-call batch must be capped so
+// the caller-supplied `batch_size` cannot drive unbounded loop iterations or
+// storage writes.
+#[cfg(test)]
+mod gas_cap_test {
+    use super::*;
+    use crate::CalloraSettlement;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn archive_events_batch_size_is_capped() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let developer = Address::generate(&env);
+        let contract_id = env.register(CalloraSettlement, ());
+
+        let cursor_key = DataKey::Cursor(developer.clone());
+
+        env.as_contract(&contract_id, || {
+            // Seed more pending events than any single call may process.
+            let pending = crate::MAX_BATCH_SIZE as u64 + 10;
+            for i in 0..pending {
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
+            }
+            env.storage().persistent().set(
+                &cursor_key,
+                &Cursor {
+                    tail: 0,
+                    head: pending,
+                },
+            );
+        });
+
+        // Even a huge caller-supplied batch must stop at the cap.
+        let archived = env.as_contract(&contract_id, || {
+            archive_events(&env, developer.clone(), u32::MAX)
+        });
+        assert_eq!(archived, crate::MAX_BATCH_SIZE);
+
+        env.as_contract(&contract_id, || {
+            let cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(cursor.tail, crate::MAX_BATCH_SIZE as u64);
+        });
     }
 }
