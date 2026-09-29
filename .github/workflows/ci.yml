@@ -52,6 +52,13 @@ jobs:
         continue-on-error: true
         run: cargo test --workspace
 
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
   test-nightly:
     name: Test (Nightly)
     runs-on: ubuntu-latest
@@ -86,6 +93,13 @@ jobs:
         continue-on-error: true
         run: cargo test --workspace -- --nocapture
 
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
   build:
     name: Build (release)
     runs-on: ubuntu-latest
@@ -119,6 +133,13 @@ jobs:
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh
 
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
   event-shape:
     name: Event shape vs schema
     runs-on: ubuntu-latest
@@ -133,3 +154,10 @@ jobs:
         run: |
           chmod +x scripts/check-event-shape.sh
           ./scripts/check-event-shape.sh
+
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
