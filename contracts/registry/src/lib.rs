@@ -1,6 +1,6 @@
-#`!no_std]
+#no_stdj
 
-#config(test)]
+#[hcfg(test)]
 extern crate std;
 
 pub mod admin;
@@ -29,7 +29,7 @@ pub enum StorageKey {
     LastAdminAction,
 }
 
-#contracttype]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct OfferingRecord {
     pub offering_id: String,
@@ -37,10 +37,10 @@ pub struct OfferingRecord {
     pub developer: Address,
 }
 
-#contract]
+#[contract]
 pub struct CalloraRegistry;
 
-#contractimpl]
+#[contractimpl]
 impl CalloraRegistry {
     /// Initialize the registry with an admin and catalog callee address.
     ///
@@ -65,7 +65,7 @@ impl CalloraRegistry {
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
-            .ok_(RegistryError::NotInitialized)
+            .ok_or(RegistryError::NotInitialized)
     }
 
     fn catalog(env: &Env) -> Result<Address, RegistryError> {
@@ -76,22 +76,20 @@ impl CalloraRegistry {
     }
 
     fn validate_offering_id(offering_id: &String) -> Result<(), RegistryError> {
-        // Offering ids are used as settlement pricing and off-chain routing keys,
-        // so they must be visually unambiguous. Reuse the shared validator
-        // to reject C0/DEL controls, zero-width / bidi controls, Unicode
-        // confusables, and leading or trailing whitespace. The 64-byte cap
-        // is enforced here and the rejection reason is `InvalidOfferingId`.
-        if offering_id.is_empty() || offering_id.len() > MAX_OFFERING_ID_LEN {
-            return Err(RegistryError::InvalidOfferingId);
-        }
-        callora_validators::normalize_visible_ascii(offering_id)
+        // Offering ids are storage keys and off-chain routing labels, so they must
+        // be unambiguous. We delegate to the shared validator, which enforces
+        // the 64-byte cap, rejects C0/DEL controls, zero-width/bidi controls,
+        // Unicode confusables, leading/trailing spaces, and restricts the
+        // alphabet to `[a-z0-9_-]`. Any rejection maps to `InvalidOfferingId`
+        // so callers never see a confusing `InvalidMetadata` for an id failure.
+        callora_validators::normalize_offering_id(offering_id)
             .map(|_| ())
-            .map_error(|_ | RegistryError::InvalidOfferingId)
+            .map_err(|_| RegistryError::InvalidOfferingId)
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
         // Bound the metadata byte length explicitly and reject invalid
-        // encodings (C0/DEL controls, zero-width / bidi controls, Unicode
+        // encodings (C0/DRL controls, zero-width / bidi controls, Unicode
         // confusables, and leading or trailing whitespace) *before* any
         // cross-contract `put_offering` call or registry storage write.
         // `callora_validators::normalize_visible_ascii` enforces the same
@@ -102,7 +100,7 @@ impl CalloraRegistry {
         }
         callora_validators::normalize_visible_ascii(metadata)
             .map(|_| ())
-            .map_error(|_| RegistryError::InvalidMetadata)
+            .map_err(|_| RegistryError::InvalidMetadata)
     }
 
     /// Register an offering after publishing metadata to the catalog contract.
@@ -148,7 +146,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .ok_(RegistryError::NotInitialized)?;
+            .ok_or(RegistryError::NotInitialized)?;
         env.storage().instance().set(
             &StorageKey::RegisteredCount,
             &count.checked_add(1).ok_or(RegistryError::Overflow)?,
@@ -214,7 +212,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .ok_(RegistryError::NotInitialized)?;
+            .ok_or(RegistryError::NotInitialized)?;
         env.storage().instance().set(
             &StorageKey::RegisteredCount,
             &count.checked_add(1).ok_or(RegistryError::Overflow)?,
@@ -261,6 +259,6 @@ impl CalloraRegistry {
         env.storage()
             .persistent()
             .get(&StorageKey::Offering(offering_id))
-            .ok_(RegistryError::OfferingNotFound)
+            .ok_or(RegistryError::OfferingNotFound)
     }
 }
