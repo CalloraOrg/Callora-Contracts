@@ -165,6 +165,7 @@ Machine-readable JSON summaries of every public function and parameter for each 
 | File | Contract |
 |------|----------|
 | [`docs/interfaces/vault.json`](docs/interfaces/vault.json) | `callora-vault` |
+| [`docs/interfaces/registry.json`](docs/interfaces/registry.json) | `callora-registry` |
 | [`docs/interfaces/settlement.json`](docs/interfaces/settlement.json) | `callora-settlement` |
 | [`docs/interfaces/revenue_pool.json`](docs/interfaces/revenue_pool.json) | `callora-revenue-pool` |
 
