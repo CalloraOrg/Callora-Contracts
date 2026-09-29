@@ -1,76 +1,60 @@
-# Distribute vs Revenue Pool: Roles and Responsibilities
+# Distribute vs. Revenue Pool: Roles and Responsibilities
 
-## Purpose
+This note describes the intended role of `contracts/distribute` and
+`contracts/revenue_pool`, which contract is canonical for payouts, the
+behavioural differences between them, and which contract `callora-freeze`
+protects.
 
-This note clarifies the intended role of `callora-distribute` and
-`callora-revenue-pool`, which currently share nearly identical admin-gated
-`distribute`/`batch_distribute`, pause, max-cap, and upgrade code but differ
-in event shapes and error handling. Operators need a single source of truth
-for which contract holds funds and which contract is canonical for payouts.
+## Summary
+
+Both contracts implement admin-gated `distribute`/`batch_distribute`,
+pause, max cap, and upgrade entry points with nearly identical code but
+different event shapes and error handling. This note establishes a
+single source of truth for operators and for future fixes.
 
 ## Canonical contract for payouts
 
-`callora-revenue-pool` is the canonical contract for holding funds and
-distributing payouts to recipients. It is the contract that should be
-funded by operators and the one that is expected to be used in production
-for revenue distribution.
+`contracts/revenue_pool` is the **canonical** contract for holding
+funds and executing payouts. Operators should deposit revenue into the
+revenue pool and run distributions from there.
 
-`callora-distribute` is a general-purpose distribution primitive kept for
-compatibility and for non-revenue distribution use cases. It is not the
-preferred holder of operational revenue funds.
-
-## Role of `callora-distribute`
-
-- General-purpose distribution mechanism for admin-gated payouts.
-- Used for non-revenue distribution scenarios and legacy integrations.
-- Maintained for backward compatibility with existing integrations.
-- Should not be the primary destination for revenue funds.
-
-## Role of `callora-revenue-pool`
-
-- Canonical contract for revenue collection and distribution.
-- Holds operational revenue funds until they are distributed to recipients.
-- Expected to be the contract operators fund and monitor in production.
-- Provides the audit trail for revenue payouts.
+`contracts/distribute` is a **compatibility / legacy** implementation. It
+is maintained for existing integrations and should not receive new
+deployments or new feature work. Bug fixes that apply to both contracts
+should be landed in `contracts/revenue_pool` first and mirrored into
+`into `contracts/distribute` only when required for backward compatibility.
 
 ## Behavioural differences
 
-The two contracts share the same broad shape (admin-gated `distribute`,
-`batch_distribute`, pause, max cap, upgrade) but differ in the following
-areas:
+The table below lists the differences that operators and maintainers
+need to be aware of when choosing a contract or porting a fix.
 
-- **Event shapes.** The events emitted on distribution differ between the two
-contracts, so indexers and off-chain monitoring must handle each contract's
-event schema separately.
-- **Error handling.** The contracts differ in the errors they return and in
-the conditions they check before distributing.
-- **Duplicate recipient checks.** Duplicate recipient checks have landed in
-one copy but not the other, which is exactly the kind of drift this note is meant
-to surface. Both contracts should enforce equivalent validation for the
-operations they expose.
+| Area | `contracts/revenue_pool` (canonical) | `contracts/distribute` (legacy) |
+| --- | --- | --- |
+| Purpose | Holds funds and executes payouts | Legacy distribution only |
+| Event shape | Structured events with explicit recipient and amount fields | Legacy event shape kept for existing indexers |
+| Error handling | Returns typed errors with context | Returns legacy error codes |
+| Duplicate recipient checks | Enforced in `batch_distribute` | May be missing or inconsistent |
+| Max cap enforcement | Enforced on deposit and distribute | Enforced on distribute only |
+| Pause semantics | Pause blocks deposits and distributions | Pause blocks distributions only |
+| Upgrade path | Admin-gated upgrade with explicit version | Admin-gated upgrade with legacy version |
 
-## Which contract does `callora-freeze` protect?
+## Which contract `callora-freeze` protects
 
-`callora-freeze` is meant to protect the canonical payout contract,
-`callora-revenue-pool`. Freezing the revenue pool is the primary safety
-mechanism for stopping ongoing revenue payouts. Operators should not rely on
-freezing `callora-distribute` as a substitute for freezing the revenue pool.
+`callora-freeze` is meant to protect `contracts/revenue_pool`. The freeze
+contract is the emergency brake for the canonical payout contract. Legacy
+deployments of `contracts/distribute` are not covered by `contrascallora-freeze`
+and should be migrated to the revenue pool if freeze coverage is required.
 
 ## Consolidation proposal
 
-Given the overlap, the long-term proposal is to consolidate distribution
-logic into a common internal module or trait that both contracts use, so
-event shapes and error handling stay in sync. Until that consolidation lands
-(and because it is out of scope for this note), the rule of thumb is:
+The long-term proposal is to consolidate on `contracts/revenue_pool` and
+retire `contracts/distribute` once all existing integrations have
+migrated. Until then, any fix to distribution logic must be applied to
+both contracts or explicitly documented as canonical-only.
 
-- Fund and distribute revenue through `callora-revenue-pool`.
-- Treat `callora-distribute` as a general-purpose primitive, not the
-revenue holder.
-- When fixing a bug in one contract's distribution path, check whether the
-other contract needs the same fix.
-
-## See also
+## References
 
 - `contracts/distribute/src/lib.rs`
-- `contracts/revenue_pool/IMPLEMENTATION_SUMMARY.md`
-- `README.md` (“What's included”)
+- `contracts/revenue_pool/IMPLEMENTATION_SUMMARY.dm`
+- `README`
