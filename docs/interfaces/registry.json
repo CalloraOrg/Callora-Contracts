@@ -4,10 +4,171 @@
   "description": "Offering registry for the Callora API marketplace. Publishes metadata through a catalog contract and tracks registered offerings.",
   "crate": "callora-registry",
   "source": "contracts/registry/src/lib.rs",
-  "cross_contract": {
+  "cross-contract": {
     "catalog": "OfferingCatalog::put_offering — invoked before persisting registry state",
     "token_balance": "token::Client::balance — optional gate in register_offering_with_balance_gate"
   },
+  "entrypoints": [
+    {
+      "name": "initialize",
+      "kind": "write",
+      "description": "Configure the registry with its admin and catalog contract address. May only be called once.",
+      "params": [
+        { "name": "admin", "type": "Address", "description": "Administrator authorized to change registry configuration." },
+        { "name": "catalog", "type": "Address", "description": "Address of the offering catalog contract used to publish metadata." }
+      ],
+      "returns": null,
+      "errors": [
+        "RegistryError::AlreadyInitialized",
+        "RegistryError::InvalidAdmin",
+        "RegistryError::InvalidCatalog"
+      ],
+      "events": [
+        "initialized"
+      ]
+    },
+    {
+      "name": "register_offering",
+      "kind": "write",
+      "description": "Register a new offering in the catalog and track it in registry state.",
+      "params": [
+        { "name": "admin", "type": "Address", "description": "Admin authorizing the registration." },
+        { "name": "offering_id", "type": "Symbol", "description": "Unique identifier for the offering." },
+        {
+          "name": "metadata",
+          "type": "OfferingMetadata",
+          "description": "Offering metadata forwarded to the catalog.",
+          "fields": [
+            { "name": "name", "type": "String" },
+            { "name": "description", "type": "String" },
+            { "name": "price", "type": "i128" },
+            { "name": "category", "type": "String" }
+          ]
+        }
+      ],
+      "returns": null,
+      "errors": [
+        "RegistryError::NotInitialized",
+        "RegistryError::Unauthorized",
+        "RegistryError::OfferingAlreadyExists",
+        "RegistryError::InvalidMetadata",
+        "RegistryError::CatalogCallFailed"
+      ],
+      "events": [
+        "offering_registered"
+      ]
+    },
+    {
+      "name": "register_offering_with_balance_gate",
+      "kind": "write",
+      "description": "Register an offering only if the provider holds at least the required token balance.",
+      "params": [
+        { "name": "admin", "type": "Address", "description": "Admin authorizing the registration." },
+        { "name": "offering_id", "type": "Symbol", "description": "Unique identifier for the offering." },
+        {
+          "name": "metadata",
+          "type": "OfferingMetadata",
+          "description": "Offering metadata forwarded to the catalog.",
+          "fields": [
+            { "name": "name", "type": "String" },
+            { "name": "description", "type": "String" },
+            { "name": "price", "type": "i128" },
+            { "name": "category", "type": "String" }
+          ]
+        },
+        { "name": "provider", "type": "Address", "description": "Address whose token balance is checked." },
+        { "name": "min_balance", "type": "i128", "description": "Minimum token balance required to register." }
+      ],
+      "returns": null,
+      "errors": [
+        "RegistryError::NotInitialized",
+        "RegistryError::Unauthorized",
+        "RegistryError::OfferingAlreadyExists",
+        "RegistryError::InvalidMetadata",
+        "RegistryError::InsufficientBalance",
+        "RegistryError::CatalogCallFailed"
+      ],
+      "events": [
+        "offering_registered"
+      ]
+    },
+    {
+      "name": "get_offering",
+      "kind": "read",
+      "description": "Return the stored metadata for an offering identified by offering_id.",
+      "params": [
+        { "name": "offering_id", "type": "Symbol", "description": "Unique identifier for the offering." }
+      ],
+      "returns": {
+        "type": "OfferingMetadata",
+        "description": "Metadata of the registered offering."
+      },
+      "errors": [
+        "RegistryError::NotInitialized",
+        "RegistryError::OfferingNotFound"
+      ],
+      "events": []
+    },
+    {
+      "name": "is_registered",
+      "kind": "read",
+      "description": "Report whether an offering identified by offering_id is currently registered.",
+      "params": [
+        { "name": "offering_id", "type": "Symbol", "description": "Unique identifier for the offering." }
+      ],
+      "returns": {
+        "type": "bool",
+        "description": "True when the offering is registered."
+      },
+      "errors": [
+        "RegistryError::NotInitialized"
+      ],
+      "events": []
+    },
+    {
+      "name": "set_catalog",
+      "kind": "write",
+      "description": "Update the catalog contract address used for future offering publications.",
+      "params": [
+        { "name": "admin", "type": "Address", "description": "Admin authorizing the configuration change." },
+        { "name": "catalog", "type": "Address", "description": "New catalog contract address." }
+      ],
+      "returns": null,
+      "errors": [
+        "RegistryError::NotInitialized",
+        "RegistryError::Unauthorized",
+        "RegistryError::InvalidCatalog"
+      ],
+      "events": [
+        "catalog_updated"
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 1, "name": "NotInitialized", "description": "The registry has not been initialized." },
+    { "code": 2, "name": "AlreadyInitialized", "description": "The registry has already been initialized." },
+    { "code": 3, "name": "Unauthorized", "description": "The caller is not authorized to perform the operation." },
+    { "code": 4, "name": "InvalidAdmin", "description": "The supplied admin address is invalid." },
+    { "code": 5, "name": "InvalidCatalog", "description": "The supplied catalog address is invalid." },
+    { "code": 6, "name": "OfferingAlreadyExists", "description": "An offering with the same id is already registered." },
+    { "code": 7, "name": "OfferingNotFound", "description": "No offering is registered for the supplied id." },
+    { "code": 8, "name": "InvalidMetadata", "description": "The supplied offering metadata is invalid." },
+    { "code": 9, "name": "InsufficientBalance", "description": "The provider balance is below the required minimum." },
+    { "code": 10, "name": "CatalogCallFailed", "description": "The call to the catalog contract failed." }
+  ],
+  "events": [
+    { "name": "initialized", "description": "Emitted when the registry is initialized.", "fields": [
+      { "name": "admin", "type": "Address" },
+      { "name": "catalog", "type": "Address" }
+    ] },
+    { "name": "offering_registered", "description": "Emitted when an offering is successfully registered.", "fields": [
+      { "name": "offering_id", "type": "Symbol" },
+      { "name": "provider", "type": "Address" }
+    ] },
+    { "name": "catalog_updated", "description": "Emitted when the catalog address is updated.", "fields": [
+      { "name": "catalog", "type": "Address" }
+    ] }
+  ],
   "testing": {
     "xcontract": "contracts/registry/tests/xcontract.rs covers catalog and token callee panic/revert safety"
   }
