@@ -26,7 +26,10 @@ pub enum StorageKey {
     Catalog,
     RegisteredCount,
     Offering(String),
-    LastAdminAction,
+    /// Per-developer cooldown timestamp. Stored in persistent storage keyed
+    /// by the developer [`Address`] so that different developers have
+    /// independent cooldown windows.
+    DeveloperCooldown(Address),
 }
 
 #[contracttype]
@@ -114,7 +117,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
-        admin::require_cooldown(&env)?;
+        admin::require_cooldown(&env, &developer)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -151,7 +154,7 @@ impl CalloraRegistry {
             (events::event_offering_registered(&env), offering_id),
             record,
         );
-        admin::update_cooldown(&env);
+        admin::update_cooldown(&env, &developer);
         Ok(())
     }
 
@@ -174,7 +177,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
-        admin::require_cooldown(&env)?;
+        admin::require_cooldown(&env, &developer)?;
         Self::validate_offering_id(&offering_id)?;
         Self::validate_metadata(&metadata)?;
 
@@ -217,7 +220,7 @@ impl CalloraRegistry {
             (events::event_offering_registered(&env), offering_id),
             record,
         );
-        admin::update_cooldown(&env);
+        admin::update_cooldown(&env, &developer);
         Ok(())
     }
 
