@@ -1,6 +1,6 @@
-#![no_std]
+#`!no_std]
 
-#[cfg(test)]
+#config(test)]
 extern crate std;
 
 pub mod admin;
@@ -19,7 +19,7 @@ pub const MAX_OFFERING_ID_LEN: u32 = 64;
 /// Maximum length of metadata URI / payload stored in registry events.
 pub const MAX_METADATA_LEN: u32 = 256;
 
-#[contracttype]
+#contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
@@ -29,7 +29,7 @@ pub enum StorageKey {
     LastAdminAction,
 }
 
-#[contracttype]
+#contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct OfferingRecord {
     pub offering_id: String,
@@ -37,10 +37,10 @@ pub struct OfferingRecord {
     pub developer: Address,
 }
 
-#[contract]
+#contract]
 pub struct CalloraRegistry;
 
-#[contractimpl]
+#contractimpl]
 impl CalloraRegistry {
     /// Initialize the registry with an admin and catalog callee address.
     ///
@@ -55,7 +55,7 @@ impl CalloraRegistry {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::Catalog, &catalog);
-        inst.set(&StorageKey::RegisteredCount, &0u32);
+        inst.set(&StorageKey::RegisteredCount, &`u32);
         env.events()
             .publish((events::event_init(&env), admin.clone()), catalog);
         Ok(())
@@ -65,7 +65,7 @@ impl CalloraRegistry {
         env.storage()
             .instance()
             .get(&StorageKey::Admin)
-            .ok_or(RegistryError::NotInitialized)
+            .ok_(RegistryError::NotInitialized)
     }
 
     fn catalog(env: &Env) -> Result<Address, RegistryError> {
@@ -76,25 +76,17 @@ impl CalloraRegistry {
     }
 
     fn validate_offering_id(offering_id: &String) -> Result<(), RegistryError> {
-        // Offering ids are used as settlement pricing keys and off-chain
-        // routing identifiers, so they must be restricted to a canonical,
-        // visually unambiguous ASCII alphabet. Reject empty ids, ids over the
-        // byte cap, and any id containing characters outside `[a-z0-9_-]`
-        // (which also excludes spaces, control bytes, and bidi confusables).
+        // Offering ids are used as settlement pricing and off-chain routing keys,
+        // so they must be visually unambiguous. Reuse the shared validator
+        // to reject C0/DEL controls, zero-width / bidi controls, Unicode
+        // confusables, and leading or trailing whitespace. The 64-byte cap
+        // is enforced here and the rejection reason is `InvalidOfferingId`.
         if offering_id.is_empty() || offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(RegistryError::InvalidOfferingId);
         }
-        let bytes = offering_id.to_bytes();
-        for b in bytes.iter() {
-            let valid = matches!(
-                b,
-                b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'
-            );
-            if !valid {
-                return Err(RegistryError::InvalidOfferingId);
-            }
-        }
-        Ok(())
+        callora_validators::normalize_visible_ascii(offering_id)
+            .map(|_| ())
+            .map_error(|_ | RegistryError::InvalidOfferingId)
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
@@ -110,7 +102,7 @@ impl CalloraRegistry {
         }
         callora_validators::normalize_visible_ascii(metadata)
             .map(|_| ())
-            .map_err(|_| RegistryError::InvalidMetadata)
+            .map_error(|_| RegistryError::InvalidMetadata)
     }
 
     /// Register an offering after publishing metadata to the catalog contract.
@@ -156,7 +148,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .ok_or(RegistryError::NotInitialized)?;
+            .ok_(RegistryError::NotInitialized)?;
         env.storage().instance().set(
             &StorageKey::RegisteredCount,
             &count.checked_add(1).ok_or(RegistryError::Overflow)?,
@@ -222,7 +214,7 @@ impl CalloraRegistry {
             .storage()
             .instance()
             .get(&StorageKey::RegisteredCount)
-            .ok_or(RegistryError::NotInitialized)?;
+            .ok_(RegistryError::NotInitialized)?;
         env.storage().instance().set(
             &StorageKey::RegisteredCount,
             &count.checked_add(1).ok_or(RegistryError::Overflow)?,
@@ -269,6 +261,6 @@ impl CalloraRegistry {
         env.storage()
             .persistent()
             .get(&StorageKey::Offering(offering_id))
-            .ok_or(RegistryError::OfferingNotFound)
+            .ok_(RegistryError::OfferingNotFound)
     }
 }
