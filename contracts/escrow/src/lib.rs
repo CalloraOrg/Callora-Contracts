@@ -402,9 +402,11 @@ impl CalloraEscrow {
     /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
     /// * [`EscrowError::NotInitialized`] -- contract not initialized.
     /// * [`EscrowError::CooldownActive`] -- a `rotate` ran within the cool-off window.
+    /// * [`EscrowError::InvalidInput`] -- `new_signer` equals the current signer.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"rotate"` tag as data.
+    /// Emits `signer_rotated` with `caller` as topic and `(old_signer,
+    /// new_signer)` as data.
     pub fn rotate_signer(
         env: Env,
         caller: Address,
@@ -414,12 +416,23 @@ impl CalloraEscrow {
         let action = Symbol::new(&env, ACTION_ROTATE);
         admin::guard(&env, &action)?;
 
+        let old_signer: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Signer)
+            .ok_or(EscrowError::NotInitialized)?;
+        if old_signer == new_signer {
+            return Err(EscrowError::InvalidInput);
+        }
+
         env.storage()
             .instance()
             .set(&StorageKey::Signer, &new_signer);
 
-        env.events()
-            .publish((events::event_action(&env), caller), action);
+        env.events().publish(
+            (events::event_signer_rotated(&env), caller),
+            (old_signer, new_signer),
+        );
 
         Ok(())
     }
