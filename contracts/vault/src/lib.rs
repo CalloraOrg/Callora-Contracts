@@ -439,6 +439,10 @@ pub mod capabilities;
 pub mod rate_limit;
 pub mod limits;
 
+/// Formal verification harnesses (compiled only under `cargo kani`).
+#[cfg(kani)]
+mod kani_proofs;
+
 #[cfg(any(kani, test))]
 #[path = "../proofs/deduct.rs"]
 mod deduct_proofs;
@@ -456,8 +460,8 @@ mod test_init_hardening;
 #[cfg(test)]
 mod test_setter_validation;
 
-// #[cfg(test)]
-// mod test_settler_validation;
+#[cfg(test)]
+mod test_settler_validation;
 
 #[cfg(test)]
 mod test_views;
