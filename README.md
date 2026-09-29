@@ -68,6 +68,8 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
 - `dry_run_sweep_idle_balance()` — View; returns a `SweepPreview` describing the untracked on-ledger USDC surplus (`on_ledger_balance - tracked_balance`, saturating at 0). Use this to inspect what `distribute(_, _, idle_balance)` would move without committing the transfer. Read-only, no auth, no TTL bump. Returns `NotInitialized` before `init`.
 
+> **Payout roles:** `callora-distribute` and `callora-revenue-pool` overlap in scope. See [`docs/DISTRIBUTE_VS_REVENUE_POOL.md`](docs/DISTRIBUTE_VS_REVENUE_POOL.md) for which contract is canonical for payouts, the behavioural differences between the two, and which contract `callora-freeze` is meant to protect.
+
 ## Architecture & Flow
 
 The following diagram illustrates the interaction between the backend, the user's vault, and the settlement contracts during an API call.
@@ -150,6 +152,7 @@ callora-contracts/
 â”œâ”€â”€ docs/
 â”‚   â”œâ”€â”€ interfaces/                        # JSON contract interface summaries
 â”‚   â”œâ”€â”€ ACCESS_CONTROL.md                  # Role-based access control overview
+â”‚   â”œâ”€â”€ DISTRIBUTE_VS_REVENUE_POOL.md      # Canonical payout contract and behavioural differences
 â”‚   â””â”€â”€ CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
 â”œâ”€â”€ BENCHMARKS.md           # Gas/cost notes
 â”œâ”€â”€ EVENT_SCHEMA.md         # Event topics and payloads
@@ -167,6 +170,7 @@ Machine-readable JSON summaries of every public function and parameter for each 
 | [`docs/interfaces/vault.json`](docs/interfaces/vault.json) | `callora-vault` |
 | [`docs/interfaces/settlement.json`](docs/interfaces/settlement.json) | `callora-settlement` |
 | [`docs/interfaces/revenue_pool.json`](docs/interfaces/revenue_pool.json) | `callora-revenue-pool` |
+| [`docs/interfaces/distribute.json`](docs/interfaces/distribute.json) | `callora-distribute` |
 
 See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema description and regeneration steps.
 
@@ -176,6 +180,11 @@ Backend operators setting up a new deployment should follow the step-by-step che
 [`docs/CONTRACT_ADDRESS_CONFIGURATION.md`](docs/CONTRACT_ADDRESS_CONFIGURATION.md).
 It covers deploying and linking the USDC token, settlement contract, and revenue pool,
 plus how to verify all addresses with the `get_contract_addresses()` view function.
+
+For payout routing decisions, read [`docs/DISTRIBUTE_VS_REVENUE_POOL.md`](docs/DISTRIBUTE_VS_REVENUE_POOL.md)
+first: it names the canonical payout contract, enumerates the behavioural differences
+(event shapes, error handling, duplicate-recipient checks), and states which contract
+`callora-freeze` is intended to protect.
 
 ## Security Notes
 
