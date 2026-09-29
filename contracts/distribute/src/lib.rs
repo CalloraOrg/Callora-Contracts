@@ -1,5 +1,9 @@
 #![no_std]
 
+//! Immediate, admin-authorized token distributions with a per-leg amount cap
+//! and a per-call batch size limit. Payments do not create per-account state
+//! entries or pending payouts, and there is no per-account state cap.
+
 pub mod events;
 pub mod errors;
 pub mod limits;
