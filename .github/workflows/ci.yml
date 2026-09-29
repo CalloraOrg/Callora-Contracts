@@ -52,6 +52,10 @@ jobs:
         continue-on-error: true
         run: cargo test --workspace
 
+      - name: Test event topic catalog (root package)
+        continue-on-error: true
+        run: cargo test -p callora-contracts-e2e --test event_topic_catalog
+
   test-nightly:
     name: Test (Nightly)
     runs-on: ubuntu-latest

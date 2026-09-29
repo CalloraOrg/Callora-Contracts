@@ -7,7 +7,7 @@ pub mod limits;
 use crate::errors::DistributeError;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -445,7 +445,7 @@ impl Distribute {
     pub fn batch_distribute(
         env: Env,
         caller: Address,
-        payments: SorobanVec<(Address, i128)>,
+        payments: Vec<(Address, i128)>,
     ) {
         caller.require_auth();
         Self::require_not_paused(&env);

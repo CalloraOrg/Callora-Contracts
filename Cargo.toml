@@ -43,7 +43,6 @@ members = [
     "contracts/vault",
     "contracts/whitelist",
     "contracts/yield",
-    "contracts/vault",
 ]
 
 default-members = [
@@ -77,6 +76,7 @@ soroban-sdk = "22"
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
 callora-distribute = { path = "contracts/distribute" }
+callora-vault = { path = "contracts/vault" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
