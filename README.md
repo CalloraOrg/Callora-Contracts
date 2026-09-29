@@ -68,8 +68,6 @@ The primary storage and metering contract. Holds USDC on behalf of API consumers
 - `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
 - `dry_run_sweep_idle_balance()` — View; returns a `SweepPreview` describing the untracked on-ledger USDC surplus (`on_ledger_balance - tracked_balance`, saturating at 0). Use this to inspect what `distribute(_, _, idle_balance)` would move without committing the transfer. Read-only, no auth, no TTL bump. Returns `NotInitialized` before `init`.
 
-See [`docs/DISTRIBUTE_VS_REVENUE_POOL.md`](docs/DISTRIBUTE_VS_REVENUE_POOL.md) for the canonical payout contract, behavioural differences between `callora-distribute` and `callora-revenue-pool`, and which contract `callora-freeze` is meant to protect.
-
 ## Architecture & Flow
 
 The following diagram illustrates the interaction between the backend, the user's vault, and the settlement contracts during an API call.
@@ -152,8 +150,8 @@ callora-contracts/
 â”œâ”€â”€ docs/
 â”‚   â”œâ”€â”€ interfaces/                        # JSON contract interface summaries
 â”‚   â”œâ”€â”€ ACCESS_CONTROL.md                  # Role-based access control overview
-â”‚   â”œâ”€â”€ DISTRIBUTE_VS_REVENUE_POOL.md      # Canonical payout contract and behavioural differences
-â”‚   â””â”€â”€ CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
+â”‚   â”œâ”€â”€ CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
+â”‚   â””â”€â”€ DISTRIBUTE_VS_REVENUE_POOL.md      # Canonical payout contract and freeze scope
 â”œâ”€â”€ BENCHMARKS.md           # Gas/cost notes
 â”œâ”€â”€ EVENT_SCHEMA.md         # Event topics and payloads
 â”œâ”€â”€ UPGRADE.md              # Upgrade and migration path

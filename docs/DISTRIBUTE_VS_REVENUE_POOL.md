@@ -1,60 +1,74 @@
 # Distribute vs. Revenue Pool: Roles and Responsibilities
 
 This note describes the intended role of `contracts/distribute` and
-`contracts/revenue_pool`, which contract is canonical for payouts, the
-behavioural differences between them, and which contract `callora-freeze`
-protects.
-
-## Summary
-
-Both contracts implement admin-gated `distribute`/`batch_distribute`,
-pause, max cap, and upgrade entry points with nearly identical code but
-different event shapes and error handling. This note establishes a
-single source of truth for operators and for future fixes.
+`contracts/revenue_pool`, which contract is canonical for payouts, the behavioural
+differences between them, and which contract `callora-freeze` is meant to
+protect.
 
 ## Canonical contract for payouts
 
-`contracts/revenue_pool` is the **canonical** contract for holding
-funds and executing payouts. Operators should deposit revenue into the
-revenue pool and run distributions from there.
+`contracts/revenue_pool` is the canonical contract for holding funds and
+performing payouts. Operators should deposit revenue into the revenue pool and
+run distribution from there. `contracts/distribute` is retained as a legacy /
+compatibility entry point for integrations that already target it, but new deployments
+and new integrations should use `contracts/revenue_pool`.
 
-`contracts/distribute` is a **compatibility / legacy** implementation. It
-is maintained for existing integrations and should not receive new
-deployments or new feature work. Bug fixes that apply to both contracts
-should be landed in `contracts/revenue_pool` first and mirrored into
-`into `contracts/distribute` only when required for backward compatibility.
+## Intended role of each contract
+
+### `contracts/revenue_pool` (canonical)
+
+- Holds the protocol revenue balance that will be distributed to recipients.
+- Owns the authoritative distribution book-keeping: total distributed amounts,
+  per-recipient totals, and cap enforcement.
+- Exposes admin-gated `distribute` / `batch_distribute`, pause / unpause, max cap
+  configuration, and upgrade entry points.
+- Is the contract that operational tooling (operator dashboards, reporting,
+  freeze controls) should treat as the source of truth for payouts and balances.
+
+### `contracts/distribute` (legacy / compatibility)
+
+- Provides the same admin-gated `distribute` / `batch_distribute`, pause, max cap
+  and upgrade surface for existing integrations.
+- Is NOT intended to hold new protocol revenue. New funds should be deposited
+  into `contracts/revenue_pool`.
+- Should be treated as a thin compatibility shim: fixes that matter for payout
+  correctness must land in `contracts/revenue_pool` first, then be mirrored here
+  only if a consumer still depends on it.
 
 ## Behavioural differences
 
-The table below lists the differences that operators and maintainers
-need to be aware of when choosing a contract or porting a fix.
-
-| Area | `contracts/revenue_pool` (canonical) | `contracts/distribute` (legacy) |
+| Aspect | `contracts/revenue_pool` (canonical) | `contracts/distribute` (legacy) |
 | --- | --- | --- |
-| Purpose | Holds funds and executes payouts | Legacy distribution only |
-| Event shape | Structured events with explicit recipient and amount fields | Legacy event shape kept for existing indexers |
-| Error handling | Returns typed errors with context | Returns legacy error codes |
-| Duplicate recipient checks | Enforced in `batch_distribute` | May be missing or inconsistent |
-| Max cap enforcement | Enforced on deposit and distribute | Enforced on distribute only |
-| Pause semantics | Pause blocks deposits and distributions | Pause blocks distributions only |
-| Upgrade path | Admin-gated upgrade with explicit version | Admin-gated upgrade with legacy version |
+| Purpose | Holds and distributes protocol revenue. | Compatibility distribution entry point. |
+| Event shape | Emits the revenue-pool distribution events used by operational tooling. | Emits the legacy distribute event shape. |
+| Error handling | Returns the revenue-pool error enum and codes. | Returns the distribute error enum and codes. |
+| Duplicate recipient checks | Enforced as part of the canonical distribution path. | May lack checks that were only added to the canonical contract. |
+| Funding expectation | Expected to hold new protocol revenue. | Not expected to hold new protocol revenue. |
+| Admin gating | `distribute` / `batch_distribute`, pause, max cap, upgrade are admin-gated. | `distribute` / `batch_distribute`, pause, max cap, upgrade are admin-gated. |
+| Status | Canonical for payouts. | Legacy; maintained for existing integrations only. |
 
 ## Which contract `callora-freeze` protects
 
-`callora-freeze` is meant to protect `contracts/revenue_pool`. The freeze
-contract is the emergency brake for the canonical payout contract. Legacy
-deployments of `contracts/distribute` are not covered by `contrascallora-freeze`
-and should be migrated to the revenue pool if freeze coverage is required.
+`callora-freeze` is meant to protect `contracts/revenue_pool`, the
+canonical contract for payouts. Freezing the canonical contract halts new payouts
+from the contract that holds protocol revenue. `contracts/distribute` is not the
+primary target of `callora-freeze`; if it is freshen at all, it is only to stop
+legacy distributions while the canonical contract is migrated to.
 
 ## Consolidation proposal
 
-The long-term proposal is to consolidate on `contracts/revenue_pool` and
-retire `contracts/distribute` once all existing integrations have
-migrated. Until then, any fix to distribution logic must be applied to
-both contracts or explicitly documented as canonical-only.
+Maintain `contracts/revenue_pool` as the single canonical implementation. Treat
+`contracts/distribute` as a deprecated compatibility shim:
+
+1. Route all new funding and new integrations to `contracts/revenue_pool`.
+2. Land correctness fixes (such as duplicate recipient checks) and new features
+   in `contracts/revenue_pool` first.
+3. Mirror only the minimum behaviour required to keep existing consumers of
+   `contracts/distribute` working.
+4. Eventually retire `contracts/distribute` once no consumer depends on it.
 
 ## References
 
 - `contracts/distribute/src/lib.rs`
-- `contracts/revenue_pool/IMPLEMENTATION_SUMMARY.dm`
-- `README`
+- `contracts/revenue_pool/IMPLEMENTATION_SUMMARY.md`
+- `README.md`
