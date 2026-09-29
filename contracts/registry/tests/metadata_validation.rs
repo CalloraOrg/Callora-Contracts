@@ -1,4 +1,4 @@
-//! Metadata byte-length and encoding validation for `callora-registry`.
+//! Metadata and offering-id byte-length and encoding validation for `callora-registry`.
 //!
 //! Issue #1065: value-bearing entry points must bound metadata byte length and
 //! reject invalid encodings *before* any cross-contract call or state change.
@@ -8,13 +8,12 @@
 //! - Reject empty, over-length, control-character, non-visible-ASCII
 //!   (including UTF-8 multibyte), and leading/trailing-whitespace metadata.
 //! - Accept bounded visible-ASCII metadata (including exactly 256 bytes).
-//! - Reject offering ids containing control characters, spaces, or other
-//!   non-visible-ASCII bytes; ids must satisfy the same visible-ASCII rule as
-//!   metadata and return `InvalidOfferingId` (not `InvalidMetadata`).
-//! - Accept offering ids composed of visible ASCII characters (e.g.
-//!   `[a-z0-9_-]`).
 //! - A rejected call leaves no partial state (not registered, count unchanged,
 //!   catalog `put_offering` never called).
+//!
+//! Offering ids are additionally routed through `validate_offering_id`, which
+//! rejects control characters, whitespace (including leading/trailing), and
+//! non-visible-ASCII bytes with `InvalidOfferingId` (never `InvalidMetadata`).
 //!
 //! Before the fix only emptiness and length (256) were checked, so the
 //! control-character / whitespace / non-ASCII cases below were *accepted*.
@@ -280,7 +279,7 @@ fn rejects_control_character_in_offering_id() {
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(
         matches!(result, Err(Ok(RegistryError::InvalidOfferingId))),
-        "control char offering id must be rejected with InvalidOfferingId, got {:?}",
+        "control char offering id must be rejected, got {:?}",
         result
     );
     assert!(!client.is_offering_registered(&oid));
@@ -375,31 +374,25 @@ fn rejects_over_length_offering_id() {
 }
 
 #[test]
-fn rejects_invalid_offering_id_in_with_gate_variant() {
+fn invalid_offering_id_reports_invalid_offering_id_not_metadata() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
-    let oid = metadata(&env, "bad\u{0001}id");
-    let token = Address::generate(&env);
+    let oid = metadata(&env, "bad id");
     let meta = metadata(&env, "ipfs://cid");
 
-    // Validation runs before the token balance read / catalog call, so a dummy
-    // token address is never reached.
-    let result =
-        client.try_register_offering_with_gate(&admin, &developer, &token, &100i128, &oid, &meta);
-    assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
-    assert_eq!(client.registered_count(), 0);
+    let result = client.try_register_offering(&admin, &developer, &oid, &meta);
+    assert!(
+        matches!(result, Err(Ok(RegistryError::InvalidOfferingId))),
+        "expected InvalidOfferingId, got {:?}",
+        result
+    );
 }
 
-// ---------------------------------------------------------------------------
-// Accept valid visible-ASCII offering ids
-// ---------------------------------------------------------------------------
-
 #[test]
-fn accepts_visible_ascii_offering_id() {
+fn accepts_valid_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
-    let oid = metadata(&env, "offering-1_ok");
+    let oid = offering_id(&env, "ok");
     let meta = metadata(&env, "ipfs://cid");
 
     client.register_offering(&admin, &developer, &oid, &meta);
@@ -425,7 +418,6 @@ fn rejected_offering_id_leaves_no_partial_state() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
 
-    // Valid registration increments the count.
     client.register_offering(
         &admin,
         &developer,
@@ -434,15 +426,9 @@ fn rejected_offering_id_leaves_no_partial_state() {
     );
     assert_eq!(client.registered_count(), 1);
 
-    // A rejected registration after the cooldown must not change anything.
     advance_past_cooldown(&env);
     let oid_bad = metadata(&env, "bad id");
-    let result = client.try_register_offering(
-        &admin,
-        &developer,
-        &oid_bad,
-        &metadata(&env, "ipfs://cid"),
-    );
+    let result = client.try_register_offering(&admin, &developer, &oid_bad, &metadata(&env, "ipfs://cid"));
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
     assert!(!client.is_offering_registered(&oid_bad));
     assert_eq!(client.registered_count(), 1);

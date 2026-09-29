@@ -76,20 +76,25 @@ impl CalloraRegistry {
     }
 
     fn validate_offering_id(offering_id: &String) -> Result<(), RegistryError> {
-        // Offering ids are used as keys by settlement pricing and off-chain
-        // routing, so they must be canonical and visually unambiguous. Reject
-        // empty/oversized ids, control bytes, bidi/zero-width characters,
-        // Unicode confusables, and leading/trailing whitespace by routing the
-        // id through the shared `normalize_visible_ascii` validator. The
-        // validator enforces the same 64-byte cap as `MAX_OFFERING_ID_LEN`,
-        // so the two bounds cannot drift. Rejections surface as
-        // `InvalidOfferingId` (never `InvalidMetadata`).
-        if offering_id.len() > MAX_OFFERING_ID_LEN {
+        // Offering ids are used as settlement pricing keys and off-chain
+        // routing identifiers, so they must be restricted to a canonical,
+        // visually unambiguous ASCII alphabet. Reject empty ids, ids over the
+        // byte cap, and any id containing characters outside `[a-z0-9_-]`
+        // (which also excludes spaces, control bytes, and bidi confusables).
+        if offering_id.is_empty() || offering_id.len() > MAX_OFFERING_ID_LEN {
             return Err(RegistryError::InvalidOfferingId);
         }
-        callora_validators::normalize_visible_ascii(offering_id)
-            .map(|_| ())
-            .map_err(|_| RegistryError::InvalidOfferingId)
+        let bytes = offering_id.to_bytes();
+        for b in bytes.iter() {
+            let valid = matches!(
+                b,
+                b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'
+            );
+            if !valid {
+                return Err(RegistryError::InvalidOfferingId);
+            }
+        }
+        Ok(())
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
