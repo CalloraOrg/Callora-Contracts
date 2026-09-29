@@ -13,18 +13,35 @@
 //! 3. **Idempotent double-init** — calling `init` twice always returns
 //!    [`Error::AlreadyInitialized`], regardless of the admin supplied.
 //!
-//! 4. **Authorisation monotonicity** — `register_error` called with any
-//!    address that is not the stored admin always returns
-//!    [`Error::Unauthorized`].
+//! 4. **Authorisation monotonicity** — `register_error` / `update_error`
+//!    called with any address that is not the stored admin always returns
+//!    [`Error::Unauthorized`], regardless of description length or whether
+//!    the code exists.
 //!
 //! 5. **log_error success ↔ code < u32::MAX** — for any code strictly less
 //!    than `u32::MAX`, `log_error` succeeds (no error).  At `u32::MAX` it
 //!    fails with [`Error::Overflow`].
 //!
+//! 6. **Registry immutability (#1225)** — a successful `register_error` for
+//!    an already-registered code always returns [`Error::AlreadyRegistered`]
+//!    and never changes the stored description; descriptions change only via
+//!    `update_error`.
+//!
+//! 7. **Update-path totality (#1225)** — `update_error` by the admin
+//!    succeeds if and only if the code is registered (and the description
+//!    is within bounds); otherwise it returns [`Error::NotRegistered`].
+//!
+//! 8. **Bounded descriptions (#1225)** — every description written by this
+//!    suite is at most `errors::MAX_DESC_LEN` bytes; the over-cap rejection
+//!    is exercised by the unit tests in `src/test.rs`.
+//!
 //! # Strategy
 //! - `proptest` drives random action sequences (`init → mix of operations`).
 //! - A deterministic LCG seeded with 64 values runs stable "golden path"
 //!   traces so CI failures are reproducible without proptest shrinking.
+//! - A `BTreeMap<u32, String>` models the expected registry, so arbitrary
+//!   interleavings of register/update are checked against a reference
+//!   implementation of the immutability rules.
 //!
 //! Closes CalloraOrg/Callora-Contracts#907.
 
@@ -34,6 +51,7 @@ use errors::{Error, ErrorsContract, ErrorsContractClient};
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, String};
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Deterministic PRNG (no std::rand, reproducible across platforms)
@@ -76,6 +94,8 @@ impl Prng {
 enum ErrorsAction {
     /// Register an error code with a description.
     RegisterError { code: u32, desc_seed: u64 },
+    /// Replace the description of an existing error code.
+    UpdateError { code: u32, desc_seed: u64 },
     /// Log an error for a user (any code, including MAX).
     LogError { code: u32 },
     /// Attempt to register using a wrong admin (must fail).
@@ -92,6 +112,8 @@ fn errors_action_strategy() -> impl Strategy<Value = ErrorsAction> {
     prop_oneof![
         4 => (any::<u32>(), any::<u64>())
             .prop_map(|(code, desc_seed)| ErrorsAction::RegisterError { code, desc_seed }),
+        3 => (any::<u32>(), any::<u64>())
+            .prop_map(|(code, desc_seed)| ErrorsAction::UpdateError { code, desc_seed }),
         4 => any::<u32>().prop_map(|code| ErrorsAction::LogError { code }),
         2 => any::<u32>()
             .prop_map(|code| ErrorsAction::RegisterErrorWrongAdmin { code }),
@@ -123,16 +145,34 @@ fn run_sequence(env: &Env, actions: &[ErrorsAction]) {
     );
 
     // ----- run action sequence -----
+    // Reference model of the registry: code -> last accepted description.
+    let mut registered: BTreeMap<u32, std::string::String> = BTreeMap::new();
+
     for action in actions {
         match action {
             ErrorsAction::RegisterError { code, desc_seed } => {
                 // Overflow-safe: just build a small description string.
                 let desc_str = std::format!("err_{}", desc_seed % 10_000);
                 let desc = String::from_str(env, &desc_str);
-                // Admin is authorised — must succeed.
-                client.register_error(&admin, code, &desc);
 
-                // Invariant 4: registering with a non-admin must fail.
+                if registered.contains_key(code) {
+                    // Invariant 6: repeat registration is always rejected and
+                    // never overwrites the stored description.
+                    assert_eq!(
+                        client
+                            .try_register_error(&admin, code, &desc)
+                            .unwrap_err()
+                            .unwrap(),
+                        Error::AlreadyRegistered,
+                        "repeat register_error must return AlreadyRegistered"
+                    );
+                } else {
+                    client.register_error(&admin, code, &desc);
+                    registered.insert(*code, desc_str);
+                }
+
+                // Invariant 4: registering with a non-admin must fail — the
+                // authorisation check runs before any other validation.
                 assert_eq!(
                     client
                         .try_register_error(&other, code, &desc)
@@ -140,6 +180,37 @@ fn run_sequence(env: &Env, actions: &[ErrorsAction]) {
                         .unwrap(),
                     Error::Unauthorized,
                     "non-admin register_error must return Unauthorized"
+                );
+            }
+
+            ErrorsAction::UpdateError { code, desc_seed } => {
+                let desc_str = std::format!("upd_{}", desc_seed % 10_000);
+                let desc = String::from_str(env, &desc_str);
+
+                if registered.contains_key(code) {
+                    // Invariant 7: admin update of a registered code succeeds.
+                    client.update_error(&admin, code, &desc);
+                    registered.insert(*code, desc_str);
+                } else {
+                    // Invariant 7: update of an unregistered code is rejected.
+                    assert_eq!(
+                        client
+                            .try_update_error(&admin, code, &desc)
+                            .unwrap_err()
+                            .unwrap(),
+                        Error::NotRegistered,
+                        "update_error on an unregistered code must return NotRegistered"
+                    );
+                }
+
+                // Invariant 4: non-admin update must fail regardless of state.
+                assert_eq!(
+                    client
+                        .try_update_error(&other, code, &desc)
+                        .unwrap_err()
+                        .unwrap(),
+                    Error::Unauthorized,
+                    "non-admin update_error must return Unauthorized"
                 );
             }
 
@@ -197,20 +268,24 @@ fn build_trace(seed: u64) -> std::vec::Vec<ErrorsAction> {
     let mut rng = Prng::new(seed);
     (0..TRACE_LEN)
         .map(|_| {
-            let pick = rng.next_u64() % 4;
+            let pick = rng.next_u64() % 5;
             match pick {
                 0 => ErrorsAction::RegisterError {
                     code: rng.gen_u32(),
                     desc_seed: rng.next_u64(),
                 },
-                1 => ErrorsAction::LogError {
+                1 => ErrorsAction::UpdateError {
+                    code: rng.gen_u32(),
+                    desc_seed: rng.next_u64(),
+                },
+                2 => ErrorsAction::LogError {
                     code: if rng.gen_bool() {
                         u32::MAX
                     } else {
                         rng.gen_u32()
                     },
                 },
-                2 => ErrorsAction::RegisterErrorWrongAdmin {
+                3 => ErrorsAction::RegisterErrorWrongAdmin {
                     code: rng.gen_u32(),
                 },
                 _ => ErrorsAction::DoubleInit,

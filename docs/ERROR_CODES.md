@@ -175,4 +175,16 @@ must not be reassigned once released.
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
 
+## Errors
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Errors | `register_error` / `update_error` was called before `init` |
+| 2 | `AlreadyInitialized` | Errors | `init` was called more than once |
+| 3 | `Unauthorized` | Errors | Caller is not the stored admin |
+| 4 | `Overflow` | Errors | `log_error` received `u32::MAX`; checked arithmetic refused to increment |
+| 5 | `DescriptionTooLong` | Errors | Description exceeds `MAX_DESC_LEN` (256 bytes) on `register_error` or `update_error` |
+| 6 | `AlreadyRegistered` | Errors | The code is already registered; use `update_error` to change its description |
+| 7 | `NotRegistered` | Errors | `update_error` was called for a code that was never registered |
+
 
