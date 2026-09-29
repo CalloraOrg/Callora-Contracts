@@ -30,6 +30,20 @@ fn advance(env: &Env, secs: u64) {
     env.ledger().set_timestamp(now + secs);
 }
 
+/// Helper: register a Stellar asset contract and mint `amount` to `to`.
+fn create_token(env: &Env, admin: &Address, to: &Address, amount: i128) -> Address {
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = sac.address();
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(env, &token);
+    token_admin.mint(to, &amount);
+    token
+}
+
+/// Helper: read the token balance of `who`.
+fn balance(env: &Env, token: &Address, who: &Address) -> i128 {
+    soroban_sdk::token::Client::new(env, token).balance(who)
+}
+
 // ===========================================================================
 // Initialisation
 // ===========================================================================
@@ -739,3 +753,4 @@ fn test_admin_functions_and_views_allowed_while_paused() {
     client.unpause(&new_admin);
     assert!(!client.is_paused());
 }
+
