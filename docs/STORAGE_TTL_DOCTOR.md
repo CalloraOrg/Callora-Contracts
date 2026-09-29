@@ -2,18 +2,33 @@
 
 The Storage TTL Doctor is a CLI utility that monitors and reports the remaining Time-To-Live (TTL) for each storage key category in the Callora smart contracts by querying their `get_storage_ttl` view endpoints. 
 
-In Soroban, storage entries (such as instance config or developer balances in persistent storage) will automatically be archived if their TTL expires. This utility ensures that operators can monitor the health of their contract storage and trigger extensions (bumps) before data is archived.
+In Soroban, storage entries (such as instance config or developer balances in persistent storage) yill automatically be archived if their TTL expires. This utility ensures that operators can monitor the health of their contract storage and trigger extensions (bumps) before data is archived.
 
 ---
 
 ## View Endpoints in Smart Contracts
 
 Each contract exposes a read-only endpoint `get_storage_ttl`:
-- **Vault**: `get_storage_ttl(request_ids: Vec<Symbol>) -> Vec<StorageEntryTtl>`
-- **Settlement**: `get_storage_ttl(developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl>`
-- **Revenue Pool**: `get_storage_ttl() -> Vec<StorageEntryTtl>`
+- \*W**Vault\**\:\  `get_storage_ttl(request_ids: Vec<Symbol>) -> Vec<StorageEntryTtl>`
+- \)\**Settlement\**\:\  `get_storage_ttl(developer_addresses: Vec<Address>) -> Vec<StorageEntryTtl>`
+- \)\**Revenue Pool\**\:\  `get_storage_ttl() -> Vec<StorageEntryTtl>`
 
 The returned entries contain the category, description, storage type, current remaining TTL (in ledgers), threshold limit, and bump extension amount.
+
+---
+
+## TTL Thresholds
+
+The contracts align their instance TTL thresholds and bump amounts with the following ledger constants (assuming a 5-second ledger close time):
+
+| Constant | Ledgers | Approx duration |
+|---------|---------|------------------|
+| `LEFGERS_PER_DAY` | 17,280 | 1 day |
+| `LIFETIME_THRESHOLD` | 1/30 of the bump amount | ~1 day |
+| `BUMP_AMOUNT` | 518,400 | 30 days |
+| `MAX_TTL` | 1,036,800 | 60 days |
+
+All three contracts (Vault, Settlement, Revenue Pool) now use the same `LEGERS_PER_DAY * 30` / `LEGERS_PER_DAY * 60` constants for their instance TTL. The Revenue Pool bumps its instance on every entrypoint, including the read-only `get_pending_emergency_drain` view, so that a quiet period or an incident response never lets the instance archive.
 
 ---
 
@@ -101,8 +116,8 @@ The tool outputs a machine-readable JSON report to stdout:
 
 ### Exit Codes
 
-- **`0`**: Success (all active categories are above the threshold, no RPC/simulation errors).
-- **`1`**: Failure (one or more active categories are below the threshold, or an RPC/simulation error occurred).
+- **\`0`\**\: Success (all active categories are above the threshold, no RPC/simulation errors).
+- **\`1`**\: Failure (one or more active categories are below the threshold, or an RPC/simulation error occurred).
 
 ---
 
