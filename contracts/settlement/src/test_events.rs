@@ -1,3 +1,4 @@
+
 //! Focused tests for the structured event emission helpers in
 //! [`crate::events`].
 //!
@@ -12,7 +13,7 @@
 //! Tests are grouped by lifecycle area: init, payments, withdrawals, admin
 //! governance, vault rotation, broadcast, upgrade, force-credit, min-balance,
 //! and developer balance migration.
-
+ 
 #[cfg(test)]
 mod event_tests {
     extern crate std;
@@ -518,12 +519,13 @@ mod event_tests {
         assert_eq!(topic1_addr(&env, &evs[0]), new_vault);
     }
 
+
     // ─── upgraded ─────────────────────────────────────────────────────────────
 
     /// `upgrade` emits exactly one `upgraded` event with topic[1]=admin.
     #[test]
     fn test_upgrade_emits_upgraded_event() {
-        let (env, contract, admin, _, _) = setup();
+        let (env, contract, admin, _, _) = setup(); 
         let client = CalloraSettlementClient::new(&env, &contract);
         let fake_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
 

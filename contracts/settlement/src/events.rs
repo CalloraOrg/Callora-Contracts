@@ -203,6 +203,20 @@ pub fn event_vault_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "vault_accepted")
 }
 
+/// Returns the Symbol for the `"vault_rotation_cancelled"` event topic.
+///
+/// **What**: Returns the canonical symbol for vault rotation cancellation events.
+///
+/// **How**: Creates a `Symbol` from `"vault_rotation_cancelled"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+pub fn event_vault_rotation_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "vault_rotation_cancelled")
+}
+
 /// Returns the Symbol for the `"upgraded"` event topic.
 ///
 /// **What**: Returns the canonical symbol for contract upgrade events.
@@ -540,6 +554,27 @@ pub fn emit_vault_accepted(env: &Env, new_vault: &Address, payload: VaultAccepte
         .publish((event_vault_accepted(env), new_vault.clone()), payload);
 }
 
+/// Emit `"vault_rotation_cancelled"` when the admin cancels a pending vault
+/// rotation proposal.
+///
+/// **What**: Publishes an event when a pending vault proposal is aborted.
+///
+/// **How**: Calls `env.events().publish()` with topic `(vault_rotation_cancelled, admin)` and payload `dropped_vault`.
+///
+/// **Why**: Provides an audit trail showing the admin intended to abort the
+/// pending vault rotation and records the dropped vault address.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `admin` - Admin address cancelling the proposal.
+/// * `dropped_vault` - Address of the vault whose proposal was dropped.
+pub fn emit_vault_rotation_cancelled(env: &Env, admin: &Address, dropped_vault: &Address) {
+    env.events().publish(
+        (event_vault_rotation_cancelled(env), admin.clone()),
+        dropped_vault.clone(),
+    );
+}
+
 /// Emit `"upgraded"` when the contract WASM is replaced.
 ///
 /// **What**: Publishes an event when contract executable code is upgraded.
@@ -776,6 +811,15 @@ mod tests {
         assert_eq!(
             event_vault_accepted(&env),
             Symbol::new(&env, "vault_accepted")
+        );
+    }
+
+    #[test]
+    fn test_event_vault_rotation_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_vault_rotation_cancelled(&env),
+            Symbol::new(&env, "vault_rotation_cancelled")
         );
     }
 
