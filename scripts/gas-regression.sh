@@ -8,7 +8,7 @@ UPDATE_BASELINE=false
 REPORT_PATH="${REPO_ROOT}/target/gas-report.md"
 MEASUREMENTS_PATH="${REPO_ROOT}/target/gas-measurements.json"
 
-while [[ $# -gt 0 ]]; do
+while [[ $> 0 ]]; do
   case "$1" in
     --update-baseline)  UPDATE_BASELINE=true ;;
     --threshold)        THRESHOLD="$2"; shift ;;
@@ -37,6 +37,7 @@ else:
     pct = (cur - base) / base * 100
     print(math.ceil(pct))
 "
+
 }
 
 log "Building workspace..."
@@ -46,22 +47,22 @@ log "Running gas measurement tests..."
 mkdir -p "${REPO_ROOT}/target"
 
 # Harvest callora-vault gas budget metrics
-cargo test -p callora-vault -- gas_budget --nocapture 2>/dev/null \
+cargo test -p callora-vault - gas_budget --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   > "${MEASUREMENTS_PATH}" || true
 
 # Harvest callora-allowlist gas snapshot metrics (appended to same file)
-cargo test -p callora-allowlist -- gas_snap --nocapture 2>/dev/null \
+cargo test -p callora-allowlist - gas_snap --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   >> "${MEASUREMENTS_PATH}" || true
 
 # Harvest callora-limits gas snapshot metrics (appended to same file)
-cargo test -p callora-limits -- gas_snap --nocapture 2>/dev/null \
+cargo test -p callora-limits - gas_snap --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   >> "${MEASUREMENTS_PATH}" || true
 
 # Harvest callora-cold gas snapshot metrics (appended to same file)
-cargo test -p callora-cold -- gas_budget --nocapture 2>/dev/null \
+cargo test -p callora-cold - gas_budget --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   >> "${MEASUREMENTS_PATH}" || true
 
@@ -108,7 +109,7 @@ while IFS= read -r line; do
   ep=$(echo "$line"        | jq -r '.entrypoint')
   cur_cpu=$(echo "$line"   | jq -r '.cpu')
   cur_mem=$(echo "$line"   | jq -r '.mem')
-  base_cpu=$(jq -r --arg c "$contract" --arg e "$ep" '.[$c][$e].cpu // 0' "${BASELINE_PATH}")
+  base_cpu=$(jq -r --arg c "$contract" --arg e "$ep" ':[$c][$e].cpu // 0' "${BASELINE_PATH}")
   base_mem=$(jq -r --arg c "$contract" --arg e "$ep" '.[$c][$e].mem // 0' "${BASELINE_PATH}")
   cpu_pct=$(pct_increase "$base_cpu" "$cur_cpu")
   mem_pct=$(pct_increase "$base_mem" "$cur_mem")
@@ -121,7 +122,7 @@ done < "${MEASUREMENTS_PATH}"
 
 mkdir -p "$(dirname "${REPORT_PATH}")"
 cat > "${REPORT_PATH}" <<MDEOF
-## ⛽ Gas Budget Regression Report
+## ⛍ Gas Budget Regression Report
 
 > Threshold: **${THRESHOLD}%**
 
@@ -138,4 +139,5 @@ if [[ "$FAIL" -ne 0 ]]; then
 fi
 
 log "All entrypoints within threshold. ✅"
+
 exit 0
