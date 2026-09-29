@@ -1,5 +1,14 @@
 #![no_std]
 
+//! Callora Distribute contract.
+//!
+//! # Instance storage TTL policy
+//!
+//! Critical configuration lives in Soroban instance storage. Reads count as
+//! active use: every public view refreshes instance TTL when it falls below a
+//! 30-day threshold, extending it back to a 60-day target. This mirrors the
+//! workspace vault policy so a read-only contract cannot silently archive.
+
 pub mod events;
 pub mod errors;
 pub mod limits;
@@ -28,9 +37,20 @@ const VERSION_KEY: &str = "version";
 /// Default per-leg distribution cap â€” effectively unlimited until explicitly set.
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
-/// TTL bump constants for instance storage archival risk mitigation.
-pub const BUMP_AMOUNT: u32 = 10_000;
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// Ledgers per day at the network's approximately five-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Refresh instance storage when fewer than ~30 days of TTL remain.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Extend instance storage back to ~60 days from the current ledger.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Backwards-compatible alias for the previous public constant name.
+pub const LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// Backwards-compatible alias for the previous public constant name.
+pub const BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
 
 // ---------------------------------------------------------------------------
 // Error strings
@@ -52,6 +72,14 @@ pub struct Distribute;
 
 #[contractimpl]
 impl Distribute {
+    /// Refresh instance storage TTL using the workspace-wide 30/60-day policy.
+    #[inline]
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
@@ -137,7 +165,9 @@ impl Distribute {
     /// # Panics
     /// * `"contract not initialized"` â€” called before `init`.
     pub fn get_admin(env: Env) -> Address {
-        Self::admin(&env)
+        let admin = Self::admin(&env);
+        Self::bump_instance_ttl(&env);
+        admin
     }
 
     /// Return the USDC token address configured for this contract.
@@ -145,10 +175,13 @@ impl Distribute {
     /// # Panics
     /// * `"contract not initialized"` â€” called before `init`.
     pub fn get_usdc_token(env: Env) -> Address {
-        env.storage()
+        let usdc = env
+            .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        Self::bump_instance_ttl(&env);
+        usdc
     }
 
     // -----------------------------------------------------------------------
@@ -246,9 +279,12 @@ impl Distribute {
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage()
+        let pending = env
+            .storage()
             .instance()
-            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        Self::bump_instance_ttl(&env);
+        pending
     }
 
     // -----------------------------------------------------------------------
@@ -302,7 +338,9 @@ impl Distribute {
 
     /// Return `true` if the contract is currently paused.
     pub fn get_paused(env: Env) -> bool {
-        Self::is_paused(&env)
+        let paused = Self::is_paused(&env);
+        Self::bump_instance_ttl(&env);
+        paused
     }
 
     // -----------------------------------------------------------------------
@@ -311,14 +349,18 @@ impl Distribute {
 
     /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
     pub fn get_max_distribute(env: Env) -> i128 {
-        env.storage()
+        let max_distribute = env
+            .storage()
             .instance()
             .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
-            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE);
+        Self::bump_instance_ttl(&env);
+        max_distribute
     }
 
     /// Return the configured maximum batch size.
     pub fn get_max_batch_size(env: Env) -> u32 {
+        Self::bump_instance_ttl(&env);
         limits::MAX_BATCH_SIZE
     }
 
@@ -533,7 +575,9 @@ impl Distribute {
             .get(&Symbol::new(&env, USDC_KEY))
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_addr);
-        usdc.balance(&env.current_contract_address())
+        let balance = usdc.balance(&env.current_contract_address());
+        Self::bump_instance_ttl(&env);
+        balance
     }
 
     // -----------------------------------------------------------------------
@@ -566,14 +610,19 @@ impl Distribute {
 
     /// Return the stored WASM version hash, or `None` if never upgraded.
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage()
+        let version = env
+            .storage()
             .instance()
-            .get(&Symbol::new(&env, VERSION_KEY))
+            .get(&Symbol::new(&env, VERSION_KEY));
+        Self::bump_instance_ttl(&env);
+        version
     }
 
     /// Return the crate version string baked in at compile time.
     pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+        let version = soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        Self::bump_instance_ttl(&env);
+        version
     }
 }
 

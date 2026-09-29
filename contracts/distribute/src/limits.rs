@@ -48,11 +48,11 @@ pub const DEFAULT_GLOBAL_CAP: u32 = 100;
 /// Maximum number of items allowed in a single batch operation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
-/// TTL bump constants for instance storage archival risk mitigation.
-/// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
-/// Bumping TTL ensures state remains accessible for critical operations.
-pub const BUMP_AMOUNT: u32 = 10_000;
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// Backwards-compatible aliases for callers that used the limits module.
+/// The canonical TTL policy is defined once at the crate root.
+pub use crate::{
+    INSTANCE_BUMP_AMOUNT as BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD as LIFETIME_THRESHOLD,
+};
 
 /// Canonical storage keys for the entire Distribute contract.
 ///
