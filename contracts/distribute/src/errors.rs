@@ -34,7 +34,7 @@ pub enum DistributeError {
     Paused = 4,
     /// Reserved legacy state-counter error (code 5); retained for code stability.
     AccountLimitExceeded = 5,
-    /// Cannot close a state entry that does not exist â€” count is zero (code 6).
+    /// Reserved legacy state-counter error (code 6); retained for code stability.
     AccountStateEmpty = 6,
     /// Batch operation received an empty items list (code 7).
     BatchEmpty = 7,

@@ -11,7 +11,7 @@ pub mod limits;
 use crate::errors::DistributeError;
 
 use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
+    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -322,7 +322,7 @@ impl Distribute {
     }
 
     /// Return the configured maximum batch size.
-    pub fn get_max_batch_size(env: Env) -> u32 {
+    pub fn get_max_batch_size(_env: Env) -> u32 {
         limits::MAX_BATCH_SIZE
     }
 
@@ -449,7 +449,7 @@ impl Distribute {
     pub fn batch_distribute(
         env: Env,
         caller: Address,
-        payments: SorobanVec<(Address, i128)>,
+        payments: Vec<(Address, i128)>,
     ) {
         caller.require_auth();
         Self::require_not_paused(&env);

@@ -86,6 +86,7 @@ mod tests {
         let (env, admin, recipient, usdc, contract) = setup();
         let client = DistributeClient::new(&env, &contract);
         let batch = payments(&env, &recipient, MAX_BATCH_SIZE);
+        let state_before = env.as_contract(&contract, || env.storage().instance().all());
 
         // Exceed the removed default of 100 payments to the same account.
         // Completed payments are not active state and must not consume a cap.
@@ -98,7 +99,7 @@ mod tests {
         assert_eq!(token::Client::new(&env, &usdc).balance(&recipient), total);
         assert_eq!(client.balance(), 1_000 - total);
         env.as_contract(&contract, || {
-            assert_eq!(env.storage().instance().all().len(), 3);
+            assert_eq!(env.storage().instance().all(), state_before);
         });
     }
 }
