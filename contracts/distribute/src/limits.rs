@@ -66,14 +66,15 @@ mod tests {
             (0, DistributeError::BatchEmpty),
             (MAX_BATCH_SIZE + 1, DistributeError::BatchTooLarge),
         ] {
-            let events_before = env.events().all();
             assert_eq!(
                 client.try_batch_distribute(&admin, &payments(&env, &recipient, count)),
                 Err(Ok(soroban_sdk::Error::from_contract_error(error as u32)))
             );
+            // Inspect the rejected invocation before balance queries replace
+            // the SDK's per-invocation event buffer.
+            assert!(env.events().all().is_empty());
             assert_eq!(client.balance(), 1_000);
             assert_eq!(token.balance(&recipient), 0);
-            assert_eq!(env.events().all(), events_before);
         }
 
         // Rejection must not prevent a subsequent valid batch.
