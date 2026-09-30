@@ -2456,6 +2456,9 @@ mod test_recovery_idempotency;
 #[cfg(test)]
 mod test_views;
 
+#[cfg(test)]
+mod test_reentrancy;
+
 // #[cfg(test)]
 // mod test_gas_budget;
 // #[cfg(test)]
