@@ -84,7 +84,42 @@ stellar contract invoke \
 
 ---
 
-### 3. Deploy the revenue pool (optional)
+### 3. Deploy the distribute contract (optional)
+
+`callora-distribute` is a standalone USDC distribution contract used to pay out
+recipients directly from a funded contract balance. It is independent of the vault.
+
+```bash
+stellar contract deploy \
+    --wasm target/wasm32-unknown-unknown/release/callora_distribute.wasm \
+    --source <OPERATOR_KEY> \
+    --network testnet
+# → DISTRIBUTE_CONTRACT_ID
+```
+
+Initialize it — **the `--source` key must match `<ADMIN_ADDRESS>`**:
+
+```bash
+stellar contract invoke \
+    --id <DISTRIBUTE_CONTRACT_ID> \
+    --source <ADMIN_KEY> \
+    --network testnet \
+    -- init \
+    --admin <ADMIN_ADDRESS> \
+    --usdc_token <USDC_TOKEN_ID>
+```
+
+> ⚠️ **Init front-running**: `init` requires a signature from `admin`
+> (`admin.require_auth()`). The `--source` key submitted with the transaction
+> **must** match `<ADMIN_ADDRESS>`. Anyone who calls `init` with a different
+> admin address will be rejected. To eliminate the race window entirely, deploy
+> and invoke `init` in the **same transaction** using Soroban's constructor
+> pattern, or invoke immediately after deployment in the same pipeline step
+> before the contract ID is published.
+
+---
+
+### 4. Deploy the revenue pool (optional)
 
 ```bash
 stellar contract deploy \
@@ -108,7 +143,7 @@ stellar contract invoke \
 
 ---
 
-### 4. Deploy the vault and call `init`
+### 5. Deploy the vault and call `init`
 
 ```bash
 stellar contract deploy \
@@ -128,11 +163,11 @@ stellar contract invoke \
 ```
 
 > **Note:** `settlement` is not passed to `init`; register it with `set_settlement`
-> after deployment (see step 5).
+> after deployment (see step 6).
 
 ---
 
-### 5. Register the settlement contract in the vault
+### 6. Register the settlement contract in the vault
 
 Only the vault admin may call `set_settlement`:
 
@@ -148,7 +183,7 @@ stellar contract invoke \
 
 ---
 
-### 6. Verify all addresses with `get_contract_addresses`
+### 7. Verify all addresses with `get_contract_addresses`
 
 ```bash
 stellar contract invoke \
