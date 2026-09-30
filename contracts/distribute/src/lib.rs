@@ -5,9 +5,12 @@
 //! # Instance storage TTL policy
 //!
 //! Critical configuration lives in Soroban instance storage. Reads count as
-//! active use: every public view refreshes instance TTL when it falls below a
-//! 30-day threshold, extending it back to a 60-day target. This mirrors the
-//! workspace vault policy so a read-only contract cannot silently archive.
+//! active use: every public view refreshes instance TTL at or below a 30-day
+//! threshold, extending it back to a 60-day target, matching the vault policy.
+//!
+//! TTL changes persist only when the invocation is submitted and committed.
+//! RPC simulation alone does not extend on-chain lifetime; clients that only
+//! simulate views still need a submitted invocation or TTL-extension transaction.
 
 pub mod events;
 pub mod errors;
@@ -40,7 +43,7 @@ pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 /// Ledgers per day at the network's approximately five-second close cadence.
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-/// Refresh instance storage when fewer than ~30 days of TTL remain.
+/// Refresh instance storage when at most ~30 days of TTL remain.
 pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// Extend instance storage back to ~60 days from the current ledger.
@@ -631,3 +634,6 @@ mod test;
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod test_ttl;
