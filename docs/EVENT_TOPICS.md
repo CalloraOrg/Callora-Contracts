@@ -106,8 +106,9 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 44 | `sweep_executed`          | `event_sweep_executed`         | Admin executes a pending sweep                |
 | 45 | `sweep_cancelled`         | `event_sweep_cancelled`        | Admin cancels a pending sweep                 |
 | 46 | `tl_window_changed`       | `event_timelock_window_changed`| Admin updates timelock window                 |
+| 47 | `allowlist_remove`        | `event_allowlist_remove`       | Single address removed from deposit allowlist |
 
-**Total: 46 topics**
+**Total: 47 topics**
 
 ---
 
@@ -193,7 +194,7 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `set_authorized_caller`, `set_max_deduct`, `set_revenue_pool`,
 `clear_revenue_pool`, `set_settlement`, `metadata_set`, `metadata_updated`,
 `metadata_removed`, `price_set`, `price_removed`, `allowlist_add`,
-`allowlist_clear`, `revenue_pool_proposed`, `revenue_pool_accepted`,
+`allowlist_remove`, `allowlist_clear`, `revenue_pool_proposed`, `revenue_pool_accepted`,
 `revenue_pool_cancelled`, `request_id_pruned`, `reserve_cap_set`,
 `rescue_funds`, `swept`, `pause_proposed`, `pause_executed`,
 `pause_cancelled`, `upgrade_proposed`, `upgrade_executed`,
@@ -226,10 +227,10 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 
 | Contract      | Topics | Unique (not shared) | Shared |
 |---------------|--------|---------------------|--------|
-| vault         | 36     | 27                  | 9      |
+| vault         | 37     | 28                  | 9      |
 | settlement    | 18     | 12                  | 6      |
 | revenue_pool  | 23     | 17                  | 6      |
-| **Total**     | **77** | **56**              | **21** |
+| **Total**     | **78** | **57**              | **21** |
 
 > Shared count: each unique topic string that appears in more than one
 > contract is counted once per contract it appears in. The shared topic
