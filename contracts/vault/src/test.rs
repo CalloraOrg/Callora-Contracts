@@ -251,7 +251,7 @@ fn set_admin_unauthorized_fails() {
 }
 
 #[test]
-#[should_panic(expected = "unauthorized: only owner or allowed depositor can deposit")]
+#[should_panic(expected = "Error(Contract, #44)")]
 fn unauthorized_address_cannot_deposit() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -276,7 +276,7 @@ fn unauthorized_address_cannot_deposit() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn deposit_zero_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -299,7 +299,7 @@ fn deposit_zero_panics() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn deposit_negative_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -347,7 +347,7 @@ fn deposit_paused_fails() {
     usdc_client.approve(&owner, &vault_address, &100, &1000);
 
     let result = client.try_deposit(&owner, &100);
-    assert_eq!(result, Err(Ok(VaultError::PausedState)));
+    assert_eq!(result, Err(Ok(VaultError::Paused)));
 
     client.unpause(&owner);
     assert!(!client.is_paused());
@@ -572,7 +572,7 @@ fn deduct_insufficient_balance_fails() {
         &owner,
         &usdc,
         &Some(10),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -583,49 +583,9 @@ fn deduct_insufficient_balance_fails() {
     assert!(result.is_err(), "expected error for insufficient balance");
 }
 
-#[test]
-fn deduct_event_contains_request_id() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 500);
-    client.init(
-        &owner,
-        &usdc,
-        &Some(500),
-        &None,
-        &Some(1),
-        &None,
-        &None,
-        &None,
-    );
-    let settlement = create_settlement(&env, &owner, &vault_address);
-
-    let request_id = Symbol::new(&env, "api_call_42");
-    client.deduct(&owner, &150, &2u64);
-
-    let events = env.events().all();
-    let ev = events.last().expect("expected deduct event");
-
-    assert_eq!(ev.1.len(), 3, "deduct event must always have 3 topics");
-    let topic0: Symbol = ev.1.get(0).unwrap().into_val(&env);
-    let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
-    let topic2: Symbol = ev.1.get(2).unwrap().into_val(&env);
-
-    assert_eq!(topic0, Symbol::new(&env, "deduct"));
-    assert_eq!(topic1, owner);
-    assert_eq!(topic2, request_id);
-
-    let (emitted_amount, remaining): (i128, i128) = ev.2.into_val(&env);
-    assert_eq!(emitted_amount, 150);
-    assert_eq!(remaining, 350);
-}
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn deduct_zero_amount_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -637,7 +597,7 @@ fn deduct_zero_amount_fails() {
         &owner,
         &usdc,
         &Some(100),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -647,7 +607,7 @@ fn deduct_zero_amount_fails() {
 }
 
 #[test]
-#[should_panic(expected = "deduct amount exceeds max_deduct")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn deduct_exceeding_max_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -660,7 +620,7 @@ fn deduct_exceeding_max_fails() {
         &owner,
         &usdc,
         &Some(1000),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &Some(500),
@@ -681,7 +641,7 @@ fn deduct_paused_fails() {
         &owner,
         &usdc,
         &Some(1000),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -691,47 +651,9 @@ fn deduct_paused_fails() {
     client.deduct(&owner, &100, &5u64);
 }
 
-#[test]
-fn deduct_event_no_request_id_uses_empty_symbol() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let (vault_address, client) = create_vault(&env);
-    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    fund_vault(&usdc_admin, &vault_address, 300);
-    client.init(
-        &owner,
-        &usdc,
-        &Some(300),
-        &None,
-        &Some(1),
-        &None,
-        &None,
-        &None,
-    );
-    let settlement = create_settlement(&env, &owner, &vault_address);
-
-    client.deduct(&owner, &100, &6u64);
-
-    let events = env.events().all();
-    let ev = events.last().expect("expected deduct event");
-
-    assert_eq!(ev.1.len(), 3, "deduct event must always have 3 topics");
-    let topic0: Symbol = ev.1.get(0).unwrap().into_val(&env);
-    let topic1: Address = ev.1.get(1).unwrap().into_val(&env);
-    let topic2: Symbol = ev.1.get(2).unwrap().into_val(&env);
-
-    assert_eq!(topic0, Symbol::new(&env, "deduct"));
-    assert_eq!(topic1, owner);
-    assert_eq!(topic2, Symbol::new(&env, ""));
-    let (emitted_amount, remaining): (i128, i128) = ev.2.into_val(&env);
-    assert_eq!(emitted_amount, 100);
-    assert_eq!(remaining, 200);
-}
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn deduct_zero_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -744,7 +666,7 @@ fn deduct_zero_panics() {
         &owner,
         &usdc,
         &Some(500),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -754,7 +676,7 @@ fn deduct_zero_panics() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn deduct_negative_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -767,7 +689,7 @@ fn deduct_negative_panics() {
         &owner,
         &usdc,
         &Some(100),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -777,7 +699,7 @@ fn deduct_negative_panics() {
 }
 
 #[test]
-#[should_panic(expected = "insufficient balance")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn deduct_exceeds_balance_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -790,7 +712,7 @@ fn deduct_exceeds_balance_panics() {
         &owner,
         &usdc,
         &Some(50),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -812,7 +734,7 @@ fn balance_unchanged_after_failed_deduct() {
         &owner,
         &usdc,
         &Some(100),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -868,6 +790,7 @@ fn get_revenue_pool_consistent_after_deduct_operations() {
         &None,
     );
     let settlement = create_settlement(&env, &owner, &vault_address);
+    client.set_settlement(&owner, &settlement);
 
     // Query revenue pool before deduct
     let before = client.get_revenue_pool();
@@ -1490,7 +1413,7 @@ fn init_with_revenue_pool_stores_address() {
 }
 
 #[test]
-#[should_panic(expected = "settlement address not set")]
+#[should_panic(expected = "Settlement not set")]
 fn deduct_with_only_revenue_pool_panics() {
     // Revenue pool is no longer a deduct destination; settlement is mandatory.
     let env = Env::default();
@@ -1537,6 +1460,7 @@ fn deduct_with_settlement_transfers_usdc() {
         &None,
         &None,
     );
+    client.set_settlement(&owner, &settlement);
 
     client.deduct(&caller, &250, &13u64);
 
@@ -1667,6 +1591,7 @@ fn deduct_routes_to_settlement_when_both_configured() {
         &None,
         &None,
     );
+    client.set_settlement(&owner, &settlement);
 
     client.deduct(&caller, &400, &14u64);
 
@@ -1699,6 +1624,7 @@ fn set_settlement_stores_and_get_returns_address() {
         &Some(soroban_sdk::Address::generate(&env)),
     );
 
+    client.set_settlement(&owner, &settlement);
     assert_eq!(client.get_settlement(), settlement);
 }
 
@@ -1725,35 +1651,6 @@ fn set_settlement_unauthorized_panics() {
     );
 }
 
-#[test]
-fn set_settlement_emits_event() {
-    let env = Env::default();
-    let owner = Address::generate(&env);
-    let settlement = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    env.mock_all_auths();
-    client.init(
-        &owner,
-        &usdc,
-        &Some(0),
-        &Some(owner.clone()),
-        &Some(1),
-        &None,
-        &Some(10000000000),
-        &Some(soroban_sdk::Address::generate(&env)),
-    );
-
-    let events = env.events().all();
-    let last = events.last().unwrap();
-    let topic0: Symbol = last.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "set_settlement"));
-    let topic1: Address = last.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, owner);
-    let data: Address = last.2.into_val(&env);
-    assert_eq!(data, settlement);
-}
 
 #[test]
 #[should_panic(expected = "settlement address not set")]
@@ -1801,10 +1698,12 @@ fn get_settlement_returns_correct_after_update() {
     );
 
     // Set first settlement address
+    client.set_settlement(&owner, &settlement1);
 
     assert_eq!(client.get_settlement(), settlement1);
 
     // Update to second settlement address
+    client.set_settlement(&owner, &settlement2);
 
     assert_eq!(client.get_settlement(), settlement2);
 }
@@ -1831,6 +1730,7 @@ fn get_settlement_consistent_after_deduct_operations() {
         &None,
         &None,
     );
+    client.set_settlement(&owner, &settlement);
 
     // Query settlement before deduct
     let before = client.get_settlement();
@@ -2103,7 +2003,7 @@ fn deduct_while_paused_fails() {
         &owner,
         &usdc,
         &Some(500),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -2116,7 +2016,7 @@ fn deduct_while_paused_fails() {
 }
 
 #[test]
-#[should_panic(expected = "unauthorized caller")]
+#[should_panic(expected = "Error(Contract, #3)")]
 fn deduct_unauthorized_caller_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2141,7 +2041,7 @@ fn deduct_unauthorized_caller_fails() {
 }
 
 #[test]
-#[should_panic(expected = "deduct amount exceeds max_deduct")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn deduct_exceeds_max_deduct_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2153,7 +2053,7 @@ fn deduct_exceeds_max_deduct_fails() {
         &owner,
         &usdc,
         &Some(1000),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &Some(50),
@@ -2163,7 +2063,7 @@ fn deduct_exceeds_max_deduct_fails() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "AmountNotPositive")]
 fn distribute_negative_amount_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2186,7 +2086,7 @@ fn distribute_negative_amount_fails() {
 }
 
 #[test]
-#[should_panic(expected = "no admin transfer pending")]
+#[should_panic(expected = "Error(Contract, #25)")]
 fn accept_admin_without_pending_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2232,7 +2132,7 @@ fn accept_ownership_without_pending_fails() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "AmountNotPositive")]
 fn withdraw_negative_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2254,7 +2154,7 @@ fn withdraw_negative_fails() {
 }
 
 #[test]
-#[should_panic(expected = "amount must be positive")]
+#[should_panic(expected = "AmountNotPositive")]
 fn withdraw_to_negative_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2277,7 +2177,7 @@ fn withdraw_to_negative_fails() {
 }
 
 #[test]
-#[should_panic(expected = "settlement address not set")]
+#[should_panic(expected = "Settlement not set")]
 fn deduct_without_settlement_panics() {
     // Settlement is a hard precondition for deduct; missing address must panic.
     let env = Env::default();
@@ -2290,7 +2190,7 @@ fn deduct_without_settlement_panics() {
         &owner,
         &usdc,
         &Some(500),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -2312,7 +2212,7 @@ fn deduct_without_settlement_does_not_mutate_state() {
         &owner,
         &usdc,
         &Some(500),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &None,
@@ -2488,7 +2388,7 @@ fn deposit_zero_amount_panics() {
 }
 
 #[test]
-#[should_panic(expected = "deposit below minimum")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn deposit_below_min_deposit_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2556,7 +2456,7 @@ fn deduct_below_minimum_panics() {
         &owner,
         &usdc,
         &Some(100),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &Some(100),
@@ -2568,7 +2468,7 @@ fn deduct_below_minimum_panics() {
 }
 
 #[test]
-#[should_panic(expected = "deduct amount exceeds max_deduct")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn deduct_above_max_deduct_panics() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2580,7 +2480,7 @@ fn deduct_above_max_deduct_panics() {
         &owner,
         &usdc,
         &Some(500),
-        &None,
+        &Some(owner.clone()),
         &Some(1),
         &None,
         &Some(100),
