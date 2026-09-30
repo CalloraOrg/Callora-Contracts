@@ -291,7 +291,7 @@ impl CalloraVault {
             .set(&DataKey::UsdcToken, &usdc_token);
         env.storage()
             .instance()
-            .set(&DataKey::Balance, &initial_balance);
+            .set(&DataKey::Balance, &initial_balance.unwrap_or(0));
         env.storage()
             .instance()
             .set(&DataKey::AuthorizedCaller, &authorized_caller);
