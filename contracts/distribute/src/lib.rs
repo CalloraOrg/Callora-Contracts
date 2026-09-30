@@ -492,8 +492,14 @@ impl Distribute {
     /// * `ERR_INSUFFICIENT_BALANCE` â€” contract holds less than `total`.
     ///
     /// # Events
-    /// Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
-    /// Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
+    /// - Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
+    /// - For each payment leg, emits in payment order:
+    ///   - `distribute_started` with `(distribute_started, callora_v1, recipient)` topic and
+    ///     `DistributionLifecycleEvent` payload before the transfer.
+    ///   - `distribute` with `(distribute, callora_v1, recipient)` topic and `amount` data.
+    ///   - `distribute_completed` with `(distribute_completed, callora_v1, recipient)` topic and
+    ///     `DistributionLifecycleEvent` payload after successful transfer.
+    /// - Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
     pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -553,10 +559,20 @@ impl Distribute {
             (total, n),
         );
 
-        // Phase 4 — execute transfers
+        // Phase 4 — execute transfers with per-leg transfer and lifecycle events
         for i in 0..n {
             let (to, amount) = payments.get(i).expect("payment leg");
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                i,
+                n,
+            );
+            events::emit_distribute_started(&env, &to, &lifecycle);
             usdc.transfer(&contract_address, &to, &amount);
+            events::emit_distribute(&env, &to, amount);
+            events::emit_distribute_completed(&env, &to, &lifecycle);
         }
 
         // Phase 5 — emit completed event
