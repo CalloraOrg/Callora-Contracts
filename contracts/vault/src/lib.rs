@@ -2184,8 +2184,9 @@ impl CalloraVault {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
-            .get::<_, bool>(&DataKey::Depositor(caller))
-            .unwrap_or(false)
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env))
+            .contains(&caller)
     }
 
     /// Add a single address to the deposit allowlist (owner-only).
@@ -2451,6 +2452,9 @@ mod test_value_conservation;
 
 #[cfg(test)]
 mod test_recovery_idempotency;
+
+#[cfg(test)]
+mod test_views;
 
 // #[cfg(test)]
 // mod test_gas_budget;
