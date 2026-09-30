@@ -50,6 +50,8 @@ use soroban_sdk::contracterror;
 /// | 40   | InvalidVault                 | Vault address is invalid                             |
 /// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
 /// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
+/// | 43   | LengthMismatch               | Paired batch vectors have different lengths          |
+/// | 44   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -101,4 +103,8 @@ pub enum SettlementError {
     NoVaultRotationPending = 41,
     /// Admin broadcast message exceeds the maximum allowed length.
     BroadcastMessageTooLong = 42,
+    /// #1135: `developers.len() != amounts.len()` in a paired batch.
+    LengthMismatch = 43,
+    /// #1135: `cursor > developers.len()` or `limit == 0`.
+    InvalidCursor = 44,
 }

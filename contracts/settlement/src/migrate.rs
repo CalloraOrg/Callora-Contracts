@@ -240,9 +240,11 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
             .checked_add(existing_v2)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
         env.storage().persistent().set(&v2_key, &merged);
-        env.storage()
-            .persistent()
-            .extend_ttl(&v2_key, 50_000, 50_000);
+        env.storage().persistent().extend_ttl(
+            &v2_key,
+            crate::types::PERSISTENT_BUMP_THRESHOLD,
+            crate::types::PERSISTENT_BUMP_AMOUNT,
+        );
         env.storage().persistent().remove(&v1_key);
     }
 }
