@@ -2,9 +2,7 @@
 
 extern crate std;
 
-use callora_distribute::{
-    CalloraDistribute, CalloraDistributeClient, DistributeError, BatchItem,
-};
+use callora_distribute::{BatchItem, CalloraDistribute, CalloraDistributeClient, DistributeError};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
 
@@ -148,11 +146,7 @@ fn broadcast_requires_auth() {
 
     env.set_auths(&[]);
     let msg = soroban_sdk::String::from_str(&env, "test");
-    let res = client.try_broadcast(
-        &admin,
-        &callora_distribute::Severity::Info,
-        &msg,
-    );
+    let res = client.try_broadcast(&admin, &callora_distribute::Severity::Info, &msg);
     assert!(res.is_err(), "broadcast must require auth");
 }
 

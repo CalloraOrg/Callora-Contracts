@@ -169,8 +169,7 @@ impl CalloraFreeze {
         let admin = Self::get_admin(env.clone())?;
         let operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
 
-        let is_authorized = caller == admin
-            || operator.map_or(false, |op| caller == op);
+        let is_authorized = caller == admin || operator.map_or(false, |op| caller == op);
         if !is_authorized {
             return Err(FreezeError::Unauthorized);
         }
@@ -208,7 +207,11 @@ impl CalloraFreeze {
     ///
     /// # Errors
     /// * [`FreezeError::Unauthorized`] — caller is not the admin.
-    pub fn set_freeze_operator(env: Env, caller: Address, operator: Option<Address>) -> Result<(), FreezeError> {
+    pub fn set_freeze_operator(
+        env: Env,
+        caller: Address,
+        operator: Option<Address>,
+    ) -> Result<(), FreezeError> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
