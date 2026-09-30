@@ -1,6 +1,6 @@
 //! Admin-only developer balance recovery operations.
 
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{Address, Env};
 
 use crate::types::AdminMigrationEvent;
 use crate::{events, timelock, CalloraSettlement, SettlementError, StorageKey};
@@ -101,15 +101,8 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
         .persistent()
         .extend_ttl(&destination_key, 50_000, 50_000);
 
-    let mut index: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&StorageKey::DeveloperIndex)
-        .unwrap_or_else(|| Vec::new(env));
-    CalloraSettlement::sorted_insert(env, &mut index, migration.to.clone());
-    env.storage()
-        .instance()
-        .set(&StorageKey::DeveloperIndex, &index);
+    // Register the destination developer in the paged index if not already present.
+    CalloraSettlement::index_insert(env, migration.to.clone());
     timelock::remove_pending_migration(env, from);
 
     events::emit_admin_migration(
