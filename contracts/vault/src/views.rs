@@ -59,13 +59,16 @@ use crate::{CalloraVault, CalloraVaultClient, CalloraVaultArgs};
 /// # Errors
 /// Mirrors `deduct`'s validation errors in the same order:
 ///
-/// 1. [`VaultError::Unauthorized`] — `caller` is not the authorized deduct
-///    caller. (Auth is not enforced here, but the role check still runs.)
+/// 1. [`VaultError::Unauthorized`] — `caller` is neither the owner nor the
+///    authorized deduct caller. (Auth is not enforced here, but the role check
+///    still runs.)
 /// 2. [`VaultError::Paused`] — vault is paused.
 /// 3. [`VaultError::AmountNotPositive`] — `amount <= 0`.
 /// 4. [`VaultError::BelowMinDeposit`] — `amount < min_deposit`.
 /// 5. [`VaultError::ExceedsMaxDeduct`] — `amount > max_deduct`.
 /// 6. [`VaultError::InsufficientBalance`] — vault balance < `amount`.
+/// 7. [`VaultError::DuplicateRequestId`] — non-zero `request_id` already
+///    processed.
 ///
 /// [`VaultError::SettlementNotSet`] and [`VaultError::NotInitialized`] are
 /// **not** raised here — the simulation does not reach the external settlement
@@ -81,6 +84,12 @@ impl CalloraVault {
         request_id: u64,
     ) -> Result<i128, VaultError> {
         CalloraVault::validate_deduct(&env, &caller, amount)?;
+
+        // Idempotency: `deduct` rejects a replayed non-zero request id with
+        // `DuplicateRequestId`; `request_id == 0` means "no idempotency".
+        if request_id != 0 {
+            CalloraVault::require_not_duplicate(&env, &request_id)?;
+        }
 
         // Projected new balance — same shape as `deduct`'s `Ok(..)` payload.
         let balance: i128 = env
