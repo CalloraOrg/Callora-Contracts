@@ -49,18 +49,23 @@ fn settlement_error_codes_are_stable_and_unique() {
         (41, SettlementError::NoVaultRotationPending),
         (42, SettlementError::BroadcastMessageTooLong),
         (43, SettlementError::CrossTenantBatch),
+        (44, SettlementError::NoUpgradePending),
+        (45, SettlementError::ZeroWasmHash),
+        (46, SettlementError::UpgradeTimelockNotExpired),
+        (47, SettlementError::UnsupportedToken),
+        (48, SettlementError::DuplicateRequestId),
     ];
 
     let mut seen = BTreeSet::new();
     for (expected_code, variant) in mappings {
-        assert_eq(variant as u32, expected_code);
+        assert_eq!(variant as u32, expected_code);
         assert!(
             seen.insert(expected_code),
             "duplicate settlement error code {expected_code}"
         );
     }
 
-    assert_eq(seen.len(), 43);
+    assert_eq!(seen.len(), 48);
 }
 
 #[test]
@@ -110,6 +115,8 @@ fn error_code_docs_list_every_settlement_code() {
         "| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |",
         "| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |",
         "| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |",
+        "| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
+        "| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |",
     ];
 
     for line in expected_lines {

@@ -9,7 +9,7 @@
 //! If any test in this file fails, the corresponding row in
 //! `docs/EVENT_TOPICS.md` must be updated to reflect the new topic string.
 
-use soroban_sdk::{Env, Symbol, Vec};
+use soroban_sdk::{Env, Symbol, Vec as SorobanVec};
 
 // ---------------------------------------------------------------------------
 // Vault contract topics
@@ -168,6 +168,12 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     }),
     ("price_removed", |e| {
         callora_settlement::events::event_price_removed(e)
+    }),
+    ("supported_token_added", |e| {
+        callora_settlement::events::event_supported_token_added(e)
+    }),
+    ("supported_token_removed", |e| {
+        callora_settlement::events::event_supported_token_removed(e)
     }),
 ];
 
