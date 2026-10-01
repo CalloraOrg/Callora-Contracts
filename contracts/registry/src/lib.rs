@@ -45,7 +45,10 @@ pub enum StorageKey {
     Catalog,
     RegisteredCount,
     Offering(String),
-    LastAdminAction,
+    /// Per-developer cooldown timestamp. Stored in persistent storage keyed
+    /// by the developer [`Address`] so that different developers have
+    /// independent cooldown windows.
+    DeveloperCooldown(Address),
 }
 
 #[contracttype]
@@ -112,10 +115,15 @@ impl CalloraRegistry {
     }
 
     fn validate_offering_id(offering_id: &String) -> Result<(), RegistryError> {
-        if offering_id.is_empty() || offering_id.len() > MAX_OFFERING_ID_LEN {
-            return Err(RegistryError::InvalidOfferingId);
-        }
-        Ok(())
+        // Offering ids are storage keys and off-chain routing labels, so they must
+        // be unambiguous. We delegate to the shared validator, which enforces
+        // the 64-byte cap, rejects C0/DEL controls, zero-width/bidi controls,
+        // Unicode confusables, leading/trailing spaces, and restricts the
+        // alphabet to `[a-z0-9_-]`. Any rejection maps to `InvalidOfferingId`
+        // so callers never see a confusing `InvalidMetadata` for an id failure.
+        callora_validators::normalize_offering_id(offering_id)
+            .map(|_| ())
+            .map_err(|_| RegistryError::InvalidOfferingId)
     }
 
     fn validate_metadata(metadata: &String) -> Result<(), RegistryError> {
@@ -138,7 +146,7 @@ impl CalloraRegistry {
     ///
     /// Validates inputs, checks for duplicates, publishes to the catalog, then
     /// atomically writes the offering record, increments the registered count,
-    /// emits the registration event, and records the admin cooldown timestamp.
+    /// emits the registration event, and records the developer cooldown timestamp.
     ///
     /// Callers are responsible for authentication, admin-equality checks, the
     /// cooldown gate, and any pre-conditions specific to their variant (e.g.
@@ -167,7 +175,7 @@ impl CalloraRegistry {
         let record = OfferingRecord {
             offering_id: offering_id.clone(),
             metadata: metadata.clone(),
-            developer,
+            developer: developer.clone(),
         };
         env.storage().persistent().set(&key, &record);
         Self::extend_offering_ttl(env, &key);
@@ -186,7 +194,7 @@ impl CalloraRegistry {
             (events::event_offering_registered(env), offering_id),
             record,
         );
-        admin::update_cooldown(env);
+        admin::update_cooldown(env, &developer);
         Ok(())
     }
 
@@ -207,7 +215,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
-        admin::require_cooldown(&env)?;
+        admin::require_cooldown(&env, &developer)?;
         Self::do_register(&env, developer, offering_id, metadata)
     }
 
@@ -231,7 +239,7 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
-        admin::require_cooldown(&env)?;
+        admin::require_cooldown(&env, &developer)?;
 
         // Balance gate: reject before any catalog interaction or state write.
         let token_client = token::Client::new(&env, &token);

@@ -60,6 +60,11 @@ pub mod admin;
 pub mod timelock;
 pub mod views;
 
+pub use timelock::{
+    DEFAULT_TIMELOCK_SECONDS, MAX_TIMELOCK_SECONDS, MIN_TIMELOCK_SECONDS,
+    PROPOSAL_GRACE_SECONDS, TIMELOCK_GRACE_SECONDS,
+};
+
 /// Bounded visible-ASCII metadata validators (shared `callora-validators` crate).
 pub use callora_validators as validators;
 
@@ -88,8 +93,6 @@ pub enum DataKey {
     Paused,
     /// Pending owner address during a two-step ownership transfer.
     PendingOwner,
-    Depositor(Address),
-    AllowedDepositorsList,
 }
 
 /// Instance / persistent storage keys for the vault.
@@ -235,6 +238,60 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Shared validation pipeline for [`deduct`] and [`crate::views::simulate_deduct`].
+    ///
+    /// Checks, **in the same order `deduct` uses**, that:
+    /// 1. `caller` is the owner or the authorized deduct caller → [`VaultError::Unauthorized`].
+    /// 2. The vault is not paused → [`VaultError::Paused`].
+    /// 3. `amount > 0` → [`VaultError::AmountNotPositive`].
+    /// 4. `amount >= min_deposit` → [`VaultError::BelowMinDeposit`].
+    /// 5. `amount <= max_deduct` → [`VaultError::ExceedsMaxDeduct`].
+    /// 6. Tracked balance ≥ `amount` → [`VaultError::InsufficientBalance`].
+    ///
+    /// This function is **read-only** (no storage writes, no events, no auth).
+    /// `deduct` calls it before any mutation so that the validation order is
+    /// guaranteed identical to what `simulate_deduct` observes.
+    pub(crate) fn validate_deduct(env: &Env, caller: &Address, amount: i128) -> Result<(), VaultError> {
+        // 1. Owner-or-authorized-caller check (issue #1107: the owner may
+        //    always deduct; a configured authorized caller may deduct too).
+        Self::require_authorized_deduct_caller(env.clone(), caller)?;
+
+        // 2. Pause guard.
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(VaultError::Paused);
+        }
+
+        // 3-5. Amount bounds (positive, min_deposit, max_deduct).
+        let min_dep = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::MinDeposit)
+            .unwrap();
+        let max_deduct = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::MaxDeduct)
+            .unwrap();
+        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+
+        // 6. Balance check.
+        let current_bal = env
+            .storage()
+            .instance()
+            .get::<_, i128>(&DataKey::Balance)
+            .unwrap_or(0);
+        if current_bal < amount {
+            return Err(VaultError::InsufficientBalance);
+        }
+
+        Ok(())
+    }
+
     /// Initialize the Callora Vault contract (one-time setup).
     ///
     /// Stores configuration in instance storage and sets the paused flag to `false`.
@@ -371,21 +428,8 @@ impl CalloraVault {
             .get::<_, i128>(&DataKey::MinDeposit)
             .unwrap();
         Self::require_valid_deposit_amount(amount, min_dep)?;
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
-        if caller != owner {
-            let allowlist = env
-                .storage()
-                .instance()
-                .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
-                .unwrap_or_else(|| Vec::new(&env));
-
-            if !allowlist.contains(&caller) {
-                return Err(VaultError::CallerNotInAllowlist);
-            }
+        if !Self::allowlist_allows(&env, &caller) {
+            return Err(VaultError::CallerNotInAllowlist);
         }
         let current_bal = env
             .storage()
@@ -452,23 +496,9 @@ impl CalloraVault {
     ) -> Result<(), VaultError> {
         caller.require_auth();
 
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap_or_else(|| panic!("Authorized caller not set"));
+        // Shared validation — same function simulate_deduct calls.
+        Self::validate_deduct(&env, &caller, amount)?;
 
-        if caller != auth_caller {
-            return Err(VaultError::Unauthorized);
-        }
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::Paused);
-        }
         let settlement_addr = Self::require_settlement(&env)?;
         let usdc_addr = env
             .storage()
@@ -476,25 +506,11 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        if current_bal < amount {
-            return Err(VaultError::InsufficientBalance);
-        }
 
         // Idempotency guard: reject a replayed request id *before* mutating the
         // tracked balance, forwarding USDC, or emitting events. A non-zero id
@@ -564,7 +580,8 @@ impl CalloraVault {
     /// `Ok(())` on success.
     ///
     /// ### Errors
-    /// - [`VaultError::Unauthorized`] — caller is not the authorized deduct caller.
+    /// - [`VaultError::Unauthorized`] — caller is neither the authorized deduct
+    ///   caller nor the vault owner.
     /// - [`VaultError::Paused`] — vault is paused.
     /// - [`VaultError::BatchEmpty`] — `items` is empty.
     /// - [`VaultError::BatchTooLarge`] — `items.len() > MAX_BATCH_SIZE`.
@@ -587,15 +604,10 @@ impl CalloraVault {
         caller.require_auth();
 
         // Authorization and lifecycle preconditions — checked before mutation.
-        let auth_caller = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::AuthorizedCaller)
-            .unwrap_or_else(|| panic!("Authorized caller not set"));
+        // Same owner-or-caller rule as `deduct`; without this a cleared
+        // authorized caller panicked instead of falling back to the owner.
+        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
 
-        if caller != auth_caller {
-            return Err(VaultError::Unauthorized);
-        }
         if env
             .storage()
             .instance()
@@ -799,12 +811,6 @@ impl CalloraVault {
     //     Ok(running)
     // }
 
-    // pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
-    //     env.storage()
-    //         .instance()
-    //         .set(&DataKey::Depositor(depositor), &true);
-    // }
-
     /// Update the address permitted to call [`deduct`] and [`batch_deduct`] (owner only).
     ///
     /// The owner must call this function to rotate the authorized caller.
@@ -850,11 +856,14 @@ impl CalloraVault {
             }
         }
 
-        let old_caller: Option<Address> = env.storage().instance().get(&DataKey::AuthorizedCaller);
+        let old_caller = Self::get_authorized_caller(&env);
 
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedCaller, &new_caller);
+        // Setting stores a plain `Address`; clearing removes the key entirely so
+        // the value never round-trips through `ScVal::Void`.
+        match new_caller {
+            Some(ref caller) => env.storage().instance().set(&DataKey::AuthorizedCaller, caller),
+            None => env.storage().instance().remove(&DataKey::AuthorizedCaller),
+        }
 
         // Advance nonce.
         let next_nonce = stored_nonce.checked_add(1).ok_or(VaultError::Overflow)?;
@@ -1491,6 +1500,14 @@ impl CalloraVault {
         result
     }
 
+    /// Return the recorded WASM hash after a successful upgrade, if any.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, BytesN<32>>(&StorageKey::ContractVersion)
+    }
+
     /// Require the caller to be the current admin.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), VaultError> {
         caller.require_auth();
@@ -1753,11 +1770,14 @@ impl CalloraVault {
         let window = timelock::get_timelock_window(&env);
         let execute_after = timelock::saturating_deadline(proposed_at, window)
             .ok_or(VaultError::TimelockOverflow)?;
+        let expires_at = timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
+            .ok_or(VaultError::TimelockOverflow)?;
         timelock::set_pending_pause(
             &env,
             &timelock::PendingPause {
                 proposed_at,
                 execute_after,
+                expires_at,
             },
         );
         env.events().publish(
@@ -1801,6 +1821,11 @@ impl CalloraVault {
         let proposal = timelock::get_pending_pause(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
+        }
+        if env.ledger().timestamp() > proposal.expires_at {
+            timelock::clear_pending_pause(&env);
+            Self::bump_instance_ttl(&env);
+            return Err(VaultError::ProposalExpired);
         }
 
         // Idempotent: if the vault is already paused (e.g. from a prior
@@ -1909,12 +1934,15 @@ impl CalloraVault {
         let window = timelock::get_timelock_window(&env);
         let execute_after = timelock::saturating_deadline(proposed_at, window)
             .ok_or(VaultError::TimelockOverflow)?;
+        let expires_at = timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
+            .ok_or(VaultError::TimelockOverflow)?;
         timelock::set_pending_upgrade(
             &env,
             &timelock::PendingUpgrade {
                 wasm_hash: new_wasm_hash.clone(),
                 proposed_at,
                 execute_after,
+                expires_at,
             },
         );
         env.events().publish(
@@ -1957,6 +1985,11 @@ impl CalloraVault {
         let proposal = timelock::get_pending_upgrade(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
+        }
+        if env.ledger().timestamp() > proposal.expires_at {
+            timelock::clear_pending_upgrade(&env);
+            Self::bump_instance_ttl(&env);
+            return Err(VaultError::ProposalExpired);
         }
         admin::guard(&env, Symbol::new(&env, "upgrade"))?;
         let wasm_hash = proposal.wasm_hash.clone();
@@ -2039,6 +2072,8 @@ impl CalloraVault {
         let window = timelock::get_timelock_window(&env);
         let execute_after = timelock::saturating_deadline(proposed_at, window)
             .ok_or(VaultError::TimelockOverflow)?;
+        let expires_at = timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
+            .ok_or(VaultError::TimelockOverflow)?;
         timelock::set_pending_sweep(
             &env,
             &timelock::PendingSweep {
@@ -2046,6 +2081,7 @@ impl CalloraVault {
                 amount,
                 proposed_at,
                 execute_after,
+                expires_at,
             },
         );
         env.events().publish(
@@ -2089,6 +2125,11 @@ impl CalloraVault {
         let proposal = timelock::get_pending_sweep(&env).ok_or(VaultError::ProposalNotFound)?;
         if env.ledger().timestamp() < proposal.execute_after {
             return Err(VaultError::TimelockNotExpired);
+        }
+        if env.ledger().timestamp() > proposal.expires_at {
+            timelock::clear_pending_sweep(&env);
+            Self::bump_instance_ttl(&env);
+            return Err(VaultError::ProposalExpired);
         }
         let usdc_addr: Address = env
             .storage()
@@ -2198,13 +2239,31 @@ impl CalloraVault {
     }
 
     #[inline(never)]
+    /// Read the authorized deduct caller, if one is set.
+    ///
+    /// The value is stored as a plain `Address`; the key is absent when no
+    /// caller is configured. `None` must never be written as a value, because
+    /// `ScVal::Void` does not read back as `Option<Address>` and would abort the
+    /// host call (issue #1107).
+    pub(crate) fn get_authorized_caller(env: &Env) -> Option<Address> {
+        if env.storage().instance().has(&DataKey::AuthorizedCaller) {
+            env.storage()
+                .instance()
+                .get::<_, Address>(&DataKey::AuthorizedCaller)
+        } else {
+            None
+        }
+    }
+
+    /// Owner-or-caller check shared by [`CalloraVault::deduct`] and
+    /// [`CalloraVault::batch_deduct`]. The owner may always deduct; when an
+    /// authorized caller is configured it may deduct too.
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
         let owner = Self::get_owner(env.clone());
         if *caller == owner {
             return Ok(());
         }
-        let auth_caller: Option<Address> = env.storage().instance().get(&DataKey::AuthorizedCaller);
-        if let Some(ac) = auth_caller {
+        if let Some(ac) = Self::get_authorized_caller(&env) {
             if *caller == ac {
                 return Ok(());
             }
@@ -2314,11 +2373,41 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Check whether an address is on the deposit allowlist.
+    /// Single source of truth for the deposit authorization gate.
     ///
-    /// Returns `true` if the address has been added via [`add_address`],
-    /// `false` otherwise.  Note that the owner may always deposit regardless
-    /// of the allowlist — this view only reflects the explicit allowlist.
+    /// Returns `true` iff `caller` is the vault owner or is present in the
+    /// `StorageKey::AllowedDepositors` vector — precisely the predicate
+    /// [`CalloraVault::deposit`] enforces and
+    /// [`CalloraVault::is_authorized_depositor`] reports.  Both call sites
+    /// share this helper so the view and the mutating path can never drift
+    /// apart (issue #1110).
+    ///
+    /// A vault that has not been initialized has neither an owner nor an
+    /// allowlist, so this returns `false`.
+    fn allowlist_allows(env: &Env, caller: &Address) -> bool {
+        let owner: Option<Address> = env.storage().instance().get(&DataKey::Owner);
+        if owner.as_ref() == Some(caller) {
+            return true;
+        }
+        env.storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .map(|allowlist| allowlist.contains(caller))
+            .unwrap_or(false)
+    }
+
+    /// Check whether an address is authorized to deposit.
+    ///
+    /// Returns `true` if the address is the vault owner **or** has been added
+    /// to the deposit allowlist via [`add_address`]; `false` otherwise.  This
+    /// is exactly the authorization gate [`deposit`] applies, so a successful
+    /// pre-check through this view predicts deposit acceptance along the
+    /// caller dimension — the vault can still reject a deposit for unrelated
+    /// reasons such as pause state or an amount below `min_deposit`.
+    ///
+    /// The owner counts as authorized even when the allowlist is empty or has
+    /// been cleared with [`clear_all`] (mirroring `deposit`'s owner bypass).
+    /// Returns `false` before `init`.
     ///
     /// No auth required; this is a read-only view.
     ///
@@ -2326,13 +2415,10 @@ impl CalloraVault {
     /// - `caller` — address to check.
     ///
     /// ### Returns
-    /// `true` if the address is on the deposit allowlist.
+    /// `true` if `caller` is the owner or is on the deposit allowlist.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
         Self::bump_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Depositor(caller))
-            .unwrap_or(false)
+        Self::allowlist_allows(&env, &caller)
     }
 
     /// Add a single address to the deposit allowlist (owner-only).
@@ -2377,6 +2463,68 @@ impl CalloraVault {
 
         env.events()
             .publish((events::event_allowlist_add(&env), events::event_version_v1(&env), caller, depositor), ());
+
+        Ok(())
+    }
+
+    /// Remove a single address from the deposit allowlist (owner-only).
+    ///
+    /// If the address is **not** in the allowlist the call succeeds without
+    /// modifying state or emitting an event (idempotent). All other entries
+    /// in the allowlist are preserved unchanged.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the vault owner (verified via `require_owner`).
+    /// - `depositor` — Address to remove from the allowlist.
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or `VaultError::Unauthorized` if caller is not owner.
+    ///
+    /// # Events
+    /// Emits `("allowlist_remove", "callora_v1", caller, depositor)` only when
+    /// the address was actually present and removed. No event is emitted when
+    /// the address was not in the list.
+    pub fn remove_address(env: Env, caller: Address, depositor: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+
+        let allowlist = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        // Find the index of the address; if absent return success without
+        // touching storage or emitting an event (idempotent).
+        let mut found_index: Option<u32> = None;
+        for (i, addr) in allowlist.iter().enumerate() {
+            if addr == depositor {
+                found_index = Some(i as u32);
+                break;
+            }
+        }
+
+        let idx = match found_index {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+
+        // Build a new list with the target address removed.
+        let mut new_list: Vec<Address> = Vec::new(&env);
+        for (i, addr) in allowlist.iter().enumerate() {
+            if i as u32 != idx {
+                new_list.push_back(addr);
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::AllowedDepositors, &new_list);
+
+        env.events().publish(
+            (events::event_allowlist_remove(&env), events::event_version_v1(&env), caller, depositor),
+            (),
+        );
 
         Ok(())
     }
@@ -2554,9 +2702,13 @@ pub mod limits;
 pub mod rate_limit;
 pub mod rescue;
 
-// #[cfg(test)]
-// #[path = "../proofs/deduct.rs"]
-// mod deduct_proofs;
+/// Formal verification harnesses (compiled only under `cargo kani`).
+#[cfg(kani)]
+mod kani_proofs;
+
+#[cfg(any(kani, test))]
+#[path = "../proofs/deduct.rs"]
+mod deduct_proofs;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -2616,6 +2768,42 @@ mod test_event_schema;
 mod test_timelock_cooldown;
 #[cfg(test)]
 mod test_admin_transfers;
+
+/// Allowlist ↔ deposit authorization parity (issue #1110): the
+/// `is_authorized_depositor` view and the `deposit` gate must consult the
+/// same storage, so a pre-check through the view predicts deposit acceptance.
+#[cfg(test)]
+mod test_allowlist;
+
+/// Issue #1107 — owner-deduction fallback. The owner may `deduct` /
+/// `batch_deduct` when `DataKey::AuthorizedCaller` is `None` (or holds someone
+/// else), and an unauthorized caller gets a typed error rather than a host
+/// panic.
+#[cfg(test)]
+mod test_owner_deduct_fallback;
+
+#[cfg(test)]
+mod test_timelock;
+
+#[cfg(test)]
+mod test_capabilities;
+
+#[cfg(test)]
+mod test_allowlist_remove;
+
+/// Parity tests for `simulate_deduct` vs `deduct` (Issue #1115).
+/// Run with: `cargo test -p callora-vault simulate`
+#[cfg(test)]
+mod test_simulate_parity;
+
+#[cfg(test)]
+mod test_views;
+
+#[cfg(test)]
+mod test_reentrancy;
+
+#[cfg(test)]
+mod test;
 
 // #[cfg(test)]
 // mod test_gas_budget;
