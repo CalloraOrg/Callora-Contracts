@@ -826,7 +826,7 @@ mod settlement {
     }
 
     // -----------------------------------------------------------------------
-    // accept_vault — pending vault or admin
+    // accept_vault — pending vault only (#1141: admin cannot self-accept)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -840,13 +840,13 @@ mod settlement {
     }
 
     #[test]
-    fn accept_vault_admin_succeeds() {
+    fn accept_vault_admin_rejected() {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
-        assert!(ctx.settlement.try_accept_vault(&ctx.admin).is_ok());
+        assert!(ctx.settlement.try_accept_vault(&ctx.admin).is_err());
     }
 
     #[test]
