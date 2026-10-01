@@ -10,8 +10,10 @@ pub fn event_init(env: &Env) -> Symbol {
 
 /// Returns the Symbol for the `"admin_changed"` event topic.
 ///
-/// Emitted during `set_admin` alongside `admin_transfer_started` to record the
-/// before/after admin intent for indexers and audit trails.
+/// Emitted by `accept_admin` (step 2 of the two-step rotation) once the admin
+/// slot has been updated, carrying `(previous_admin, new_admin)` so indexers
+/// record the change only when it actually happens. It is deliberately not
+/// published by `set_admin`, which only nominates a successor.
 pub fn event_admin_changed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_changed")
 }
@@ -105,9 +107,10 @@ pub fn event_batch_distribute_completed(env: &Env) -> Symbol {
     Symbol::new(env, "batch_distribute_completed")
 }
 
-/// Returns the Symbol for the canonical event version marker used by Callora.
+/// Returns the canonical event version marker. Symbols require underscores,
+/// so the schema uses `callora_v1` rather than the invalid `callora.v1`.
 pub fn event_version_v1(env: &Env) -> Symbol {
-    Symbol::new(env, "callora.v1")
+    Symbol::new(env, "callora_v1")
 }
 
 #[cfg(test)]
