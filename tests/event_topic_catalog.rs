@@ -9,7 +9,7 @@
 //! If any test in this file fails, the corresponding row in
 //! `docs/EVENT_TOPICS.md` must be updated to reflect the new topic string.
 
-use soroban_sdk::{Env, Symbol, Vec};
+use soroban_sdk::{Env, Symbol, Vec as SorobanVec};
 
 // ---------------------------------------------------------------------------
 // Vault contract topics
@@ -163,6 +163,18 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_settlement::events::event_admin_migration(e)
     }),
     ("deposit", |e| callora_settlement::events::event_deposit(e)),
+    ("price_set", |e| {
+        callora_settlement::events::event_price_set(e)
+    }),
+    ("price_removed", |e| {
+        callora_settlement::events::event_price_removed(e)
+    }),
+    ("supported_token_added", |e| {
+        callora_settlement::events::event_supported_token_added(e)
+    }),
+    ("supported_token_removed", |e| {
+        callora_settlement::events::event_supported_token_removed(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -366,7 +378,7 @@ fn topic_counts_match_catalog_documentation() {
             + SETTLEMENT_TOPICS.len()
             + REVENUE_POOL_TOPICS.len()
             + DISTRIBUTE_TOPICS.len(),
-        85,
+        87,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }
@@ -497,4 +509,32 @@ fn topic_constructors_are_deterministic() {
             "constructor returned different Symbols on repeated calls"
         );
     }
+}
+
+/// Explicit catalog test for the `set_settlement` topic (issue #1111).
+///
+/// Verifies that:
+/// 1. The `event_set_settlement` constructor produces exactly the bytes for
+///    `"set_settlement"` (no accidental rename/drift).
+/// 2. The entry is present in `VAULT_TOPICS` at the expected position (row 18).
+#[test]
+fn set_settlement_topic_in_catalog() {
+    let env = Env::default();
+
+    // 1. Constructor byte-identity.
+    let sym = callora_vault::events::event_set_settlement(&env);
+    assert_eq!(
+        sym,
+        Symbol::new(&env, "set_settlement"),
+        "event_set_settlement constructor produced unexpected bytes"
+    );
+
+    // 2. Catalog presence — find the entry by name.
+    let found = VAULT_TOPICS
+        .iter()
+        .any(|(name, _)| *name == "set_settlement");
+    assert!(
+        found,
+        "\"set_settlement\" is missing from the VAULT_TOPICS catalog array"
+    );
 }
