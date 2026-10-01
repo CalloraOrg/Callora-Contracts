@@ -1,0 +1,37 @@
+
+# 2026-07-26 21:31:58.106182
++n
+
+# 2026-07-26 21:33:01.994851
++Description
++This is a smart-contract issue for the GrantFox FWC26 campaign (Stellar Wave). u64 bitmap of supported features on yield so clients can detect capability deltas.
++
++Requirements and Context
++Implement per the description above
++Add focused tests for the change
++Document any API/visible changes
++Adhere to repo's lint and code style
++Must be secure, tested, and documented
++Suggested Execution
++Fork the repo and create a branch
++Implement changes:
++contracts/yield/src/views.rs
++Test and commit; open a PR with Closes #744 in the body
++Guidelines
++Minimum 95% test coverage with cargo test
++require_auth on every state-changing entrypoint
++Overflow-safe math; no unwrap() in production paths
++Clear NatSpec-style /// rustdoc
++Timeframe: 96 hours
+
+# 2026-07-26 21:33:56.760591
++create the file
+
+# 2026-07-26 21:34:01.545578
++y
+
+# 2026-07-26 21:34:16.876960
++/git push
+
+# 2026-07-26 21:35:33.640653
++/exit

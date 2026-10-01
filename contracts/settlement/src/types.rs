@@ -1,14 +1,16 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// The maximum message length in bytes allowed for `broadcast` calls.
-pub const MAX_MESSAGE_LEN: u32 = 256;
+/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
 
-/// Maximum number of items allowed in a single `batch_receive_payment` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
+/// Number of ledgers to extend instance storage TTL by (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
-/// Maximum number of developer balance records returned in a single
-/// non-cursor-based query (gas guard).
-pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
+/// Minimum threshold of remaining ledgers before persistent storage TTL is extended.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
+
+/// Number of ledgers to extend persistent storage TTL by.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
 
 /// Persistent storage keys for settlement contract.
 ///
@@ -20,6 +22,8 @@ pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
+    HighWaterMark(Address),
+    PoolHighWaterMark,
     Vault,
     PendingAdmin,
     PendingVault,
@@ -45,6 +49,51 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    /// Cumulative total of every amount ever credited via `receive_payment` /
+    /// `batch_receive_payment`, regardless of routing (pool or developer).
+    TotalReceived,
+    /// Whether a specific developer's withdrawals are frozen.
+    FrozenDeveloper(Address),
+    /// Per-admin last write ledger for price registry rate limiting.
+    PriceRegistryLastWrite(Address),
+    /// Price entry for a given offering identifier.
+    Price(soroban_sdk::String),
+    /// Pending timelocked WASM upgrade proposal.
+    PendingUpgrade,
+    /// Whether a token contract is accepted for settlement payments.
+    SupportedToken(Address),
+    /// Whether the configured-USDC allowlist backfill has run.
+    SupportedTokensMigrated,
+    /// Persistent replay marker for an accounting-only vault deduction.
+    DeductionRequest(u64),
+}
+
+/// Accounting-only deduction recorded; does not imply a token transfer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeductionRecordedEvent {
+    pub amount: i128,
+    pub request_id: u64,
+}
+
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -62,6 +111,26 @@ pub enum Severity {
 pub struct AdminBroadcast {
     pub severity: Severity,
     pub message: soroban_sdk::String,
+}
+
+/// Storage TTL policy entry for a given storage key category.
+///
+/// Retained for ABI compatibility with the off-chain tooling that consumes the
+/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
+/// measurement: contract code cannot observe the remaining TTL of a ledger
+/// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence — see
+/// `docs/STORAGE_TTL_DOCTOR.md`. The revenue pool exposes policy constants only
+/// via `get_ttl_policy` (`callora_revenue_pool::TtlPolicy`).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct StorageEntryTtl {
+    pub category: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
+    pub storage_type: soroban_sdk::String,
+    pub ttl: u32,
+    pub threshold: u32,
+    pub bump_amount: u32,
 }
 
 /// Developer balance record in settlement contract.
@@ -142,6 +211,15 @@ pub struct BalanceCreditedEvent {
     pub token: Address,
 }
 
+/// Emitted when a deposit is made for a developer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DepositEvent {
+    pub developer: Address,
+    pub token: Address,
+    pub amount: i128,
+}
+
 /// Emitted when a new vault address is proposed via `propose_vault()`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -186,6 +264,7 @@ pub struct DeveloperForceCreditedEvent {
     pub amount: i128,
     pub reason: Symbol,
     pub new_balance: i128,
+    pub token: Address,
 }
 
 /// Emitted when the admin proposes or executes a timelock'd developer balance
@@ -197,4 +276,21 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
+}
+
+/// Emitted when the admin proposes a timelocked WASM upgrade.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposedEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+}
+
+/// Emitted when a pending WASM upgrade is cancelled by the admin.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeCancelledEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub cancelled_at: u64,
 }

@@ -26,6 +26,8 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Install Rust stable toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       # -----------------------------------------------------------------------
       # 3. Cache — speeds up subsequent runs considerably
@@ -51,6 +53,9 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-tarpaulin
+
+      - name: Build settlement WASM for tests
+        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       # -----------------------------------------------------------------------
       # 5. Run coverage

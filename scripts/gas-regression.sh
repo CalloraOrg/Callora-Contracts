@@ -45,12 +45,28 @@ cargo build --workspace 2>&1 | tail -5
 log "Running gas measurement tests..."
 mkdir -p "${REPO_ROOT}/target"
 
+# Harvest callora-vault gas budget metrics
 cargo test -p callora-vault -- gas_budget --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   > "${MEASUREMENTS_PATH}" || true
 
+# Harvest callora-allowlist gas snapshot metrics (appended to same file)
+cargo test -p callora-allowlist -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
+# Harvest callora-limits gas snapshot metrics (appended to same file)
+cargo test -p callora-limits -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
+# Harvest callora-cold gas snapshot metrics (appended to same file)
+cargo test -p callora-cold -- gas_budget --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
 if [[ ! -s "${MEASUREMENTS_PATH}" ]]; then
-  err "No gas measurements found."
+  err "No gas measurements found. Ensure gas_budget (callora-vault), gas_snap (callora-allowlist), gas_snap (callora-limits), and gas_budget (callora-cold) tests emit JSON lines."
   exit 2
 fi
 

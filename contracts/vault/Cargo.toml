@@ -5,13 +5,15 @@ edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
+callora-validators = { path = "../validators" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
 callora-settlement = { path = "../settlement" }
+callora-revenue-pool = { path = "../revenue_pool" }

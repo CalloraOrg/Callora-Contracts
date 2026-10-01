@@ -74,7 +74,6 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
     let dev = Address::generate(&env);
-    let token = Address::generate(&env);
 
     let addr = env.register(CalloraSettlement, ());
     let client = CalloraSettlementClient::new(&env, &addr);
@@ -114,11 +113,12 @@ fn test_pagination_fewer_than_limit() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     // 5 developers
     for _ in 0..5 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     // limit 10
@@ -137,12 +137,13 @@ fn test_pagination_exactly_limit() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     // 10 developers
     let mut devs = soroban_sdk::Vec::new(&env);
     for _ in 0..10 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev.clone()), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev.clone()), &token, &1u32);
         devs.push_back(dev);
     }
 
@@ -168,11 +169,12 @@ fn test_pagination_more_than_limit() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     // 15 developers
     for _ in 0..15 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     // Page 1: limit 10
@@ -196,10 +198,11 @@ fn test_pagination_stable_ordering() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     for _ in 0..8 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     let (p1_run1, cursor1_run1) =
@@ -247,10 +250,11 @@ fn test_pagination_invalid_cursor() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     for _ in 0..5 {
         let dev = Address::generate(&env);
-        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token);
+        client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
     let invalid_cursor = Some(Address::generate(&env));
@@ -258,4 +262,58 @@ fn test_pagination_invalid_cursor() {
         client.get_developer_balances_cursor(&admin, &invalid_cursor, &10u32, &token);
     assert_eq!(page.len(), 0);
     assert!(next_cursor.is_none());
+}
+
+#[test]
+fn test_minimum_balance_aliases_are_exposed_and_persisted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+
+    client.init(&admin, &vault);
+
+    client.set_minimum_balance(&admin, &dev, &150i128);
+    assert_eq!(client.get_minimum_balance(&dev), 150i128);
+
+    client.set_developer_min_balance(&admin, &dev, &250i128);
+    assert_eq!(client.get_minimum_balance(&dev), 250i128);
+}
+
+#[test]
+fn test_get_withdrawal_today_resets_at_rollover_without_write() {
+    use crate::{DailyWithdrawState, StorageKey};
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(86_399);
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+    client.init(&admin, &vault);
+
+    // Manually inject state for day 0
+    let state = DailyWithdrawState {
+        day: 0,
+        amount: 500,
+    };
+    env.as_contract(&addr, || {
+        env.storage()
+            .persistent()
+            .set(&StorageKey::WithdrawalToday(dev.clone()), &state);
+    });
+
+    // Check value at 86_399
+    assert_eq!(client.get_withdrawal_today(&dev), 500i128);
+
+    // Advance to day 1
+    env.ledger().set_timestamp(86_400);
+
+    // View reports 0 seamlessly without write
+    assert_eq!(client.get_withdrawal_today(&dev), 0i128);
 }

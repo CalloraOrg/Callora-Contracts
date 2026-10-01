@@ -29,6 +29,31 @@ fn settlement_error_codes_are_stable_and_unique() {
         (21, SettlementError::TimelockNotExpired),
         (22, SettlementError::MigrationBalanceChanged),
         (23, SettlementError::OverDraft),
+        (24, SettlementError::InvalidClaimWindow),
+        (25, SettlementError::ClaimWindowClosed),
+        (26, SettlementError::MinBalanceViolation),
+        (27, SettlementError::ReplayDetected),
+        (28, SettlementError::BatchEmpty),
+        (29, SettlementError::BatchTooLarge),
+        (30, SettlementError::DeveloperFrozen),
+        (31, SettlementError::DeveloperNotFrozen),
+        (32, SettlementError::FreezeUnauthorized),
+        (33, SettlementError::WriteRateLimitExceeded),
+        (34, SettlementError::InvalidConfigDistinct),
+        (35, SettlementError::InvalidConfigAdminContract),
+        (36, SettlementError::InvalidConfigVaultContract),
+        (37, SettlementError::InvalidUsdcToken),
+        (38, SettlementError::InvalidRecipient),
+        (39, SettlementError::NoAdminTransferPending),
+        (40, SettlementError::InvalidVault),
+        (41, SettlementError::NoVaultRotationPending),
+        (42, SettlementError::BroadcastMessageTooLong),
+        (43, SettlementError::CrossTenantBatch),
+        (44, SettlementError::NoUpgradePending),
+        (45, SettlementError::ZeroWasmHash),
+        (46, SettlementError::UpgradeTimelockNotExpired),
+        (47, SettlementError::UnsupportedToken),
+        (48, SettlementError::DuplicateRequestId),
     ];
 
     let mut seen = BTreeSet::new();
@@ -40,7 +65,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 23);
+    assert_eq!(seen.len(), 48);
 }
 
 #[test]
@@ -70,6 +95,28 @@ fn error_code_docs_list_every_settlement_code() {
         "| 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |",
         "| 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |",
         "| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |",
+        "| 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |",
+        "| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |",
+        "| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |",
+        "| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |",
+        "| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |",
+        "| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |",
+        "| 30 | `DeveloperFrozen` | Settlement | Developer is frozen and cannot withdraw |",
+        "| 31 | `DeveloperNotFrozen` | Settlement | Developer is not frozen; cannot unfreeze |",
+        "| 32 | `FreezeUnauthorized` | Settlement | Caller is not authorized to freeze/unfreeze |",
+        "| 33 | `WriteRateLimitExceeded` | Settlement | Admin wrote prices too frequently |",
+        "| 34 | `InvalidConfigDistinct` | Settlement | Init config requires distinct admin and vault |",
+        "| 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |",
+        "| 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |",
+        "| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |",
+        "| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |",
+        "| 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |",
+        "| 40 | `InvalidVault` | Settlement | Vault address is invalid |",
+        "| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |",
+        "| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |",
+        "| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |",
+        "| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
+        "| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |",
     ];
 
     for line in expected_lines {

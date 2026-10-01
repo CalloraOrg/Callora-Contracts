@@ -31,6 +31,31 @@ use soroban_sdk::contracterror;
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
 /// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
+/// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
+/// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
+/// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
+/// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
+/// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
+/// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
+/// | 30   | DeveloperFrozen              | Developer is frozen and cannot withdraw              |
+/// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
+/// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
+/// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
+/// | 34   | InvalidConfigDistinct        | Init config requires distinct admin and vault        |
+/// | 35   | InvalidConfigAdminContract   | Init config forbids the admin being the contract     |
+/// | 36   | InvalidConfigVaultContract   | Init config forbids the vault being the contract     |
+/// | 37   | InvalidUsdcToken             | USDC token address is invalid                        |
+/// | 38   | InvalidRecipient             | Withdrawal recipient cannot be the contract          |
+/// | 39   | NoAdminTransferPending       | No admin transfer is pending                         |
+/// | 40   | InvalidVault                 | Vault address is invalid                             |
+/// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
+/// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
+/// | 43   | CrossTenantBatch             | Batch settlement mixes developers from different tenants |
+/// | 44   | NoUpgradePending             | No upgrade proposal is currently pending             |
+/// | 45   | ZeroWasmHash                 | Proposed WASM hash is all-zero (rejected)            |
+/// | 46   | UpgradeTimelockNotExpired    | Upgrade timelock delay has not yet elapsed           |
+/// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
+/// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -60,4 +85,38 @@ pub enum SettlementError {
     OverDraft = 23,
     InvalidClaimWindow = 24,
     ClaimWindowClosed = 25,
+    MinBalanceViolation = 26,
+    ReplayDetected = 27,
+    BatchEmpty = 28,
+    BatchTooLarge = 29,
+    /// Developer is frozen and cannot withdraw.
+    DeveloperFrozen = 30,
+    /// Developer is not frozen; cannot unfreeze.
+    DeveloperNotFrozen = 31,
+    /// Caller is not authorized to freeze/unfreeze developers.
+    FreezeUnauthorized = 32,
+    /// Admin attempted a price write before the minimum interval elapsed.
+    WriteRateLimitExceeded = 33,
+    InvalidConfigDistinct = 34,
+    InvalidConfigAdminContract = 35,
+    InvalidConfigVaultContract = 36,
+    InvalidUsdcToken = 37,
+    InvalidRecipient = 38,
+    NoAdminTransferPending = 39,
+    InvalidVault = 40,
+    NoVaultRotationPending = 41,
+    /// Admin broadcast message exceeds the maximum allowed length.
+    BroadcastMessageTooLong = 42,
+    /// Batch settlement mixes developers from different tenants.
+    CrossTenantBatch = 43,
+    /// No upgrade proposal is currently pending.
+    NoUpgradePending = 44,
+    /// Proposed WASM hash is all-zero bytes (rejected as invalid).
+    ZeroWasmHash = 45,
+    /// Upgrade timelock delay has not yet elapsed.
+    UpgradeTimelockNotExpired = 46,
+    /// Token is not enabled for settlement payments.
+    UnsupportedToken = 47,
+    /// Deduction request ID has already been recorded.
+    DuplicateRequestId = 48,
 }

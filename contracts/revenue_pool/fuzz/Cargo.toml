@@ -18,3 +18,9 @@ soroban-sdk = { version = "22", features = ["testutils"] }
 [profile.release]
 panic = "abort"
 overflow-checks = true
+
+[[bin]]
+name = "main"
+path = "targets/main.rs"
+test = false
+doc = false
