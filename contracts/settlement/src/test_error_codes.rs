@@ -48,7 +48,11 @@ fn settlement_error_codes_are_stable_and_unique() {
         (40, SettlementError::InvalidVault),
         (41, SettlementError::NoVaultRotationPending),
         (42, SettlementError::BroadcastMessageTooLong),
-        (43, SettlementError::UnsupportedToken),
+        (43, SettlementError::CrossTenantBatch),
+        (44, SettlementError::NoUpgradePending),
+        (45, SettlementError::ZeroWasmHash),
+        (46, SettlementError::UpgradeTimelockNotExpired),
+        (47, SettlementError::UnsupportedToken),
     ];
 
     let mut seen = BTreeSet::new();
@@ -60,7 +64,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 43);
+    assert_eq!(seen.len(), 47);
 }
 
 #[test]
@@ -109,7 +113,8 @@ fn error_code_docs_list_every_settlement_code() {
         "| 40 | `InvalidVault` | Settlement | Vault address is invalid |",
         "| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |",
         "| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |",
-        "| 43 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
+        "| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |",
+        "| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
     ];
 
     for line in expected_lines {

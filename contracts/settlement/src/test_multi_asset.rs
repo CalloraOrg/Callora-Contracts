@@ -139,6 +139,8 @@ fn test_withdraw_asserts_token() {
     let (token_b, token_b_client, token_b_sac) = create_token(&env, &admin);
 
     client.init(&admin, &vault);
+    client.add_supported_token(&admin, &token_a);
+    client.add_supported_token(&admin, &token_b);
 
     // Credit both tokens to developer
     client.receive_payment(
