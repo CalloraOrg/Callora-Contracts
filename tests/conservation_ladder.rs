@@ -193,6 +193,7 @@ fn run_trace(seed: u64) {
                     &true,
                     &None::<Address>,
                     &h.usdc_id,
+                    &1u32,
                 );
                 trace.push(step, std::format!("deduct {amount}"));
             }
@@ -214,6 +215,7 @@ fn run_trace(seed: u64) {
                     &true,
                     &None::<Address>,
                     &h.usdc_id,
+                    &1u32,
                 );
                 trace.push(step, std::format!("batch_deduct [{a1}, {a2}]"));
             }

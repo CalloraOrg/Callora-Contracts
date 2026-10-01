@@ -169,26 +169,16 @@ fn e2e_full_cycle() {
     h.vault.deduct(
         &h.backend,
         &single_deduct_amount,
-        &Some(Symbol::new(&env, "req_single_1")),
-        &u16::MAX,
+        &1u64,
     );
 
     let batch_items = vec![
         &env,
-        callora_vault::DeductItem {
-            amount: 5_000_000,
-            request_id: Some(Symbol::new(&env, "req_batch_1")),
-        },
-        callora_vault::DeductItem {
-            amount: 7_500_000,
-            request_id: Some(Symbol::new(&env, "req_batch_2")),
-        },
-        callora_vault::DeductItem {
-            amount: 2_500_000,
-            request_id: None, // no idempotency tracking for this leg
-        },
+        (5_000_000, 2u64),
+        (7_500_000, 3u64),
+        (2_500_000, 0u64), // no idempotency tracking for this leg
     ];
-    let batch_total: i128 = batch_items.iter().map(|i| i.amount).sum();
+    let batch_total: i128 = batch_items.iter().map(|(a, _)| *a).sum();
     h.vault.batch_deduct(&h.backend, &batch_items);
 
     let total_deducted = single_deduct_amount + batch_total;
@@ -209,9 +199,8 @@ fn e2e_full_cycle() {
     // move any funds — re-assert conservation after the rejected attempt.
     let dup_result = h.vault.try_deduct(
         &h.backend,
-        &1,
-        &Some(Symbol::new(&env, "req_single_1")),
-        &u16::MAX,
+        &single_deduct_amount,
+        &1u64,
     );
     assert!(dup_result.is_err(), "duplicate request_id must be rejected");
     assert_eq!(h.vault.balance(), deposit_amount - total_deducted);
@@ -253,7 +242,7 @@ fn e2e_full_cycle() {
     h.settlement.set_usdc_token(&h.owner, &h.usdc_id);
     let dev_a_withdraw: i128 = 1_500_000;
     h.settlement
-        .withdraw_developer_balance(&h.dev_a, &dev_a_withdraw, &h.usdc_id);
+        .withdraw_developer_balance(&h.dev_a, &dev_a_withdraw, &None::<Address>);
 
     assert_eq!(
         h.settlement.get_developer_balance(&h.dev_a, &h.usdc_id),
@@ -306,7 +295,7 @@ fn e2e_full_cycle() {
         "deposit must be blocked while paused"
     );
 
-    let blocked_deduct = h.vault.try_deduct(&h.backend, &1_000, &None, &u16::MAX);
+    let blocked_deduct = h.vault.try_deduct(&h.backend, &1_000, &0u64);
     assert!(
         blocked_deduct.is_err(),
         "deduct must be blocked while paused"
