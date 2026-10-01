@@ -483,29 +483,24 @@ fn guardian_can_enter_emergency_pause_but_only_admin_can_recover() {
 }
 
 #[test]
-fn emergency_pause_blocks_drain_execution_but_allows_cancellation() {
+fn emergency_pause_allows_drain_execution_but_keeps_distributions_blocked() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(1_700_000_000);
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
     let (pool, client) = init_pool(&env, &admin, &usdc_address);
     fund_pool(&usdc_admin, &pool, 10_000);
 
-    client.propose_emergency_drain(&admin, &treasury, &5_000);
-    env.ledger()
-        .set_timestamp(1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS);
     client.emergency_pause(&admin);
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    env.ledger().set_timestamp(1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS);
 
-    assert_eq!(
-        client.try_execute_emergency_drain(&admin),
-        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
-    );
-    assert!(client.get_pending_emergency_drain().is_some());
-
-    client.cancel_emergency_drain(&admin);
+    assert_eq!(client.try_execute_emergency_drain(&admin), Ok(Ok(())));
     assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(usdc_client.balance(&treasury), 5_000);
+    assert!(client.is_emergency_paused());
 }
 
 #[test]

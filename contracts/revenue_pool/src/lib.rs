@@ -478,8 +478,8 @@ impl RevenuePool {
     /// Activate recovery-only emergency mode.
     ///
     /// The admin or configured pause guardian may call. Once active, normal
-    /// sensitive mutations fail closed; only admin recovery and drain
-    /// cancellation remain available.
+    /// sensitive mutations fail closed; admin recovery and the timelocked
+    /// emergency drain lifecycle remain available.
     ///
     /// # Errors
     /// * [`RevenuePoolError::Unauthorized`] - caller is neither admin nor guardian.
@@ -1018,7 +1018,6 @@ impl RevenuePool {
     /// [`PendingEmergencyDrain`] snapshot as data.
     pub fn propose_emergency_drain(env: Env, caller: Address, treasury: Address, amount: i128) {
         caller.require_auth();
-        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if amount <= 0 {
             env.panic_with_error(RevenuePoolError::AmountNotPositive);
@@ -1069,7 +1068,6 @@ impl RevenuePool {
     /// `(to, amount, proposed_at, executed_at)` as data.
     pub fn execute_emergency_drain(env: Env, caller: Address) {
         caller.require_auth();
-        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
 
         let inst = env.storage().instance();
