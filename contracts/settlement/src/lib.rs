@@ -907,7 +907,7 @@ impl CalloraSettlement {
         cap: i128,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone()).ok_or(SettlementError::NotInitialized)?;
+        let current_admin = Self::get_admin(env.clone())?;
         if caller != current_admin {
             return Err(SettlementError::Unauthorized);
         }
