@@ -2,10 +2,11 @@
 //!
 //! Coverage targets: cooldown configuration bounds, per-action isolation,
 //! window enforcement across ledger time, auth/authorization gating, the
-//! two-step admin rotation, and the read-only views.
+//! two-step admin rotation, signer rotation events, and the read-only views.
 
 use crate::admin::{DEFAULT_COOLDOWN_SECS, MAX_COOLDOWN_SECS, MIN_COOLDOWN_SECS};
 use crate::{CalloraHot, CalloraHotClient, HotError, ACTION_ROTATE};
+use soroban_sdk::testutils::Events as _;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env, Symbol};
 
@@ -228,6 +229,47 @@ fn test_per_action_isolation() {
 }
 
 #[test]
+fn test_rotate_signer_rejects_same_signer() {
+    let (_env, admin, signer, client) = setup(Some(60));
+    let res = client.try_rotate_signer(&admin, &signer);
+    assert_eq!(res, Err(Ok(HotError::SameSigner)));
+    assert_eq!(client.get_signer(), signer);
+}
+
+#[test]
+fn test_rotate_signer_emits_old_and_new_signer() {
+    let (env, admin, old_signer, client) = setup(Some(60));
+    let new_signer = Address::generate(&env);
+
+    client.rotate_signer(&admin, &new_signer);
+    assert_eq!(client.get_signer(), new_signer);
+
+    let events = env.events().all();
+    let (_, topics, data) = events.last().unwrap();
+    let topic: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(topic, Symbol::new(&env, "signer_rotated"));
+    let (emitted_old, emitted_new): (Address, Address) =
+        data.try_into_val(&env).unwrap();
+    assert_eq!(emitted_old, old_signer);
+    assert_eq!(emitted_new, new_signer);
+}
+
+#[test]
+fn test_rotate_signer_event_payload_matches_storage() {
+    let (env, admin, old_signer, client) = setup(Some(60));
+    let new_signer = Address::generate(&env);
+
+    client.rotate_signer(&admin, &new_signer);
+
+    let events = env.events().all();
+    let (_, _, data) = events.last().unwrap();
+    let (emitted_old, emitted_new): (Address, Address) =
+        data.try_into_val(&env).unwrap();
+    assert_eq!(emitted_old, old_signer);
+    assert_eq!(emitted_new, client.get_signer());
+}
+
+#[test]
 fn test_shorter_cooldown_takes_effect_for_next_check() {
     let (env, admin, _signer, client) = setup(Some(1000));
     client.pause(&admin);
@@ -320,6 +362,58 @@ fn test_new_admin_controls_cooldown_after_rotation() {
     // New admin can.
     client.set_cooldown(&new_admin, &120);
     assert_eq!(client.get_cooldown(), 120);
+}
+
+// Cancel a pending admin transfer. Only the current admin may call.
+
+#[test]
+fn test_cancel_admin_transfer_happy_path() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let cancelled_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    // Set up a pending admin nomination.
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    // Cancel the pending nomination as the current admin.
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(client.get_pending_admin(), None);
+    // Current admin still the same.
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_cancel_admin_transfer_no_pending_rejected() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    // No pending admin exists; cancelling should return NoPendingAdmin.
+    let res = client.try_cancel_admin_transfer(&_admin);
+    assert_eq!(res, Err(Ok(HotError::NoPendingAdmin)));
+}
+
+#[test]
+fn test_cancel_admin_transfer_non_admin_rejected() {
+    let (env, _admin, _signer, client) = setup(Some(60));
+    let intruder = Address::generate(&env);
+    let res = client.try_cancel_admin_transfer(&intruder);
+    assert_eq!(res, Err(Ok(HotError::Unauthorized)));
+}
+
+// Cancelled nominees cannot accept the admin transfer.
+#[test]
+fn test_cancelled_admin_cannot_accept() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let new_admin = Address::generate(&env);
+
+    // Set up a pending admin nomination.
+    client.set_admin(&admin, &new_admin);
+
+    // Cancel the pending nomination.
+    client.cancel_admin_transfer(&admin);
+
+    // The former pending admin cannot accept (no pending exists).
+    let res = client.try_accept_admin(&new_admin);
+    assert_eq!(res, Err(Ok(HotError::NoPendingAdmin)));
 }
 
 // ===========================================================================
