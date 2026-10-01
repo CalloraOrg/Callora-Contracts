@@ -30,7 +30,10 @@ pub const MAX_BROADCAST_MESSAGE_LEN: u32 = 1024;
 
 pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
-pub use timelock::{PendingDeveloperMigration, DEVELOPER_MIGRATION_TIMELOCK_SECONDS};
+pub use timelock::{
+    PendingDeveloperMigration, PendingUpgrade, DEVELOPER_MIGRATION_TIMELOCK_SECONDS,
+    UPGRADE_TIMELOCK_SECONDS,
+};
 pub use types::*;
 
 #[contract]
@@ -1269,22 +1272,138 @@ impl CalloraSettlement {
         events::emit_admin_broadcast(&env, &caller, AdminBroadcast { severity, message });
     }
 
-    /// Upgrade the contract to a new WASM hash (admin only).
+    /// Propose a timelocked WASM upgrade (admin only).
+    ///
+    /// Records a [`PendingUpgrade`] snapshot containing `new_wasm_hash` and an
+    /// execution deadline of `now + UPGRADE_TIMELOCK_SECONDS` (48 h). A second
+    /// call replaces any existing proposal and restarts the delay.
+    ///
+    /// # Arguments
+    /// * `caller` - Must be the current admin; must authorize.
+    /// * `new_wasm_hash` - 32-byte WASM hash to install on execution. Must not
+    ///   be all-zero bytes.
+    ///
+    /// # Errors
+    /// * `Unauthorized` — caller is not the admin.
+    /// * `ZeroWasmHash` — all-zero `new_wasm_hash` is rejected.
+    /// * `TimelockOverflow` — `proposed_at + delay` overflows `u64`.
     ///
     /// # Events
-    /// Emits `upgraded` with the new WASM hash.
-    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+    /// Emits `upgrade_proposed` with the hash, `proposed_at`, and `execute_after`.
+    pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
+        // Reject zero hash (32 zero bytes) as an obviously invalid WASM address.
+        if new_wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            env.panic_with_error(SettlementError::ZeroWasmHash);
+        }
+        let proposed_at = env.ledger().timestamp();
+        let execute_after = proposed_at
+            .checked_add(UPGRADE_TIMELOCK_SECONDS)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::TimelockOverflow));
+        let proposal = timelock::PendingUpgrade {
+            wasm_hash: new_wasm_hash.clone(),
+            proposed_at,
+            execute_after,
+        };
+        timelock::set_pending_upgrade(&env, &proposal);
+        events::emit_upgrade_proposed(
+            &env,
+            &caller,
+            UpgradeProposedEvent {
+                wasm_hash: new_wasm_hash,
+                proposed_at,
+                execute_after,
+            },
+        );
+    }
+
+    /// Execute a matured WASM upgrade proposal (admin only).
+    ///
+    /// The admin must authorize independently of `propose_upgrade`. Exactly the
+    /// WASM hash recorded at proposal time is installed; the proposal is cleared
+    /// atomically to prevent replay.
+    ///
+    /// # Errors
+    /// * `Unauthorized` — caller is not the admin.
+    /// * `NoUpgradePending` — no proposal exists.
+    /// * `UpgradeTimelockNotExpired` — `execute_after` has not been reached.
+    ///
+    /// # Events
+    /// Emits `upgraded` with the installed WASM hash (existing event topic,
+    /// kept for consistency with `get_version` / off-chain indexers).
+    pub fn execute_upgrade(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone()).unwrap();
+        if caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        let proposal = timelock::get_pending_upgrade(&env)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::NoUpgradePending));
+        let now = env.ledger().timestamp();
+        if now < proposal.execute_after {
+            env.panic_with_error(SettlementError::UpgradeTimelockNotExpired);
+        }
+        // Consume the proposal before calling the deployer to prevent re-entry.
+        timelock::clear_pending_upgrade(&env);
         env.deployer()
-            .update_current_contract_wasm(new_wasm_hash.clone());
+            .update_current_contract_wasm(proposal.wasm_hash.clone());
         env.storage()
             .instance()
-            .set(&StorageKey::ContractVersion, &new_wasm_hash);
-        events::emit_upgraded(&env, &caller, &new_wasm_hash);
+            .set(&StorageKey::ContractVersion, &proposal.wasm_hash);
+        events::emit_upgraded(&env, &caller, &proposal.wasm_hash);
+    }
+
+    /// Cancel a pending upgrade proposal (admin only).
+    ///
+    /// # Errors
+    /// * `Unauthorized` — caller is not the admin.
+    /// * `NoUpgradePending` — no proposal exists.
+    ///
+    /// # Events
+    /// Emits `upgrade_cancelled` with the cancelled WASM hash and current timestamp.
+    pub fn cancel_upgrade(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone()).unwrap();
+        if caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        let proposal = timelock::get_pending_upgrade(&env)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::NoUpgradePending));
+        timelock::clear_pending_upgrade(&env);
+        events::emit_upgrade_cancelled(
+            &env,
+            &caller,
+            UpgradeCancelledEvent {
+                wasm_hash: proposal.wasm_hash,
+                cancelled_at: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    /// Return the pending upgrade proposal, or `None` if none is in progress.
+    ///
+    /// Read-only; no auth required. Bumps instance TTL on call.
+    pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgrade> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        timelock::get_pending_upgrade(&env)
+    }
+
+    /// Deprecated: alias for `propose_upgrade`.
+    ///
+    /// Retained for interface compatibility. Callers should migrate to
+    /// `propose_upgrade` + `execute_upgrade` for timelocked upgrades.
+    ///
+    /// # Events
+    /// Emits `upgrade_proposed` (not `upgraded`). The upgrade is **not**
+    /// applied immediately; call `execute_upgrade` after the delay.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        Self::propose_upgrade(env, caller, new_wasm_hash);
     }
 
     /// Return the WASM hash installed by the most recent `upgrade` call, or
@@ -1483,5 +1602,7 @@ mod test_multi_asset;
 mod test_overflow_safe_math;
 #[cfg(test)]
 mod test_ttl_bump;
+#[cfg(test)]
+mod test_upgrade_timelock;
 #[cfg(test)]
 mod test_views;

@@ -30,7 +30,8 @@ use crate::limits::MinBalanceChanged;
 use crate::types::{
     AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
     DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
-    GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
+    GlobalPool, PaymentReceivedEvent, UpgradeCancelledEvent, UpgradeProposedEvent,
+    VaultAcceptedEvent, VaultProposedEvent,
 };
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
@@ -306,7 +307,36 @@ pub fn event_metadata_removed(env: &Env) -> Symbol {
     Symbol::new(env, "metadata_removed")
 }
 
+/// Returns the Symbol for the `"price_set"` event topic.
+pub fn event_price_set(env: &Env) -> Symbol {
+    Symbol::new(env, "price_set")
+}
+
+/// Returns the Symbol for the `"price_removed"` event topic.
+pub fn event_price_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "price_removed")
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
+
+/// Emit `"price_set"` when an offering price is created or changed.
+pub fn emit_price_set(
+    env: &Env,
+    offering_id: &soroban_sdk::String,
+    old: Option<soroban_sdk::String>,
+    new: &soroban_sdk::String,
+) {
+    env.events().publish(
+        (event_price_set(env), offering_id.clone()),
+        (old, new.clone()),
+    );
+}
+
+/// Emit `"price_removed"` when an existing offering price is removed.
+pub fn emit_price_removed(env: &Env, offering_id: &soroban_sdk::String, old: &soroban_sdk::String) {
+    env.events()
+        .publish((event_price_removed(env), offering_id.clone()), old.clone());
+}
 
 /// Emit `"initialized"` once when the settlement contract is first set up.
 ///
@@ -664,6 +694,52 @@ pub fn emit_developer_min_balance_changed(
     );
 }
 
+// ─── Upgrade timelock events ─────────────────────────────────────────────────
+
+/// Returns the Symbol for the `"upgrade_proposed"` event topic.
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
+/// Emit `"upgrade_proposed"` when the admin proposes a timelocked WASM upgrade.
+///
+/// **What**: Records a pending WASM hash together with the execution deadline.
+///
+/// **How**: `env.events().publish()` with topic `(upgrade_proposed, caller)` and payload `UpgradeProposedEvent`.
+///
+/// **Why**: Lets off-chain watchers detect and verify an upcoming upgrade before it executes.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address proposing the upgrade.
+/// * `payload` - Structured proposal details.
+pub fn emit_upgrade_proposed(env: &Env, caller: &Address, payload: UpgradeProposedEvent) {
+    env.events()
+        .publish((event_upgrade_proposed(env), caller.clone()), payload);
+}
+
+/// Emit `"upgrade_cancelled"` when the admin cancels a pending upgrade proposal.
+///
+/// **What**: Records that a previously proposed WASM upgrade has been voided.
+///
+/// **How**: `env.events().publish()` with topic `(upgrade_cancelled, caller)` and payload `UpgradeCancelledEvent`.
+///
+/// **Why**: Audit trail confirming no upgrade took place for the cancelled hash.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address cancelling the proposal.
+/// * `payload` - Structured cancellation details.
+pub fn emit_upgrade_cancelled(env: &Env, caller: &Address, payload: UpgradeCancelledEvent) {
+    env.events()
+        .publish((event_upgrade_cancelled(env), caller.clone()), payload);
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -831,6 +907,24 @@ mod tests {
         assert_eq!(
             event_metadata_removed(&env),
             Symbol::new(&env, "metadata_removed")
+        );
+    }
+
+    #[test]
+    fn test_event_upgrade_proposed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_upgrade_proposed(&env),
+            Symbol::new(&env, "upgrade_proposed")
+        );
+    }
+
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_upgrade_cancelled(&env),
+            Symbol::new(&env, "upgrade_cancelled")
         );
     }
 }
