@@ -34,24 +34,26 @@
 ///
 /// ## Request-ID Idempotency
 ///
-/// `deduct` and `batch_deduct` accept an optional `request_id: Option<Symbol>`.
-/// When `Some(id)` is supplied the contract persists a processed-request marker
-/// in **temporary storage** and rejects any subsequent call that carries the same
-/// `request_id`, returning `VaultError::DuplicateRequestId`.
+/// `deduct` and `batch_deduct` accept a `request_id: u64` idempotency key.
+/// When a **non-zero** id is supplied the contract persists a processed-request
+/// marker and rejects any subsequent call that carries the same `request_id`,
+/// returning `VaultError::DuplicateRequestId`. The marker is written only after
+/// the deduction succeeds, so a replayed backend call is charged exactly once.
 ///
 /// This gives safe **at-least-once retry** semantics: a backend can replay a
 /// failed transaction with the same `request_id` and the contract will either
 /// succeed (first time) or return a deterministic error (duplicate).
 ///
-/// When `request_id` is `None` no deduplication is performed; the call is
-/// treated as a fire-and-forget deduction with no idempotency guarantee.
+/// `request_id == 0` is the documented **"no idempotency" sentinel**: no marker
+/// is written and the id is never deduplicated, so `0` may be reused on every
+/// call. Supply any non-zero id to obtain idempotency.
 ///
 /// ### Retention / TTL
 /// Processed-request markers live in persistent storage and are bumped to
 /// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct. The threshold
-/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are now
-/// persistent, they do not silently archive. To prevent state bloat, an owner
-/// can explicitly prune old markers using `prune_processed_requests`.
+/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are
+/// persistent, they do not silently archive; an owner can explicitly prune old
+/// markers using `prune_processed_requests` so an id can be reused.
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod admin;
@@ -86,8 +88,6 @@ pub enum DataKey {
     Paused,
     /// Pending owner address during a two-step ownership transfer.
     PendingOwner,
-    Depositor(Address),
-    AllowedDepositorsList,
 }
 
 /// Instance / persistent storage keys for the vault.
@@ -95,7 +95,7 @@ pub enum DataKey {
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     UsdcToken,
-    ProcessedRequest(Symbol),
+    ProcessedRequest(u64),
     ReserveCap(Address),
     DeveloperConfig(Address),
     DeveloperState(Address),
@@ -280,6 +280,11 @@ impl CalloraVault {
             return Err(VaultError::MinDepositExceedsMaxDeduct);
         }
 
+        let initial_balance_val = initial_balance.unwrap_or(0);
+        if initial_balance_val < 0 {
+            return Err(VaultError::InitialBalanceNegative);
+        }
+
         env.storage().instance().set(&DataKey::Owner, &owner);
         // The admin role defaults to the owner at initialization so the
         // timelocked lifecycle actions (pause / upgrade / sweep) and
@@ -291,10 +296,14 @@ impl CalloraVault {
             .set(&DataKey::UsdcToken, &usdc_token);
         env.storage()
             .instance()
-            .set(&DataKey::Balance, &initial_balance);
-        env.storage()
-            .instance()
-            .set(&DataKey::AuthorizedCaller, &authorized_caller);
+            .set(&DataKey::Balance, &initial_balance_val);
+            
+        if let Some(ac) = authorized_caller {
+            env.storage()
+                .instance()
+                .set(&DataKey::AuthorizedCaller, &ac);
+        }
+        
         env.storage()
             .instance()
             .set(&DataKey::MinDeposit, &min_dep_val);
@@ -312,7 +321,7 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Paused, &false);
 
         env.events()
-            .publish((events::event_init(&env), events::event_version_v1(&env), owner.clone()), initial_balance);
+            .publish((events::event_init(&env), events::event_version_v1(&env), owner.clone()), initial_balance_val);
         Ok(())
     }
 
@@ -360,21 +369,8 @@ impl CalloraVault {
             .get::<_, i128>(&DataKey::MinDeposit)
             .unwrap();
         Self::require_valid_deposit_amount(amount, min_dep)?;
-        let owner = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::Owner)
-            .unwrap();
-        if caller != owner {
-            let allowlist = env
-                .storage()
-                .instance()
-                .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
-                .unwrap_or_else(|| Vec::new(&env));
-
-            if !allowlist.contains(&caller) {
-                return Err(VaultError::CallerNotInAllowlist);
-            }
+        if !Self::allowlist_allows(&env, &caller) {
+            return Err(VaultError::CallerNotInAllowlist);
         }
         let current_bal = env
             .storage()
@@ -414,6 +410,8 @@ impl CalloraVault {
     /// - `caller` — address initiating the deduction.
     /// - `amount` — amount in USDC stroops; must be within `[min_deposit, max_deduct]`.
     /// - `request_id` — idempotency key forwarded to the settlement contract.
+    ///   A non-zero id is recorded and must be unique; `0` means "no
+    ///   idempotency" and is never deduplicated.
     ///
     /// ### Returns
     /// `Ok(())` on success.
@@ -483,6 +481,14 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
+        // Idempotency guard: reject a replayed request id *before* mutating the
+        // tracked balance, forwarding USDC, or emitting events. A non-zero id
+        // that has already been processed returns `DuplicateRequestId`;
+        // `request_id == 0` is the documented "no idempotency" sentinel.
+        if request_id != 0 {
+            Self::require_not_duplicate(&env, &request_id)?;
+        }
+
         let new_bal = current_bal
             .checked_sub(amount)
             .unwrap_or_else(|| panic!("Math underflow"));
@@ -502,6 +508,13 @@ impl CalloraVault {
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
         settlement_client.record_deduction(&amount, &request_id);
+
+        // Record the idempotency marker only after every state mutation and
+        // external call has succeeded. Any earlier failure reverts the whole
+        // transaction, so a failed deduct never marks its request id.
+        if request_id != 0 {
+            Self::mark_request_processed(&env, &request_id);
+        }
         Ok(())
     }
 
@@ -528,7 +541,9 @@ impl CalloraVault {
     /// ### Parameters
     /// - `caller` — address initiating the deductions.
     /// - `items` — vector of `(amount, request_id)` pairs; each amount must be
-    ///   within `[min_deposit, max_deduct]`.
+    ///   within `[min_deposit, max_deduct]`. Non-zero `request_id`s must be
+    ///   unique both against previously-processed ids and within this batch;
+    ///   `0` means "no idempotency" and is never deduplicated.
     ///
     /// ### Returns
     /// `Ok(())` on success.
@@ -612,8 +627,9 @@ impl CalloraVault {
         // item, or a total that exceeds the tracked balance fails the whole call
         // atomically (mirrors `deduct`'s explicit pre-transfer checks).
         let mut total_amount: i128 = 0i128;
+        let mut seen_ids: Vec<u64> = Vec::new(&env);
         for item in items.iter() {
-            let (amount, _request_id) = item;
+            let (amount, request_id) = item;
             if amount <= 0 {
                 return Err(VaultError::AmountNotPositive);
             }
@@ -622,6 +638,17 @@ impl CalloraVault {
             }
             if amount > max_deduct {
                 return Err(VaultError::ExceedsMaxDeduct);
+            }
+            // Idempotency: reject an id already recorded in storage as well as
+            // an id repeated within this same batch. Both checks run before any
+            // mutation so a duplicate fails the whole batch atomically.
+            // `request_id == 0` means "no idempotency" and is never recorded.
+            if request_id != 0 {
+                Self::require_not_duplicate(&env, &request_id)?;
+                if seen_ids.contains(&request_id) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_ids.push_back(request_id);
             }
             total_amount = total_amount
                 .checked_add(amount)
@@ -661,6 +688,12 @@ impl CalloraVault {
             );
 
             settlement_client.record_deduction(&amount, &request_id);
+
+            // Persist the idempotency marker only after this item's transfer
+            // and settlement call succeed; a later failure reverts the batch.
+            if request_id != 0 {
+                Self::mark_request_processed(&env, &request_id);
+            }
         }
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Ok(())
@@ -749,12 +782,6 @@ impl CalloraVault {
     //     }
     //     let _ = Self::require_settlement(&env)?;
     //     Ok(running)
-    // }
-
-    // pub fn get_meta(env: Env) -> Result<VaultMeta, VaultError> {
-    //     env.storage()
-    //         .instance()
-    //         .set(&DataKey::Depositor(depositor), &true);
     // }
 
     /// Update the address permitted to call [`deduct`] and [`batch_deduct`] (owner only).
@@ -1242,6 +1269,12 @@ impl CalloraVault {
     ///
     /// ### Errors
     /// - [`VaultError::Unauthorized`] — caller is not the owner.
+    /// - [`VaultError::SettlementCannotBeVault`] — settlement equals the vault address.
+    /// - [`VaultError::SettlementCannotBeToken`] — settlement equals the USDC token address.
+    ///
+    /// ### Events
+    /// Emits `set_settlement` with `(event_set_settlement, version_v1, caller)` as
+    /// topics and `(old_settlement, new_settlement)` as data payload.
     pub fn set_settlement(
         env: Env,
         caller: Address,
@@ -1258,9 +1291,43 @@ impl CalloraVault {
         if caller != owner {
             return Err(VaultError::Unauthorized);
         }
+
+        // Reject settlement == vault address (would route deduct proceeds back to
+        // the vault itself, silently burning them from the settlement contract's
+        // perspective).
+        if settlement == env.current_contract_address() {
+            return Err(VaultError::SettlementCannotBeVault);
+        }
+
+        // Reject settlement == USDC token address (routing deduction proceeds to
+        // the token contract would lock them permanently).
+        let usdc_addr = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+        if settlement == usdc_addr {
+            return Err(VaultError::SettlementCannotBeToken);
+        }
+
+        // Read old value before overwriting for audit trail.
+        let old_settlement: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Settlement);
+
         env.storage()
             .instance()
             .set(&DataKey::Settlement, &settlement);
+
+        env.events().publish(
+            (
+                events::event_set_settlement(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            (old_settlement, settlement),
+        );
         Ok(())
     }
     /// Return the configured revenue pool address, if any.
@@ -1329,6 +1396,10 @@ impl CalloraVault {
         if !(timelock::MIN_TIMELOCK_SECONDS..=timelock::MAX_TIMELOCK_SECONDS).contains(&window) {
             return Err(VaultError::InvalidTimelockWindow);
         }
+        // Read the previous window BEFORE overwriting it so the event payload
+        // carries (old_window, new_window). Reading after the write would
+        // return the new value for both tuple elements (bug #1112).
+        let old_window = timelock::get_timelock_window(&env);
         timelock::set_timelock_window(&env, window);
         env.events().publish(
             (
@@ -1336,7 +1407,7 @@ impl CalloraVault {
                 events::event_version_v1(&env),
                 caller.clone(),
             ),
-            (timelock::get_timelock_window(&env), window),
+            (old_window, window),
         );
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -1468,6 +1539,33 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Cancel a pending admin transfer (current admin only).
+    ///
+    /// Cancellation removes the nominee before returning, so the previously
+    /// nominated address can no longer accept this transfer.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), VaultError> {
+        Self::require_admin(&env, &caller)?;
+        if env
+            .storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::PendingAdmin)
+            .is_none()
+        {
+            return Err(VaultError::NoAdminTransferPending);
+        }
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events().publish(
+            (
+                events::event_admin_cancelled(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            (),
+        );
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
     /// Transfer ownership (two-step) — initiate.
     ///
     /// # Errors
@@ -1501,25 +1599,48 @@ impl CalloraVault {
     ///
     /// The pending owner must authorize this call to finalize the transfer.
     ///
-    /// # Panics
-    /// If no ownership transfer is pending (`DataKey::PendingOwner` is absent).
-    ///
-    /// The historic `VaultError::NoOwnershipTransferPending` variant was removed
-    /// from the stable error interface (code 24 reserved); an empty pending
-    /// state is a caller error and is surfaced as a panic, consistent with the
-    /// rest of the vault's handling of invariant-breaking inputs.
+    /// # Errors
+    /// - [`VaultError::NoOwnershipTransferPending`] — no transfer is staged.
     pub fn accept_ownership(env: Env) -> Result<(), VaultError> {
         let new_owner: Address = env
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::PendingOwner)
-            .unwrap_or_else(|| panic!("no ownership transfer pending"));
+            .ok_or(VaultError::NoOwnershipTransferPending)?;
         new_owner.require_auth();
         env.storage().instance().set(&DataKey::Owner, &new_owner);
         env.storage().instance().remove(&DataKey::PendingOwner);
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_ownership_accepted(&env), events::event_version_v1(&env), new_owner), ());
+        Ok(())
+    }
+
+    /// Cancel a pending ownership transfer (current owner only).
+    ///
+    /// Cancellation removes the nominee before returning, so the previously
+    /// nominated address can no longer accept this transfer.
+    pub fn cancel_ownership_transfer(env: Env, caller: Address) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+        if env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::PendingOwner)
+            .is_none()
+        {
+            return Err(VaultError::NoOwnershipTransferPending);
+        }
+        env.storage().instance().remove(&DataKey::PendingOwner);
+        env.events().publish(
+            (
+                events::event_ownership_cancelled(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            (),
+        );
+        Self::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -2072,15 +2193,15 @@ impl CalloraVault {
 
     /// Return `true` if `request_id` has already been processed (marker present
     /// in persistent storage, or temporary storage for legacy markers).
-    pub fn is_request_processed(env: Env, request_id: Symbol) -> bool {
+    pub fn is_request_processed(env: Env, request_id: u64) -> bool {
         let key = StorageKey::ProcessedRequest(request_id);
         env.storage().persistent().has(&key) || env.storage().temporary().has(&key)
     }
 
     /// Check that `request_id` has NOT been processed yet.
     /// Returns `VaultError::DuplicateRequestId` if the marker exists.
-    pub(crate) fn require_not_duplicate(env: &Env, request_id: &Symbol) -> Result<(), VaultError> {
-        let key = StorageKey::ProcessedRequest(request_id.clone());
+    pub(crate) fn require_not_duplicate(env: &Env, request_id: &u64) -> Result<(), VaultError> {
+        let key = StorageKey::ProcessedRequest(*request_id);
         if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
             return Err(VaultError::DuplicateRequestId);
         }
@@ -2088,8 +2209,8 @@ impl CalloraVault {
     }
 
     /// Persist a processed-request marker in persistent storage and set its TTL.
-    fn mark_request_processed(env: &Env, request_id: &Symbol) {
-        let key = StorageKey::ProcessedRequest(request_id.clone());
+    fn mark_request_processed(env: &Env, request_id: &u64) {
+        let key = StorageKey::ProcessedRequest(*request_id);
         env.storage().persistent().set(&key, &true);
         env.storage().persistent().extend_ttl(
             &key,
@@ -2107,20 +2228,20 @@ impl CalloraVault {
     ///
     /// ### Parameters
     /// - `caller` — must be the vault owner.
-    /// - `ids` — vector of request-id symbols to prune.
+    /// - `ids` — vector of request-id values to prune.
     ///
     /// ### Events
     /// Emits `request_id_pruned` for each successfully pruned marker.
     pub fn prune_processed_requests(
         env: Env,
         caller: Address,
-        ids: Vec<Symbol>,
+        ids: Vec<u64>,
     ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller)?;
 
         for id in ids.iter() {
-            let key = StorageKey::ProcessedRequest(id.clone());
+            let key = StorageKey::ProcessedRequest(id);
             let removed_persistent = env.storage().persistent().has(&key);
             let removed_temporary = env.storage().temporary().has(&key);
             if removed_persistent {
@@ -2172,11 +2293,41 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Check whether an address is on the deposit allowlist.
+    /// Single source of truth for the deposit authorization gate.
     ///
-    /// Returns `true` if the address has been added via [`add_address`],
-    /// `false` otherwise.  Note that the owner may always deposit regardless
-    /// of the allowlist — this view only reflects the explicit allowlist.
+    /// Returns `true` iff `caller` is the vault owner or is present in the
+    /// `StorageKey::AllowedDepositors` vector — precisely the predicate
+    /// [`CalloraVault::deposit`] enforces and
+    /// [`CalloraVault::is_authorized_depositor`] reports.  Both call sites
+    /// share this helper so the view and the mutating path can never drift
+    /// apart (issue #1110).
+    ///
+    /// A vault that has not been initialized has neither an owner nor an
+    /// allowlist, so this returns `false`.
+    fn allowlist_allows(env: &Env, caller: &Address) -> bool {
+        let owner: Option<Address> = env.storage().instance().get(&DataKey::Owner);
+        if owner.as_ref() == Some(caller) {
+            return true;
+        }
+        env.storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::AllowedDepositors)
+            .map(|allowlist| allowlist.contains(caller))
+            .unwrap_or(false)
+    }
+
+    /// Check whether an address is authorized to deposit.
+    ///
+    /// Returns `true` if the address is the vault owner **or** has been added
+    /// to the deposit allowlist via [`add_address`]; `false` otherwise.  This
+    /// is exactly the authorization gate [`deposit`] applies, so a successful
+    /// pre-check through this view predicts deposit acceptance along the
+    /// caller dimension — the vault can still reject a deposit for unrelated
+    /// reasons such as pause state or an amount below `min_deposit`.
+    ///
+    /// The owner counts as authorized even when the allowlist is empty or has
+    /// been cleared with [`clear_all`] (mirroring `deposit`'s owner bypass).
+    /// Returns `false` before `init`.
     ///
     /// No auth required; this is a read-only view.
     ///
@@ -2184,13 +2335,10 @@ impl CalloraVault {
     /// - `caller` — address to check.
     ///
     /// ### Returns
-    /// `true` if the address is on the deposit allowlist.
+    /// `true` if `caller` is the owner or is on the deposit allowlist.
     pub fn is_authorized_depositor(env: Env, caller: Address) -> bool {
         Self::bump_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Depositor(caller))
-            .unwrap_or(false)
+        Self::allowlist_allows(&env, &caller)
     }
 
     /// Add a single address to the deposit allowlist (owner-only).
@@ -2407,15 +2555,18 @@ impl CalloraVault {
 // ---------------------------------------------------------------------------
 
 pub mod capabilities;
-mod cold_storage;
 pub mod events;
 pub mod limits;
 pub mod rate_limit;
 pub mod rescue;
 
-// #[cfg(test)]
-// #[path = "../proofs/deduct.rs"]
-// mod deduct_proofs;
+/// Formal verification harnesses (compiled only under `cargo kani`).
+#[cfg(kani)]
+mod kani_proofs;
+
+#[cfg(any(kani, test))]
+#[path = "../proofs/deduct.rs"]
+mod deduct_proofs;
 
 // ---------------------------------------------------------------------------
 // Test modules
@@ -2456,11 +2607,25 @@ mod test_value_conservation;
 #[cfg(test)]
 mod test_recovery_idempotency;
 
+/// Request-id idempotency coverage for `deduct` / `batch_deduct`:
+/// duplicate rejection, within-batch dedup, marker views, and pruning.
+#[cfg(test)]
+mod test_idempotency;
+
 /// Holistic event-shape audit: drives every vault function that emits an event
 /// and asserts the published topic list matches EVENT_SCHEMA.md.  Catches
 /// call sites that fire zero, twice, or with the wrong topic count / version.
 #[cfg(test)]
 mod test_event_schema;
+
+#[cfg(test)]
+mod test_admin_transfers;
+
+/// Allowlist ↔ deposit authorization parity (issue #1110): the
+/// `is_authorized_depositor` view and the `deposit` gate must consult the
+/// same storage, so a pre-check through the view predicts deposit acceptance.
+#[cfg(test)]
+mod test_allowlist;
 
 // #[cfg(test)]
 // mod test_gas_budget;
