@@ -282,21 +282,33 @@ impl CalloraHot {
     /// # Errors
     /// * [`HotError::Unauthorized`] -- caller is not the current admin.
     /// * [`HotError::NotInitialized`] -- contract not initialized.
+    /// * [`HotError::SameSigner`] -- `new_signer` equals the current signer.
     /// * [`HotError::CooldownActive`] -- a `rotate` ran within the cool-off window.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"rotate"` tag as data.
+    /// Emits `signer_rotated` with `caller` as topic and `(old_signer,
+    /// new_signer)` as data.
     pub fn rotate_signer(env: Env, caller: Address, new_signer: Address) -> Result<(), HotError> {
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_ROTATE);
         admin::guard(&env, &action)?;
+
+        let old_signer: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Signer)
+            .ok_or(HotError::NotInitialized)?;
+
+        if old_signer == new_signer {
+            return Err(HotError::SameSigner);
+        }
 
         env.storage()
             .instance()
             .set(&StorageKey::Signer, &new_signer);
 
         env.events()
-            .publish((events::event_action(&env), caller), action);
+            .publish((events::event_signer_rotated(&env), caller), (old_signer, new_signer));
 
         Ok(())
     }
@@ -365,6 +377,41 @@ impl CalloraHot {
 
         env.events()
             .publish((events::event_admin_accepted(&env), old_admin), pending);
+
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call.
+    ///
+    /// Returns [`HotError::NoPendingAdmin`] when no nomination is in progress.
+    /// Clears the pending admin and emits `admin_cancelled` with the previous
+    /// pending admin address.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    ///
+    /// # Errors
+    /// * [`HotError::NotInitialized`] -- contract not initialized.
+    /// * [`HotError::NoPendingAdmin`] -- no nomination is in progress.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` with `(caller)` as topic and the cancelled
+    /// pending admin address as data.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), HotError> {
+        Self::require_admin(&env, &caller)?;
+
+        let cancelled: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(HotError::NoPendingAdmin)?;
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingAdmin);
+
+        env.events()
+            .publish((events::event_admin_cancelled(&env), caller), cancelled);
 
         Ok(())
     }

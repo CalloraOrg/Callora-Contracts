@@ -343,6 +343,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-emergency"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-escrow"
 version = "0.1.0"
 dependencies = [
@@ -421,6 +428,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-refund"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-registry"
 version = "0.1.0"
 dependencies = [
@@ -483,6 +497,7 @@ dependencies = [
 name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
