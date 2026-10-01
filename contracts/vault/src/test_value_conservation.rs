@@ -351,13 +351,9 @@ fn deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    // `env.events().all()` reflects only the most recent top-level invocation,
-    // so an empty buffer proves this failed call published no events.
-    assert_eq!(
-        env.events().all().len(),
-        0,
-        "failed deduct must publish no events"
-    );
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
@@ -372,13 +368,9 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    // `env.events().all()` reflects only the most recent top-level invocation,
-    // so an empty buffer proves this failed call published no events.
-    assert_eq!(
-        env.events().all().len(),
-        0,
-        "failed batch_deduct must publish no events"
-    );
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
