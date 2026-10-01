@@ -351,10 +351,9 @@ fn deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    // A rejected call must publish nothing. `env.events().all()` reports the
-    // most recent invocation's events rather than a cumulative log, so the
-    // expected count here is zero, not a snapshot taken before the call.
-    assert_eq!(env.events().all().len(), 0, "failed deduct must emit no events");
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
@@ -369,16 +368,16 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    // See the note in `deduct_without_settlement_returns_error_before_mutation`.
-    assert_eq!(env.events().all().len(), 0, "failed batch_deduct must emit no events");
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
 fn deduct_and_batch_deduct_without_usdc_return_not_initialized() {
     let env = Env::default();
     let settlement = Address::generate(&env);
-    let (client, owner, usdc) =
-        setup_vault_with_optional_settlement(&env, Some(settlement));
+    let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, Some(settlement));
     env.as_contract(&client.address, || {
         env.storage().instance().remove(&DataKey::UsdcToken);
     });
