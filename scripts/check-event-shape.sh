@@ -5,17 +5,18 @@
 # Also verifies that every constructor-exported topic is snapshot-tested and
 # appears in EVENT_TOPICS.md.
 #
-# Version markers (`event_version_*`, e.g. "callora.v1") describe the event
+# Version markers (`event_version_*`, e.g. "callora_v1") describe the event
 # schema version rather than an action, are emitted next to topic 0 instead of
 # replacing it, and are therefore excluded from the snapshot-test and
 # documentation rules. The script still reports them so an invalid marker
 # literal (one that is not a valid Soroban symbol) stays visible.
+# Issue #1118: additionally verifies that every vault publish() call site
+# includes the version constructor (events::event_version_v1) at topic[1].
 #
-# Exit 0 = all events are documented. Exit 1 = undocumented event found.
+# Exit 0 = all checks pass. Exit 1 = any check fails.
 set -euo pipefail
 
 SCHEMA="docs/EVENT_TOPICS.md"
-EVENTS_DIR="contracts"
 
 # Soroban topic strings are lowercase identifiers (see
 # tests/event_topic_catalog.rs::all_topic_strings_are_valid_identifiers).
@@ -41,16 +42,14 @@ check_contract() {
   echo "=== $contract_name Event Shape Check ==="
 
   # 1. Verify no inline Symbol::new in publish call sites
-  if [[ -f "$lib" ]]; then
-    local INLINE_COUNT
-    INLINE_COUNT=$(grep -cP 'env\.events\(\)\.publish\(\(.*Symbol::new' "$lib" 2>/dev/null || true)
-    if [[ "$INLINE_COUNT" -gt 0 ]]; then
-      echo "FAIL: $contract_name has $INLINE_COUNT inline Symbol::new in publish() calls"
-      grep -nP 'env\.events\(\)\.publish\(\(.*Symbol::new' "$lib" || true
-      FAIL=1
-    else
-      echo "OK: no inline Symbol::new in publish() calls"
-    fi
+  local INLINE_COUNT
+  INLINE_COUNT=$(grep -cP 'env\.events\(\)\.publish\(\(.*Symbol::new' "$lib" 2>/dev/null || true)
+  if [[ "$INLINE_COUNT" -gt 0 ]]; then
+    echo "FAIL: $contract_name has $INLINE_COUNT inline Symbol::new in publish() calls"
+    grep -nP 'env\.events\(\)\.publish\(\(.*Symbol::new' "$lib" || true
+    FAIL=1
+  else
+    echo "OK: no inline Symbol::new in publish() calls"
   fi
 
   if [[ -f "$events" ]]; then
@@ -62,9 +61,12 @@ check_contract() {
     # captured so a malformed symbol (e.g. one containing ".") cannot silently
     # truncate into a different string.
     local PRODUCED_TOPICS TESTED_TOPICS MARKERS
-    PRODUCED_TOPICS=$( { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' "$events" || true; } | grep -v '\.' | sort -u || true)
-    TESTED_TOPICS=$( { grep -oP 'Symbol::new\(&env,\s*"\K[^"]*' "$events" || true; } | grep -v '\.' | sort -u || true)
-    MARKERS=$( { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' "$events" || true; } | grep '\.' | sort -u || true)
+    # Version-marker literals are identified by their constructor name
+    # (`event_version_*`), not by their spelling, so both the legacy invalid
+    # "callora.v1" and the valid "callora_v1" are excluded from topic checks.
+    MARKERS=$( { grep -A3 -P 'pub fn event_version\w*' "$events" || true; } | { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' || true; } | sort -u || true)
+    PRODUCED_TOPICS=$( { grep -oP 'Symbol::new\(env,\s*"\K[^"]*' "$events" || true; } | sort -u | { grep -vxF -f <(printf '%s\n' "$MARKERS" | sed '/^$/d'; echo '__no_marker__') || true; })
+    TESTED_TOPICS=$( { grep -oP 'Symbol::new\(&env,\s*"\K[^"]*' "$events" || true; } | sort -u | { grep -vxF -f <(printf '%s\n' "$MARKERS" | sed '/^$/d'; echo '__no_marker__') || true; })
 
     local PRODUCED_COUNT TESTED_COUNT
     PRODUCED_COUNT=$(echo "$PRODUCED_TOPICS" | sed '/^$/d' | wc -l | tr -d ' ')
@@ -137,13 +139,70 @@ check_contract() {
   echo ""
 }
 
+# Issue #1118: verify every vault publish() call includes event_version_v1.
+# Strategy: count publish() calls vs publish() calls that also reference
+# event_version_v1 in the same multi-line block (up to 6 lines ahead).
+check_vault_version_topics() {
+  local lib="contracts/vault/src/lib.rs"
+  echo "=== vault Version-Topic Check (Issue #1118) ==="
+
+  # Count publish blocks that lack event_version_v1.
+  # Each publish( opens a tuple; we collect lines until the closing );
+  # and check whether event_version_v1 appears in those lines.
+  local MISSING
+  MISSING=$(python3 - "$lib" <<'PYEOF'
+import re, sys
+
+text = open(sys.argv[1]).read()
+lines = text.splitlines()
+
+violations = []
+i = 0
+while i < len(lines):
+    line = lines[i]
+    if 'env.events().publish(' in line:
+        # Collect this block until we see ); at start of a line (end of call)
+        block_lines = [line]
+        j = i + 1
+        while j < len(lines) and j < i + 20:
+            block_lines.append(lines[j])
+            if lines[j].strip().startswith(');'):
+                break
+            j += 1
+        block = '\n'.join(block_lines)
+        if 'event_version_v1' not in block:
+            violations.append(f"  line {i+1}: {line.strip()[:80]}")
+    i += 1
+
+for v in violations:
+    print(v)
+print(len(violations))
+PYEOF
+  )
+
+  local COUNT
+  COUNT=$(echo "$MISSING" | tail -1)
+  local DETAILS
+  DETAILS=$(echo "$MISSING" | head -n -1)
+
+  if [[ "$COUNT" -gt 0 ]]; then
+    echo "FAIL: $COUNT vault publish() call(s) missing event_version_v1:"
+    echo "$DETAILS"
+    FAIL=1
+  else
+    echo "OK: all vault publish() calls include event_version_v1"
+  fi
+  echo ""
+}
+
 check_contract "vault"
 check_contract "settlement"
 check_contract "revenue_pool"
 check_contract "distribute"
+check_vault_version_topics
 
 if [[ "$FAIL" -ne 0 ]]; then
-  echo "FAILED: some contracts have undocumented events. See above."
+  echo "FAILED: some contracts have undocumented or unversioned events. See above."
   exit 1
 fi
 
