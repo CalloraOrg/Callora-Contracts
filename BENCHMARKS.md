@@ -1,1 +1,195 @@
-IyBWYXVsdCBPcGVyYXRpb24gR2FzIC8gQ29zdCBOb3RlcwoKQXBwcm94aW1hdGUgcmVzb3VyY2UgdXNhZ2UgZm9yIENhbGxvcmEgVmF1bHQgb3BlcmF0aW9ucyB0byBndWlkZSBpbnRlZ3JhdGlvbiBhbmQgY2FwYWNpdHkgcGxhbm5pbmcuIFNvcm9iYW4gdXNlcyByZXNvdXJjZSBtZXRlcmluZyAoQ1BVIGluc3RydWN0aW9ucywgbGVkZ2VyIHJlYWRzL3dyaXRlcywgZXZlbnRzKS4gRXhhY3QgbnVtYmVycyBkZXBlbmQgb24gbmV0d29yayBmZWUgY29uZmlndXJhdGlvbiBhbmQgc2hvdWxkIGJlIHZhbGlkYXRlZCBvbiB0ZXN0bmV0IG9yIHZpYSBgc29yb2JhbiBjb250cmFjdCBpbnZva2VgIHNpbXVsYXRpb24uCgo+ICoqRGlzY2xhaW1lcjoqKiBUaGUgbnVtYmVycyBwcm92aWRlZCBiZWxvdyBhcmUgZXN0aW1hdGVzIGFuZCBzaG91bGQgYmUgdXNlZCBjb250ZXh0dWFsbHkuIEV4YWN0IGNvc3RzIGRpdmVyZ2UgYmV0d2VlbiB0ZXN0bmV0IGFuZCBtYWlubmV0IGRlcGVuZGluZyBvbiByZWFsLXRpbWUgbmV0d29yayBjb25kaXRpb25zLgoKIyMgTWV0aG9kb2xvZ3kKCkNvc3QgZXN0aW1hdGlvbnMgYXJlIGRlcml2ZWQgYnkgcnVubmluZyB0cmFuc2FjdGlvbiBzaW11bGF0aW9ucyB0aHJvdWdoIGBzb3JvYmFuIGNvbnRyYWN0IGludm9rZSAtLXNpbXVsYXRlYCBvbiByZWNlbnQgdGVzdG5ldCBkZXBsb3ltZW50cy4gU2ltdWxhdGVkIG9wZXJhdGlvbnMgbG9nIENQVS9pbnN0cnVjdGlvbiBjb3N0cywgbGVkZ2VyIGVudHJ5IHJlYWRzL3dyaXRlcywgZXZlbnQgc2l6ZSwgYW5kIG5ldHdvcmsgZmVlIHBhcmFtZXRlcnMuCgojIyBSZWxhdGl2ZSBDb3N0ICh0eXBpY2FsIG9yZGVyKQoKfCBPcGVyYXRpb24gfCBSZWxhdGl2ZSBjb3N0IHwgTm90ZXMgfCBFc3RpbWF0ZWQgQ1BVIEluc3RydWN0aW9ucyAoVGVzdG5ldCkqIHwKfC0tLXwtLS18LS0tfC0tLXwKfCBgYmFsYW5jZSgpYCB8IExvd2VzdCB8IFNpbmdsZSBpbnN0YW5jZSByZWFkLCBubyB3cml0ZXMsIG5vIGV2ZW50LiB8IDwgNTAwayB8CnwgYGdldF9tZXRhKClgIHwgTG93IHwgU2FtZSBhcyBiYWxhbmNlIChyZWFkcyBmdWxsIG1ldGEpLiB8IDwgNTAwayB8CnwgYGRlcG9zaXRgIHwgTWVkaXVtIHwgT25lIHJlYWQsIG9uZSB3cml0ZSwgb25lIGV2ZW50LiBDcm9zcy1jb250cmFjdCBjYWxsIHRvIFVTREMuIHwgfiAyLjVNIHwKfCBgZGVkdWN0YCB8IE1lZGl1bSB8IE9uZSByZWFkLCBvbmUgd3JpdGUsIG9uZSBldmVudC4gTWF5IGNyb3NzLWNhbGwgU2V0dGxlbWVudCBwb29sLiB8IH4gMi44TSB8CnwgYHdpdGhkcmF3YCB8IE1lZGl1bSB8IE9uZSByZWFkLCBvbmUgd3JpdGUsIG9uZSBldmVudC4gQ3Jvc3MtY29udHJhY3QgY2FsbCB0byBVU0RDLiB8IH4gMi41TSB8CnwgYHdpdGhkcmF3X3RvYCB8IE1lZGl1bSB8IE9uZSByZWFkLCBvbmUgd3JpdGUsIG9uZSBldmVudC4gQ3Jvc3MtY29udHJhY3QgY2FsbCB0byBVU0RDLiB8IH4gMi41TSB8CnwgYGRpc3RyaWJ1dGVgfCBNZWRpdW0gfCBPbmUgcmVhZCwgb25lIHdyaXRlLCBvbmUgZXZlbnQuIENyb3NzLWNvbnRyYWN0IGNhbGwgdG8gVVNEQy4gfCB+IDIuNU0gfAp8IGByZWNlaXZlX3BheW1lbnRgfCBMb3cgfCBPbmUgZXZlbnQgZW1pc3Npb24uIFZhbGlkYXRlcyBjYWxsZXIgYW5kIGVtaXRzIGFuIGV2ZW50LiB8IH4gMS4wTSB8CnwgYGJhdGNoX2RlZHVjdGAgfCBNZWRpdW0tSGlnaCB8IE9uZSByZWFkLCBvbmUgd3JpdGUsIE4gZXZlbnRzIChvbmUgcGVyIGl0ZW0pLiBCdWxrIHByb2Nlc3MuIHwgfiAzLjVNICsgKDEwMGsgcGVyIGl0ZW0pIHwKfCBgaW5pdGAgfCBIaWdoZXN0IHwgRmlyc3Qgd3JpdGUgKGNyZWF0ZSBpbnN0YW5jZSksIG9uZSBldmVudDsgcmVxdWlyZXMgYXV0aC4gfCB+IDQuNU0gfAoKIyMgTWV0YWRhdGEgVmFsaWRhdGlvbiBOb3RlCgpgY2FsbG9yYS12YXVsdDo6c2V0X21ldGFkYXRhYCBhbmQgYHVwZGF0ZV9tZXRhZGF0YWAgbm93IHJ1biBhIGJvdW5kZWQgTyhuKQp2aXNpYmxlLUFTQ0lJIHZhbGlkYXRpb24gcGFzcyBiZWZvcmUgc3RvcmFnZS4gVGhlIGlucHV0IGlzIGFscmVhZHkgY2FwcGVkIGF0CjI1NiBieXRlcywgc28gdGhlIGluY3JlbWVudGFsIGNvc3QgaXMgYSBzaW5nbGUgbGluZWFyIHNjYW4gcGx1cyBhIGZpeGVkIGJ1ZmZlcgpjb3B5LiBUaGlzIGtlZXBzIHRoZSBpbXBhY3Qgc21hbGwgd2hpbGUgcmVqZWN0aW5nIHplcm8td2lkdGgsIGJpZGktb3ZlcnJpZGUsCmFuZCBjb25mdXNhYmxlIG1ldGFkYXRhIHN0cmluZ3MgYmVmb3JlIHRoZXkgcmVhY2ggc3RhdGUuCgpSZWxlYXNlIFdBU00gc2l6ZSBjb21wYXJpc29uIGZvciBgY2FsbG9yYS12YXVsdGAgdXNpbmcKYGNhcmdvIGJ1aWxkIC0tdGFyZ2V0IHdhc20zMi11bmtub3duLXVua25vd24gLS1yZWxlYXNlIC1wIGNhbGxvcmEtdmF1bHRgOgpiYXNlbGluZSBgdXBzdHJlYW0vbWFpbmAgd2FzIDY5LDQ2NSBieXRlczsgdGhpcyBjaGFuZ2UgYnVpbGRzIHRvIDY5LDUwNSBieXRlcwooKzQwIGJ5dGVzKS4gVGhlIGJyYW5jaCB0aGVyZWZvcmUgaGFzIGEgbWlub3Igc2l6ZSBpbXBhY3QsIHRob3VnaCB0aGUgYmFzZWxpbmUKYXJ0aWZhY3QgaXMgYWxyZWFkeSBhYm92ZSB0aGUgcmVwb3NpdG9yeSdzIG5vbWluYWwgNjUsNTM2LWJ5dGUgc2l6ZSB0YXJnZXQuCgoqXCpUaGVzZSBhcmUgcHVyZWx5IHN0cnVjdHVyYWwgZXN0aW1hdGVzLiBBY3R1YWwgY29zdHMgZmx1Y3R1YXRlIGFuZCBtdXN0IGJlIHNpbXVsYXRlZCBwZXIgZGVwbG95bWVudC4qCgojIyBPYnRhaW5pbmcgRXhhY3QgTnVtYmVycwoKLSBgKlRlc3RuZXQqYDogRGVwbG95IHRoZSB2YXVsdCBhbmQgaW52b2tlIGVhY2ggb3BlcmF0aW9uOyBpbnNwZWN0IHRyYW5zYWN0aW9uIG1ldGEgZm9yIGluc3RydWN0aW9ucyBhbmQgZmVlLgotIGAqQ0xJKmA6IFVzZSBgc29yb2JhbiBjb250cmFjdCBpbnZva2VgIHdpdGggYC0tc2ltdWxhdGVgIChvciBlcXVpdmFsZW50KSBhbmQgY2hlY2sgcmV0dXJuZWQgcmVzb3VyY2UvZmVlIGluZm8uCi0gYCoqVGVzdCBlbnYqKmA6IFJ1biB0aGUgb3B0aW9uYWwgYmVuY2htYXJrIHRlc3Q6IGBjYXJnbyB0ZXN0IC0taWdub3JlZCB2YXVsdF9vcGVyYXRpb25fY29zdHMgLS0gLS1ub2NhcHR1cmVgLiBUaGlzIGxvZ3MgQ1BVL2luc3RydWN0aW9uIGFuZCBmZWUgZXN0aW1hdGVzIHBlciBvcGVyYXRpb24gd2hlbiBpbnZvY2F0aW9uIGNvc3QgbWV0ZXJpbmcgaXMgZW5hYmxlZCBpbiB0aGUgdGVzdCBlbnZpcm9ubWVudC4KCiMjIEZlZSBDb25maWd1cmF0aW9uCgpTb3JvYmFuIGZlZXMgYXJlIGNvbmZpZ3VyZWQgcGVyIG5ldHdvcmsgKGUuZy4gUHVi bmV0KS4gVGhleSBhcmUgYXBwbGllZCB0bzoKCi0gQ1BVIGluc3RydWN0aW9ucyAocGVyIGluY3JlbWVudCkKLSBMZWRnZXIgZW50cnkgcmVhZHMgYW5kIHdyaXRlcwotIEV2ZW50IHNpemUKLSBUcmFuc2FjdGlvbiBzaXplCi0gUmVudCBmb3IgcGVyc2lzdGVudC90ZW1wb3Jhcnkgc3RvcmFnZQoKU2VlIFtTdGVsbGFyIGRvY3VtZW50YXRpb24gb24gRmVlcyBhbmQgUmVzb3VyY2UgTGltaXRzXShodHRwczovL2RldmVsb3BlcnMuc3RlbGxhci5vcmcvZG9jcy9lbmN5Y2xvcGVkaWEvZmVlcy1hbmQtcmVzb3VyY2UtbGltaXRzKSBmb3IgY3VycmVudCBmZWUgcGFyYW1ldGVycyBhbmQgYSBkZXRhaWxlZCBicmVha2Rvd24gb2YgbWV0ZXJpbmcgb3BlcmF0aW9ucy4KCiMgSG90IENvbnRyYWN0IENyaXRlcmlvbiBCZW5jaG1hcmtzCgpUaGUgYGNhbGxvcmEtaG90YCBjb250cmFjdCBpbmNsdWRlcyBgY3JpdGVyaW9uYCBiZW5jaG1hcmtzIGZvciBpdHMgaG90IGVudHJ5cG9pbnRzIHRvIHRyYWNrIHBlcmZvcm1hbmNlIG92ZXIgdGltZS4gQmVuY2htYXJrcyBhcmUgbG9jYXRlZCBhdCBgY29udHJhY3RzL2hvdC9iZW5jaGVzL21haW4ucnNgLgoKIyMgUnVubmluZwoKYGBgYmFzaApjYXJnbyBiZW5jaCAtcCBjYWxsb3JhLWhvdApgYGAKClRoaXMgcnVucyBhbGwgcmVnaXN0ZXJlZCBiZW5jaG1hcmtzIGFuZCBwcmludHMgcGVyLWVudHJ5cG9pbnQgdGltaW5nIHN0YXRpc3RpY3MuCgojIyBCZW5jaG1hcmsgVGFyZ2V0cwoKfCBUYXJnZXQgfCBEZXNjcmlwdGlvbiB8CnwtLS18LS0tfAp8IGBob3QvaXNfcGF1c2VkYCB8IFJlYWQgcGF1c2VkIGZsYWcgZnJvbSBpbnN0YW5jZSBzdG9yYWdlIHwKfCBgaG90L2dldF9hZG1pbmAgfCBSZWFkIGN1cnJlbnQgYWRtaW4gYWRkcmVzcyB8CnwgYGhvdC9nZXRfc2lnbmVyYCB8IFJlYWQgY3VycmVudCBob3Qgc2lnbmVyIGFkZHJlc3MgfAp8IGBob3QvZ2V0X2Nvb2xkb3duYCB8IFJlYWQgY29uZmlndXJlZCBjb29sLW9mZiB3aW5kb3cgfAp8IGBob3QvZ2V0X3BlbmRpbmdfYWRtaW5gIHwgUmVhZCBwZW5kaW5nIGFkbWluICh0d28tc3RlcCByb3RhdGlvbikgfAp8IGBob3QvY29vbGRvd25fcmVtYWluaW5nYCB8IENvbXB1dGUgcmVtYWluaW5nIGNvb2xkb3duIGZvciBhbiBhY3Rpb24gfAp8IGBob3QvaXNfcmVhZHlgIHwgQ2hlY2sgd2hldGhlciBhbiBhY3Rpb24gbWF5IHJ1biBub3cgfAp8IGBob3QvcGF1c2VgIHwgQ3JpdGljYWwgYWN0aW9uOiBzZXQgcGF1c2VkIGZsYWcgKGNvb2xkb3duLWd1YXJkZWQpIHwKfCBgaG90L3VucGF1c2VgIHwgQ3JpdGljYWwgYWN0aW9uOiBjbGVhciBwYXVzZWQgZmxhZyAoY29vbGRvd24tZ3VhcmRlZCkgfAp8IGBob3Qvcm90YXRlX3NpZ25lcmAgfCBDcml0aWNhbCBhY3Rpb246IHJvdGF0ZSBob3Qgc2lnbmVyIChjb29sZG93bi1ndWFyZGVkKSB8CnwgYGhvdC9zZXRfY29vbGRvd25gIHwgVXBkYXRlIGdsb2JhbCBjb29sLW9mZiB3aW5kb3cgfAp8IGBob3Qvc2V0X2FkbWluYCB8IE5vbWluYXRlIG5ldyBhZG1pbiAodHdvLXN0ZXAgcm90YXRpb24pIHwKfCBgaG90L2FjY2VwdF9hZG1pbmAgfCBBY2NlcHQgcGVuZGluZyBhZG1pbiB0cmFuc2ZlciB8CgpDb29sZG93bi1ndWFyZGVkIGNyaXRpY2FsIGFjdGlvbnMgKGBwYXVzZWAsIGB1bnBhdXNlYCwgYHJvdGF0ZV9zaWduZXJgKSBhZHZhbmNlIHRoZSBsZWRnZXIgdGltZXN0YW1wIGJ5IGBDT09MRE9XTl9TRUNTICsgMWAgYmV0d2VlbiBpdGVyYXRpb25zIHNvIGVhY2ggaW52b2NhdGlvbiBpcyBhY2NlcHRlZC4KCiMjIEJhc2VsaW5lCgpSdW4gYGNhcmdvIGJlbmNoIC1wIGNhbGxvcmEtaG90IC0tIC0tc2F2ZS1iYXNlbGluZSBtYWluYCB0byBjYXB0dXJlIGEgYmFzZWxpbmUuIEZ1dHVyZSBydW5zIGNhbiBiZSBjb21wYXJlZCB3aXRoOgoKYGBgYmFzaApjYXJnbyBiZW5jaCAtcCBjYWxsb3JhLWhvdCAtLSAtLWJhc2VsaW5lIG1haW4KYGBgCgojIyBEZXYtRGVwZW5kZW5jeQoKYGNyaXRlcmlvbiA9ICIwLjUiYCBpcyBhZGRlZCBhcyBhIGRldi1kZXBlbmRlbmN5IGluIGBjb250cmFjdHMvaG90L0NhcmdvLnRvbWxgLiBUaGlzIGRvZXMgbm90IGFmZmVjdCB0aGUgcHJvZHVjdGlvbiBXQVNNIGFydGlmYWN0LgoKIyBXaGl0ZWxpc3QgQ3JpdGVyaW9uIEJlbmNobWFya3MKClRoZSBgY2FsbG9yYS13aGl0ZWxpc3RgIHBhY2thZ2UgYmVuY2htYXJrcyB0aGUgY29udHJhY3QncyBwdWJsaWMgd2hpdGVsaXN0CmVudHJ5cG9pbnRzIHdpdGggQ3JpdGVyaW9uLiBUaGUgaGFybmVzcyBpcyBsb2NhdGVkIGF0CmBjb250cmFjdHMvd2hpdGVsaXN0L2JlbmNoZXMvbWFpbi5yc2AuCgojIyBSdW5uaW5nCgpgYGBiYXNoCmNhcmdvIGJlbmNoIC1wIGNhbGxvcmEtd2hpdGVsaXN0CmBgYAoKIyMgQmVuY2htYXJrIFRhcmdldHMKCnwgVGFyZ2V0IHwgRGVzY3JpcHRpb24gfAp8LS0tfC0tLXwKfCBgd2hpdGVsaXN0L2lzX3doaXRlbGlzdGVkL21lbWJlci8zMmAgfCBDaGVjayBhIG1lbWJlciBhdCB0aGUgZW5kIG9mIGEgMzItYWRkcmVzcyB3aGl0ZWxpc3QgfAp8IGB3aGl0ZWxpc3QvaXNfd2hpdGVsaXN0ZWQvbWlzcy8zMmAgfCBDaGVjayBhIG1pc3NpbmcgYWRkcmVzcyBhZ2FpbnN0IGEgMzItYWRkcmVzcyB3aGl0ZWxpc3QgfAp8IGB3aGl0ZWxpc3QvZ2V0X3doaXRlbGlzdC8zMmAgfCBSZXR1cm4gYSAzMi1hZGRyZXNzIHdoaXRlbGlzdCB8CnwgYHdoaXRlbGlzdC9hZGRfYWRkcmVzcy9lbXB0eWAgfCBBZGQgdGhlIGZpcnN0IGFkZHJlc3MgfAp8IGB3aGl0ZWxpc3QvYWRkX2FkZHJlc3MvMzJgIHwgQWRkIGFuIGFkZHJlc3MgYWZ0ZXIgMzIgZXhpc3RpbmcgZW50cmllcyB8CnwgYHdoaXRlbGlzdC9yZW1vdmVfYWRkcmVzcy8zMmAgfCBSZW1vdmUgdGhlIGZpbmFsIGFkZHJlc3MgZnJvbSAzMiBlbnRyaWVzIHwKfCBgd2hpdGVsaXN0L2NsZWFyX2FsbC8zMmAgfCBDbGVhciBhIDMyLWFkZHJlc3Mgd2hpdGVsaXN0IHwKCkVhY2ggc3RhdGUtY2hhbmdpbmcgc2FtcGxlIHVzZXMgYSBuZXdseSBpbml0aWFsaXplZCBmaXh0dXJlLiBJbml0aWFsaXphdGlvbiwKbGlzdCBwb3B1bGF0aW9uLCBhbmQgY29vbGRvd24gYWR2YW5jZW1lbnQgc3RheSBvdXRzaWRlIHRoZSBtZWFzdXJlZCBvcGVyYXRpb24sCndoaWxlIHRoZSBtZWFzdXJlZCBpbnZvY2F0aW9uIHN0aWxsIGV4ZWN1dGVzIHRoZSBlbnRyeXBvaW50J3MgYXV0aG9yaXphdGlvbgphbmQgY29vbGRvd24gY2hlY2tzLgoKIyMgQmFzZWxpbmUKClNhdmUgYSBjb21wYXJpc29uIGJhc2VsaW5lIHdpdGg6CgpgYGBiYXNoCmNhcmdvIGJlbmNoIC1wIGNhbGxvcmEtd2hpdGVsaXN0IC0tIC0tc2F2ZS1iYXNlbGluZSBtYWluCmBgYAoKQ29tcGFyZSBhIGxhdGVyIHJ1biB3aXRoOgoKYGBgYmFzaApjYXJnbyBiZW5jaCAtcCBjYWxsb3JhLXdoaXRlbGlzdCAtLSAtLWJhc2VsaW5lIG1haW4KYGBgCgpgY3JpdGVyaW9uID0gIjAuNSJgIGlzIGEgZGV2ZWxvcG1lbnQtb25seSBkZXBlbmRlbmN5IGFuZCBkb2VzIG5vdCBhZmZlY3QgdGhlCnByb2R1Y3Rpb24gY29udHJhY3QgV0FTTS4KCiMgR2FzIFJlZ3Jlc3Npb24gQmFzZWxpbmUKClRoZSByZXBvc2l0b3J5IG1haW50YWlucyBhIG1lYXN1cmVkIENQVS9tZW1vcnkgYmFzZWxpbmUgYXQKYGNvbnRyYWN0cy8uZ2FzLWJhc2VsaW5lLmpzb25gLiBQdWxsIHJlcXVlc3RzIGFyZSBnYXRlZCBvbiB0aGlzIGJhc2VsaW5lIGJ5IHRoZQpgR2FzIHJlZ3Jlc3Npb24gYmFzZWxpbmVgIHdvcmtmbG93IChgLmdpdGh1Yi93b3JrZmxvd3MvZ2FzLXJlZ3Jlc3Npb24ueW1sYCksCndoaWNoIHJ1bnMgYHNjcmlwdHMvZ2FzLXJlZ3Jlc3Npb24uc2hgIGFuZCBmYWlscyB3aGVuIGFueSBlbnRyeXBvaW50IGdyb3dzIGJ5Cm1vcmUgdGhhbiA1JSBpbiBDUFUgb3IgbWVtb3J5IHVubGVzcyB0aGUgUFIgY2FycmllcyB0aGUgYGdhcy1vdmVycmlkZWAgbGFiZWwuCgojIyBXaGF0IHRoZSBjaGVjayBkb2VzCgoxLiBCdWlsZHMgdGhlIHdvcmtzcGFjZSBhbmQgcnVucyB0aGUgZ2FzIG1lYXN1cmVtZW50IHRlc3RzIGZvciBgY2FsbG9yYS12YXVsdGAsCmAgY2FsbG9yYS1hbGxvd2xpc3RgLCBgY2FsbG9yYS1saW1pdHNgLCBhbmQgYGNhbGxvcmEtY29sZGAuCjIuIENvbXBhcmVzIGVhY2ggbWVhc3VyZWQgZW50cnlwb2ludCBhZ2FpbnN0IGBjb250cmFjdHMvLmdhcy1iYXNlbGluZS5qc29uYCB1c2luZyBhCjUlIHRocmVzaG9sZC4KMy4gV3JpdGVzIGEgbWFya2Rvd24gcmVwb3J0IHRvIGB0YXJnZXQvZ2FzLXJlcG9ydC5tZGAgYW5kIHVwbG9hZHMgaXQgYXMgdGhlCmBnYXMtcmVwb3J0YCBhcnRpZmFjdCBvbiBldmVyeSBwdWxsIHJlcXVlc3QgcnVuLgoKIyMgUmVmcmVzaGluZyB0aGUgYmFzZWxpbmUKCldoZW4gYSByZWdyZXNzaW9uIGlzIGludGVudGlvbmFsIChmb3IgZXhhbXBsZSwgYSBkZWxpYmVyYXRlIHN0b3JhZ2UgbGF5b3V0IGNoYW5nZSk6CgoxLiBSdW4gdGhlIG1lYXN1cmVtZW50cyBhbmQgd3JpdGUgdGhlIG5ldyBiYXNlbGluZToKCiAgIGBgYGJhc2gKICAgLi9zY3JpcHRzL2dhcy1yZWdyZXNzaW9uLnNoIC0tdXBkYXRlLWJhc2VsaW5lCiAgIGBgYAoKMi4gUmV2aWV3IHRoZSBkaWZmIGluIGBjb250cmFjdHMvLmdhcy1iYXNlbGluZS5qc29uYCBhbmQgY29tbWl0IGl0IGFzIHBhcnQgb2YgdGhlIFBSLgozLiBEb2N1bWVudCB0aGUgcmF0aW9uYWxlIGluIHRoZSBQUiBkZXNjcmlwdGlvbi4gTWVyZ2luZyB0aGUgcmVmcmVzaGVkIGJhc2VsaW5lCmlzIGVxdWl2YWxlbnQgdG8gYWNjZXB0aW5nIHRoZSBuZXcgY29zdCBwcm9maWxlLgoKIyMjIE92ZXJyaWRlIGxhYmVsCgpJZiBhIHJlZ3Jlc3Npb24gaXMga25vd24gYW5kIGFjY2VwdGVkIGJ1dCB0aGUgYmFzZWxpbmUgaGFzIG5vdCB5ZXQgYmVlbgpyZWZyZXNoZWQsIGFkZCB0aGUgYGdhcy1vdmVycmlkZWAgbGFiZWwgdG8gdGhlIHB1bGwgcmVxdWVzdC4gVGhlIHdvcmtmbG93IHdpbGwKc3RpbGwgcnVuIGFuZCB1cGxvYWQgdGhlIHJlcG9ydCwgYnV0IHRoZSBnYXRlIHdpbGwgbm90IGZhaWwuIFJlbW92ZSB0aGUgbGFiZWwKYW5kIHJlZnJlc2ggdGhlIGJhc2VsaW5lIGFzIHNvb24gYXMgcG9zc2libGUgdG8ga2VlcCB0aGUgZ2F0ZSBtZWFuaW5nZnVsLgoKIyMjIFJ1bm5pbmcgbG9jYWxseQoKYGBgYmFzaAouL3NjcmlwdHMvZ2FzLXJlZ3Jlc3Npb24uc2gKYGBgCgpUaGUgc2NyaXB0IHJlcXVpcmVzIGBqcWAsIGBjYXJnb2AsIGFuZCBgcHl0aG9uM2AuIFBhc3MgYC0tdGhyZXNob2xkIDxwZXJjZW50PmAKdG8gb3ZlcmlkZSB0aGUgZGVmYXVsdCA1JSB0aHJlc2hvbGQgZm9yIGEgb25lLW9mZiBpbnZlc3RpZ2F0aW9uLgo=
+# Vault Operation Gas / Cost Notes
+
+Approximate resource usage for Callora Vault operations to guide integration and capacity planning. Soroban uses resource metering (CPU instructions, ledger reads/writes, events). Exact numbers depend on network fee configuration and should be validated on testnet or via `soroban contract invoke` simulation.
+
+> **Disclaimer**: The numbers provided below are estimates and should be used contextually. Exact costs diverge between testnet and mainnet depending on real-time network conditions.
+
+## Methodology
+
+Cost estimations are derived by running transaction simulations through `soroban contract invoke --simulate` on recent testnet deployments. Simulated operations log CPU/instruction costs, ledger entry reads/writes, event size, and network fee parameters.
+
+## Relative Cost (typical order)
+
+| Operation | Relative cost | Notes | Estimated CPU Instructions (Testnet)* |
+|---|---|---|---|
+| `balance()` | Lowest | Single instance read, no writes, no event. | < 500k |
+| `get_meta()` | Low | Same as balance (reads full meta). | < 500k |
+| `deposit` | Medium | One read, one write, one event. Cross-contract call to USDC. | ~ 2.5M |
+| `deduct` | Medium | One read, one write, one event. May cross-call Settlement pool. | ~ 2.8M |
+| `withdraw` | Medium | One read, one write, one event. Cross-contract call to USDC. | ~ 2.5M |
+| `withdraw_to` | Medium | One read, one write, one event. Cross-contract call to USDC. | ~ 2.5M |
+| `distribute`| Medium | One read, one write, one event. Cross-contract call to USDC. | ~ 2.5M |
+| `receive_payment`| Low | One event emission. Validates caller and emits an event. | ~ 1.0M |
+| `batch_deduct` | Medium–High | One read, one write, N events (one per item). Bulk process. | ~ 3.5M + (100k per item) |
+| `init` | Highest | First write (create instance), one event; requires auth. | ~ 4.5M |
+
+## Metadata Validation Note
+
+`callora-vault::set_metadata` and `update_metadata` now run a bounded O(n)
+visible-ASCII validation pass before storage. The input is already capped at
+256 bytes, so the incremental cost is a single linear scan plus a fixed buffer
+copy. This keeps the impact small while rejecting zero-width, bidi-override,
+and confusable metadata strings before they reach state.
+
+Release WASM size comparison for `callora-vault` using
+`cargo build --target wasm32-unknown-unknown --release -p callora-vault`:
+baseline `upstream/main` was 69,465 bytes; this change builds to 69,505 bytes
+(+40 bytes). The branch therefore has a minor size impact, though the baseline
+artifact is already above the repository's nominal 65,536-byte size target.
+
+*\*These are purely structural estimates. Actual costs fluctuate and must be simulated per deployment.*
+
+## Obtaining Exact Numbers
+
+- **Testnet**: Deploy the vault and invoke each operation; inspect transaction meta for instructions and fee.
+- **CLI**: Use `soroban contract invoke` with `--simulate` (or equivalent) and check returned resource/fee info.
+- **Test env**: Run the optional benchmark test: `cargo test --ignored vault_operation_costs -- --nocapture`. This logs CPU/instruction and fee estimates per operation when invocation cost metering is enabled in the test environment.
+
+## Fee Configuration
+
+Soroban fees are configured per network (e.g. Pubnet). They are applied to:
+
+- CPU instructions (per increment)
+- Ledger entry reads and writes
+- Event size
+- Transaction size
+- Rent for persistent/temporary storage
+
+See [Stellar documentation on Fees and Resource Limits](https://developers.stellar.org/docs/encyclopedia/fees-and-resource-limits) for current fee parameters and a detailed breakdown of metering operations.
+
+# Hot Contract Criterion Benchmarks
+
+The `callora-hot` contract includes `criterion` benchmarks for its hot entrypoints to track performance over time. Benchmarks are located at `contracts/hot/benches/main.rs`.
+
+## Running
+
+```bash
+cargo bench -p callora-hot
+```
+
+This runs all registered benchmarks and prints per-entrypoint timing statistics.
+
+## Benchmark Targets
+
+| Target | Description |
+|---|---|
+| `hot/is_paused` | Read paused flag from instance storage |
+| `hot/get_admin` | Read current admin address |
+| `hot/get_signer` | Read current hot signer address |
+| `hot/get_cooldown` | Read configured cool-off window |
+| `hot/get_pending_admin` | Read pending admin (two-step rotation) |
+| `hot/cooldown_remaining` | Compute remaining cooldown for an action |
+| `hot/is_ready` | Check whether an action may run now |
+| `hot/pause` | Critical action: set paused flag (cooldown-guarded) |
+| `hot/unpause` | Critical action: clear paused flag (cooldown-guarded) |
+| `hot/rotate_signer` | Critical action: rotate hot signer (cooldown-guarded) |
+| `hot/set_cooldown` | Update global cool-off window |
+| `hot/set_admin` | Nominate new admin (two-step rotation) |
+| `hot/accept_admin` | Accept pending admin transfer |
+
+Cooldown-guarded critical actions (`pause`, `unpause`, `rotate_signer`) advance the ledger timestamp by `COOLDOWN_SECS + 1` between iterations so each invocation is accepted.
+
+## Baseline
+
+Run `cargo bench -p callora-hot -- --save-baseline main` to capture a baseline. Future runs can be compared with:
+
+```bash
+cargo bench -p callora-hot -- --baseline main
+```
+
+## Dev-Dependency
+
+`criterion = "0.5"` is added as a dev-dependency in `contracts/hot/Cargo.toml`. This does not affect the production WASM artifact.
+
+# Whitelist Criterion Benchmarks
+
+The `callora-whitelist` package benchmarks the contract's public whitelist
+entrypoints with Criterion. The harness is located at
+`contracts/whitelist/benches/main.rs`.
+
+## Running
+
+```bash
+cargo bench -p callora-whitelist
+```
+
+## Benchmark Targets
+
+| Target | Description |
+|---|---|
+| `whitelist/is_whitelisted/member/32` | Check a member at the end of a 32-address whitelist |
+| `whitelist/is_whitelisted/miss/32` | Check a missing address against a 32-address whitelist |
+| `whitelist/get_whitelist/32` | Return a 32-address whitelist |
+| `whitelist/add_address/empty` | Add the first address |
+| `whitelist/add_address/32` | Add an address after 32 existing entries |
+| `whitelist/remove_address/32` | Remove the final address from 32 entries |
+| `whitelist/clear_all/32` | Clear a 32-address whitelist |
+
+Each state-changing sample uses a newly initialized fixture. Initialization,
+list population, and cooldown advancement stay outside the measured operation,
+while the measured invocation still executes the entrypoint's authorization
+and cooldown checks.
+
+## Baseline
+
+Save a comparison baseline with:
+
+```bash
+cargo bench -p callora-whitelist -- --save-baseline main
+```
+
+Compare a later run with:
+
+```bash
+cargo bench -p callora-whitelist -- --baseline main
+```
+
+`criterion = "0.5"` is a development-only dependency and does not affect the
+production contract WASM.
+
+# Gas Regression Baseline
+
+The repository maintains a measured CPU/memory baseline at
+`contracts/.gas-baseline.json`. Pull requests are gated on this baseline by the
+`gas-regression` job in the CI workflow (`.github/workflows/ci.yml`),
+which runs `scripts/gas-regression.sh` and fails when any entrypoint grows by
+more than 5% in CPU or memory unless the PR carries the `gas-override` label.
+
+## What the check does
+
+1. Builds the workspace and runs the gas measurement tests for `callora-vault`,
+`callora-allowlist`, `callora-limits`, and `callora-cold`.
+2. Compares each measured entrypoint against `contracts/.gas-baseline.json` using a
+5% threshold.
+3. Writes a markdown report to `target/gas-report.md` and uploads it as the
+`gas-report` artifact on every pull request run.
+
+## Refreshing the baseline
+
+When a regression is intentional (for example, a deliberate storage layout change):
+
+1. Run the measurements and write the new baseline:
+
+   ```bash
+   ./scripts/gas-regression.sh --update-baseline
+   ```
+
+2. Review the diff in `contracts/.gas-baseline.json` and commit it as part of the PR.
+3. Document the rationale in the PR description. Merging the refreshed baseline
+is equivalent to accepting the new cost profile.
+
+### Override label
+
+If a regression is known and accepted but the baseline has not yet been
+refreshed, add the `gas-override` label to the pull request. The workflow will
+still run and upload the report, but the gate will not fail. Remove the label
+and refresh the baseline as soon as possible to keep the gate meaningful.
+
+### Running locally
+
+```bash
+./scripts/gas-regression.sh
+```
+
+The script requires `jq`, `cargo`, and `python3`. Pass `--threshold <percent>`
+to override the default 5% threshold for a one-off investigation.

@@ -7,6 +7,17 @@ All topic/data types refer to Soroban/Stellar XDR values.
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
 
+## Change Note (2026-09)
+
+**Two-step admin rotation events (Issue #1163).**
+`set_admin()` now publishes `admin_transfer_started` only. The explicit
+`admin_changed` event moved to `accept_admin()` / `claim_admin()`, where it is
+emitted with `(previous_admin, new_admin)` immediately before
+`admin_transfer_completed`. A nomination that is cancelled therefore leaves no
+`admin_changed` event behind, so indexers keyed on that topic no longer record
+an admin change that never happened. Applies to `callora-revenue-pool` and
+`callora-distribute`.
+
 ## Change Note (2026-06)
 
 **Event topic centralization (PR: task/event-symbol-catalog).**
@@ -20,6 +31,29 @@ All inline `Symbol::new(&env, "...")` event topic literals have been extracted f
 Each module exports one `pub fn event_*(&env) -> Symbol` function per topic and includes
 a `#[cfg(test)]` snapshot block asserting byte-level identity to the original literal.
 No topic strings were renamed; this refactor is a zero-semantic-change migration.
+
+## Change Note (2026-09) — Issue #1118: version topic added to six vault events
+
+Six vault events previously published without the `"callora_v1"` version marker at
+topic[1]. Indexers filtering on the version topic were silently dropping these
+fund-moving events. All six now carry `"callora_v1"` at topic[1]:
+
+| Event | Function | Old topic count | New topic count |
+|-------|----------|-----------------|-----------------|
+| `withdraw` | `withdraw()` | 2 | 3 |
+| `withdraw_to` | `withdraw_to()` | 3 | 4 |
+| `distribute` | `distribute()` | 2 | 3 |
+| `rescue_funds` | `admin_rescue()` | 3 | 4 |
+| `reserve_cap_set` | `set_reserve_cap()` | 3 | 4 |
+| `request_id_pruned` | `prune_processed_requests()` | 2 | 3 |
+
+The version symbol string is `"callora_v1"` (underscore, not dot — Soroban `Symbol`
+only allows `a-zA-Z0-9_`; the previous `"callora.v1"` string was invalid and would
+panic when passed through the Soroban host's XDR layer).
+
+**Breaking change for indexers:** Any consumer matching on topic count or positional
+topic index for these six events must update its filters. The `"callora_v1"` symbol
+is always at topic[1]; the subject address (owner/caller/token) shifts to topic[2]+.
 
 
 ## Contract: Callora Vault
@@ -106,21 +140,16 @@ transfer, or `deduct` event is emitted.
 
 Emitted when the vault owner withdraws to their own address.
 
-| Field         | Location | Type   | Description                                          |
-|---------------|----------|--------|------------------------------------------------------|
-| topic 0       | topics   | Symbol | `"withdraw"`                                         |
-| topic 1       | topics   | Address| vault owner                                          |
-| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
-| `new_balance` | data     | i128   | vault balance after withdrawal                       |
-| Index   | Location | Type         | Description           |
-|---------|----------|--------------|-----------------------|
-| topic 0 | topics   | Symbol       | `"withdraw"`          |
-| topic 1 | topics   | Address      | vault owner           |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Index   | Location | Type         | Description                         |
+|---------|----------|--------------|-------------------------------------|
+| topic 0 | topics   | Symbol       | `"withdraw"`                        |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)     |
+| topic 2 | topics   | Address      | vault owner                         |
+| data    | data     | (i128, i128) | (amount, new_balance)               |
 
 ```json
 {
-  "topics": ["withdraw", "GOWNER..."],
+  "topics": ["withdraw", "callora_v1", "GOWNER..."],
   "data": [200000, 700000]
 }
 ```
@@ -131,23 +160,17 @@ Emitted when the vault owner withdraws to their own address.
 
 Emitted when the vault owner withdraws to a designated recipient.
 
-| Field         | Location | Type   | Description                                          |
-|---------------|----------|--------|------------------------------------------------------|
-| topic 0       | topics   | Symbol | `"withdraw_to"`                                      |
-| topic 1       | topics   | Address| vault owner                                          |
-| topic 2       | topics   | Address| recipient `to`                                       |
-| `amount`      | data     | i128   | amount withdrawn in USDC micro-units                 |
-| `new_balance` | data     | i128   | vault balance after withdrawal                       |
-| Index   | Location | Type         | Description           |
-|---------|----------|--------------|-----------------------|
-| topic 0 | topics   | Symbol       | `"withdraw_to"`       |
-| topic 1 | topics   | Address      | vault owner           |
-| topic 2 | topics   | Address      | recipient             |
-| data    | data     | (i128, i128) | (amount, new_balance) |
+| Index   | Location | Type         | Description                         |
+|---------|----------|--------------|-------------------------------------|
+| topic 0 | topics   | Symbol       | `"withdraw_to"`                     |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)     |
+| topic 2 | topics   | Address      | vault owner                         |
+| topic 3 | topics   | Address      | recipient                           |
+| data    | data     | (i128, i128) | (amount, new_balance)               |
 
 ```json
 {
-  "topics": ["withdraw_to", "GOWNER...", "GRECIPIENT..."],
+  "topics": ["withdraw_to", "callora_v1", "GOWNER...", "GRECIPIENT..."],
   "data": [150000, 550000]
 }
 ```
@@ -446,6 +469,41 @@ Emitted when the owner updates the authorized caller address.
 
 ---
 
+### `tl_window_changed`
+
+Emitted when the admin updates the timelock window length via `set_timelock_window()`.
+
+The payload records both the **previous** and the **new** window length so auditors
+can detect shortening of the escape-hatch delay without replaying storage history.
+
+| Index   | Location | Type       | Description                                         |
+|---------|----------|------------|-----------------------------------------------------|
+| topic 0 | topics   | Symbol     | `"tl_window_changed"`                               |
+| topic 1 | topics   | Symbol     | `"callora.v1"` (version marker)                     |
+| topic 2 | topics   | Address    | `caller` — admin who changed the window             |
+| data    | data     | (u64, u64) | `(old_window_seconds, new_window_seconds)`          |
+
+**Payload order:** `data[0]` is always the **old** (previous) value; `data[1]` is the
+**new** (just-committed) value. Auditors monitoring for shortening attacks should
+assert `data[1] >= data[0]`.
+
+Valid window range: [`MIN_TIMELOCK_SECONDS` (3 600 s / 1 h), `MAX_TIMELOCK_SECONDS` (2 592 000 s / 30 d)].
+Default at deployment: `DEFAULT_TIMELOCK_SECONDS` = 172 800 s (48 h).
+
+```json
+{
+  "topics": ["tl_window_changed", "callora.v1", "GADMIN..."],
+  "data": [172800, 3600]
+}
+```
+
+> **Security note:** a `tl_window_changed` event where `data[1] < data[0]` means
+> the admin shortened the escape-hatch delay. Indexers and monitoring systems
+> SHOULD alert on this condition because a shortened window reduces the time
+> available for community reaction to a malicious admin action.
+
+---
+
 ---
 
 ### `admin_nominated`
@@ -471,6 +529,97 @@ Emitted when the nominee accepts the admin role.
 | topic 1 | topics   | Address| old admin     |
 | topic 2 | topics   | Address| new admin     |
 | data    | data     | ()     | empty         |
+
+---
+
+### `distribute` (vault)
+
+Emitted when the admin distributes on-ledger USDC surplus to a recipient via
+`distribute()`. Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type    | Description                          |
+|---------|----------|---------|--------------------------------------|
+| topic 0 | topics   | Symbol  | `"distribute"`                       |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)      |
+| topic 2 | topics   | Address | `to` — recipient address             |
+| data    | data     | i128    | `amount` in USDC micro-units         |
+
+```json
+{
+  "topics": ["distribute", "callora_v1", "GRECIPIENT..."],
+  "data": 1000000
+}
+```
+
+---
+
+### `rescue_funds`
+
+Emitted when the admin rescues tokens from the vault via `admin_rescue()`.
+Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type    | Description                               |
+|---------|----------|---------|-------------------------------------------|
+| topic 0 | topics   | Symbol  | `"rescue_funds"`                          |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)           |
+| topic 2 | topics   | Address | `caller` — admin address                  |
+| topic 3 | topics   | Address | `token_address` — token being rescued     |
+| data    | data     | (Address, i128) | `(to, amount)` — destination and amount |
+
+```json
+{
+  "topics": ["rescue_funds", "callora_v1", "GADMIN...", "GTOKEN..."],
+  "data": ["GRECIPIENT...", 3000000]
+}
+```
+
+---
+
+### `reserve_cap_set`
+
+Emitted when the owner sets or updates the deposit reserve cap for a token via
+`set_reserve_cap()`. Updated in Issue #1118 to include the version marker at topic[1].
+
+| Index   | Location | Type         | Description                             |
+|---------|----------|--------------|-----------------------------------------|
+| topic 0 | topics   | Symbol       | `"reserve_cap_set"`                     |
+| topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)         |
+| topic 2 | topics   | Address      | `caller` — owner address                |
+| topic 3 | topics   | Address      | `token` — token the cap applies to      |
+| data    | data     | (Option\<i128\>, i128) | `(prev_cap, new_cap)` — previous cap (None if unset) and new cap |
+
+```json
+{
+  "topics": ["reserve_cap_set", "callora_v1", "GOWNER...", "GTOKEN..."],
+  "data": [null, 999999]
+}
+```
+
+---
+
+### `request_id_pruned`
+
+Emitted once per successfully removed idempotency marker when the owner calls
+`prune_processed_requests()`. Updated in Issue #1118 to include the version marker
+at topic[1].
+
+| Index   | Location | Type    | Description                              |
+|---------|----------|---------|------------------------------------------|
+| topic 0 | topics   | Symbol  | `"request_id_pruned"`                    |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)          |
+| topic 2 | topics   | Symbol  | `id` — the pruned request ID             |
+| data    | data     | ()      | empty                                    |
+
+```json
+{
+  "topics": ["request_id_pruned", "callora_v1", "req_abc123"],
+  "data": null
+}
+```
+
+**Indexer note:** One `request_id_pruned` event is emitted per marker that was
+actually found and removed. IDs not present in storage are silently skipped (no
+event).
 
 ---
 
@@ -518,28 +667,37 @@ Emitted when the current admin nominates a successor (step 1 of 2).
 }
 ```
 
-> Indexers should treat funds as still under `current_admin` control until
+> This is the only event published by `set_admin()`; no `admin_changed` event
+> accompanies a nomination (Issue #1163). Indexers should treat the pool as
+> still under `current_admin` control until `admin_changed` /
 > `admin_transfer_completed` is observed.
 
 ---
 
 ### `admin_changed`
 
-Emitted when `set_admin()` is called to record the requested admin change.
-This event is emitted immediately before `admin_transfer_started`.
+Emitted when the nominee accepts the admin role (step 2 of 2), after the admin
+slot has been updated and immediately before `admin_transfer_completed`.
+`set_admin()` does **not** emit this event — nomination publishes only
+`admin_transfer_started`, so a transfer that is cancelled never produces a
+change event (Issue #1163).
 
-| Index   | Location | Type               | Description                           |
-|---------|----------|--------------------|---------------------------------------|
-| topic 0 | topics   | Symbol             | `"admin_changed"`                     |
-| topic 1 | topics   | Address            | `current_admin` — caller/admin        |
-| data    | data     | (Address, Address) | `(old_admin, new_admin)`              |
+| Index   | Location | Type               | Description                            |
+|---------|----------|--------------------|----------------------------------------|
+| topic 0 | topics   | Symbol             | `"admin_changed"`                      |
+| topic 1 | topics   | Address            | `previous_admin` — outgoing admin      |
+| data    | data     | (Address, Address) | `(previous_admin, new_admin)`          |
 
 ```json
 {
-  "topics": ["admin_changed", "GCURRENT_ADMIN..."],
-  "data": ["GCURRENT_ADMIN...", "GPENDING_ADMIN..."]
+  "topics": ["admin_changed", "GPREVIOUS_ADMIN..."],
+  "data": ["GPREVIOUS_ADMIN...", "GNEW_ADMIN..."]
 }
 ```
+
+> Topic 1 and `data[0]` are the admin that held the role immediately before
+> this event; `data[1]` is the incoming admin. One event therefore records the
+> complete handover.
 
 ---
 
@@ -1404,6 +1562,95 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 
 ---
 
+## Contract: `callora-freeze` (v0.0.1)
+
+Every state-changing entrypoint emits exactly one event. Topic[1] is always
+`"callora_v1"` for version filtering. The `reason` and `frozen_at` fields from
+`freeze_set` are also persisted in storage and readable via `get_freeze_status()`.
+
+### `freeze_initialized`
+
+Emitted once by `init()`.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"freeze_initialized"`                |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)       |
+| topic 2 | topics   | Address | `admin` — initial admin address       |
+| data    | data     | `()`    | empty                                 |
+
+```json
+{
+  "topics": ["freeze_initialized", "callora_v1", "GADMIN..."],
+  "data": null
+}
+```
+
+---
+
+### `freeze_set`
+
+Emitted by `freeze()`. Payload includes the reason label and ledger timestamp.
+
+| Index      | Location | Type     | Description                                 |
+|------------|----------|----------|---------------------------------------------|
+| topic 0    | topics   | Symbol   | `"freeze_set"`                              |
+| topic 1    | topics   | Symbol   | `"callora_v1"` (version marker)             |
+| topic 2    | topics   | Address  | `caller` — admin or freeze operator         |
+| `reason`   | data     | Symbol   | reason label supplied by the caller         |
+| `frozen_at`| data     | u64      | `env.ledger().timestamp()` at freeze time   |
+
+```json
+{
+  "topics": ["freeze_set", "callora_v1", "GCALLER..."],
+  "data": { "reason": "exploit_risk", "frozen_at": 1700000000 }
+}
+```
+
+---
+
+### `freeze_cleared`
+
+Emitted by `unfreeze()`. Persisted reason and timestamp are cleared atomically.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"freeze_cleared"`                    |
+| topic 1 | topics   | Symbol  | `"callora_v1"` (version marker)       |
+| topic 2 | topics   | Address | `caller` — admin who unfroze          |
+| data    | data     | `()`    | empty                                 |
+
+```json
+{
+  "topics": ["freeze_cleared", "callora_v1", "GADMIN..."],
+  "data": null
+}
+```
+
+---
+
+### `freeze_operator_set`
+
+Emitted by `set_freeze_operator()` for both set and clear operations.
+`new_operator: null` means the role was cleared.
+
+| Index          | Location | Type              | Description                                         |
+|----------------|----------|-------------------|-----------------------------------------------------|
+| topic 0        | topics   | Symbol            | `"freeze_operator_set"`                             |
+| topic 1        | topics   | Symbol            | `"callora_v1"` (version marker)                     |
+| topic 2        | topics   | Address           | `caller` — admin who updated the operator           |
+| `old_operator` | data     | `Option<Address>` | operator before this call; `null` if none was set   |
+| `new_operator` | data     | `Option<Address>` | operator after this call; `null` if role was cleared|
+
+```json
+{
+  "topics": ["freeze_operator_set", "callora_v1", "GADMIN..."],
+  "data": { "old_operator": null, "new_operator": "GOPERATOR..." }
+}
+```
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -1423,13 +1670,14 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `clear_revenue_pool`     | vault           | `set_revenue_pool(None)`                 |
 | `set_max_deduct`         | vault           | `set_max_deduct()`                       |
 | `set_authorized_caller` | vault           | `set_authorized_caller()`                |
+| `tl_window_changed`     | vault           | `set_timelock_window()`                  |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |
 | `distribute`             | vault           | `distribute()`                           |
 | `swept`                  | vault           | `sweep_idle_balance()`                   |
 | `init`                   | revenue-pool    | `init()`                                 |
-| `admin_changed`          | revenue-pool    | `set_admin()`                            |
+| `admin_changed`          | revenue-pool    | `accept_admin()` / `claim_admin()`       |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
 | `set_max_distribute`     | revenue-pool    | `set_max_distribute()`                   |
 | `admin_transfer_completed`| revenue-pool   | `claim_admin()`                          |
@@ -1451,6 +1699,10 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | `balance_credited`       | settlement      | `receive_payment()` with `to_pool=false` |
 | `vault_changed`          | settlement      | `set_vault()`                            |
 | `developer_force_credited`| settlement     | `force_credit_developer()`               |
+| `freeze_initialized`     | freeze          | `init()`                                 |
+| `freeze_set`             | freeze          | `freeze()`                               |
+| `freeze_cleared`         | freeze          | `unfreeze()`                             |
+| `freeze_operator_set`    | freeze          | `set_freeze_operator()` (set or clear)   |
 
 ---
 
@@ -1466,5 +1718,10 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 | 0.1.0   | settlement    | `payment_received`, `balance_credited`                       |
 | 0.1.0   | settlement    | `developer_force_credited` (admin escape hatch)               |
 | 0.2.0   | vault         | Added `swept` event on `sweep_idle_balance()` (Issue #415)  |
+| 0.2.0   | vault         | Fixed `tl_window_changed` payload: first element is now the **previous** window, second is the new window (Issue #1112). Prior versions emitted `(new, new)`. |
 | 0.2.0   | revenue-pool  | Added `emergency_drain_proposed`, `emergency_drain_executed`, `emergency_drain_cancelled` events |
 | 0.2.0   | settlement    | Added `developer_min_balance_changed` event on `set_developer_min_balance()` (Issue #633) |
+| 0.3.0   | vault         | Added `"callora_v1"` version marker at topic[1] for `withdraw`, `withdraw_to`, `distribute`, `rescue_funds`, `reserve_cap_set`, `request_id_pruned` (Issue #1118) |
+| 0.3.0   | vault         | Version symbol renamed `"callora.v1"` → `"callora_v1"` (dot not allowed in Soroban Symbol charset) |
+| 0.0.1   | freeze        | Added `freeze_initialized`, `freeze_set`, `freeze_cleared`, `freeze_operator_set` events; `reason` persisted in storage; `get_freeze_status()` view added (Issue #1217) |
+| 0.3.0   | revenue-pool  | Moved `admin_changed` from `set_admin()` to `accept_admin()` so nomination no longer announces a change (Issue #1163) |
