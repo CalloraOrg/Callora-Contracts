@@ -23,9 +23,10 @@
 //! Production callers should still call
 //! [`crate::CalloraVault::get_settlement`] before submitting a real `deduct`.
 
-use soroban_sdk::{contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contractimpl, Address, Env};
 
-use crate::{CalloraVault, VaultError};
+use crate::errors::VaultError;
+use crate::{CalloraVault, CalloraVaultClient, CalloraVaultArgs};
 
 /// Read-only pre-flight of [`crate::CalloraVault::deduct`].
 ///
@@ -42,8 +43,9 @@ use crate::{CalloraVault, VaultError};
 ///   does not raise `Unauthorized` for an unknown caller — it reflects what
 ///   the subsequent authorized `deduct` would do.
 /// - `amount`: amount to deduct. Must be positive.
-/// - `request_id`: optional idempotency key. If `Some(id)` and the id is
-///   already in storage, the simulation returns `DuplicateRequestId`.
+/// - `request_id`: optional idempotency key. If `Some(id)` with a non-zero id
+///   that is already in storage, the simulation returns
+///   `DuplicateRequestId`; `Some(0)` means "no idempotency".
 /// - `max_fee_bps`: slippage guard. Same semantics as `deduct`.
 /// - `developer`: developer whose rate-limit bucket is checked.
 ///
@@ -87,8 +89,8 @@ impl CalloraVault {
         env: Env,
         _caller: Address,
         amount: i128,
-        request_id: Option<Symbol>,
-        max_fee_bps: u16,
+        request_id: Option<u64>,
+        max_fee_bps: u32,
         developer: Address,
     ) -> Result<i128, VaultError> {
         // 1. Pause guard (read-only via `Self::is_paused`).
@@ -118,27 +120,30 @@ impl CalloraVault {
         crate::rate_limit::would_consume_tokens(&env, &developer, amount)?;
 
         // 6. Balance check.
-        let meta = CalloraVault::get_meta(env.clone())?;
-        if meta.balance < amount {
+        let balance: i128 = env
+            .storage()
+            .instance()
+            .get(&crate::DataKey::Balance)
+            .unwrap_or(0);
+        if balance < amount {
             return Err(VaultError::InsufficientBalance);
         }
 
         // 7. Slippage guard. Mirrors `deduct`'s math exactly: skip when
         //    `max_fee_bps == u16::MAX` (sentinel = no limit) or when the
         //    balance is zero (division-by-zero guard).
-        if max_fee_bps < u16::MAX && meta.balance > 0 {
+        if max_fee_bps < u32::MAX && balance > 0 {
             let calculated_fee_bps = amount
                 .checked_mul(10_000)
                 .ok_or(VaultError::Overflow)?
-                / meta.balance;
+                / balance;
             if calculated_fee_bps > max_fee_bps as i128 {
                 return Err(VaultError::Slippage);
             }
         }
 
         // Projected new balance — same shape as `deduct`'s `Ok(..)` payload.
-        let new_balance = meta
-            .balance
+        let new_balance = balance
             .checked_sub(amount)
             .ok_or(VaultError::Overflow)?;
         Ok(new_balance)

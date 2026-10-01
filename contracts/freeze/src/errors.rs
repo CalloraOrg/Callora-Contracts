@@ -4,12 +4,11 @@ use soroban_sdk::contracterror;
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum ContractError {
+pub enum FreezeError {
     NotInitialized = 1,
     AlreadyInitialized = 2,
     Unauthorized = 3,
     AlreadyFrozen = 4,
     NotFrozen = 5,
-    InvalidState = 6,
-    Overflow = 7,
+    Overflow = 6,
 }

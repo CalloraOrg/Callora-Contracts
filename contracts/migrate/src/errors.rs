@@ -31,7 +31,6 @@ use soroban_sdk::contracterror;
 #[repr(u32)]
 pub enum MigrationError {
     // ── Initialization ────────────────────────────────────────────────────
-
     /// The contract has not been initialized.
     ///
     /// Call [`EmergencyMigration::init`] before any other entrypoint.
@@ -43,7 +42,6 @@ pub enum MigrationError {
     AlreadyInitialized = 2,
 
     // ── Authorization ─────────────────────────────────────────────────────
-
     /// The caller is not the configured administrator.
     ///
     /// All state-changing entrypoints check that the caller equals the admin
@@ -51,7 +49,6 @@ pub enum MigrationError {
     Unauthorized = 3,
 
     // ── Legacy state ──────────────────────────────────────────────────────
-
     /// No legacy state was found in storage.
     ///
     /// The migration contract expects the previous deployment to have written
@@ -67,7 +64,6 @@ pub enum MigrationError {
     InvalidLegacyBalance = 5,
 
     // ── Version gating ────────────────────────────────────────────────────
-
     /// The supplied `expected_version` does not match the stored version.
     ///
     /// This guard prevents running a migration step out of order and serves
@@ -83,7 +79,6 @@ pub enum MigrationError {
     InvalidTargetVersion = 7,
 
     // ── Idempotency guards ────────────────────────────────────────────────
-
     /// Migration has already been performed for the requested state.
     ///
     /// Once the reshaped [`CurrentData`] record is written to storage, further
@@ -91,7 +86,6 @@ pub enum MigrationError {
     AlreadyMigrated = 8,
 
     // ── Upgrade guard ─────────────────────────────────────────────────────
-
     /// No upgrade has been authorized for the requested version.
     ///
     /// [`EmergencyMigration::authorize_upgrade`] must be called first with the
@@ -100,7 +94,6 @@ pub enum MigrationError {
     UpgradeNotAuthorized = 9,
 
     // ── New semantic variants (codes 10+) ─────────────────────────────────
-
     /// The migration version counter would overflow `u32::MAX`.
     ///
     /// This is a defensive overflow guard on the `checked_add(1)` that

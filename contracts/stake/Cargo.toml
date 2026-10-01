@@ -12,4 +12,8 @@ doctest = false
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
+callora-stake = { path = ".", features = ["testutils"] }
 soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

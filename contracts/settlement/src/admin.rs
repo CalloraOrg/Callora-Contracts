@@ -7,7 +7,7 @@ use crate::{events, timelock, CalloraSettlement, SettlementError, StorageKey};
 
 fn require_admin(env: &Env, caller: &Address) {
     caller.require_auth();
-    let admin = CalloraSettlement::get_admin(env.clone());
+    let admin = CalloraSettlement::get_admin(env.clone()).unwrap();
     if caller != &admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }

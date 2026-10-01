@@ -194,6 +194,11 @@ pub fn event_subscription_released(env: &Env) -> Symbol {
     Symbol::new(env, "subscription_released")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,10 +285,7 @@ mod tests {
     #[test]
     fn test_event_bet_consumed_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_bet_consumed(&env),
-            Symbol::new(&env, "bet_consumed")
-        );
+        assert_eq!(event_bet_consumed(&env), Symbol::new(&env, "bet_consumed"));
     }
 
     /// Snapshot: proves `event_bet_released` maps to exactly
@@ -291,10 +293,7 @@ mod tests {
     #[test]
     fn test_event_bet_released_bytes() {
         let env = Env::default();
-        assert_eq!(
-            event_bet_released(&env),
-            Symbol::new(&env, "bet_released")
-        );
+        assert_eq!(event_bet_released(&env), Symbol::new(&env, "bet_released"));
     }
 
     /// Snapshot: proves `event_position_consumed` maps to exactly

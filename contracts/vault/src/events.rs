@@ -95,6 +95,13 @@ pub fn event_ownership_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "ownership_accepted")
 }
 
+/// Returns the Symbol for the `"ownership_cancelled"` event topic.
+///
+/// Emitted when the current owner cancels a pending ownership transfer.
+pub fn event_ownership_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "ownership_cancelled")
+}
+
 /// Returns the Symbol for the `"withdraw"` event topic.
 ///
 /// Emitted when the vault owner withdraws funds from the vault.
@@ -349,6 +356,15 @@ pub fn event_swept(env: &Env) -> Symbol {
     Symbol::new(env, "swept")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+///
+/// This symbol is emitted as the second topic slot (after the legacy topic)
+/// to enable explicit version handling by indexers while preserving the
+/// original first-slot byte identity for backward compatibility.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora_v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +460,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_ownership_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "ownership_accepted"));
+    }
+
+    #[test]
+    fn test_event_ownership_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_ownership_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "ownership_cancelled"));
     }
 
     #[test]

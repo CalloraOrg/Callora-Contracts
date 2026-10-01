@@ -4,7 +4,10 @@ use crate::validators::{
     checked_add_amount, is_visible_ascii_metadata, normalize_visible_ascii, require_in_range,
     require_non_negative_amount, require_positive_amount, MAX_VALIDATED_STRING_LEN,
 };
-use crate::ValidatorError;
+use crate::{
+    capabilities, CAP_AMOUNT_VALIDATION, CAP_CHECKED_ARITHMETIC, CAP_RANGE_VALIDATION,
+    CAP_STRING_VALIDATION, ValidatorError,
+};
 use soroban_sdk::{Env, String};
 
 // --- normalize_visible_ascii -------------------------------------------------
@@ -167,4 +170,22 @@ fn out_of_range_rejected() {
 fn empty_range_rejects_everything() {
     // min > max is an empty range.
     assert_eq!(require_in_range(5, 10, 1), Err(ValidatorError::OutOfRange));
+}
+
+// --- capability bitmap -------------------------------------------------------
+
+#[test]
+fn capabilities_exposes_supported_validator_features() {
+    let env = Env::default();
+    let caps = capabilities(&env);
+
+    assert_ne!(caps, 0);
+    assert_eq!(
+        caps,
+        CAP_STRING_VALIDATION
+            | CAP_AMOUNT_VALIDATION
+            | CAP_CHECKED_ARITHMETIC
+            | CAP_RANGE_VALIDATION
+    );
+    assert_eq!(caps & !((1u64 << 4) - 1), 0);
 }

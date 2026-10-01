@@ -108,7 +108,10 @@ fn all_defined_bits_are_distinct_powers_of_two() {
     ];
     for &b in &bits {
         // Must be a power of two (exactly one bit set).
-        assert!(b != 0 && (b & (b - 1)) == 0, "bit {b:#x} is not a power of two");
+        assert!(
+            b != 0 && (b & (b - 1)) == 0,
+            "bit {b:#x} is not a power of two"
+        );
     }
     // All bits must be unique — their OR must equal their sum.
     let or_sum: u64 = bits.iter().copied().fold(0, |a, b| a | b);

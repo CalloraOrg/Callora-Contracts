@@ -35,6 +35,10 @@ pub const ARCHIVE_TTL_LEDGERS: u32 = 3_110_400; // ~6 months
 pub fn archive_events(env: &Env, developer: Address, batch_size: u32) -> u32 {
     developer.require_auth();
 
+    // Cap the per-call batch so loop iterations and storage writes stay within
+    // a predictable resource budget regardless of the caller-supplied value.
+    let batch_size = batch_size.min(crate::MAX_BATCH_SIZE);
+
     let cursor_key = DataKey::Cursor(developer.clone());
 
     // Retrieve cursor or initialize a default instance. No unwraps permitted.
@@ -159,6 +163,55 @@ mod tests {
         // Will panic as auth is not mocked
         env.as_contract(&contract_id, || {
             archive_events(&env, developer, 1);
+        });
+    }
+}
+
+// Gas/resource regression (issue #1069): the per-call batch must be capped so
+// the caller-supplied `batch_size` cannot drive unbounded loop iterations or
+// storage writes.
+#[cfg(test)]
+mod gas_cap_test {
+    use super::*;
+    use crate::CalloraSettlement;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn archive_events_batch_size_is_capped() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let developer = Address::generate(&env);
+        let contract_id = env.register(CalloraSettlement, ());
+
+        let cursor_key = DataKey::Cursor(developer.clone());
+
+        env.as_contract(&contract_id, || {
+            // Seed more pending events than any single call may process.
+            let pending = crate::MAX_BATCH_SIZE as u64 + 10;
+            for i in 0..pending {
+                let active_key = DataKey::ActiveEvent(developer.clone(), i);
+                env.storage()
+                    .persistent()
+                    .set(&active_key, &Bytes::from_slice(&env, &[i as u8]));
+            }
+            env.storage().persistent().set(
+                &cursor_key,
+                &Cursor {
+                    tail: 0,
+                    head: pending,
+                },
+            );
+        });
+
+        // Even a huge caller-supplied batch must stop at the cap.
+        let archived = env.as_contract(&contract_id, || {
+            archive_events(&env, developer.clone(), u32::MAX)
+        });
+        assert_eq!(archived, crate::MAX_BATCH_SIZE);
+
+        env.as_contract(&contract_id, || {
+            let cursor: Cursor = env.storage().persistent().get(&cursor_key).unwrap();
+            assert_eq!(cursor.tail, crate::MAX_BATCH_SIZE as u64);
         });
     }
 }

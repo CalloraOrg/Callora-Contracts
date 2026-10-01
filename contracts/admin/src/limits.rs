@@ -1,5 +1,23 @@
 //! Per-account limits enforcement for bets, positions, and subscriptions.
 //!
+//! # Status and consumers (issue #1248)
+//!
+//! **Experimental / unwired.** No contract in this workspace depends on
+//! `callora-admin`, and this module provides free functions only — it exposes
+//! no `#[contract]` entrypoints — so nothing can reach it on-chain yet. The
+//! *bet* / *position* / *subscription* terms are placeholders pending a
+//! concrete Callora product definition; they do not currently map to any
+//! shipped Callora flow.
+//!
+//! The same per-account cap concept is already implemented, tested, and wired
+//! up as a standalone contract in `contracts/yield` (`CalloraYieldLimits`; see
+//! `contracts/yield/YIELD_LIMITS.md` and `contracts/yield/src/limits.rs`).
+//! Key differences: `yield` stores per-account cap overrides in **instance**
+//! storage and reports `YieldLimitError`, whereas this module stores both caps
+//! and counters in **persistent** storage and reports
+//! [`crate::errors::AdminLimitError`]. Consolidate or delete one of the two
+//! before either gains a consumer.
+//!
 //! # Problem
 //!
 //! Without per-account caps, a single account can open an unbounded number
@@ -252,8 +270,7 @@ enum StorageKey {
 /// - [`AdminLimitError::NotInitialized`] — admin has never been set.
 fn require_admin(env: &Env, caller: &Address) -> Result<(), AdminLimitError> {
     caller.require_auth();
-    let admin =
-        crate::admin::get_admin(env).ok_or(AdminLimitError::NotInitialized)?;
+    let admin = crate::admin::get_admin(env).ok_or(AdminLimitError::NotInitialized)?;
     if *caller != admin {
         return Err(AdminLimitError::Unauthorized);
     }
@@ -349,7 +366,12 @@ pub fn set_default_limits(
         .persistent()
         .set(&StorageKey::DefaultLimits, &caps);
     env.events().publish(
-        (events::event_default_limits_set(env), caller.clone(), caps.clone()),
+        (
+            events::event_default_limits_set(env),
+            events::event_version_v1(env),
+            caller.clone(),
+            caps.clone(),
+        ),
         caps,
     );
     Ok(())
@@ -402,6 +424,7 @@ pub fn set_account_limits(
     env.events().publish(
         (
             events::event_account_limits_set(env),
+            events::event_version_v1(env),
             caller.clone(),
             account.clone(),
         ),
@@ -437,6 +460,7 @@ pub fn clear_account_limits(
     env.events().publish(
         (
             events::event_account_limits_cleared(env),
+            events::event_version_v1(env),
             caller.clone(),
             account.clone(),
         ),
@@ -515,7 +539,11 @@ pub fn consume_bet(env: &Env, account: &Address) -> Result<(), AdminLimitError> 
     usage.add_bet()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_bet_consumed(env), account.clone()),
+        (
+            events::event_bet_consumed(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         (usage.bets, caps.max_bets),
     );
     Ok(())
@@ -543,7 +571,11 @@ pub fn consume_position(env: &Env, account: &Address) -> Result<(), AdminLimitEr
     usage.add_position()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_position_consumed(env), account.clone()),
+        (
+            events::event_position_consumed(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         (usage.positions, caps.max_positions),
     );
     Ok(())
@@ -571,7 +603,11 @@ pub fn consume_subscription(env: &Env, account: &Address) -> Result<(), AdminLim
     usage.add_subscription()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_subscription_consumed(env), account.clone()),
+        (
+            events::event_subscription_consumed(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         (usage.subscriptions, caps.max_subscriptions),
     );
     Ok(())
@@ -602,7 +638,11 @@ pub fn release_bet(env: &Env, account: &Address) -> Result<(), AdminLimitError> 
     usage.sub_bet()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_bet_released(env), account.clone()),
+        (
+            events::event_bet_released(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         usage.bets,
     );
     Ok(())
@@ -625,7 +665,11 @@ pub fn release_position(env: &Env, account: &Address) -> Result<(), AdminLimitEr
     usage.sub_position()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_position_released(env), account.clone()),
+        (
+            events::event_position_released(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         usage.positions,
     );
     Ok(())
@@ -648,7 +692,11 @@ pub fn release_subscription(env: &Env, account: &Address) -> Result<(), AdminLim
     usage.sub_subscription()?;
     save_usage(env, account, &usage);
     env.events().publish(
-        (events::event_subscription_released(env), account.clone()),
+        (
+            events::event_subscription_released(env),
+            events::event_version_v1(env),
+            account.clone(),
+        ),
         usage.subscriptions,
     );
     Ok(())

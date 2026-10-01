@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]

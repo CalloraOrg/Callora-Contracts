@@ -14,8 +14,9 @@
 
 extern crate std;
 
-use callora_registry::{CalloraRegistry, CalloraRegistryClient, RegistryError};
+use callora_registry::{admin, CalloraRegistry, CalloraRegistryClient, RegistryError};
 use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Ledger, LedgerInfo};
 use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,16 @@ fn setup_registry(env: &Env) -> (Address, CalloraRegistryClient<'_>, Address) {
     let client = CalloraRegistryClient::new(env, &registry_id);
     client.init(&admin, &catalog);
     (admin, client, developer)
+}
+
+/// Advance the ledger timestamp past the admin cooldown window so the next
+/// admin-gated action is not blocked.
+fn advance_past_cooldown(env: &Env) {
+    let current = env.ledger().get().timestamp;
+    env.ledger().set(LedgerInfo {
+        timestamp: current + admin::COOLDOWN_SECONDS + 1,
+        ..env.ledger().get()
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +170,9 @@ fn register_offering_increments_count() {
 
     client.register_offering(&admin, &developer, &oid1, &meta);
     assert_eq!(client.registered_count(), 1);
+
+    // Advance past cooldown to allow the second registration.
+    advance_past_cooldown(&env);
 
     client.register_offering(&admin, &developer, &oid2, &meta);
     assert_eq!(client.registered_count(), 2);
@@ -433,6 +447,10 @@ fn duplicate_offering_registration_rejected() {
 
     client.register_offering(&admin, &developer, &oid, &meta);
     assert_eq!(client.registered_count(), 1);
+
+    // Advance past cooldown so the duplicate check runs (not blocked by
+    // cooldown).
+    advance_past_cooldown(&env);
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(

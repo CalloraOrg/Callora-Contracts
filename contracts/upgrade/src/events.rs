@@ -63,6 +63,11 @@ pub fn event_cooldown_set(env: &Env) -> Symbol {
     Symbol::new(env, "cooldown_set")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

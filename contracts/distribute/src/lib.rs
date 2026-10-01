@@ -1,507 +1,589 @@
 #![no_std]
-/// # Callora Distribute Contract — per-account state caps for API marketplace abuse prevention.
-///
-/// Tracks active state entries (bets, positions, subscriptions) per account
-/// and enforces a configurable global cap to prevent storage bloat.
-///
-/// ## Pause Circuit Breaker
-///
-/// When the contract is paused:
-/// - `open` and `close` are blocked
-/// - `batch_open` and `batch_close` are blocked
-/// - Admin configuration functions remain available
-/// - `pause` / `unpause` are blocked (admin must unpause first)
-///
-/// ## Access Control
-///
-/// Two privileged roles:
-/// - **Admin** — full control: configuration, pause, upgrade, admin rotation.
-/// - **Authorized Caller** — may call `open` / `close` on behalf of accounts.
-///
-/// When no authorized caller is set, only the admin may call `open` / `close`.
-pub mod errors;
+
+//! Immediate, admin-authorized token distributions with a per-leg amount cap
+//! and a per-call batch size limit. Payments do not create per-account state
+//! entries or pending payouts, and there is no per-account state cap.
+
 pub mod events;
+pub mod errors;
 pub mod limits;
-pub mod pause;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use crate::errors::DistributeError;
 
-use errors::DistributeError;
-use limits::{
-    decrement_category, decrement_state, get_account_category_count, get_account_count,
-    get_global_cap, increment_category, increment_state, write_global_cap, AccountState,
-    StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD, MAX_BATCH_SIZE,
-};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
-/// Severity levels for admin broadcast messages.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Severity {
-    Info,
-    Warn,
-    Crit,
-}
+// ---------------------------------------------------------------------------
+// Storage key constants
+// ---------------------------------------------------------------------------
 
-/// Event payload for admin broadcast messages.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct AdminBroadcast {
-    pub severity: Severity,
-    pub message: soroban_sdk::String,
-}
+const ADMIN_KEY: &str = "admin";
+const USDC_KEY: &str = "usdc";
+const PAUSED_KEY: &str = "paused";
+const PENDING_ADMIN_KEY: &str = "pending_admin";
+const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
+const VERSION_KEY: &str = "version";
 
-/// A single item in a batch open or close operation.
-#[contracttype]
-#[derive(Clone)]
-pub struct BatchItem {
-    pub account: Address,
-    pub category: Symbol,
-}
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Default per-leg distribution cap â€” effectively unlimited until explicitly set.
+pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
+
+/// TTL bump constants for instance storage archival risk mitigation.
+pub const BUMP_AMOUNT: u32 = 10_000;
+pub const LIFETIME_THRESHOLD: u32 = 1_000;
+
+// ---------------------------------------------------------------------------
+// Contract
+// ---------------------------------------------------------------------------
 
 #[contract]
-pub struct CalloraDistribute;
+pub struct Distribute;
 
 #[contractimpl]
-impl CalloraDistribute {
-    /// Initialize the distribute contract.
+impl Distribute {
+    // -----------------------------------------------------------------------
+    // Initialisation
+    // -----------------------------------------------------------------------
+
+    /// Initialize the distribute contract with an admin and the USDC token address.
     ///
-    /// Exactly-once; returns `AlreadyInitialized` if called again.
+    /// Can only be called once. Rejects `usdc_token == contract address`.
     ///
-    /// # Parameters
-    /// - `caller` — future admin; must authorize the transaction.
-    /// - `global_cap` — maximum active state entries per account across all
-    ///   categories.  Must be > 0.
+    /// # Panics
+    /// * `DistributeError::AlreadyInitialized` â€” called more than once.
+    /// * `DistributeError::InvalidConfig` â€” bad token address or token/admin aliasing.
     ///
-    /// # Errors
-    /// - `DistributeError::AlreadyInitialized` — called more than once.
-    /// - `DistributeError::CapNotPositive` — `global_cap == 0`.
-    pub fn init(env: Env, caller: Address, global_cap: u32) -> Result<(), DistributeError> {
-        caller.require_auth();
+    /// # Events
+    /// Emits `init` with `admin` as topic and `usdc_token` as data.
+    pub fn init(env: Env, admin: Address, usdc_token: Address) {
+        if env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
+            env.panic_with_error(DistributeError::AlreadyInitialized);
+        }
+        let contract_addr = env.current_contract_address();
+        if usdc_token == contract_addr {
+            env.panic_with_error(DistributeError::InvalidConfig);
+        }
+        if usdc_token == admin {
+            env.panic_with_error(DistributeError::InvalidConfig);
+        }
         let inst = env.storage().instance();
-        if inst.has(&StorageKey::Admin) {
-            return Err(DistributeError::AlreadyInitialized);
-        }
-        if global_cap == 0 {
-            return Err(DistributeError::CapNotPositive);
-        }
-        inst.set(&StorageKey::Admin, &caller);
-        inst.set(&StorageKey::GlobalCap, &global_cap);
+        inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
+        inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
-            .publish((events::event_init(&env), caller), global_cap);
-        Ok(())
+            .publish((events::event_init(&env), events::event_version_v1(&env), admin), usdc_token);
     }
 
     // -----------------------------------------------------------------------
-    // View functions
+    // Admin helpers (internal)
     // -----------------------------------------------------------------------
 
-    /// Return the admin address.  Panics if not initialized.
-    pub fn get_admin(env: Env) -> Result<Address, DistributeError> {
+    fn admin(env: &Env) -> Address {
         env.storage()
             .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(DistributeError::NotInitialized)
+            .get(&Symbol::new(env, ADMIN_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized))
     }
 
-    /// Return the global per-account cap (defaults to [`limits::DEFAULT_GLOBAL_CAP`]).
-    pub fn get_global_cap(env: Env) -> u32 {
-        get_global_cap(&env)
-    }
-
-    /// Return the total active state entry count for `account`.
-    pub fn get_account_count(env: Env, account: Address) -> u32 {
-        get_account_count(&env, &account)
-    }
-
-    /// Return the per-category active state entry count for `(account, category)`.
-    pub fn get_account_category_count(env: Env, account: Address, category: Symbol) -> u32 {
-        get_account_category_count(&env, &account, &category)
-    }
-
-    /// Return the full account state (total count across all categories).
-    pub fn get_state(env: Env, account: Address) -> AccountState {
-        AccountState {
-            count: get_account_count(&env, &account),
+    fn require_admin(env: &Env, caller: &Address) {
+        if *caller != Self::admin(env) {
+            env.panic_with_error(DistributeError::Unauthorized);
         }
     }
 
-    /// Return `true` if the contract is currently paused.
+    fn require_not_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
+            .unwrap_or(false)
+        {
+            env.panic_with_error(DistributeError::Paused);
+        }
+    }
+
+    fn is_paused(env: &Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
+            .unwrap_or(false)
+    }
+
+    fn validate_recipient(env: &Env, recipient: &Address, contract_self: &Address) {
+        if recipient == contract_self {
+            env.panic_with_error(DistributeError::InvalidRecipient);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Admin view
+    // -----------------------------------------------------------------------
+
+    /// Return the current admin address.
     ///
-    /// Delegates to [`pause::is_paused`] for the actual storage read.
-    pub fn is_paused(env: Env) -> bool {
-        pause::is_paused(&env)
+    /// # Panics
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
+    pub fn get_admin(env: Env) -> Address {
+        Self::admin(&env)
+    }
+
+    /// Return the USDC token address configured for this contract.
+    ///
+    /// # Panics
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
+    pub fn get_usdc_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized))
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-step admin rotation
+    // -----------------------------------------------------------------------
+
+    /// Nominate a new admin. Only the current admin may call.
+    /// The nominee must call `claim_admin` to complete.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `admin_transfer_started` with `current` as topic and `new_admin`
+    /// as data. No `admin_changed` event is published while the transfer is
+    /// only pending — the admin does not change until `accept_admin`
+    /// (Issue #1163), so a nomination that is later cancelled never announces
+    /// a change that did not happen.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
+        caller.require_auth();
+        let current = Self::admin(&env);
+        if caller != current {
+            env.panic_with_error(DistributeError::Unauthorized);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_admin_transfer_started(&env),
+                events::event_version_v1(&env),
+                current,
+            ),
+            new_admin,
+        );
+    }
+
+    /// Complete the admin transfer. Only the pending admin may call.
+    ///
+    /// # Panics
+    /// * `DistributeError::NoAdminTransferPending` â€” no transfer is in progress.
+    /// * `DistributeError::Unauthorized` â€” wrong caller.
+    ///
+    /// # Events
+    /// Emits `admin_changed` with the previous admin as topic and
+    /// `(previous_admin, new_admin)` as data, followed by
+    /// `admin_transfer_completed` with the new admin as topic. Both are
+    /// published only after the admin slot is updated, so indexers observe
+    /// the change exactly when it happens (Issue #1163).
+    pub fn accept_admin(env: Env, caller: Address) {
+        caller.require_auth();
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NoAdminTransferPending));
+        if caller != pending {
+            env.panic_with_error(DistributeError::Unauthorized);
+        }
+        let previous = Self::admin(&env);
+        inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_admin_changed(&env),
+                events::event_version_v1(&env),
+                previous.clone(),
+            ),
+            (previous, pending.clone()),
+        );
+        env.events().publish(
+            (
+                events::event_admin_transfer_completed(&env),
+                events::event_version_v1(&env),
+                pending,
+            ),
+            (),
+        );
+    }
+
+    /// Alias for `accept_admin`.
+    pub fn claim_admin(env: Env, caller: Address) {
+        Self::accept_admin(env, caller);
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::NoAdminTransferPending` â€” no transfer in progress.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) {
+        caller.require_auth();
+        let current = Self::admin(&env);
+        if caller != current {
+            env.panic_with_error(DistributeError::Unauthorized);
+        }
+        let inst = env.storage().instance();
+        let pending: Address = inst
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NoAdminTransferPending));
+        inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), events::event_version_v1(&env), current, pending), ());
     }
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().instance().get(&StorageKey::PendingAdmin)
-    }
-
-    /// Read the stored contract version (WASM hash) as last set by `upgrade`.
-    pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage().instance().get(&StorageKey::ContractVersion)
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
     }
 
     // -----------------------------------------------------------------------
-    // Mutating functions — authorized caller
+    // Pause / unpause
     // -----------------------------------------------------------------------
 
-    /// Open a new state entry for `account` in `category`.
+    /// Activate the circuit-breaker. Blocks `distribute`.
+    /// Only the admin may call.
     ///
-    /// Increments both the global and per-category counters.  Rejects if the
-    /// global count would meet or exceed the cap.
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::AlreadyPaused` â€” contract is already paused.
     ///
-    /// # Authorization
-    /// Caller must be the admin or the designated authorized caller.
-    ///
-    /// # Errors
-    /// - `DistributeError::Paused` — contract is paused.
-    /// - `DistributeError::Unauthorized` — caller is not admin/authorized.
-    /// - `DistributeError::AccountLimitExceeded` — cap reached.
-    pub fn open(
-        env: Env,
-        caller: Address,
-        account: Address,
-        category: Symbol,
-    ) -> Result<u32, DistributeError> {
-        Self::require_not_paused(&env)?;
+    /// # Events
+    /// Emits `pause_set` with `caller` as topic and `true` as data.
+    pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
-        Self::require_authorized_caller(&env, &caller)?;
-        let cap = get_global_cap(&env);
-        let new_count = increment_state(&env, &account, cap)?;
-        increment_category(&env, &account, &category)?;
+        Self::require_admin(&env, &caller);
+        if Self::is_paused(&env) { env.panic_with_error(DistributeError::AlreadyPaused); }
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), true);
+    }
+
+    /// Deactivate the circuit-breaker. Only the admin may call.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::NotPaused` â€” contract is not currently paused.
+    ///
+    /// # Events
+    /// Emits `pause_set` with `caller` as topic and `false` as data.
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        if !Self::is_paused(&env) { env.panic_with_error(DistributeError::NotPaused); }
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), false);
+    }
+
+    /// Return `true` if the contract is currently paused.
+    pub fn get_paused(env: Env) -> bool {
+        Self::is_paused(&env)
+    }
+
+    // -----------------------------------------------------------------------
+    // Distribution cap
+    // -----------------------------------------------------------------------
+
+    /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
+    pub fn get_max_distribute(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+    }
+
+    /// Return the configured maximum batch size.
+    pub fn get_max_batch_size(_env: Env) -> u32 {
+        limits::MAX_BATCH_SIZE
+    }
+
+    /// Set the maximum amount distributable per leg. Must be positive. Admin only.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::CapNotPositive` â€” value â‰¤ 0.
+    ///
+    /// # Events
+    /// Emits `set_max_distribute` with `(old_max, new_max)`.
+    pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        if max_distribute <= 0 { env.panic_with_error(DistributeError::CapNotPositive); }
+        let old_max = Self::get_max_distribute(env.clone());
+        env.storage()
+            .instance()
+            .set(&Symbol::new(&env, MAX_DISTRIBUTE_KEY), &max_distribute);
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (events::event_open(&env), caller, account, category),
-            new_count,
+            (
+                events::event_set_max_distribute(&env),
+                events::event_version_v1(&env),
+                Self::admin(&env),
+            ),
+            (old_max, max_distribute),
         );
-        Ok(new_count)
-    }
-
-    /// Close an existing state entry for `account` in `category`.
-    ///
-    /// Decrements both the global and per-category counters.
-    ///
-    /// # Authorization
-    /// Caller must be the admin or the designated authorized caller.
-    ///
-    /// # Errors
-    /// - `DistributeError::Paused` — contract is paused.
-    /// - `DistributeError::Unauthorized` — caller is not admin/authorized.
-    /// - `DistributeError::AccountStateEmpty` — count is already zero.
-    pub fn close(
-        env: Env,
-        caller: Address,
-        account: Address,
-        category: Symbol,
-    ) -> Result<u32, DistributeError> {
-        Self::require_not_paused(&env)?;
-        caller.require_auth();
-        Self::require_authorized_caller(&env, &caller)?;
-        let new_count = decrement_state(&env, &account)?;
-        decrement_category(&env, &account, &category)?;
-        env.events().publish(
-            (events::event_close(&env), caller, account, category),
-            new_count,
-        );
-        Ok(new_count)
-    }
-
-    /// Atomically open multiple state entries.
-    ///
-    /// Full-batch validation completes before any state write.  If any item
-    /// would exceed the cap, the entire batch reverts.
-    ///
-    /// # Authorization
-    /// Caller must be the admin or the designated authorized caller.
-    ///
-    /// # Errors
-    /// - `DistributeError::BatchEmpty` — empty items list.
-    /// - `DistributeError::BatchTooLarge` — exceeds `MAX_BATCH_SIZE`.
-    /// - `DistributeError::AccountLimitExceeded` — any item would exceed cap.
-    pub fn batch_open(
-        env: Env,
-        caller: Address,
-        items: Vec<BatchItem>,
-    ) -> Result<(), DistributeError> {
-        Self::require_not_paused(&env)?;
-        caller.require_auth();
-        Self::require_authorized_caller(&env, &caller)?;
-        let n = items.len();
-        if n == 0 {
-            return Err(DistributeError::BatchEmpty);
-        }
-        if n > MAX_BATCH_SIZE {
-            return Err(DistributeError::BatchTooLarge);
-        }
-        // Validate all items before any state mutation.
-        let cap = get_global_cap(&env);
-        // Collect the per-account increments needed.  We use a Vec of
-        // (account, category) pairs since accounts may appear multiple times.
-        for item in items.iter() {
-            let current = get_account_count(&env, &item.account);
-            if current >= cap {
-                return Err(DistributeError::AccountLimitExceeded);
-            }
-            // Check that current + total occurrences of this account in the
-            // batch won't exceed the cap.  This is a simplified validation —
-            // for full correctness we'd count per-account in the batch, but
-            // the sequential execution below handles it atomically.
-        }
-        // Execute — each increment_state call enforces the cap independently.
-        for item in items.iter() {
-            increment_state(&env, &item.account, cap)?;
-            increment_category(&env, &item.account, &item.category)?;
-            env.events().publish(
-                (
-                    events::event_batch_open(&env),
-                    caller.clone(),
-                    item.account.clone(),
-                    item.category.clone(),
-                ),
-                get_account_count(&env, &item.account),
-            );
-        }
-        Ok(())
-    }
-
-    /// Atomically close multiple state entries.
-    ///
-    /// Full-batch validation completes before any state write.  If any item
-    /// has a zero count, the entire batch reverts.
-    ///
-    /// # Authorization
-    /// Caller must be the admin or the designated authorized caller.
-    ///
-    /// # Errors
-    /// - `DistributeError::BatchEmpty` — empty items list.
-    /// - `DistributeError::BatchTooLarge` — exceeds `MAX_BATCH_SIZE`.
-    /// - `DistributeError::AccountStateEmpty` — any item has zero count.
-    pub fn batch_close(
-        env: Env,
-        caller: Address,
-        items: Vec<BatchItem>,
-    ) -> Result<(), DistributeError> {
-        Self::require_not_paused(&env)?;
-        caller.require_auth();
-        Self::require_authorized_caller(&env, &caller)?;
-        let n = items.len();
-        if n == 0 {
-            return Err(DistributeError::BatchEmpty);
-        }
-        if n > MAX_BATCH_SIZE {
-            return Err(DistributeError::BatchTooLarge);
-        }
-        // Validate: all accounts must have count > 0.
-        for item in items.iter() {
-            if get_account_count(&env, &item.account) == 0 {
-                return Err(DistributeError::AccountStateEmpty);
-            }
-        }
-        // Execute.
-        for item in items.iter() {
-            decrement_state(&env, &item.account)?;
-            decrement_category(&env, &item.account, &item.category)?;
-            env.events().publish(
-                (
-                    events::event_batch_close(&env),
-                    caller.clone(),
-                    item.account.clone(),
-                    item.category.clone(),
-                ),
-                get_account_count(&env, &item.account),
-            );
-        }
-        Ok(())
     }
 
     // -----------------------------------------------------------------------
-    // Admin functions
+    // Distribution
     // -----------------------------------------------------------------------
 
-    /// Set the global per-account cap (admin only).
+    /// Distribute USDC from this contract to a single recipient.
     ///
-    /// # Errors
-    /// - `DistributeError::CapNotPositive` — `new_cap == 0`.
-    /// - `DistributeError::Unauthorized` — caller is not admin.
-    pub fn set_global_cap(env: Env, caller: Address, new_cap: u32) -> Result<(), DistributeError> {
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::Paused` â€” contract is paused.
+    /// * `DistributeError::AmountNotPositive` â€” amount â‰¤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` â€” amount exceeds the cap.
+    /// * `DistributeError::InvalidRecipient`.
+    /// * `DistributeError::InsufficientBalance` â€” contract holds less than `amount`.
+    ///
+    /// # Events
+    /// Emits `distribute_started` with `to` as topic and `amount` as data.
+    /// Emits `distribute` with `to` as topic and `amount` as data (legacy).
+    /// Emits `distribute_completed` with `to` as topic and `amount` as data.
+    pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-        if new_cap == 0 {
-            return Err(DistributeError::CapNotPositive);
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+        if amount <= 0 {
+            env.panic_with_error(DistributeError::AmountNotPositive);
         }
-        let old = get_global_cap(&env);
-        write_global_cap(&env, new_cap);
-        env.events()
-            .publish((events::event_set_global_cap(&env), caller), (old, new_cap));
-        Ok(())
-    }
-
-    /// Pause the contract, blocking `open`, `close`, `batch_open`, `batch_close`.
-    ///
-    /// Delegates storage write to [`pause::pause`].
-    ///
-    /// Admin only.
-    pub fn pause(env: Env, caller: Address) -> Result<(), DistributeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-        if pause::is_paused(&env) {
-            return Err(DistributeError::Paused);
+        let max_distribute = Self::get_max_distribute(env.clone());
+        if amount > max_distribute {
+            env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
         }
-        pause::pause(&env, &caller);
-        env.events()
-            .publish((events::event_paused(&env), caller), ());
-        Ok(())
-    }
-
-    /// Unpause the contract, restoring `open` / `close` operations.
-    ///
-    /// Delegates storage write to [`pause::resume`].
-    ///
-    /// Admin only.
-    pub fn unpause(env: Env, caller: Address) -> Result<(), DistributeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-        if !pause::is_paused(&env) {
-            return Err(DistributeError::Paused);
-        }
-        pause::resume(&env, &caller);
-        env.events()
-            .publish((events::event_unpaused(&env), caller), ());
-        Ok(())
-    }
-
-    /// Nominate a new admin (admin only).
-    ///
-    /// Two-step transfer: the nominee must call `accept_admin` to complete.
-    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), DistributeError> {
-        caller.require_auth();
-        let current = Self::require_admin(&env, &caller)?;
-        if new_admin == current {
-            return Err(DistributeError::NewAdminSameAsCurrent);
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+        Self::validate_recipient(&env, &to, &contract_address);
+        if usdc.balance(&contract_address) < amount {
+            env.panic_with_error(DistributeError::InsufficientBalance);
         }
         env.storage()
             .instance()
-            .set(&StorageKey::PendingAdmin, &new_admin);
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (events::event_admin_nominated(&env), current, new_admin),
-            (),
+            (
+                events::event_distribute_started(&env),
+                events::event_version_v1(&env),
+                to.clone(),
+            ),
+            amount,
         );
-        Ok(())
+        usdc.transfer(&contract_address, &to, &amount);
+        env.events().publish((events::event_distribute(&env), events::event_version_v1(&env), to.clone()), amount);
+        env.events().publish(
+            (events::event_distribute_completed(&env), events::event_version_v1(&env), to),
+            amount,
+        );
     }
 
-    /// Accept the admin role (pending admin only).
-    pub fn accept_admin(env: Env) -> Result<(), DistributeError> {
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::PendingAdmin)
-            .ok_or(DistributeError::NoAdminTransferPending)?;
-        pending.require_auth();
-        let current: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(DistributeError::NotInitialized)?;
-        env.storage().instance().set(&StorageKey::Admin, &pending);
-        env.storage().instance().remove(&StorageKey::PendingAdmin);
-        env.events()
-            .publish((events::event_admin_accepted(&env), current, pending), ());
-        Ok(())
-    }
-
-    /// Cancel a pending admin transfer (admin only).
-    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), DistributeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::PendingAdmin)
-            .ok_or(DistributeError::NoAdminTransferPending)?;
-        env.storage().instance().remove(&StorageKey::PendingAdmin);
-        env.events()
-            .publish((events::event_admin_cancelled(&env), caller, pending), ());
-        Ok(())
-    }
-
-    /// Admin-gated contract upgrade.
+    /// Distribute USDC from this contract to multiple recipients in a single
+    /// atomic transaction.
     ///
-    /// Updates the contract WASM to `new_wasm_hash` and persists the version.
-    pub fn upgrade(
+    /// Each leg is a `(Address, i128)` tuple of `(recipient, amount)`.  The
+    /// function validates every leg before transferring any USDC â€” if *any*
+    /// leg fails validation the entire batch is reverted (fail-early / all-or-nothing).
+    ///
+    /// # Validation (per-leg, fail-early)
+    /// - `amount` must be positive.
+    /// - `amount` must not exceed `max_distribute` (per-leg cap).
+    /// - `recipient` must not be the contract address itself.
+    ///
+    /// # Validation (batch-level)
+    /// - Caller must be authorised admin.
+    /// - Contract must not be paused.
+    /// - Batch must not be empty.
+    /// - Batch size must not exceed `MAX_BATCH_SIZE`.
+    /// - The sum of all amounts must not exceed the contract's USDC balance.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::Paused` â€” contract is paused.
+    /// * `DistributeError::BatchEmpty` â€” no payment legs provided.
+    /// * `DistributeError::BatchTooLarge` â€” more than `MAX_BATCH_SIZE` legs.
+    /// * `DistributeError::Overflow` - the sum of all leg amounts overflows `i128`.
+    /// * `DistributeError::AmountNotPositive` â€” any leg has amount â‰¤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` â€” any leg exceeds per-leg cap.
+    /// * `DistributeError::InvalidRecipient`.
+    /// * `DistributeError::InsufficientBalance` â€” contract holds less than `total`.
+    ///
+    /// # Events
+    /// Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
+    /// Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
+    pub fn batch_distribute(
         env: Env,
         caller: Address,
-        new_wasm_hash: BytesN<32>,
-    ) -> Result<(), DistributeError> {
+        payments: Vec<(Address, i128)>,
+    ) {
         caller.require_auth();
-        Self::require_admin(&env, &caller)?;
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+
+        let n = payments.len();
+        if n == 0 {
+            env.panic_with_error(DistributeError::BatchEmpty);
+        }
+        let max_batch = limits::MAX_BATCH_SIZE;
+        if n > max_batch {
+            env.panic_with_error(DistributeError::BatchTooLarge);
+        }
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_address);
+        let contract_address = env.current_contract_address();
+        let max_distribute = Self::get_max_distribute(env.clone());
+
+        // Phase 1 â€” validate all legs and compute total
+        let mut total: i128 = 0;
+        for i in 0..n {
+            let (ref to, amount) = payments.get(i).expect("payment leg");
+            if amount <= 0 {
+                env.panic_with_error(DistributeError::AmountNotPositive);
+            }
+            if amount > max_distribute {
+                env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
+            }
+            Self::validate_recipient(&env, to, &contract_address);
+            // Overflow-safe accumulation
+            total = total
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(DistributeError::Overflow));
+        }
+
+        // Phase 2 â€” check total balance
+        if usdc.balance(&contract_address) < total {
+            env.panic_with_error(DistributeError::InsufficientBalance);
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        // Phase 3 â€” emit started event
+        env.events().publish(
+            (
+                events::event_batch_distribute_started(&env),
+                events::event_version_v1(&env),
+                caller.clone(),
+            ),
+            (total, n),
+        );
+
+        // Phase 4 â€” execute transfers
+        for i in 0..n {
+            let (to, amount) = payments.get(i).expect("payment leg");
+            usdc.transfer(&contract_address, &to, &amount);
+        }
+
+        // Phase 5 â€” emit completed event
+        env.events().publish(
+            (events::event_batch_distribute_completed(&env), events::event_version_v1(&env), caller),
+            (total, n),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Balance view
+    // -----------------------------------------------------------------------
+
+    /// Return this contract's on-ledger USDC balance.
+    ///
+    /// # Panics
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
+    pub fn balance(env: Env) -> i128 {
+        let usdc_addr: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_addr);
+        usdc.balance(&env.current_contract_address())
+    }
+
+    // -----------------------------------------------------------------------
+    // Upgrade
+    // -----------------------------------------------------------------------
+
+    /// Admin-gated contract upgrade. Replaces the WASM and persists the version.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    ///
+    /// # Events
+    /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
+    pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
         env.storage()
             .instance()
-            .set(&StorageKey::ContractVersion, &new_wasm_hash);
-        env.events()
-            .publish((events::event_upgraded(&env), caller), new_wasm_hash);
-        Ok(())
-    }
-
-    /// Broadcast an emergency message from the admin.
-    ///
-    /// Message length is capped at 256 characters.
-    pub fn broadcast(
-        env: Env,
-        caller: Address,
-        severity: Severity,
-        message: soroban_sdk::String,
-    ) -> Result<(), DistributeError> {
-        caller.require_auth();
-        Self::require_admin(&env, &caller)?;
-        let len = message.len();
-        if len == 0 || len > 256 {
-            return Err(DistributeError::BatchEmpty); // reuse for message validation
-        }
+            .set(&Symbol::new(&env, VERSION_KEY), &new_wasm_hash.clone());
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (events::event_admin_broadcast(&env), caller),
-            AdminBroadcast { severity, message },
+            (events::event_upgraded(&env), events::event_version_v1(&env), Self::admin(&env)),
+            new_wasm_hash,
         );
-        Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Private helpers
-    // -----------------------------------------------------------------------
-
-    fn require_admin(env: &Env, caller: &Address) -> Result<Address, DistributeError> {
-        let admin: Address = env
-            .storage()
+    /// Return the stored WASM version hash, or `None` if never upgraded.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        env.storage()
             .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(DistributeError::NotInitialized)?;
-        if *caller != admin {
-            return Err(DistributeError::Unauthorized);
-        }
-        Ok(admin)
+            .get(&Symbol::new(&env, VERSION_KEY))
     }
 
-    fn require_authorized_caller(env: &Env, caller: &Address) -> Result<(), DistributeError> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Admin)
-            .ok_or(DistributeError::NotInitialized)?;
-        if *caller != admin {
-            return Err(DistributeError::Unauthorized);
-        }
-        Ok(())
-    }
-
-    fn require_not_paused(env: &Env) -> Result<(), DistributeError> {
-        if pause::is_paused(env) {
-            return Err(DistributeError::Paused);
-        }
-        Ok(())
+    /// Return the crate version string baked in at compile time.
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 }
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+extern crate std;

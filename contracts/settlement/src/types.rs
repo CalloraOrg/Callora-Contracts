@@ -1,15 +1,5 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// The maximum message length in bytes allowed for `broadcast` calls.
-pub const MAX_MESSAGE_LEN: u32 = 256;
-
-/// Maximum number of items allowed in a single `batch_receive_payment` call.
-pub const MAX_BATCH_SIZE: u32 = 50;
-
-/// Maximum number of developer balance records returned in a single
-/// non-cursor-based query (gas guard).
-pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
-
 /// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
 pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
 
@@ -62,6 +52,34 @@ pub enum StorageKey {
     /// Cumulative total of every amount ever credited via `receive_payment` /
     /// `batch_receive_payment`, regardless of routing (pool or developer).
     TotalReceived,
+    /// Whether a specific developer's withdrawals are frozen.
+    FrozenDeveloper(Address),
+    /// Per-admin last write ledger for price registry rate limiting.
+    PriceRegistryLastWrite(Address),
+    /// Price entry for a given offering identifier.
+    Price(soroban_sdk::String),
+    /// Pending timelocked WASM upgrade proposal.
+    PendingUpgrade,
+}
+
+/// Read-only preview of a developer claim/withdrawal.
+///
+/// Returned by `simulate_claim` after running the same validation checks as
+/// `withdraw_developer_balance`, without requiring auth, transferring tokens,
+/// writing storage, or emitting events.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimSimulation {
+    pub developer: Address,
+    pub amount: i128,
+    pub recipient: Address,
+    pub token: Address,
+    pub current_balance: i128,
+    pub remaining_balance: i128,
+    pub contract_balance: i128,
+    pub daily_withdraw_cap: i128,
+    pub withdrawn_today: i128,
+    pub withdrawn_today_after: i128,
 }
 
 /// Severity levels for admin broadcast messages.
@@ -81,8 +99,15 @@ pub struct AdminBroadcast {
     pub message: soroban_sdk::String,
 }
 
-/// Storage TTL entry for a given storage key category, returned by
-/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+/// Storage TTL policy entry for a given storage key category.
+///
+/// Retained for ABI compatibility with the off-chain tooling that consumes the
+/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
+/// measurement: contract code cannot observe the remaining TTL of a ledger
+/// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence — see
+/// `docs/STORAGE_TTL_DOCTOR.md`. The revenue pool exposes policy constants only
+/// via `get_ttl_policy` (`callora_revenue_pool::TtlPolicy`).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
@@ -237,4 +262,21 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
+}
+
+/// Emitted when the admin proposes a timelocked WASM upgrade.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposedEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+}
+
+/// Emitted when a pending WASM upgrade is cancelled by the admin.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeCancelledEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub cancelled_at: u64,
 }

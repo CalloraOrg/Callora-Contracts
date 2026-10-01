@@ -33,18 +33,34 @@ fn settlement_error_codes_are_stable_and_unique() {
         (25, SettlementError::ClaimWindowClosed),
         (26, SettlementError::MinBalanceViolation),
         (27, SettlementError::ReplayDetected),
+        (28, SettlementError::BatchEmpty),
+        (29, SettlementError::BatchTooLarge),
+        (30, SettlementError::DeveloperFrozen),
+        (31, SettlementError::DeveloperNotFrozen),
+        (32, SettlementError::FreezeUnauthorized),
+        (33, SettlementError::WriteRateLimitExceeded),
+        (34, SettlementError::InvalidConfigDistinct),
+        (35, SettlementError::InvalidConfigAdminContract),
+        (36, SettlementError::InvalidConfigVaultContract),
+        (37, SettlementError::InvalidUsdcToken),
+        (38, SettlementError::InvalidRecipient),
+        (39, SettlementError::NoAdminTransferPending),
+        (40, SettlementError::InvalidVault),
+        (41, SettlementError::NoVaultRotationPending),
+        (42, SettlementError::BroadcastMessageTooLong),
+        (43, SettlementError::CrossTenantBatch),
     ];
 
     let mut seen = BTreeSet::new();
     for (expected_code, variant) in mappings {
-        assert_eq!(variant as u32, expected_code);
+        assert_eq(variant as u32, expected_code);
         assert!(
             seen.insert(expected_code),
             "duplicate settlement error code {expected_code}"
         );
     }
 
-    assert_eq!(seen.len(), 27);
+    assert_eq(seen.len(), 43);
 }
 
 #[test]
@@ -78,6 +94,22 @@ fn error_code_docs_list_every_settlement_code() {
         "| 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |",
         "| 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |",
         "| 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |",
+        "| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |",
+        "| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |",
+        "| 30 | `DeveloperFrozen` | Settlement | Developer is frozen and cannot withdraw |",
+        "| 31 | `DeveloperNotFrozen` | Settlement | Developer is not frozen; cannot unfreeze |",
+        "| 32 | `FreezeUnauthorized` | Settlement | Caller is not authorized to freeze/unfreeze |",
+        "| 33 | `WriteRateLimitExceeded` | Settlement | Admin wrote prices too frequently |",
+        "| 34 | `InvalidConfigDistinct` | Settlement | Init config requires distinct admin and vault |",
+        "| 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |",
+        "| 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |",
+        "| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |",
+        "| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |",
+        "| 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |",
+        "| 40 | `InvalidVault` | Settlement | Vault address is invalid |",
+        "| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |",
+        "| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |",
+        "| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |",
     ];
 
     for line in expected_lines {

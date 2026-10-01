@@ -21,4 +21,9 @@ pub enum RegistryError {
     Overflow = 7,
     /// Offering is not registered (code 8).
     OfferingNotFound = 8,
+    /// Admin action cooldown has not yet expired (code 9).
+    AdminCooldownActive = 9,
+    /// Metadata is empty, exceeds the byte bound, or contains invalid
+    /// (non-visible-ASCII / control / whitespace-delimited) encodings (code 10).
+    InvalidMetadata = 10,
 }

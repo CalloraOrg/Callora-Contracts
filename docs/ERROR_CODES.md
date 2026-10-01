@@ -97,6 +97,21 @@ must not be reassigned once released.
 | 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
 | 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
 | 27 | `ReplayDetected` | Settlement | Settlement request reused or regressed the replay-guard ledger sequence |
+| 28 | `BatchEmpty` | Settlement | Batch operation received an empty vector |
+| 29 | `BatchTooLarge` | Settlement | Batch operation exceeded the maximum allowed size |
+| 30 | `DeveloperFrozen` | Settlement | Developer is frozen and cannot withdraw |
+| 31 | `DeveloperNotFrozen` | Settlement | Developer is not frozen; cannot unfreeze |
+| 32 | `FreezeUnauthorized` | Settlement | Caller is not authorized to freeze/unfreeze |
+| 33 | `WriteRateLimitExceeded` | Settlement | Admin wrote prices too frequently |
+| 34 | `InvalidConfigDistinct` | Settlement | Init config requires distinct admin and vault |
+| 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |
+| 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |
+| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |
+| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |
+| 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |
+| 40 | `InvalidVault` | Settlement | Vault address is invalid |
+| 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
+| 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |
 
 ## Revenue Pool
 
@@ -104,6 +119,29 @@ must not be reassigned once released.
 |------|---------|----------|---------|
 | 1 | `BatchEmpty` | Revenue Pool | `batch_distribute` received an empty `payments` vector |
 | 2 | `BatchTooLarge` | Revenue Pool | `batch_distribute` exceeded `MAX_BATCH_SIZE` |
+| 3 | `NotInitialized` | Revenue Pool | A function was called before `init` |
+| 4 | `AlreadyInitialized` | Revenue Pool | `init` was called more than once |
+| 5 | `Unauthorized` | Revenue Pool | Caller is not authorized for the operation |
+| 6 | `Paused` | Revenue Pool | Distribution is blocked while the pool is paused |
+| 7 | `AlreadyPaused` | Revenue Pool | `pause` was called while the pool was already paused |
+| 8 | `NotPaused` | Revenue Pool | `unpause` was called while the pool was not paused |
+| 9 | `InvalidUsdcToken` | Revenue Pool | USDC address conflicts with the pool or admin address |
+| 10 | `NoAdminTransferPending` | Revenue Pool | No admin transfer is pending |
+| 11 | `NoPauseGuardian` | Revenue Pool | No pause guardian is configured |
+| 12 | `AmountNotPositive` | Revenue Pool | Amount must be greater than zero |
+| 13 | `AmountExceedsMaxDistribute` | Revenue Pool | Amount exceeds the configured per-leg cap |
+| 14 | `InvalidRecipient` | Revenue Pool | Recipient is the revenue pool contract |
+| 15 | `InsufficientBalance` | Revenue Pool | Pool USDC balance is below the requested amount |
+| 16 | `DuplicateRecipient` | Revenue Pool | A batch contains the same recipient more than once |
+| 17 | `Overflow` | Revenue Pool | Checked arithmetic detected an overflow |
+| 18 | `MaxDistributeNotPositive` | Revenue Pool | Distribution cap must be greater than zero |
+| 19 | `MessageEmpty` | Revenue Pool | Admin broadcast message is empty |
+| 20 | `MessageTooLong` | Revenue Pool | Admin broadcast message exceeds the length limit |
+| 21 | `NoPendingEmergencyDrain` | Revenue Pool | No emergency drain proposal is pending |
+| 22 | `TimelockNotExpired` | Revenue Pool | Emergency drain timelock has not elapsed |
+| 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |
+| 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |
+| 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |
 
 ## Upgrade
 

@@ -163,6 +163,12 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_settlement::events::event_admin_migration(e)
     }),
     ("deposit", |e| callora_settlement::events::event_deposit(e)),
+    ("price_set", |e| {
+        callora_settlement::events::event_price_set(e)
+    }),
+    ("price_removed", |e| {
+        callora_settlement::events::event_price_removed(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -191,6 +197,9 @@ const REVENUE_POOL_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     }),
     ("pause_set", |e| {
         callora_revenue_pool::events::event_pause_set(e)
+    }),
+    ("emergency_pause_set", |e| {
+        callora_revenue_pool::events::event_emergency_pause_set(e)
     }),
     ("receive_payment", |e| {
         callora_revenue_pool::events::event_receive_payment(e)
@@ -230,6 +239,44 @@ const REVENUE_POOL_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     }),
     ("emergency_drain_cancelled", |e| {
         callora_revenue_pool::events::event_emergency_drain_cancelled(e)
+    }),
+];
+
+// ---------------------------------------------------------------------------
+// Distribute contract topics
+// ---------------------------------------------------------------------------
+
+const DISTRIBUTE_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
+    ("init", |e| callora_distribute::events::event_init(e)),
+    ("admin_changed", |e| {
+        callora_distribute::events::event_admin_changed(e)
+    }),
+    ("admin_transfer_started", |e| {
+        callora_distribute::events::event_admin_transfer_started(e)
+    }),
+    ("admin_transfer_completed", |e| {
+        callora_distribute::events::event_admin_transfer_completed(e)
+    }),
+    ("admin_cancelled", |e| {
+        callora_distribute::events::event_admin_cancelled(e)
+    }),
+    ("pause_set", |e| {
+        callora_distribute::events::event_pause_set(e)
+    }),
+    ("set_max_distribute", |e| {
+        callora_distribute::events::event_set_max_distribute(e)
+    }),
+    ("distribute", |e| {
+        callora_distribute::events::event_distribute(e)
+    }),
+    ("distribute_started", |e| {
+        callora_distribute::events::event_distribute_started(e)
+    }),
+    ("distribute_completed", |e| {
+        callora_distribute::events::event_distribute_completed(e)
+    }),
+    ("upgraded", |e| {
+        callora_distribute::events::event_upgraded(e)
     }),
 ];
 
@@ -279,6 +326,20 @@ fn revenue_pool_topics_match_catalog() {
     }
 }
 
+/// Verify every distribute event constructor produces the expected Symbol bytes.
+#[test]
+fn distribute_topics_match_catalog() {
+    let env = Env::default();
+    for (expected, ctor) in DISTRIBUTE_TOPICS {
+        let sym = ctor(&env);
+        assert_eq!(
+            sym,
+            Symbol::new(&env, expected),
+            "distribute topic mismatch: expected \"{expected}\""
+        );
+    }
+}
+
 /// Catalog count guard: if this test fails, a new topic was added to
 /// `events.rs` but the corresponding row in `docs/EVENT_TOPICS.md` was
 /// not updated.
@@ -298,12 +359,20 @@ fn topic_counts_match_catalog_documentation() {
     );
     assert_eq!(
         REVENUE_POOL_TOPICS.len(),
-        21,
+        22,
         "revenue_pool topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
-        VAULT_TOPICS.len() + SETTLEMENT_TOPICS.len() + REVENUE_POOL_TOPICS.len(),
-        73,
+        DISTRIBUTE_TOPICS.len(),
+        11,
+        "distribute topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        VAULT_TOPICS.len()
+            + SETTLEMENT_TOPICS.len()
+            + REVENUE_POOL_TOPICS.len()
+            + DISTRIBUTE_TOPICS.len(),
+        87,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }
@@ -325,6 +394,11 @@ fn all_topic_strings_are_valid_identifiers() {
             REVENUE_POOL_TOPICS
                 .iter()
                 .map(|(s, c)| ("revenue_pool", *s, *c)),
+        )
+        .chain(
+            DISTRIBUTE_TOPICS
+                .iter()
+                .map(|(s, c)| ("distribute", *s, *c)),
         )
         .collect();
 
@@ -391,6 +465,20 @@ fn no_duplicate_topics_per_contract() {
             );
         }
     }
+
+    let mut distribute_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in DISTRIBUTE_TOPICS {
+        distribute_syms.push_back(ctor(&env));
+    }
+    for i in 0..distribute_syms.len() {
+        for j in (i + 1)..distribute_syms.len() {
+            assert_ne!(
+                distribute_syms.get(i).unwrap(),
+                distribute_syms.get(j).unwrap(),
+                "distribute has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
 }
 
 /// Cross-contract stability: calling the same constructor twice returns
@@ -404,6 +492,7 @@ fn topic_constructors_are_deterministic() {
         .map(|(_, c)| *c)
         .chain(SETTLEMENT_TOPICS.iter().map(|(_, c)| *c))
         .chain(REVENUE_POOL_TOPICS.iter().map(|(_, c)| *c))
+        .chain(DISTRIBUTE_TOPICS.iter().map(|(_, c)| *c))
         .collect();
 
     for ctor in all {
@@ -414,4 +503,32 @@ fn topic_constructors_are_deterministic() {
             "constructor returned different Symbols on repeated calls"
         );
     }
+}
+
+/// Explicit catalog test for the `set_settlement` topic (issue #1111).
+///
+/// Verifies that:
+/// 1. The `event_set_settlement` constructor produces exactly the bytes for
+///    `"set_settlement"` (no accidental rename/drift).
+/// 2. The entry is present in `VAULT_TOPICS` at the expected position (row 18).
+#[test]
+fn set_settlement_topic_in_catalog() {
+    let env = Env::default();
+
+    // 1. Constructor byte-identity.
+    let sym = callora_vault::events::event_set_settlement(&env);
+    assert_eq!(
+        sym,
+        Symbol::new(&env, "set_settlement"),
+        "event_set_settlement constructor produced unexpected bytes"
+    );
+
+    // 2. Catalog presence — find the entry by name.
+    let found = VAULT_TOPICS
+        .iter()
+        .any(|(name, _)| *name == "set_settlement");
+    assert!(
+        found,
+        "\"set_settlement\" is missing from the VAULT_TOPICS catalog array"
+    );
 }

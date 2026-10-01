@@ -12,8 +12,8 @@ use soroban_sdk::contracterror;
 /// | 2    | AlreadyInitialized       | `init` was called more than once                   |
 /// | 3    | Unauthorized             | Caller is not the admin or authorized caller       |
 /// | 4    | Paused                   | Contract is currently paused                       |
-/// | 5    | AccountLimitExceeded     | Account would exceed per-account state cap         |
-/// | 6    | AccountStateEmpty        | Cannot close a state entry that does not exist     |
+/// | 5    | AccountLimitExceeded     | Reserved legacy code; not emitted by entrypoints   |
+/// | 6    | AccountStateEmpty        | Reserved legacy code; not emitted by entrypoints   |
 /// | 7    | BatchEmpty               | Batch operation received an empty items list       |
 /// | 8    | BatchTooLarge            | Batch exceeds `MAX_BATCH_SIZE`                     |
 /// | 9    | Overflow                 | Arithmetic overflow detected                       |
@@ -32,9 +32,9 @@ pub enum DistributeError {
     Unauthorized = 3,
     /// Contract is currently paused (code 4).
     Paused = 4,
-    /// Account would exceed the per-account state cap (code 5).
+    /// Reserved legacy state-counter error (code 5); retained for code stability.
     AccountLimitExceeded = 5,
-    /// Cannot close a state entry that does not exist — count is zero (code 6).
+    /// Reserved legacy state-counter error (code 6); retained for code stability.
     AccountStateEmpty = 6,
     /// Batch operation received an empty items list (code 7).
     BatchEmpty = 7,
@@ -48,6 +48,14 @@ pub enum DistributeError {
     NewAdminSameAsCurrent = 11,
     /// No admin transfer is pending to cancel (code 12).
     NoAdminTransferPending = 12,
+
+    InvalidConfig = 13,
+    InvalidRecipient = 14,
+    AmountNotPositive = 15,
+    AmountExceedsMaxDistribute = 16,
+    InsufficientBalance = 17,
+    AlreadyPaused = 18,
+    NotPaused = 19,
 }
 
 #[cfg(test)]
@@ -57,7 +65,7 @@ mod tests {
     /// Verify that every error discriminant is unique and sequential.
     #[test]
     fn error_codes_are_unique_and_sequential() {
-        let codes: [u32; 12] = [
+        let codes: [u32; 19] = [
             DistributeError::NotInitialized as u32,
             DistributeError::AlreadyInitialized as u32,
             DistributeError::Unauthorized as u32,
@@ -70,8 +78,15 @@ mod tests {
             DistributeError::CapNotPositive as u32,
             DistributeError::NewAdminSameAsCurrent as u32,
             DistributeError::NoAdminTransferPending as u32,
+            DistributeError::InvalidConfig as u32,
+            DistributeError::InvalidRecipient as u32,
+            DistributeError::AmountNotPositive as u32,
+            DistributeError::AmountExceedsMaxDistribute as u32,
+            DistributeError::InsufficientBalance as u32,
+            DistributeError::AlreadyPaused as u32,
+            DistributeError::NotPaused as u32,
         ];
-        let mut seen = [false; 13];
+        let mut seen = [false; 20];
         for (i, &code) in codes.iter().enumerate() {
             assert_eq!(
                 code,
