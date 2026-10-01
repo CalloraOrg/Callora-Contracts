@@ -58,6 +58,22 @@ pub enum StorageKey {
     PriceRegistryLastWrite(Address),
     /// Price entry for a given offering identifier.
     Price(soroban_sdk::String),
+    /// Pending timelocked WASM upgrade proposal.
+    PendingUpgrade,
+    /// Whether a token contract is accepted for settlement payments.
+    SupportedToken(Address),
+    /// Whether the configured-USDC allowlist backfill has run.
+    SupportedTokensMigrated,
+    /// Persistent replay marker for an accounting-only vault deduction.
+    DeductionRequest(u64),
+}
+
+/// Accounting-only deduction recorded; does not imply a token transfer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeductionRecordedEvent {
+    pub amount: i128,
+    pub request_id: u64,
 }
 
 /// Read-only preview of a developer claim/withdrawal.
@@ -97,8 +113,15 @@ pub struct AdminBroadcast {
     pub message: soroban_sdk::String,
 }
 
-/// Storage TTL entry for a given storage key category, returned by
-/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+/// Storage TTL policy entry for a given storage key category.
+///
+/// Retained for ABI compatibility with the off-chain tooling that consumes the
+/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
+/// measurement: contract code cannot observe the remaining TTL of a ledger
+/// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence — see
+/// `docs/STORAGE_TTL_DOCTOR.md`. The revenue pool exposes policy constants only
+/// via `get_ttl_policy` (`callora_revenue_pool::TtlPolicy`).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
@@ -253,4 +276,21 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
+}
+
+/// Emitted when the admin proposes a timelocked WASM upgrade.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposedEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+}
+
+/// Emitted when a pending WASM upgrade is cancelled by the admin.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeCancelledEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub cancelled_at: u64,
 }
