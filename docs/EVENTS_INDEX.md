@@ -84,6 +84,8 @@ individual events through the ladder as indexer needs arise.
 | Event topic (action) | Constructor | Subject (topic2 today) | Data payload |
 |---|---|---|---|
 | `payment_received` | `event_payment_received` | vault/admin caller | `PaymentReceivedEvent { from_vault, amount, to_pool, developer }` |
+| `supported_token_added` | `event_supported_token_added` | caller, token | token address |
+| `supported_token_removed` | `event_supported_token_removed` | caller, token | token address |
 | `balance_credited` | `event_balance_credited` | developer address | `BalanceCreditedEvent { developer, amount, new_balance }` |
 | `developer_withdraw` | `event_developer_withdraw` | developer address | `DeveloperWithdrawEvent { developer, amount, to }` |
 | `daily_withdraw_cap_changed` | `event_daily_withdraw_cap_changed` | caller | `DailyWithdrawCapChanged { developer, new_cap }` |
@@ -102,7 +104,7 @@ individual events through the ladder as indexer needs arise.
 | Event topic (action) | Constructor | Subject (topic2 today) | Data payload |
 |---|---|---|---|
 | `init` | `event_init` | — | admin, USDC token address |
-| `admin_changed` | `event_admin_changed` | current admin | new admin address |
+| `admin_changed` | `event_admin_changed` | previous admin | `(previous_admin, new_admin)` — emitted by `accept_admin()`, never by `set_admin()` |
 | `admin_transfer_started` | `event_admin_transfer_started` | current admin | new admin address |
 | `admin_transfer_completed` | `event_admin_transfer_completed` | — | — |
 | `admin_cancelled` | `event_admin_cancelled` | — | — |
