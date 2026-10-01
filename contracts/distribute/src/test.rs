@@ -20,9 +20,12 @@ fn init_event_structure_validation() {
     let events = env.events().all();
     let event = events.last().unwrap();
 
+    // Topics: (event_name, callora_v1, admin)
     let topics = &event.1;
     assert_eq!(topics.len(), 3);
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "init"));
     let topic1: Symbol = topics.get(1).unwrap().into_val(&env);
     let topic2: Address = topics.get(2).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "init"));
@@ -81,6 +84,12 @@ fn admin_transfer_events_structure() {
         "acceptance must publish admin_changed then admin_transfer_completed, got {}",
         events.len()
     );
+    let last_event = events.last().unwrap();
+    let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
+    // Topics: (event_name, callora_v1, new_admin)
+    let topic2: Address = last_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, new_admin);
 
     let changed = events.get(0).unwrap();
     let changed_topic0: Symbol = changed.1.get(0).unwrap().into_val(&env);
@@ -163,6 +172,7 @@ fn pause_unpause_events() {
     let pause_event = events.last().unwrap();
     let topic0: Symbol = pause_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "pause_set"));
+    // Topics: (event_name, callora_v1, caller)
     let topic1: Symbol = pause_event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
     let topic2: Address = pause_event.1.get(2).unwrap().into_val(&env);
@@ -206,6 +216,7 @@ fn set_max_distribute_event() {
     let event = events.last().unwrap();
     let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "set_max_distribute"));
+    // Topics: (event_name, callora_v1, admin)
     let topic1: Symbol = event.1.get(1).unwrap().into_val(&env);
     assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
     let topic2: Address = event.1.get(2).unwrap().into_val(&env);
@@ -376,7 +387,6 @@ fn all_event_constructors_return_correct_symbols() {
 #[test]
 fn require_auth_on_all_state_changing_functions() {
     let env = Env::default();
-    // Do NOT mock all auths — we want to verify auth failures
     let admin = Address::generate(&env);
     let usdc_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -384,6 +394,14 @@ fn require_auth_on_all_state_changing_functions() {
     let contract_addr = env.register(Distribute, ());
     let client = DistributeClient::new(&env, &contract_addr);
 
+    // Init and fund with all auths mocked (setup phase).
+    env.mock_all_auths();
+    client.init(&admin, &usdc_addr);
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1000);
+
+    // Now drop all auth — non-admin should fail on every state-changing function.
+    env.set_auths(&[]);
     // init now requires admin auth; mock it only for this call
     env.mock_all_auths();
     client.init(&admin, &usdc_addr);

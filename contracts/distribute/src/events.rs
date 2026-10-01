@@ -150,6 +150,11 @@ pub fn event_batch_distribute_completed(env: &Env) -> Symbol {
     Symbol::new(env, "batch_distribute_completed")
 }
 
+/// Returns the Symbol for the `"broadcast"` event topic.
+///
+/// Emitted when the admin publishes a severity-tagged broadcast message.
+pub fn event_broadcast(env: &Env) -> Symbol {
+    Symbol::new(env, "broadcast")
 /// Returns the Symbol for the `"batch_distribute"` event topic.
 pub fn event_batch_distribute(env: &Env) -> Symbol {
     Symbol::new(env, "batch_distribute")
