@@ -17,6 +17,8 @@ use soroban_sdk::contracterror;
 /// | 50   | InvalidAdminCooldown        | Admin cool-off window is outside accepted bounds     |
 /// | 51   | NoAdminTransferPending      | No admin transfer is pending                         |
 /// | 52   | NewAdminSameAsCurrent       | Proposed admin matches the current admin             |
+/// | 53   | AdminTransferCancelled      | Admin transfer was cancelled                         |
+/// | 54   | MigrationPending            | Legacy whitelist vector has not been migrated yet    |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -44,4 +46,6 @@ pub enum WhitelistError {
     NewAdminSameAsCurrent = 52,
     /// Admin transfer was cancelled (code 53).
     AdminTransferCancelled = 53,
+    /// Whitelist mutations are blocked until the legacy vector is migrated (code 54).
+    MigrationPending = 54,
 }
