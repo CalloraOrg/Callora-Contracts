@@ -1,5 +1,22 @@
 #![no_std]
 
+//! Callora Distribute contract.
+//!
+//! Immediate, admin-authorized token distributions with a per-leg amount cap
+//! and a per-call batch size limit. Payments do not create per-account state
+//! entries or pending payouts, and there is no per-account state cap.
+//!
+//! # Instance storage TTL policy
+//!
+//! Critical configuration lives in Soroban instance storage. Reads count as
+//! active use: every public view refreshes instance TTL at or below a 30-day
+//! threshold, extending it back to a 60-day target, matching the vault policy.
+//!
+//! TTL changes persist only when the invocation is submitted and committed.
+//! RPC simulation alone does not extend on-chain lifetime; clients that only
+//! simulate views still need a submitted invocation or TTL-extension transaction.
+
+pub mod events;
 pub mod errors;
 pub mod events;
 pub mod limits;
@@ -26,26 +43,20 @@ const VERSION_KEY: &str = "version";
 /// Default per-leg distribution cap â€” effectively unlimited until explicitly set.
 pub const DEFAULT_MAX_DISTRIBUTE: i128 = i128::MAX;
 
-/// TTL bump constants for instance storage archival risk mitigation.
-pub const BUMP_AMOUNT: u32 = 10_000;
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// Ledgers per day at the network's approximately five-second close cadence.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-// ---------------------------------------------------------------------------
-// Error strings
-// ---------------------------------------------------------------------------
+/// Refresh instance storage when at most ~30 days of TTL remain.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
-#[allow(dead_code)]
-const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-#[allow(dead_code)]
-const ERR_NOT_INITIALIZED: &str = "contract not initialized";
-#[allow(dead_code)]
-const ERR_PAUSED: &str = "contract is paused";
-#[allow(dead_code)]
-const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
-#[allow(dead_code)]
-const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
-#[allow(dead_code)]
-const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
+/// Extend instance storage back to ~60 days from the current ledger.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Backwards-compatible alias for the previous public constant name.
+pub const LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_THRESHOLD;
+
+/// Backwards-compatible alias for the previous public constant name.
+pub const BUMP_AMOUNT: u32 = INSTANCE_BUMP_AMOUNT;
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -56,22 +67,34 @@ pub struct Distribute;
 
 #[contractimpl]
 impl Distribute {
+    /// Refresh instance storage TTL using the workspace-wide 30/60-day policy.
+    #[inline]
+    fn bump_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
 
     /// Initialize the distribute contract with an admin and the USDC token address.
     ///
+    /// Requires a signature from `admin` (`admin.require_auth()`), preventing
+    /// init front-running: only the intended admin can claim ownership at
+    /// deployment time.
+    ///
     /// Can only be called once. Rejects `usdc_token == contract address`.
     ///
     /// # Panics
-    /// * `"contract already initialized"` â€” called more than once.
-    /// * `"invalid config: usdc_token cannot be the contract itself"` â€” bad token address.
-    /// * `"invalid config: usdc_token cannot be the admin address"` â€” token/admin aliasing.
+    /// * `DistributeError::AlreadyInitialized` â€” called more than once.
+    /// * `DistributeError::InvalidConfig` â€” bad token address or token/admin aliasing.
     ///
     /// # Events
     /// Emits `init` with `admin` as topic and `usdc_token` as data.
     pub fn init(env: Env, admin: Address, usdc_token: Address) {
+        admin.require_auth();
         if env.storage().instance().has(&Symbol::new(&env, ADMIN_KEY)) {
             env.panic_with_error(DistributeError::AlreadyInitialized);
         }
@@ -145,20 +168,25 @@ impl Distribute {
     /// Return the current admin address.
     ///
     /// # Panics
-    /// * `"contract not initialized"` â€” called before `init`.
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
     pub fn get_admin(env: Env) -> Address {
-        Self::admin(&env)
+        let admin = Self::admin(&env);
+        Self::bump_instance_ttl(&env);
+        admin
     }
 
     /// Return the USDC token address configured for this contract.
     ///
     /// # Panics
-    /// * `"contract not initialized"` â€” called before `init`.
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
     pub fn get_usdc_token(env: Env) -> Address {
-        env.storage()
+        let usdc = env
+            .storage()
             .instance()
             .get(&Symbol::new(&env, USDC_KEY))
-            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        Self::bump_instance_ttl(&env);
+        usdc
     }
 
     // -----------------------------------------------------------------------
@@ -169,11 +197,14 @@ impl Distribute {
     /// The nominee must call `claim_admin` to complete.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
     ///
     /// # Events
-    /// Emits `admin_changed` with `(current, new_admin)` and
-    /// `admin_transfer_started` with `new_admin`.
+    /// Emits `admin_transfer_started` with `current` as topic and `new_admin`
+    /// as data. No `admin_changed` event is published while the transfer is
+    /// only pending — the admin does not change until `accept_admin`
+    /// (Issue #1163), so a nomination that is later cancelled never announces
+    /// a change that did not happen.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         let current = Self::admin(&env);
@@ -183,14 +214,6 @@ impl Distribute {
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events().publish(
-            (
-                events::event_admin_changed(&env),
-                events::event_version_v1(&env),
-                current.clone(),
-            ),
-            (current.clone(), new_admin.clone()),
-        );
         env.events().publish(
             (
                 events::event_admin_transfer_started(&env),
@@ -204,11 +227,15 @@ impl Distribute {
     /// Complete the admin transfer. Only the pending admin may call.
     ///
     /// # Panics
-    /// * `"no pending admin"` â€” no transfer is in progress.
-    /// * `"unauthorized: caller is not pending admin"` â€” wrong caller.
+    /// * `DistributeError::NoAdminTransferPending` â€” no transfer is in progress.
+    /// * `DistributeError::Unauthorized` â€” wrong caller.
     ///
     /// # Events
-    /// Emits `admin_transfer_completed` with the new admin as topic.
+    /// Emits `admin_changed` with the previous admin as topic and
+    /// `(previous_admin, new_admin)` as data, followed by
+    /// `admin_transfer_completed` with the new admin as topic. Both are
+    /// published only after the admin slot is updated, so indexers observe
+    /// the change exactly when it happens (Issue #1163).
     pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
         let inst = env.storage().instance();
@@ -218,9 +245,18 @@ impl Distribute {
         if caller != pending {
             env.panic_with_error(DistributeError::Unauthorized);
         }
+        let previous = Self::admin(&env);
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_admin_changed(&env),
+                events::event_version_v1(&env),
+                previous.clone(),
+            ),
+            (previous, pending.clone()),
+        );
         env.events().publish(
             (
                 events::event_admin_transfer_completed(&env),
@@ -239,8 +275,8 @@ impl Distribute {
     /// Cancel a pending admin transfer. Only the current admin may call.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `"no admin transfer pending"` â€” no transfer in progress.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::NoAdminTransferPending` â€” no transfer in progress.
     ///
     /// # Events
     /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
@@ -269,9 +305,12 @@ impl Distribute {
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage()
+        let pending = env
+            .storage()
             .instance()
-            .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
+            .get(&Symbol::new(&env, PENDING_ADMIN_KEY));
+        Self::bump_instance_ttl(&env);
+        pending
     }
 
     // -----------------------------------------------------------------------
@@ -282,8 +321,8 @@ impl Distribute {
     /// Only the admin may call.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `"contract already paused"` â€” contract is already paused.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::AlreadyPaused` â€” contract is already paused.
     ///
     /// # Events
     /// Emits `pause_set` with `caller` as topic and `true` as data.
@@ -312,8 +351,8 @@ impl Distribute {
     /// Deactivate the circuit-breaker. Only the admin may call.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `"contract not paused"` â€” contract is not currently paused.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::NotPaused` â€” contract is not currently paused.
     ///
     /// # Events
     /// Emits `pause_set` with `caller` as topic and `false` as data.
@@ -341,7 +380,9 @@ impl Distribute {
 
     /// Return `true` if the contract is currently paused.
     pub fn get_paused(env: Env) -> bool {
-        Self::is_paused(&env)
+        let paused = Self::is_paused(&env);
+        Self::bump_instance_ttl(&env);
+        paused
     }
 
     // -----------------------------------------------------------------------
@@ -350,22 +391,26 @@ impl Distribute {
 
     /// Return the per-leg distribution cap. Defaults to `i128::MAX` when unset.
     pub fn get_max_distribute(env: Env) -> i128 {
-        env.storage()
+        let max_distribute = env
+            .storage()
             .instance()
             .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
-            .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE);
+        Self::bump_instance_ttl(&env);
+        max_distribute
     }
 
     /// Return the configured maximum batch size.
-    pub fn get_max_batch_size(_env: Env) -> u32 {
+    pub fn get_max_batch_size(env: Env) -> u32 {
+        Self::bump_instance_ttl(&env);
         limits::MAX_BATCH_SIZE
     }
 
     /// Set the maximum amount distributable per leg. Must be positive. Admin only.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `"max_distribute must be positive"` â€” value â‰¤ 0.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::CapNotPositive` â€” value â‰¤ 0.
     ///
     /// # Events
     /// Emits `set_max_distribute` with `(old_max, new_max)`.
@@ -399,12 +444,12 @@ impl Distribute {
     /// Distribute USDC from this contract to a single recipient.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `ERR_PAUSED` â€” contract is paused.
-    /// * `ERR_AMOUNT_NOT_POSITIVE` â€” amount â‰¤ 0.
-    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` â€” amount exceeds the cap.
-    /// * `"invalid recipient: cannot distribute to the contract itself"`.
-    /// * `ERR_INSUFFICIENT_BALANCE` â€” contract holds less than `amount`.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::Paused` â€” contract is paused.
+    /// * `DistributeError::AmountNotPositive` â€” amount â‰¤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` â€” amount exceeds the cap.
+    /// * `DistributeError::InvalidRecipient`.
+    /// * `DistributeError::InsufficientBalance` â€” contract holds less than `amount`.
     ///
     /// # Events
     /// Emits `distribute_started` with `to` as topic and `amount` as data.
@@ -482,18 +527,25 @@ impl Distribute {
     /// - The sum of all amounts must not exceed the contract's USDC balance.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
-    /// * `ERR_PAUSED` â€” contract is paused.
-    /// * `"batch is empty"` â€” no payment legs provided.
-    /// * `"batch exceeds max batch size"` â€” more than `MAX_BATCH_SIZE` legs.
-    /// * `ERR_AMOUNT_NOT_POSITIVE` â€” any leg has amount â‰¤ 0.
-    /// * `ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE` â€” any leg exceeds per-leg cap.
-    /// * `"invalid recipient: cannot distribute to the contract itself"`.
-    /// * `ERR_INSUFFICIENT_BALANCE` â€” contract holds less than `total`.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
+    /// * `DistributeError::Paused` â€” contract is paused.
+    /// * `DistributeError::BatchEmpty` â€” no payment legs provided.
+    /// * `DistributeError::BatchTooLarge` â€” more than `MAX_BATCH_SIZE` legs.
+    /// * `DistributeError::Overflow` - the sum of all leg amounts overflows `i128`.
+    /// * `DistributeError::AmountNotPositive` â€” any leg has amount â‰¤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` â€” any leg exceeds per-leg cap.
+    /// * `DistributeError::InvalidRecipient`.
+    /// * `DistributeError::InsufficientBalance` â€” contract holds less than `total`.
     ///
     /// # Events
-    /// Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
-    /// Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
+    /// - Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
+    /// - For each payment leg, emits in payment order:
+    ///   - `distribute_started` with `(distribute_started, callora_v1, recipient)` topic and
+    ///     `DistributionLifecycleEvent` payload before the transfer.
+    ///   - `distribute` with `(distribute, callora_v1, recipient)` topic and `amount` data.
+    ///   - `distribute_completed` with `(distribute_completed, callora_v1, recipient)` topic and
+    ///     `DistributionLifecycleEvent` payload after successful transfer.
+    /// - Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
     pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -517,7 +569,7 @@ impl Distribute {
         let contract_address = env.current_contract_address();
         let max_distribute = Self::get_max_distribute(env.clone());
 
-        // Phase 1 â€” validate all legs and compute total
+        // Phase 1 — validate all legs and compute total
         let mut total: i128 = 0;
         for i in 0..n {
             let (ref to, amount) = payments.get(i).expect("payment leg");
@@ -531,10 +583,10 @@ impl Distribute {
             // Overflow-safe accumulation
             total = total
                 .checked_add(amount)
-                .unwrap_or_else(|| panic!("arithmetic overflow in batch_distribute total"));
+                .unwrap_or_else(|| env.panic_with_error(DistributeError::Overflow));
         }
 
-        // Phase 2 â€” check total balance
+        // Phase 2 — check total balance
         if usdc.balance(&contract_address) < total {
             env.panic_with_error(DistributeError::InsufficientBalance);
         }
@@ -543,7 +595,7 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-        // Phase 3 â€” emit started event
+        // Phase 3 — emit started event
         env.events().publish(
             (
                 events::event_batch_distribute_started(&env),
@@ -553,13 +605,23 @@ impl Distribute {
             (total, n),
         );
 
-        // Phase 4 â€” execute transfers
+        // Phase 4 — execute transfers with per-leg transfer and lifecycle events
         for i in 0..n {
             let (to, amount) = payments.get(i).expect("payment leg");
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                i,
+                n,
+            );
+            events::emit_distribute_started(&env, &to, &lifecycle);
             usdc.transfer(&contract_address, &to, &amount);
+            events::emit_distribute(&env, &to, amount);
+            events::emit_distribute_completed(&env, &to, &lifecycle);
         }
 
-        // Phase 5 â€” emit completed event
+        // Phase 5 — emit completed event
         env.events().publish(
             (
                 events::event_batch_distribute_completed(&env),
@@ -577,7 +639,7 @@ impl Distribute {
     /// Return this contract's on-ledger USDC balance.
     ///
     /// # Panics
-    /// * `ERR_NOT_INITIALIZED` â€” called before `init`.
+    /// * `DistributeError::NotInitialized` â€” called before `init`.
     pub fn balance(env: Env) -> i128 {
         let usdc_addr: Address = env
             .storage()
@@ -585,7 +647,9 @@ impl Distribute {
             .get(&Symbol::new(&env, USDC_KEY))
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_addr);
-        usdc.balance(&env.current_contract_address())
+        let balance = usdc.balance(&env.current_contract_address());
+        Self::bump_instance_ttl(&env);
+        balance
     }
 
     // -----------------------------------------------------------------------
@@ -595,7 +659,7 @@ impl Distribute {
     /// Admin-gated contract upgrade. Replaces the WASM and persists the version.
     ///
     /// # Panics
-    /// * `ERR_UNAUTHORIZED` â€” caller is not the current admin.
+    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
     ///
     /// # Events
     /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
@@ -622,14 +686,19 @@ impl Distribute {
 
     /// Return the stored WASM version hash, or `None` if never upgraded.
     pub fn get_version(env: Env) -> Option<BytesN<32>> {
-        env.storage()
+        let version = env
+            .storage()
             .instance()
-            .get(&Symbol::new(&env, VERSION_KEY))
+            .get(&Symbol::new(&env, VERSION_KEY));
+        Self::bump_instance_ttl(&env);
+        version
     }
 
     /// Return the crate version string baked in at compile time.
     pub fn version(env: Env) -> soroban_sdk::String {
-        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
+        let version = soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"));
+        Self::bump_instance_ttl(&env);
+        version
     }
 }
 
@@ -638,3 +707,6 @@ mod test;
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod test_ttl;
