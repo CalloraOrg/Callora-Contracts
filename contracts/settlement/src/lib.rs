@@ -84,6 +84,12 @@ impl CalloraSettlement {
     /// This entrypoint is intended for accounting-only updates and does not
     /// credit any developer or pool balance. The vault must authorize the call.
     ///
+    /// Note: `TotalReceived` is also incremented by [`Self::receive_payment`]
+    /// and [`Self::batch_receive_payment`] for every actual credit path
+    /// (pool and developer). `record_deduction` exists for cases where the
+    /// vault wants to record an inbound amount that does not go through a
+    /// standard credit path.
+    ///
     /// # Arithmetic safety
     /// The cumulative total is incremented via `checked_add`. An overflow
     /// panics with [`SettlementError::PoolOverflow`] rather than wrapping
@@ -162,6 +168,14 @@ impl CalloraSettlement {
                 .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow));
             global_pool.last_updated = env.ledger().timestamp();
             inst.set(&StorageKey::GlobalPool, &global_pool);
+
+            // Reconcile TotalReceived: pool credit path.
+            let total_received = inst.get::<_, i128>(&StorageKey::TotalReceived).unwrap_or(0);
+            let new_total_received = total_received
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::PoolOverflow));
+            inst.set(&StorageKey::TotalReceived, &new_total_received);
+
             events::emit_payment_received(
                 &env,
                 &caller,
@@ -204,6 +218,13 @@ impl CalloraSettlement {
                 .unwrap_or_else(|| Vec::new(&env));
             Self::sorted_insert(&env, &mut index, dev_address.clone());
             inst.set(&StorageKey::DeveloperIndex, &index);
+
+            // Reconcile TotalReceived: developer credit path.
+            let total_received = inst.get::<_, i128>(&StorageKey::TotalReceived).unwrap_or(0);
+            let new_total_received = total_received
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
+            inst.set(&StorageKey::TotalReceived, &new_total_received);
 
             events::emit_payment_received(
                 &env,
@@ -292,6 +313,9 @@ impl CalloraSettlement {
 
         let inst = env.storage().instance();
 
+        // Accumulate the batch total for the TotalReceived reconciliation below.
+        let mut batch_total: i128 = 0;
+
         for item in items.iter() {
             let (dev, amount) = item;
             let balance_key = StorageKey::DeveloperBalance(dev.clone(), token.clone());
@@ -334,7 +358,20 @@ impl CalloraSettlement {
                     amount,
                 },
             );
+
+            // Accumulate for TotalReceived.
+            batch_total = batch_total
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
         }
+
+        // Reconcile TotalReceived: batch developer credit path.
+        // Written once after the loop to avoid redundant storage reads/writes.
+        let total_received = inst.get::<_, i128>(&StorageKey::TotalReceived).unwrap_or(0);
+        let new_total_received = total_received
+            .checked_add(batch_total)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
+        inst.set(&StorageKey::TotalReceived, &new_total_received);
     }
 
     /// Get current admin address
@@ -400,9 +437,22 @@ impl CalloraSettlement {
             .ok_or(SettlementError::NotInitialized)
     }
 
-    /// Return the cumulative total of all funds received via `receive_payment` and
-    /// `batch_receive_payment`, regardless of routing (pool or developer). Returns
-    /// `0` before any payments.
+    /// Return the cumulative total of all funds credited through every inbound
+    /// payment path.
+    ///
+    /// The following paths contribute to this metric:
+    /// - [`Self::receive_payment`] — both pool (`to_pool = true`) and
+    ///   developer (`to_pool = false`) branches.
+    /// - [`Self::batch_receive_payment`] — every item in the batch,
+    ///   regardless of which developer is credited.
+    /// - [`Self::record_deduction`] — accounting-only vault deductions that
+    ///   do not go through a standard credit path.
+    ///
+    /// Returns `0` before any payments have been received.
+    ///
+    /// # Arithmetic safety
+    /// Every contributing path uses `checked_add` so an overflow panics with
+    /// [`SettlementError::PoolOverflow`] rather than wrapping silently.
     pub fn get_total_received(env: Env) -> i128 {
         env.storage()
             .instance()

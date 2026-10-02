@@ -1,80 +1,47 @@
+//! Per-entrypoint auth snapshot tests for `callora-distribute`.
+//!
+//! Every state-changing entrypoint must require admin auth.
+//! Every read-only entrypoint must succeed without auth.
+//!
+//! These tests exist to catch regressions where an auth guard is accidentally
+//! removed or bypassed.
+
 #![cfg(test)]
 
 extern crate std;
 
-use callora_distribute::{
-    CalloraDistribute, CalloraDistributeClient, DistributeError, BatchItem,
-};
+use callora_distribute::{Distribute, DistributeClient};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{token, Address, BytesN, Env};
 
-fn create_contract(env: &Env) -> CalloraDistributeClient<'_> {
-    let contract_id = env.register(CalloraDistribute, ());
-    CalloraDistributeClient::new(env, &contract_id)
+fn create_contract(env: &Env) -> DistributeClient<'_> {
+    let contract_id = env.register(Distribute, ());
+    DistributeClient::new(env, &contract_id)
 }
 
-fn setup(env: &Env) -> (Address, CalloraDistributeClient<'_>) {
+/// Returns an initialized contract with a funded USDC token.
+fn setup(env: &Env) -> (Address, Address, DistributeClient<'_>) {
     env.mock_all_auths();
     let admin = Address::generate(env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let client = create_contract(env);
-    client.init(&admin, &10);
-    (admin, client)
+    client.init(&admin, &usdc_addr);
+    (admin, usdc_addr, client)
 }
 
-#[test]
-fn init_requires_auth() {
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    let client = create_contract(&env);
-
-    env.set_auths(&[]);
-    let res = client.try_init(&admin, &10);
-    assert!(res.is_err(), "init must require auth");
-}
-
-#[test]
-fn set_global_cap_requires_auth() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    env.set_auths(&[]);
-    let res = client.try_set_global_cap(&admin, &20);
-    assert!(res.is_err(), "set_global_cap must require auth");
-}
-
-#[test]
-fn open_requires_auth() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    env.set_auths(&[]);
-    let account = Address::generate(&env);
-    let res = client.try_open(&admin, &account, &Symbol::new(&env, "test"));
-    assert!(res.is_err(), "open must require auth");
-}
-
-#[test]
-fn close_requires_auth() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    env.mock_all_auths();
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "test");
-    client.open(&admin, &account, &cat);
-
-    env.set_auths(&[]);
-    let res = client.try_close(&admin, &account, &cat);
-    assert!(res.is_err(), "close must require auth");
-}
+// ---------------------------------------------------------------------------
+// State-changing entrypoints: must require auth
+// ---------------------------------------------------------------------------
 
 #[test]
 fn set_admin_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
-    env.set_auths(&[]);
     let new_admin = Address::generate(&env);
+    env.set_auths(&[]);
     let res = client.try_set_admin(&admin, &new_admin);
     assert!(res.is_err(), "set_admin must require auth");
 }
@@ -82,24 +49,38 @@ fn set_admin_requires_auth() {
 #[test]
 fn accept_admin_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
-    env.mock_all_auths();
     let new_admin = Address::generate(&env);
+    env.mock_all_auths();
     client.set_admin(&admin, &new_admin);
 
     env.set_auths(&[]);
-    let res = client.try_accept_admin();
+    let res = client.try_accept_admin(&new_admin);
     assert!(res.is_err(), "accept_admin must require auth");
+}
+
+#[test]
+fn claim_admin_requires_auth() {
+    let env = Env::default();
+    let (admin, _usdc, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+    client.set_admin(&admin, &new_admin);
+
+    env.set_auths(&[]);
+    let res = client.try_claim_admin(&new_admin);
+    assert!(res.is_err(), "claim_admin must require auth");
 }
 
 #[test]
 fn cancel_admin_transfer_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
-    env.mock_all_auths();
     let new_admin = Address::generate(&env);
+    env.mock_all_auths();
     client.set_admin(&admin, &new_admin);
 
     env.set_auths(&[]);
@@ -110,7 +91,7 @@ fn cancel_admin_transfer_requires_auth() {
 #[test]
 fn pause_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
     let res = client.try_pause(&admin);
@@ -120,7 +101,7 @@ fn pause_requires_auth() {
 #[test]
 fn unpause_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
     env.mock_all_auths();
     client.pause(&admin);
@@ -131,100 +112,234 @@ fn unpause_requires_auth() {
 }
 
 #[test]
-fn upgrade_requires_auth() {
+fn set_max_distribute_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
+    let res = client.try_set_max_distribute(&admin, &1_000);
+    assert!(res.is_err(), "set_max_distribute must require auth");
+}
+
+#[test]
+fn distribute_requires_auth() {
+    let env = Env::default();
+    let (admin, usdc, client) = setup(&env);
+
+    let recipient = Address::generate(&env);
+    let usdc_sac = token::StellarAssetClient::new(&env, &usdc);
+    let contract_addr = env.register(Distribute, ());
+    usdc_sac.mint(&contract_addr, &1_000);
+
+    // Re-initialize on the second contract instance just to have a funded one.
+    // For this test we just verify auth failure, no actual transfer needed.
+    env.set_auths(&[]);
+    let res = client.try_distribute(&admin, &recipient, &100);
+    assert!(res.is_err(), "distribute must require auth");
+}
+
+#[test]
+fn batch_distribute_requires_auth() {
+    let env = Env::default();
+    let (admin, _usdc, client) = setup(&env);
+
+    let recipient = Address::generate(&env);
+    let mut payments = soroban_sdk::Vec::new(&env);
+    payments.push_back((recipient, 100i128));
+
+    env.set_auths(&[]);
+    let res = client.try_batch_distribute(&admin, &payments);
+    assert!(res.is_err(), "batch_distribute must require auth");
+}
+
+#[test]
+fn upgrade_requires_auth() {
+    let env = Env::default();
+    let (admin, _usdc, client) = setup(&env);
+
     let dummy = BytesN::from_array(&env, &[0u8; 32]);
+    env.set_auths(&[]);
     let res = client.try_upgrade(&admin, &dummy);
     assert!(res.is_err(), "upgrade must require auth");
 }
 
-#[test]
-fn broadcast_requires_auth() {
-    let env = Env::default();
-    let (admin, client) = setup(&env);
-
-    env.set_auths(&[]);
-    let msg = soroban_sdk::String::from_str(&env, "test");
-    let res = client.try_broadcast(
-        &admin,
-        &callora_distribute::Severity::Info,
-        &msg,
-    );
-    assert!(res.is_err(), "broadcast must require auth");
-}
+// ---------------------------------------------------------------------------
+// Read-only entrypoints: must succeed without auth
+// ---------------------------------------------------------------------------
 
 #[test]
 fn get_admin_does_not_require_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
-    assert_eq!(client.get_admin().unwrap(), admin);
+    let returned_admin = client.get_admin();
+    assert_eq!(
+        returned_admin, admin,
+        "get_admin must return the admin without auth"
+    );
 }
 
 #[test]
-fn get_global_cap_does_not_require_auth() {
+fn get_usdc_token_does_not_require_auth() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
+    let (_admin, usdc, client) = setup(&env);
 
     env.set_auths(&[]);
-    assert_eq!(client.get_global_cap(), 10);
+    let returned = client.get_usdc_token();
+    assert_eq!(returned, usdc, "get_usdc_token must not require auth");
 }
 
 #[test]
-fn is_paused_does_not_require_auth() {
+fn get_paused_does_not_require_auth() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
+    let (_admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
-    assert!(!client.is_paused());
+    assert!(!client.get_paused(), "get_paused must not require auth");
+}
+
+#[test]
+fn get_max_distribute_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, _usdc, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let _ = client.get_max_distribute();
+}
+
+#[test]
+fn get_max_batch_size_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, _usdc, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let _ = client.get_max_batch_size();
 }
 
 #[test]
 fn get_pending_admin_does_not_require_auth() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
+    let (_admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
-    assert_eq!(client.get_pending_admin(), None);
+    assert_eq!(
+        client.get_pending_admin(),
+        None,
+        "get_pending_admin must not require auth"
+    );
 }
 
 #[test]
 fn get_version_does_not_require_auth() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
+    let (_admin, _usdc, client) = setup(&env);
 
     env.set_auths(&[]);
-    assert_eq!(client.get_version(), None);
+    assert_eq!(
+        client.get_version(),
+        None,
+        "get_version must not require auth"
+    );
 }
 
 #[test]
-fn admin_with_auth_can_call_all_entrypoints() {
+fn balance_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, _usdc, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let _ = client.balance();
+}
+
+// ---------------------------------------------------------------------------
+// Full happy-path smoke test (admin with auth can use all entrypoints)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn admin_with_auth_can_use_all_entrypoints() {
     let env = Env::default();
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let client = create_contract(&env);
-    client.init(&admin, &10);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
 
-    assert_eq!(client.get_global_cap(), 10);
+    client.init(&admin, &usdc_addr);
 
-    client.set_global_cap(&admin, &20);
-    assert_eq!(client.get_global_cap(), 20);
+    // Fund the contract.
+    let usdc_sac = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_sac.mint(&contract_addr, &10_000);
 
-    let account = Address::generate(&env);
-    let cat = Symbol::new(&env, "test");
-    client.open(&admin, &account, &cat);
-    assert_eq!(client.get_account_count(&account), 1);
+    // Verify views.
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_usdc_token(), usdc_addr);
+    assert!(!client.get_paused());
+    assert_eq!(client.balance(), 10_000);
 
-    client.close(&admin, &account, &cat);
-    assert_eq!(client.get_account_count(&account), 0);
+    // Set distribution cap.
+    client.set_max_distribute(&admin, &5_000);
+    assert_eq!(client.get_max_distribute(), 5_000);
 
+    // Single distribute.
+    let recipient = Address::generate(&env);
+    client.distribute(&admin, &recipient, &1_000);
+    assert_eq!(client.balance(), 9_000);
+
+    // Batch distribute.
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+    let mut payments = soroban_sdk::Vec::new(&env);
+    payments.push_back((r2, 500i128));
+    payments.push_back((r3, 500i128));
+    client.batch_distribute(&admin, &payments);
+    assert_eq!(client.balance(), 8_000);
+
+    // Pause / unpause.
+    client.pause(&admin);
+    assert!(client.get_paused());
+    client.unpause(&admin);
+    assert!(!client.get_paused());
+
+    // Admin rotation.
     let new_admin = Address::generate(&env);
     client.set_admin(&admin, &new_admin);
-    client.accept_admin();
-    assert_eq!(client.get_admin().unwrap(), new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+/// Verify that `batch_distribute` accepts a `Vec<(Address, i128)>` — the concrete
+/// Soroban SDK type — not an import alias (`SorobanVec`). This is the regression
+/// test for issue #1171.
+#[test]
+fn batch_distribute_accepts_soroban_vec_type() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+    client.init(&admin, &usdc_addr);
+
+    let usdc_sac = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_sac.mint(&contract_addr, &10_000);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Use soroban_sdk::Vec directly — this must compile without the alias workaround.
+    let mut payments: soroban_sdk::Vec<(Address, i128)> = soroban_sdk::Vec::new(&env);
+    payments.push_back((r1, 100i128));
+    payments.push_back((r2, 200i128));
+
+    client.batch_distribute(&admin, &payments);
+    assert_eq!(client.balance(), 9_700);
 }

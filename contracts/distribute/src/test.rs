@@ -20,12 +20,18 @@ fn init_event_structure_validation() {
     let events = env.events().all();
     let event = events.last().unwrap();
 
+    // Events are published as (event_name, version, caller) with the payload as data.
+    // Topic layout: [0]=event_name, [1]=version, [2]=admin
     let topics = &event.1;
-    assert_eq!(topics.len(), 2);
+    assert_eq!(
+        topics.len(),
+        3,
+        "init event must have 3 topics: (name, version, admin)"
+    );
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-    let topic1: Address = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "init"));
-    assert_eq!(topic1, admin);
+    assert_eq!(topic2, admin);
 
     let data: Address = event.2.into_val(&env);
     assert_eq!(data, usdc_addr);
@@ -89,8 +95,9 @@ fn admin_transfer_events_structure() {
     let last_event = events.last().unwrap();
     let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
-    let topic1: Address = last_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, new_admin);
+    // Topic layout: [0]=event_name, [1]=version, [2]=new_admin
+    let topic2: Address = last_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, new_admin);
 }
 
 #[test]
@@ -137,8 +144,9 @@ fn pause_unpause_events() {
     let pause_event = events.last().unwrap();
     let topic0: Symbol = pause_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "pause_set"));
-    let topic1: Address = pause_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, admin);
+    // Topic layout: [0]=event_name, [1]=version, [2]=caller
+    let topic2: Address = pause_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, admin);
     let is_paused: bool = pause_event.2.into_val(&env);
     assert!(is_paused);
 
@@ -174,8 +182,9 @@ fn set_max_distribute_event() {
     let event = events.last().unwrap();
     let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "set_max_distribute"));
-    let topic1: Address = event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, admin);
+    // Topic layout: [0]=event_name, [1]=version, [2]=admin
+    let topic2: Address = event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, admin);
     let data: (i128, i128) = event.2.into_val(&env);
     assert_eq!(data, (i128::MAX, 1000));
 }
@@ -211,8 +220,9 @@ fn distribute_event_structure() {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         if topic0 == Symbol::new(&env, "distribute") {
             found = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            // Topic layout: [0]=event_name, [1]=version, [2]=recipient
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
             break;
@@ -246,7 +256,11 @@ fn distribute_lifecycle_events() {
     let events = env.events().all();
     // Should emit 3 events: distribute_started, distribute, distribute_completed
     // (plus potentially other events depending on test environment)
-    assert!(events.len() >= 3, "expected at least 3 events, got {}", events.len());
+    assert!(
+        events.len() >= 3,
+        "expected at least 3 events, got {}",
+        events.len()
+    );
 
     // Find and verify distribute_started event
     let mut found_started = false;
@@ -256,23 +270,26 @@ fn distribute_lifecycle_events() {
     for event in events.iter() {
         let topics: &Vec<Val> = &event.1;
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-        
+
         if topic0 == Symbol::new(&env, "distribute_started") {
             found_started = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            // Topic layout: [0]=event_name, [1]=version, [2]=recipient
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         } else if topic0 == Symbol::new(&env, "distribute") {
             found_distribute = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            // Topic layout: [0]=event_name, [1]=version, [2]=recipient
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         } else if topic0 == Symbol::new(&env, "distribute_completed") {
             found_completed = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            // Topic layout: [0]=event_name, [1]=version, [2]=recipient
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         }
@@ -312,7 +329,10 @@ fn all_event_constructors_return_correct_symbols() {
         events::event_set_max_distribute(&env),
         Symbol::new(&env, "set_max_distribute")
     );
-    assert_eq!(events::event_distribute(&env), Symbol::new(&env, "distribute"));
+    assert_eq!(
+        events::event_distribute(&env),
+        Symbol::new(&env, "distribute")
+    );
     assert_eq!(
         events::event_distribute_started(&env),
         Symbol::new(&env, "distribute_started")
@@ -327,7 +347,8 @@ fn all_event_constructors_return_correct_symbols() {
 #[test]
 fn require_auth_on_all_state_changing_functions() {
     let env = Env::default();
-    // Do NOT mock all auths — we want to verify auth failures
+    // Mock all auths during setup so init and mint work, then clear them for intruder tests.
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let usdc_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -344,6 +365,9 @@ fn require_auth_on_all_state_changing_functions() {
     // Non-admin should fail on all state-changing functions
     let intruder = Address::generate(&env);
     let recipient = Address::generate(&env);
+
+    // Clear auth mocking: every call that requires auth will fail for intruder.
+    env.set_auths(&[]);
 
     // set_admin
     let result = client.try_set_admin(&intruder, &intruder);
@@ -373,10 +397,16 @@ fn require_auth_on_all_state_changing_functions() {
 
     // accept_admin / claim_admin (no pending transfer — auth checked first)
     let result = client.try_accept_admin(&intruder);
-    assert!(result.is_err(), "non-admin should not be able to accept_admin");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to accept_admin"
+    );
 
     let result = client.try_claim_admin(&intruder);
-    assert!(result.is_err(), "non-admin should not be able to claim_admin");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to claim_admin"
+    );
 
     // upgrade (auth checked before wasm verification)
     let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
@@ -516,7 +546,10 @@ fn init_rejects_usdc_token_as_contract() {
     let client = DistributeClient::new(&env, &contract_addr);
 
     let result = client.try_init(&admin, &contract_addr);
-    assert!(result.is_err(), "init with usdc_token == contract should fail");
+    assert!(
+        result.is_err(),
+        "init with usdc_token == contract should fail"
+    );
 }
 
 #[test]

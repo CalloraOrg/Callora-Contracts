@@ -1,14 +1,12 @@
 #![no_std]
 
-pub mod events;
 pub mod errors;
+pub mod events;
 pub mod limits;
 
 use crate::errors::DistributeError;
 
-use soroban_sdk::{
-    contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec as SorobanVec,
-};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
 // Storage key constants
@@ -36,11 +34,17 @@ pub const LIFETIME_THRESHOLD: u32 = 1_000;
 // Error strings
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
+#[allow(dead_code)]
 const ERR_NOT_INITIALIZED: &str = "contract not initialized";
+#[allow(dead_code)]
 const ERR_PAUSED: &str = "contract is paused";
+#[allow(dead_code)]
 const ERR_AMOUNT_NOT_POSITIVE: &str = "amount must be positive";
+#[allow(dead_code)]
 const ERR_AMOUNT_EXCEEDS_MAX_DISTRIBUTE: &str = "amount exceeds max_distribute";
+#[allow(dead_code)]
 const ERR_INSUFFICIENT_BALANCE: &str = "insufficient USDC balance";
 
 // ---------------------------------------------------------------------------
@@ -83,8 +87,14 @@ impl Distribute {
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_init(&env), events::event_version_v1(&env), admin), usdc_token);
+        env.events().publish(
+            (
+                events::event_init(&env),
+                events::event_version_v1(&env),
+                admin,
+            ),
+            usdc_token,
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -211,8 +221,14 @@ impl Distribute {
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_admin_transfer_completed(&env), events::event_version_v1(&env), pending), ());
+        env.events().publish(
+            (
+                events::event_admin_transfer_completed(&env),
+                events::event_version_v1(&env),
+                pending,
+            ),
+            (),
+        );
     }
 
     /// Alias for `accept_admin`.
@@ -240,8 +256,15 @@ impl Distribute {
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NoAdminTransferPending));
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_admin_cancelled(&env), events::event_version_v1(&env), current, pending), ());
+        env.events().publish(
+            (
+                events::event_admin_cancelled(&env),
+                events::event_version_v1(&env),
+                current,
+                pending,
+            ),
+            (),
+        );
     }
 
     /// Return the pending admin address, or `None` if no transfer is in progress.
@@ -267,15 +290,23 @@ impl Distribute {
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        if Self::is_paused(&env) { env.panic_with_error(DistributeError::AlreadyPaused); }
+        if Self::is_paused(&env) {
+            env.panic_with_error(DistributeError::AlreadyPaused);
+        }
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &true);
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), true);
+        env.events().publish(
+            (
+                events::event_pause_set(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            true,
+        );
     }
 
     /// Deactivate the circuit-breaker. Only the admin may call.
@@ -289,15 +320,23 @@ impl Distribute {
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        if !Self::is_paused(&env) { env.panic_with_error(DistributeError::NotPaused); }
+        if !Self::is_paused(&env) {
+            env.panic_with_error(DistributeError::NotPaused);
+        }
         env.storage()
             .instance()
             .set(&Symbol::new(&env, PAUSED_KEY), &false);
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events()
-            .publish((events::event_pause_set(&env), events::event_version_v1(&env), caller), false);
+        env.events().publish(
+            (
+                events::event_pause_set(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            false,
+        );
     }
 
     /// Return `true` if the contract is currently paused.
@@ -318,7 +357,7 @@ impl Distribute {
     }
 
     /// Return the configured maximum batch size.
-    pub fn get_max_batch_size(env: Env) -> u32 {
+    pub fn get_max_batch_size(_env: Env) -> u32 {
         limits::MAX_BATCH_SIZE
     }
 
@@ -333,7 +372,9 @@ impl Distribute {
     pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        if max_distribute <= 0 { env.panic_with_error(DistributeError::CapNotPositive); }
+        if max_distribute <= 0 {
+            env.panic_with_error(DistributeError::CapNotPositive);
+        }
         let old_max = Self::get_max_distribute(env.clone());
         env.storage()
             .instance()
@@ -403,9 +444,20 @@ impl Distribute {
             amount,
         );
         usdc.transfer(&contract_address, &to, &amount);
-        env.events().publish((events::event_distribute(&env), events::event_version_v1(&env), to.clone()), amount);
         env.events().publish(
-            (events::event_distribute_completed(&env), events::event_version_v1(&env), to),
+            (
+                events::event_distribute(&env),
+                events::event_version_v1(&env),
+                to.clone(),
+            ),
+            amount,
+        );
+        env.events().publish(
+            (
+                events::event_distribute_completed(&env),
+                events::event_version_v1(&env),
+                to,
+            ),
             amount,
         );
     }
@@ -442,11 +494,7 @@ impl Distribute {
     /// # Events
     /// Emits `batch_distribute_started` with `caller` as topic and `(total, count)` as data.
     /// Emits `batch_distribute_completed` with `caller` as topic and `(total, count)` as data.
-    pub fn batch_distribute(
-        env: Env,
-        caller: Address,
-        payments: SorobanVec<(Address, i128)>,
-    ) {
+    pub fn batch_distribute(env: Env, caller: Address, payments: Vec<(Address, i128)>) {
         caller.require_auth();
         Self::require_not_paused(&env);
         Self::require_admin(&env, &caller);
@@ -513,7 +561,11 @@ impl Distribute {
 
         // Phase 5 â€” emit completed event
         env.events().publish(
-            (events::event_batch_distribute_completed(&env), events::event_version_v1(&env), caller),
+            (
+                events::event_batch_distribute_completed(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
             (total, n),
         );
     }
@@ -559,7 +611,11 @@ impl Distribute {
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
-            (events::event_upgraded(&env), events::event_version_v1(&env), Self::admin(&env)),
+            (
+                events::event_upgraded(&env),
+                events::event_version_v1(&env),
+                Self::admin(&env),
+            ),
             new_wasm_hash,
         );
     }
