@@ -632,6 +632,8 @@ fn test_invariant_record_deduction() {
     assert_eq!(client.get_total_received(), 1_500);
     assert_eq!(client.get_global_pool().total_balance, 0);
 
+    // receive_payment also increments TotalReceived (fix for #1149).
+    // After this call TotalReceived = 1_000 (record_deduction) + 500 (record_deduction) + 300 (receive_payment) = 1_800.
     client.receive_payment(
         &vault,
         &300,
@@ -640,7 +642,11 @@ fn test_invariant_record_deduction() {
         &usdc_addr,
         &1u32,
     );
-    assert_eq!(client.get_total_received(), 1_500);
+    assert_eq!(
+        client.get_total_received(),
+        1_800,
+        "TotalReceived must include credits from receive_payment, not just record_deduction"
+    );
     assert_eq!(client.get_global_pool().total_balance, 0);
 }
 

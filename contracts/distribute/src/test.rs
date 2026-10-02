@@ -20,6 +20,8 @@ fn init_event_structure_validation() {
     let events = env.events().all();
     let event = events.last().unwrap();
 
+    // Events are published as (event_name, version, caller) with the payload as data.
+    // Topic layout: [0]=event_name, [1]=version, [2]=admin
     let topics = &event.1;
     assert_eq!(topics.len(), 3);
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
@@ -376,7 +378,8 @@ fn all_event_constructors_return_correct_symbols() {
 #[test]
 fn require_auth_on_all_state_changing_functions() {
     let env = Env::default();
-    // Do NOT mock all auths — we want to verify auth failures
+    // Mock all auths during setup so init and mint work, then clear them for intruder tests.
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let usdc_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -398,6 +401,9 @@ fn require_auth_on_all_state_changing_functions() {
     // Non-admin should fail on all state-changing functions
     let intruder = Address::generate(&env);
     let recipient = Address::generate(&env);
+
+    // Clear auth mocking: every call that requires auth will fail for intruder.
+    env.set_auths(&[]);
 
     // set_admin
     let result = client.try_set_admin(&intruder, &intruder);

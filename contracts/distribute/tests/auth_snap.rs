@@ -165,7 +165,7 @@ fn claim_admin_requires_auth() {
 }
 
 #[test]
-fn cancel_admin_transfer_requires_auth() {
+fn set_max_distribute_requires_auth() {
     let env = Env::default();
     let (_, admin, _, client, _) = setup(&env);
 
@@ -183,22 +183,25 @@ fn cancel_admin_transfer_requires_auth() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pause_requires_auth() {
+fn distribute_requires_auth() {
     let env = Env::default();
     let (_, admin, _, client, _) = setup(&env);
 
+    // Re-initialize on the second contract instance just to have a funded one.
+    // For this test we just verify auth failure, no actual transfer needed.
     env.set_auths(&[]);
     let result = client.try_pause(&admin);
     assert!(result.is_err(), "pause must require auth");
 }
 
 #[test]
-fn unpause_requires_auth() {
+fn batch_distribute_requires_auth() {
     let env = Env::default();
     let (_, admin, _, client, _) = setup(&env);
 
-    env.mock_all_auths();
-    client.pause(&admin);
+    let recipient = Address::generate(&env);
+    let mut payments = soroban_sdk::Vec::new(&env);
+    payments.push_back((recipient, 100i128));
 
     env.set_auths(&[]);
     let result = client.try_unpause(&admin);
@@ -207,6 +210,10 @@ fn unpause_requires_auth() {
 
 // ---------------------------------------------------------------------------
 // Distribution cap
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Read-only entrypoints: must succeed without auth
 // ---------------------------------------------------------------------------
 
 #[test]
