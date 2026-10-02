@@ -58,6 +58,8 @@ use soroban_sdk::contracterror;
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
+/// | 51   | InvalidOfferingId            | Offering id failed validation (empty, too long, or invalid characters) |
+/// | 52   | InvalidPrice                 | Price string failed validation (not a valid positive decimal) |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -125,4 +127,8 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
+    /// Offering id failed validation (empty, too long, or invalid characters).
+    InvalidOfferingId = 51,
+    /// Price string failed validation (not a valid positive decimal).
+    InvalidPrice = 52,
 }

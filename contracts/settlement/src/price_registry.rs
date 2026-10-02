@@ -24,8 +24,10 @@
 
 use soroban_sdk::{Address, Env, String};
 
+use callora_validators::{normalize_offering_id, MAX_OFFERING_ID_LEN};
 use crate::events::{emit_price_removed, emit_price_set};
 use crate::{CalloraSettlement, SettlementError, StorageKey};
+use crate::types::{PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT};
 
 /// Minimum number of ledgers that must pass between consecutive price writes
 /// by the same admin.
@@ -33,6 +35,68 @@ use crate::{CalloraSettlement, SettlementError, StorageKey};
 /// On Stellar, one ledger corresponds to approximately 5 seconds, so
 /// `MIN_WRITE_INTERVAL = 10` represents a ~50-second minimum interval.
 pub const MIN_WRITE_INTERVAL: u32 = 10;
+
+/// Maximum allowed byte length for a price string.
+///
+/// This bounds on-chain storage and parsing cost for price values.
+pub const MAX_PRICE_LEN: u32 = 32;
+
+/// Validate that a price string represents a positive decimal number.
+///
+/// Accepts formats like "100", "100.5", "0.01", "100.000000".
+/// Rejects empty strings, negative values, zero, non-numeric characters,
+/// multiple decimal points, and strings exceeding [`MAX_PRICE_LEN`].
+fn validate_price(price: &String) -> Result<(), SettlementError> {
+    let len = price.len();
+    if len == 0 || len > MAX_PRICE_LEN {
+        return Err(SettlementError::InvalidPrice);
+    }
+
+    let mut buf = [0u8; MAX_PRICE_LEN as usize];
+    price.copy_into_slice(&mut buf[..len as usize]);
+    let bytes = &buf[..len as usize];
+
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    let mut digits_after_dot = 0;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'.' {
+            if seen_dot {
+                return Err(SettlementError::InvalidPrice);
+            }
+            seen_dot = true;
+        } else if b.is_ascii_digit() {
+            seen_digit = true;
+            if seen_dot {
+                digits_after_dot += 1;
+                if digits_after_dot > 7 {
+                    return Err(SettlementError::InvalidPrice);
+                }
+            }
+        } else {
+            return Err(SettlementError::InvalidPrice);
+        }
+    }
+
+    if !seen_digit {
+        return Err(SettlementError::InvalidPrice);
+    }
+
+    // Check that the value is > 0 (not just "0" or "0.0" etc.)
+    let mut all_zero = true;
+    for &b in bytes {
+        if b != b'0' && b != b'.' {
+            all_zero = false;
+            break;
+        }
+    }
+    if all_zero {
+        return Err(SettlementError::InvalidPrice);
+    }
+
+    Ok(())
+}
 
 /// Set the price for an offering.
 ///
@@ -48,11 +112,13 @@ pub const MIN_WRITE_INTERVAL: u32 = 10;
 /// * `env` - Execution environment.
 /// * `caller` - Must be the admin; `caller.require_auth()` is invoked.
 /// * `offering_id` - Identifier for the offering whose price is being set.
-/// * `price` - Price value as a string.
+/// * `price` - Price value as a string (positive decimal, max 7 decimal places).
 ///
 /// # Panics
 /// * [`SettlementError::Unauthorized`] — caller is not the admin.
 /// * [`SettlementError::WriteRateLimitExceeded`] — write interval not elapsed.
+/// * [`SettlementError::InvalidOfferingId`] — offering_id failed validation.
+/// * [`SettlementError::InvalidPrice`] — price failed validation.
 pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String) {
     caller.require_auth();
     let admin =
@@ -60,10 +126,15 @@ pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String)
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
+
+    normalize_offering_id(&offering_id).map_err(|_| env.panic_with_error(SettlementError::InvalidOfferingId))?;
+    validate_price(&price)?;
+
     enforce_write_rate_limit(env, &caller);
     let key = StorageKey::Price(offering_id.clone());
     let old = env.storage().persistent().get::<_, String>(&key);
     env.storage().persistent().set(&key, &price);
+    env.storage().persistent().extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
     emit_price_set(env, &offering_id, old, &price);
     update_last_write_ledger(env, &caller);
 }
@@ -105,12 +176,20 @@ pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
 /// Get the price for an offering.
 ///
 /// Returns `None` if no price has been set for the given offering ID.
+/// Extends the TTL of the price entry on read.
 ///
 /// # Arguments
 /// * `env` - Execution environment.
 /// * `offering_id` - Identifier for the offering.
+///
+/// # Panics
+/// * [`SettlementError::InvalidOfferingId`] — offering_id failed validation.
 pub fn get_price(env: &Env, offering_id: String) -> Option<String> {
+    normalize_offering_id(&offering_id).map_err(|_| env.panic_with_error(SettlementError::InvalidOfferingId))?;
     let key = StorageKey::Price(offering_id);
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+    }
     env.storage().persistent().get(&key)
 }
 
@@ -453,6 +532,304 @@ mod tests {
 
         let result = client.try_remove_price(&non_admin, &String::from_str(&env, "offer1"));
         assert!(is_error(result, SettlementError::Unauthorized));
+    }
+
+    #[test]
+    fn set_price_rejects_empty_offering_id() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, ""),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+    }
+
+    #[test]
+    fn set_price_rejects_offering_id_too_long() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let long_id = "a".repeat(MAX_OFFERING_ID_LEN as usize + 1);
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, &long_id),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+    }
+
+    #[test]
+    fn set_price_rejects_offering_id_with_invalid_chars() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // uppercase
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "OFFER1"),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+
+        // space
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer 1"),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+
+        // special chars
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer@1"),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+    }
+
+    #[test]
+    fn set_price_rejects_offering_id_with_leading_trailing_space() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, " offer1"),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1 "),
+            &String::from_str(&env, "100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+    }
+
+    #[test]
+    fn set_price_rejects_empty_price() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, ""),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+    }
+
+    #[test]
+    fn set_price_rejects_price_too_long() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let long_price = "1".repeat(MAX_PRICE_LEN as usize + 1);
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, &long_price),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+    }
+
+    #[test]
+    fn set_price_rejects_non_numeric_price() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "abc"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100.5.5"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100a"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+    }
+
+    #[test]
+    fn set_price_rejects_zero_or_negative_price() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // zero
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "0"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "0.0"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "0.0000000"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        // negative
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "-100"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "-0.5"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+    }
+
+    #[test]
+    fn set_price_accepts_valid_decimal_prices() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // integer
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100"),
+        );
+        let price = client.try_get_price(&String::from_str(&env, "offer1"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "100")),
+            _ => panic!("expected price to be set"),
+        }
+
+        // decimal
+        env.ledger().set_sequence_number(env.ledger().sequence() + MIN_WRITE_INTERVAL as u32);
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer2"),
+            &String::from_str(&env, "100.5"),
+        );
+        let price = client.try_get_price(&String::from_str(&env, "offer2"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "100.5")),
+            _ => panic!("expected price to be set"),
+        }
+
+        // small decimal
+        env.ledger().set_sequence_number(env.ledger().sequence() + MIN_WRITE_INTERVAL as u32);
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer3"),
+            &String::from_str(&env, "0.0000001"),
+        );
+        let price = client.try_get_price(&String::from_str(&env, "offer3"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "0.0000001")),
+            _ => panic!("expected price to be set"),
+        }
+    }
+
+    #[test]
+    fn set_price_rejects_too_many_decimal_places() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // 8 decimal places - should fail
+        let result = client.try_set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "0.00000001"),
+        );
+        assert!(is_error(result, SettlementError::InvalidPrice));
+    }
+
+    #[test]
+    fn get_price_rejects_invalid_offering_id() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // First set a valid price
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100"),
+        );
+
+        // Try to get with invalid offering_id
+        let result = client.try_get_price(&String::from_str(&env, "OFFER1"));
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+
+        let result = client.try_get_price(&String::from_str(&env, ""));
+        assert!(is_error(result, SettlementError::InvalidOfferingId));
+    }
+
+    #[test]
+    fn get_price_extends_ttl() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100"),
+        );
+
+        // get_price should not fail and should extend TTL (we can't directly test TTL extension
+        // in unit tests, but we verify the call succeeds)
+        let price = client.try_get_price(&String::from_str(&env, "offer1"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "100")),
+            _ => panic!("expected price to be set"),
+        }
+
+        // Second read should also succeed
+        let price = client.try_get_price(&String::from_str(&env, "offer1"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "100")),
+            _ => panic!("expected price to be set"),
+        }
+    }
+
+    #[test]
+    fn set_price_extends_ttl_on_write() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        // set_price should extend TTL on write (we verify the call succeeds)
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "offer1"),
+            &String::from_str(&env, "100"),
+        );
+
+        let price = client.try_get_price(&String::from_str(&env, "offer1"));
+        match price {
+            Ok(Ok(Some(p))) => assert_eq!(p, String::from_str(&env, "100")),
+            _ => panic!("expected price to be set"),
+        }
     }
 
     fn is_write_rate_limit_error<V, CE: Into<soroban_sdk::Error>, E: Into<soroban_sdk::Error>>(
