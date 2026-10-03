@@ -126,6 +126,10 @@ fuzz_target!(|data: &[u8]| {
     }));
 
     let balance_after = pool.balance();
+    assert!(
+        balance_after >= 0,
+        "pool balance went negative: balance_before={balance_before} balance_after={balance_after}"
+    );
 
     if expected_valid {
         // Conservation: balance must decrease by exactly `total`.
@@ -141,17 +145,14 @@ fuzz_target!(|data: &[u8]| {
     } else {
         // Rejection: on any expected-invalid input the pool must be unchanged.
         // (The call may either panic or return a typed Err — both are acceptable.)
-        let succeeded = result.as_ref().map(|r| r.is_ok()).unwrap_or(false);
-        if succeeded {
-            // If it somehow succeeded, balance arithmetic must still hold.
-            // This path fires if our expected_valid logic is too conservative,
-            // which itself is a finding worth investigating.
-        } else {
-            assert_eq!(
-                balance_before, balance_after,
-                "rejection invariant violated: pool balance changed on a rejected call \
-                 (before={balance_before}, after={balance_after})"
-            );
-        }
+        assert!(
+            result.is_err(),
+            "expected invalid batch to be rejected, but it succeeded"
+        );
+        assert_eq!(
+            balance_before, balance_after,
+            "rejection invariant violated: pool balance changed on a rejected call \
+             (before={balance_before}, after={balance_after})"
+        );
     }
 });
