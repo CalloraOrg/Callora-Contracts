@@ -1,7 +1,8 @@
 //! Focused tests for withdraw_to zero-address recipient validation.
 //!
 //! Verifies that `withdraw_to` rejects zero-address recipients with
-//! `VaultError::ZeroAddressRecipient` (error code 37).
+//! `VaultError::ZeroAddressRecipient` (error code 37) and returns
+//! `Result<i128, VaultError>` from the withdraw entrypoints.
 
 extern crate std;
 
@@ -62,7 +63,7 @@ fn withdraw_to_zero_address_fails() {
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
     let zero_addr = zero_address(&env);
-    let result = client.try_withdraw_to(&zero_addr, &100);
+    let result: Result<Result<i128, VaultError>, _> = client.try_withdraw_to(&zero_addr, &100);
 
     assert!(result.is_err(), "expected error for zero-address recipient");
     // Verify the specific error code (37 = ZeroAddressRecipient)
@@ -88,7 +89,7 @@ fn withdraw_to_valid_address_succeeds() {
     fund_vault(&usdc_admin, &vault_address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
-    let remaining = client.withdraw_to(&recipient, &100);
+    let remaining = client.withdraw_to(&recipient, &100).unwrap();
 
     assert_eq!(remaining, 900);
     assert_eq!(client.balance(), 900);
@@ -109,7 +110,7 @@ fn withdraw_to_zero_address_checked_before_amount() {
 
     // Even with an invalid amount (0), zero-address should be rejected first
     let zero_addr = zero_address(&env);
-    let result = client.try_withdraw_to(&zero_addr, &0);
+    let result: Result<Result<i128, VaultError>, _> = client.try_withdraw_to(&zero_addr, &0);
 
     assert!(result.is_err(), "expected error for zero-address recipient");
     let err = result.unwrap_err();
@@ -141,7 +142,7 @@ fn withdraw_to_zero_address_fails_even_when_paused() {
     assert!(client.is_paused());
 
     let zero_addr = zero_address(&env);
-    let result = client.try_withdraw_to(&zero_addr, &100);
+    let result: Result<Result<i128, VaultError>, _> = client.try_withdraw_to(&zero_addr, &100);
 
     assert!(result.is_err(), "expected error for zero-address recipient even when paused");
     let err = result.unwrap_err();
@@ -168,14 +169,14 @@ fn withdraw_to_valid_after_zero_address_rejection() {
 
     // First, try zero address (should fail)
     let zero_addr = zero_address(&env);
-    let result = client.try_withdraw_to(&zero_addr, &100);
+    let result: Result<Result<i128, VaultError>, _> = client.try_withdraw_to(&zero_addr, &100);
     assert!(result.is_err());
 
     // Balance should be unchanged
     assert_eq!(client.balance(), 1000);
 
     // Now try valid recipient (should succeed)
-    let remaining = client.withdraw_to(&recipient, &100);
+    let remaining = client.withdraw_to(&recipient, &100).unwrap();
     assert_eq!(remaining, 900);
     assert_eq!(usdc_client.balance(&recipient), 100);
 }

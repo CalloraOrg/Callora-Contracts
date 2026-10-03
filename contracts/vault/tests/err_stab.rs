@@ -1,8 +1,8 @@
 //! Frozen snapshot of `VaultError` discriminant codes (buffer #4).
-//!
-//! These tests guard against accidental renumbering of error codes, which would
-//! silently break off-chain integrators that branch on numeric error codes
-//! returned by the contract.
+///
+/// These tests guard against accidental renumbering of error codes, which would
+/// silently break off-chain integrators that branch on numeric error codes
+/// returned by the contract.
 
 extern crate std;
 

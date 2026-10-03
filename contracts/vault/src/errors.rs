@@ -48,7 +48,7 @@ use soroban_sdk::contracterror;
 /// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
 /// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
 /// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
-/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
+/// | 56   | CannotWithdrawToVault          | Withdrawal recipient cannot be the vault address         |
 /// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
 /// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
 /// | 51   | ProposalNotFound               | No pending timelock proposal for the requested action    |
@@ -157,8 +157,8 @@ pub enum VaultError {
     InvalidTimelockWindow = 54,
     /// Amount is below the minimum transfer unit (code 55).
     BelowMinTransferAmount = 55,
-    /// Settlement address cannot be the vault contract itself (code 56).
-    SettlementCannotBeVault = 56,
+/// Withdrawal recipient cannot be the vault contract address (code 56).
+    CannotWithdrawToVault = 56,
     /// Settlement address cannot be the USDC token contract (code 57).
     SettlementCannotBeToken = 57,
     /// Proposal has passed its grace period and is no longer executable (code 58).
