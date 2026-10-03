@@ -49,8 +49,14 @@ jobs:
       - name: Test (all workspace members)
         run: cargo test --workspace
 
-  # The only non-blocking job in this workflow: it pins the nightly toolchain,
+# The only non-blocking job in this workflow: it pins the nightly toolchain,
   # which is expected to break on unrelated churn. Every other job is blocking.
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
   test-nightly:
     name: Test (Nightly, optional — non-blocking)
     runs-on: ubuntu-latest
@@ -85,6 +91,13 @@ jobs:
         continue-on-error: true
         run: cargo test --workspace -- --nocapture
 
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
   build:
     name: Build (release)
     runs-on: ubuntu-latest
@@ -113,6 +126,13 @@ jobs:
           chmod +x scripts/check-wasm-size.sh
           ./scripts/check-wasm-size.sh
 
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
   event-shape:
     name: Event shape vs schema
     runs-on: ubuntu-latest
@@ -123,7 +143,14 @@ jobs:
         shell: bash
         run: |
           chmod +x scripts/check-event-shape.sh
-          ./scripts/check-event-shape.sh
+./scripts/check-event-shape.sh
+
+      - name: Verify workspace members cover all contract crates
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
 
   gas-regression:
     name: Gas regression vs baseline
