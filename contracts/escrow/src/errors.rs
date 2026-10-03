@@ -19,6 +19,10 @@ use soroban_sdk::contracterror;
 /// | 9    | InvalidInput        | A supplied input is malformed or forbidden                    |
 /// | 10   | EscrowExists        | Escrow already exists for the given payment asset and recipient |
 /// | 11   | Paused              | Operation is rejected because the contract is paused         |
+/// | 12   | EscrowNotFound      | No escrow record exists for the given payment asset and recipient |
+/// | 13   | AlreadyReleased     | Escrow has already been released or refunded                 |
+/// | 14   | InsufficientFunds   | Funder does not have enough of the payment asset             |
+/// | 15   | TransferFailed      | Token transfer into or out of the contract failed            |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -45,4 +49,12 @@ pub enum EscrowError {
     EscrowExists = 10,
     /// Operation is rejected because the contract is paused (code 11).
     Paused = 11,
+    /// No escrow record exists for the given payment asset and recipient (code 12).
+    EscrowNotFound = 12,
+    /// Escrow has already been released or refunded (code 13).
+    AlreadyReleased = 13,
+    /// Funder does not have enough of the payment asset (code 14).
+    InsufficientFunds = 14,
+    /// Token transfer into or out of the contract failed (code 15).
+    TransferFailed = 15,
 }
