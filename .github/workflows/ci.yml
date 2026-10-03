@@ -10,6 +10,18 @@ on:
     - cron: '0 0 * * *' # Run nightly
 
 jobs:
+  revenue-pool-fuzz-compile:
+    name: Revenue pool fuzz compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check revenue pool fuzz binaries
+        run: cargo check -p callora-revenue-pool-fuzz --bins
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -38,10 +50,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Check Revenue Pool Fuzz Targets
-        run: |
-          cargo check -p callora-revenue-pool-fuzz --bins
 
       - name: Check Settlement Fuzz Targets (optional)
         continue-on-error: true
