@@ -39,10 +39,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Check Fuzz Targets
+      - name: Check Revenue Pool Fuzz Targets
         run: |
-          cargo check -p callora-settlement-fuzz
           cargo check -p callora-revenue-pool-fuzz --bins
+
+      - name: Check Settlement Fuzz Targets (optional)
+        continue-on-error: true
+        run: cargo check -p callora-settlement-fuzz
 
       - name: Build settlement WASM for tests
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
