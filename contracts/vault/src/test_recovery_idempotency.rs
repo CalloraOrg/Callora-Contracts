@@ -347,18 +347,22 @@ fn distribute_works_after_direct_pause() {
 #[test]
 fn prune_works_during_recovery_mode() {
     let env = Env::default();
-    let (_, client, _, owner) = setup_vault(&env, 1_000);
+    let (vault_addr, client, _, owner) = setup_vault(&env, 1_000);
 
     // Write a processed-request marker directly into persistent storage
     // to simulate a previously-processed deduct.  We do this because
     // the current `deduct` implementation doesn't store markers via
     // `mark_request_processed`; we only need the marker to test pruning.
-    let rid = Symbol::new(&env, "req_prune");
-    let key = StorageKey::ProcessedRequest(rid.clone());
-    env.storage().persistent().set(&key, &true);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, REQUEST_ID_BUMP_THRESHOLD, REQUEST_ID_BUMP_AMOUNT);
+    let rid: u64 = 42;
+    let key = StorageKey::ProcessedRequest(rid);
+    env.as_contract(&vault_addr, || {
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(
+            &key,
+            REQUEST_ID_BUMP_THRESHOLD,
+            REQUEST_ID_BUMP_AMOUNT,
+        );
+    });
     assert!(client.is_request_processed(&rid));
 
     // Pause the vault
@@ -367,7 +371,7 @@ fn prune_works_during_recovery_mode() {
 
     // Prune should still work during pause (recovery mode)
     let mut ids = soroban_sdk::Vec::new(&env);
-    ids.push_back(rid.clone());
+    ids.push_back(rid);
     client.prune_processed_requests(&owner, &ids);
     assert!(!client.is_request_processed(&rid));
 }
