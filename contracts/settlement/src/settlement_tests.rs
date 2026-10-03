@@ -2,6 +2,7 @@
 mod settlement_tests {
     extern crate std;
 
+    use crate::archive::{self, ActiveEvent, ArchivedEvent, MAX_BATCH_SIZE};
     use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
     use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
     use soroban_sdk::token as token_mod;
@@ -83,6 +84,121 @@ mod settlement_tests {
         let client = CalloraSettlementClient::new(env, settlement_addr);
         let global_pool = client.get_global_pool();
         global_pool.total_balance
+    }
+
+    #[test]
+    fn test_archive_events_moves_active_to_archived() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+        let token = Address::generate(&env);
+
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &token,
+            &1u32,
+        );
+        client.receive_payment(
+            &vault,
+            &200i128,
+            &false,
+            &Some(developer.clone()),
+            &token,
+            &2u32,
+        );
+
+        env.as_contract(&addr, || {
+            assert_eq!(archive::active_len(&env, &developer), 2);
+            assert_eq!(archive::archived_len(&env, &developer), 0);
+        });
+
+        let archived = client.archive_events(&developer, &MAX_BATCH_SIZE);
+        assert_eq!(archived, 2);
+
+        env.as_contract(&addr, || {
+            assert_eq!(archive::active_len(&env, &developer), 0);
+            assert_eq!(archive::archived_len(&env, &developer), 2);
+        });
+    }
+
+    #[test]
+    fn test_archive_events_respects_batch_size() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+        let token = Address::generate(&env);
+
+        for i in 0..5u32 {
+            client.receive_payment(
+                &vault,
+                &100i128,
+                &false,
+                &Some(developer.clone()),
+                &token,
+                &i,
+            );
+        }
+
+        let archived = client.archive_events(&developer, &2u32);
+        assert_eq!(archived, 2);
+
+        env.as_contract(&addr, || {
+            assert_eq!(archive::active_len(&env, &developer), 3);
+            assert_eq!(archive::archived_len(&env, &developer), 2);
+        });
+    }
+
+    #[test]
+    fn test_archive_events_batch_size_capped() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+        let token = Address::generate(&env);
+
+        client.receive_payment(
+            &vault,
+            &100i128,
+            &false,
+            &Some(developer.clone()),
+            &token,
+            &1u32,
+        );
+
+        let archived = client.archive_events(&developer, &(MAX_BATCH_SIZE + 1));
+        assert_eq!(archived, 1);
+    }
+
+    #[test]
+    fn test_archive_events_empty_returns_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let addr = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &addr);
+        client.init(&admin, &vault);
+
+        let archived = client.archive_events(&developer, &MAX_BATCH_SIZE);
+        assert_eq!(archived, 0);
     }
 
     #[test]
