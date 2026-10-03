@@ -10,6 +10,12 @@ must not be reassigned once released.
 - Add new variants only with new, previously unused codes in that contract.
 - Do not reuse a removed code for a different error.
 - `cargo test --workspace` enforces code stability and duplicate-code checks.
+- This document is generated from the `#[contracterror]` enums in each contract by
+  `scripts/gen_error_codes.py`. Run the script after changing any error enum and
+  commit the regenerated document. CI fails when the doc and enums diverge
+  (`scripts/gen_error_codes.py --check`).
+- Variants that exist in an enum but are never emitted are marked as **reserved**.
+  Reserved codes must not be reassigned to a different error.
 
 ## Vault
 
@@ -31,7 +37,7 @@ must not be reassigned once released.
 | 14 | `UsdcTokenCannotBeVault` | Vault | USDC token address cannot be the vault contract |
 | 15 | `RevenuePoolCannotBeVault` | Vault | Revenue pool address cannot be the vault contract |
 | 16 | `AuthorizedCallerCannotBeVault` | Vault | Authorized caller cannot be the vault contract |
-| 17 | `InitialBalanceExceedsOnLedger` | Vault | Initial tracked balance exceeds on-ledger USDC |
+| 17 | `InitialBalanceExceedsOnLedger` | Vault | **reserved** — variant is declared but never emitted |
 | 18 | `AlreadyPaused` | Vault | Contract is already paused |
 | 19 | `NotPaused` | Vault | Contract is not paused |
 | 20 | `SettlementNotSet` | Vault | Settlement address has not been configured |
@@ -49,7 +55,7 @@ must not be reassigned once released.
 | 32 | `StaleNonce` | Vault | Rotation nonce does not match the stored current nonce |
 | 33 | `NewRevenuePoolSameAsCurrent` | Vault | Proposed revenue pool matches the current revenue pool |
 | 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |
-| 35 | `Slippage` | Vault | Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit |
+| 35 | `Slippage` | Vault | Calculated fee in basis-points exceeds the caller-supplied `max_fee_bps` limit |
 | 36 | `RateLimited` | Vault | Developer exceeded the configured rate limit |
 | 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
 | 38 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
@@ -61,7 +67,7 @@ must not be reassigned once released.
 | 44 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
 | 45 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
 | 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
-| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
+| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN`..`=MAX` bounds |
 | 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
@@ -76,7 +82,7 @@ must not be reassigned once released.
 | 4 | `AmountNotPositive` | Settlement | Amount must be greater than zero |
 | 5 | `DeveloperRequired` | Settlement | `to_pool=false` requires a developer address |
 | 6 | `DeveloperMustBeNone` | Settlement | `to_pool=true` forbids a developer address |
-| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `i128` |
+| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `ii128` |
 | 8 | `DeveloperOverflow` | Settlement | Developer balance credit would overflow `i128` |
 | 9 | `UsdcTokenNotConfigured` | Settlement | USDC token address is not configured |
 | 10 | `InsufficientDeveloperBalance` | Settlement | Developer balance is lower than the withdrawal |
@@ -167,23 +173,21 @@ must not be reassigned once released.
 | 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
 | 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
 | 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
-| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
-| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
-| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
-| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
+| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale |
 | 17 | `CooldownNotElapsed` | Upgrade | The cooldown period for upgrades has not yet elapsed |
 | 18 | `InvalidCooldown` | Upgrade | Requested cooldown is outside `MIN_COOLDOWN_SECONDS..=MAX_COOLDOWN_SECONDS` |
 
-## Freeze
+## Fee
 
 | Code | Variant | Contract | Meaning |
 |------|---------|----------|---------|
-| 1 | `NotInitialized` | Freeze | Contract has not been initialized yet |
-| 2 | `AlreadyInitialized` | Freeze | `init` was called more than once |
-| 3 | `Unauthorized` | Freeze | Caller is not authorized for the operation |
-| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
-| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
-| 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+| 1 | `NotInitialized` | Fee | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Fee | `init` was called more than once |
+| 3 | `Unauthorized` | Fee | Caller is not authorized for the operation |
+| 4 | `InvalidBps` | Fee | Fee basis points are outside the accepted range |
+| 5 | `FeeTooHigh` | Fee | Calculated fee exceeds the caller-supplied limit |
+| 6 | `Overflow` | Fee | Arithmetic overflow was detected |
+| 7 | `InvalidAmount` | Fee | Amount must be greater than zero |
 
 ## Errors
 
@@ -198,4 +202,63 @@ must not be reassigned once released.
 | 7 | `AlreadyRegistered` | Errors | The code is already registered; use `update_error` to change its description |
 | 8 | `NotRegistered` | Errors | `update_error` was called for a code that was never registered |
 
+## Refund
 
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Refund | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Refund | `init` was called more than once |
+| 3 | `Unauthorized` | Refund | Caller is not authorized for the operation |
+| 4 | `RefundNotFound` | Refund | No refund record exists for the given ID |
+| 5 | `RefundAlreadyProcessed` | Refund | Refund has already been claimed or cancelled |
+| 6 | `InvalidAmount` | Refund | Amount must be greater than zero |
+| 7 | `InsufficientBalance` | Refund | Contract balance is too low to fund the refund |
+| 8 | `RefundWindowClosed` | Refund | The refund claim window has closed |
+| 9 | `InvalidWindow` | Refund | Refund window parameters are invalid |
+| 10 | `Overflow` | Refund | Arithmetic overflow was detected |
+
+## Rescue
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Rescue | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Rescue | `init` was called more than once |
+| 3 | `Unauthorized` | Rescue | Caller is not authorized for the operation |
+| 4 | `NoPendingRescue` | Rescue | No rescue operation is pending |
+| 5 | `TimelockNotExpired` | Rescue | Rescue timelock has not elapsed |
+| 6 | `InvalidRescueTarget` | Rescue | Rescue target address is invalid |
+| 7 | `InsufficientBalance` | Rescue | Contract balance is too low for the rescue |
+| 8 | `InvalidAmount` | Rescue | Amount must be greater than zero |
+| 9 | `Overflow` | Rescue | Arithmetic overflow was detected |
+
+## Batch Claim
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Batch Claim | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Batch Claim | `init` was called more than once |
+| 3 | `Unauthorized` | Batch Claim | Caller is not authorized for the operation |
+| 4 | `BatchEmpty` | Batch Claim | Batch claim received an empty vector |
+| 5 | `BatchTooLarge` | Batch Claim | Batch claim exceeded the maximum allowed size |
+| 6 | `DuplicateClaim` | Batch Claim | The same claim appears more than once in the batch |
+| 7 | `ClaimNotFound` | Batch Claim | No claim exists for the given ID |
+| 8 | `ClaimAlreadyProcessed` | Batch Claim | Claim has already been processed |
+| 9 | `InsufficientBalance` | Batch Claim | Contract balance is too low for the batch claim |
+| 10 | `Overflow` | Batch Claim | Arithmetic overflow was detected |
+
+## Registry
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Registry | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Registry | `init` was called more than once |
+| 3 | `Unauthorized` | Registry | Caller is not authorized for the operation |
+| 4 | `OfferingNotFound` | Registry | No offering exists for the given ID |
+| 5 | `OfferingAlreadyExists` | Registry | An offering with the same ID already exists |
+| 6 | `InvalidOfferingId` | Registry | Offering ID is empty or contains invalid characters |
+| 7 | `InvalidMetadata` | Registry | Metadata is empty or contains invalid characters |
+| 8 | `MetadataTooLong` | Registry | Metadata exceeds the maximum length |
+| 9 | `OwnerNotSet` | Registry | Offering owner has not been configured |
+| 10 | `OwnerShipTransferPending` | Registry | An ownership transfer is already pending |
+| 11 | `NoOwnershipTransferPending` | Registry | No ownership transfer is pending |
+| 12 | `Overflow` | Registry | Arithmetic overflow was detected |

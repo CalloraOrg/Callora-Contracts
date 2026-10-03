@@ -1,6 +1,9 @@
 use soroban_sdk::contracterror;
 
 /// Errors that can be returned by the refund contract.
+///
+/// Codes are stable and must match `docs/ERROR_CODES.md`.
+/// Unused codes are marked as reserved in the documentation.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RefundError {

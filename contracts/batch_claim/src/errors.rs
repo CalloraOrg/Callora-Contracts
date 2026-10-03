@@ -15,7 +15,7 @@ use soroban_sdk::contracterror;
 /// | 9    | ClaimIdMismatch      | Provided claim_id does not match stored record    |
 /// | 10   | InvalidClaimId       | Identifier is malformed (all-zero)                |
 /// | 11   | BatchTooLarge        | Batch exceeds `MAX_PENDING_AMOUNTS` entries       |
-/// | 12   | BatchEmpty           | Batch input must not be empty                     |
+/// | 12   | Reserved             | Reserved for future use                           |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -55,10 +55,6 @@ pub enum BatchClaimError {
     /// so an oversized batch fails closed and cheaply instead of running the
     /// ledger out of resources part-way through a settlement.
     BatchTooLarge = 11,
-    /// The batch input is empty (code 12).
-    ///
-    /// Issue #1044: an empty batch is rejected rather than silently succeeding,
-    /// so client bugs surface as errors instead of wasting fees on a no-op
-    /// settlement.
-    BatchEmpty = 12,
+/// Reserved for future use (code 12).
+    Reserved = 12,
 }

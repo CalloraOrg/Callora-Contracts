@@ -109,8 +109,8 @@ pub enum SettlementError {
     NoVaultRotationPending = 41,
     /// Admin broadcast message exceeds the maximum allowed length.
     BroadcastMessageTooLong = 42,
-    /// Batch settlement mixes developers from different tenants.
-    CrossTenantBatch = 43,
+/// Reserved for future use; not currently emitted by the contract.
+    Reserved43 = 43,
     /// No upgrade proposal is currently pending.
     NoUpgradePending = 44,
     /// Proposed WASM hash is all-zero bytes (rejected as invalid).
