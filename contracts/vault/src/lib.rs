@@ -35,26 +35,17 @@
 ///
 /// ## Request-ID Idempotency
 ///
-/// `deduct` and `batch_deduct` accept a `request_id: u64` idempotency key.
-/// When a **non-zero** id is supplied the contract persists a processed-request
-/// marker and rejects any subsequent call that carries the same `request_id`,
-/// returning `VaultError::DuplicateRequestId`. The marker is written only after
-/// the deduction succeeds, so a replayed backend call is charged exactly once.
+/// `deduct` accepts a `request_id: u64`; `batch_deduct` accepts `Vec<(i128, u64)>`.
+/// A non-zero ID is recorded in persistent storage after the corresponding
+/// transfer and settlement call succeed. Reusing a recorded ID returns
+/// `VaultError::DuplicateRequestId`. ID `0` is the no-idempotency sentinel and
+/// is neither checked nor recorded.
 ///
-/// This gives safe **at-least-once retry** semantics: a backend can replay a
-/// failed transaction with the same `request_id` and the contract will either
-/// succeed (first time) or return a deterministic error (duplicate).
-///
-/// `request_id == 0` is the documented **"no idempotency" sentinel**: no marker
-/// is written and the id is never deduplicated, so `0` may be reused on every
-/// call. Supply any non-zero id to obtain idempotency.
-///
-/// ### Retention / TTL
-/// Processed-request markers live in persistent storage and are bumped to
-/// `REQUEST_ID_BUMP_AMOUNT` ledgers on every successful deduct. The threshold
-/// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are
-/// persistent, they do not silently archive; an owner can explicitly prune old
-/// markers using `prune_processed_requests` so an id can be reused.
+/// Markers have a bounded persistent-storage TTL. They are assigned
+/// `REQUEST_ID_BUMP_AMOUNT` ledgers at write time; after archival a marker may
+/// no longer be available for duplicate detection. Owners can explicitly remove
+/// retained markers with `prune_processed_requests`. Callers that need
+/// idempotency beyond the marker TTL must also keep their own operation record.
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
 pub mod admin;

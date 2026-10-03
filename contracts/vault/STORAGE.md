@@ -34,7 +34,7 @@ Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_
 | `REQUEST_ID_BUMP_THRESHOLD` | `17_280 × 7` = 120 960  | ~7 days              | Idempotency markers must outlive the client retry window. 7 days covers typical backend re-submission timeouts. |
 | `REQUEST_ID_BUMP_AMOUNT`    | `17_280 × 30` = 518 400 | ~30 days             | 30-day bump is a best-effort deduplication guarantee. After expiry the marker auto-archives and the `request_id` can be reused (callers requiring longer windows must track off-chain). |
 
-`StorageKey::ProcessedRequest(Symbol)` uses **temporary storage** — it auto-archives after TTL expiry; no manual cleanup is required.
+`StorageKey::ProcessedRequest(u64)` uses persistent storage with the configured bounded TTL; see the canonical enum table below.
 
 ### Persistent storage — rate-limit token bucket
 
@@ -106,31 +106,31 @@ Timelock proposals (`PendingPause`, `PendingUpgrade`, `PendingSweep`), idempoten
 
 Buffer #5 persistent rationale: an admin may propose a pause/upgrade, then poll `get_pending_*` each day waiting for the timelock to expire. Without read bumps, the proposal itself could archive before its own execute window opens, leaving the admin unable to execute even though they "used" the contract every day.
 
-## Processed-Request Idempotency Storage (Temporary)
+## Processed-Request Idempotency Storage
 
-Idempotency markers for `deduct` and `batch_deduct` live in **persistent storage**. They do **not** silently archive; an owner MUST explicitly prune them with `prune_processed_requests` to recover state space.
+Idempotency markers for `deduct` and `batch_deduct` live in **persistent storage** with a bounded TTL. Soroban may archive an expired marker; owners can also explicitly prune retained markers with `prune_processed_requests`.
 
 | Constant                    | Value                    | Rationale                                                    |
 | --------------------------- | ------------------------ | ------------------------------------------------------------ |
 | `REQUEST_ID_BUMP_THRESHOLD` | `17_280 * 7` (~7 days)   | Bump is triggered when fewer than 7 days of TTL remain       |
 | `REQUEST_ID_BUMP_AMOUNT`    | `17_280 * 30` (~30 days) | Each bump extends the TTL to 30 days from the current ledger |
 
-### Key: `StorageKey::ProcessedRequest(Symbol)`
+### Key: `StorageKey::ProcessedRequest(u64)`
 
-- **Storage tier:** Temporary (auto-archived after TTL expires)
+- **Storage tier:** Persistent (bounded TTL; may be archived after expiry)
 - **Value type:** `bool` (`true`); presence of the key is the authoritative signal
-- **Written by:** `deduct` and `batch_deduct` on every **successful** deduction where `request_id` is `Some(id)`
+- **Written by:** `deduct` and `batch_deduct` on every **successful** deduction where `request_id` is non-zero
 - **Read by:** `deduct`, `batch_deduct` (duplicate check), `is_request_processed` (view)
-- **TTL:** Set to `REQUEST_ID_BUMP_AMOUNT` (~30 days) on write; bumped on every successful re-use within the threshold window
+- **TTL:** Set to `REQUEST_ID_BUMP_AMOUNT` (~30 days) on write. A duplicate attempt is rejected and does not extend the marker's TTL.
 
 ### Retention Policy
 
 | Scenario                      | Behaviour                                            |
 | ----------------------------- | ---------------------------------------------------- |
-| First deduct with `Some(id)`  | Marker written; TTL set to ~30 days                  |
+| First deduct with a non-zero ID | Marker written; TTL set to ~30 days                  |
 | Retry within retention window | `DuplicateRequestId` error returned; no state change |
 | Retry after TTL expires       | Marker archived; deduct treated as new (succeeds)    |
-| Deduct with `None`            | No marker written; no deduplication                  |
+| Deduct with `0`            | No marker written; no deduplication                  |
 | Failed deduct (any error)     | No marker written; id remains reusable               |
 
 > **Caller guidance:** Backends should treat `VaultError::DuplicateRequestId` as a successful no-op — the original deduction already went through. Do not retry with a new `request_id` for the same logical operation.
@@ -139,68 +139,35 @@ Idempotency markers for `deduct` and `batch_deduct` live in **persistent storage
 
 ## Storage Overview
 
-The Callora Vault contract uses Soroban's instance storage to persist contract state. Data is organized using the `StorageKey` enum, providing type-safe access to contract state.
+The Callora Vault contract uses Soroban's instance and persistent storage. Data is organized using the `StorageKey` enum, providing type-safe access to contract state.
 
-## Storage Keys
+## Canonical `StorageKey` enum and value types
 
-The contract defines the following storage keys:
+The list below mirrors `StorageKey` in `contracts/vault/src/lib.rs`. It is the authoritative key list; older descriptions elsewhere in this document are historical and must not be used as an implementation map.
 
-```rust
-#[contracttype]
-pub enum StorageKey {
-    MetaKey,                       // VaultMeta
-    Admin,                         // Address
-    UsdcToken,                     // Address
-    Settlement,                    // Address
-    RevenuePool,                   // Option<Address>
-    MaxDeduct,                     // i128
-    Paused,                        // bool
-    Metadata(String),              // String (offering metadata by offering_id)
-    PendingOwner,                  // Address
-    PendingAdmin,                  // Address
-    AllowedDepositors,             // Vec<Address> — instance storage, deposit allowlist
-    ContractVersion,               // BytesN<32>
-    ProcessedRequest(Symbol),      // bool — persistent storage, idempotency marker
-}
-```
+| Variant | Key argument | Value type | Storage tier / status |
+| --- | --- | --- | --- |
+| `UsdcToken` | — | `Address` | Enum variant; no active read/write found in the vault implementation |
+| `ProcessedRequest(u64)` | request ID | `bool` | Persistent; duplicate marker with bounded TTL |
+| `ReserveCap(Address)` | token address | `i128` | Instance |
+| `DeveloperConfig(Address)` | developer address | `RateLimitConfig` | Instance |
+| `DeveloperState(Address)` | developer address | `RateLimitState` | Persistent |
+| `TimelockWindow` | — | `u64` | Instance |
+| `PendingPause` | — | `PendingPause` | Persistent |
+| `PendingUpgrade` | — | `PendingUpgrade` | Persistent |
+| `PendingSweep` | — | `PendingSweep` | Persistent |
+| `Admin` | — | `Address` | Instance |
+| `PendingAdmin` | — | `Address` | Instance |
+| `ContractVersion` | — | `BytesN<32>` | Instance |
+| `AllowedDepositors` | — | `Vec<Address>` | Instance |
+| `AdminCooldown` | — | `u64` | Instance |
+| `LastCriticalAdminAction` | — | `CriticalAdminAction` | Instance |
+| `Settlement` | — | `Address` | Enum variant; legacy key not used by the current implementation |
+| `AuthCallerNonce` | — | `u64` | Instance |
 
-### Storage Keys Table
+`ProcessedRequest(u64)` markers are written to persistent storage only when a non-zero request ID succeeds. `deduct(amount, request_id)` takes `amount: i128` and `request_id: u64`; `batch_deduct(items)` takes `Vec<(i128, u64)>`. ID `0` disables deduplication. The marker uses the configured persistent TTL and may be archived after that TTL; callers needing longer idempotency must keep an off-chain record. Owners can explicitly prune markers with `prune_processed_requests`.
 
-| Key Variant                | Storage Tier  | Value Type        | Description                                            | Access                                                                     |
-| -------------------------- | ------------- | ----------------- | ------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `MetaKey`                  | Instance      | `VaultMeta`       | Owner, balance, authorized_caller, min_deposit         | `get_meta()`, updated by deposit/deduct/withdraw                           |
-| `Admin`                    | Instance      | `Address`         | Administrator address                                  | `get_admin()`, `set_admin()`                                               |
-| `UsdcToken`                | Instance      | `Address`         | USDC token contract address                            | Set during `init()`                                                        |
-| `Settlement`               | Instance      | `Address`         | Settlement contract; receives USDC on deduct           | `set_settlement()`, `get_settlement()`                                     |
-| `RevenuePool`              | Instance      | `Option<Address>` | Revenue pool address (informational)                   | `set_revenue_pool()`, `get_revenue_pool()`                                 |
-| `MaxDeduct`                | Instance      | `i128`            | Maximum USDC per single deduct                         | Set during `init()`, read by `deduct()` / `batch_deduct()`                 |
-| `Paused`                   | Instance      | `bool`            | Circuit-breaker flag                                   | `pause()`, `unpause()`, `is_paused()`                                      |
-| `Metadata(String)`         | Instance      | `String`          | Per-offering metadata (IPFS CID / URI)                 | `set_metadata()`, `get_metadata()`, `update_metadata()`                    |
-| `Price(String)`            | Instance      | `String`          | Per-offering price string for the offering ID          | `set_price()`, `get_price()`, `remove_price()`                             |
-| `OfferingIndex`            | Instance      | `Vec<String>`     | Ordered list of offering IDs with stored prices        | `set_price()`, `remove_price()`, `list_prices()`                           |
-| `PendingOwner`             | Instance      | `Address`         | Two-step ownership transfer nominee                    | `transfer_ownership()`, `accept_ownership()`                               |
-| `PendingAdmin`             | Instance      | `Address`         | Two-step admin transfer nominee                        | `set_admin()`, `accept_admin()`                                            |
-| `Depositor(Address)` / `DepositorIndex` | — | — | **Removed (#1110)** — never written; the canonical allowlist entry is `AllowedDepositors` below | — |
-| `AllowedDepositors`          | Instance      | `Vec<Address>`    | Addresses permitted to deposit (owner bypasses)       | `add_address()`, `clear_all()`, `deposit()`, `is_authorized_depositor()` |
-| `ContractVersion`          | Instance      | `BytesN<32>`      | WASM hash set by `upgrade()`                           | `upgrade()`, `version()`                                                   |
-| `ProcessedRequest(Symbol)` | **Temporary** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
-| Key Variant | Storage Tier | Value Type | Description | Access |
-|-------------|-------------|-----------|-------------|--------|
-| `MetaKey` | Instance | `VaultMeta` | Owner, balance, authorized_caller, min_deposit | `get_meta()`, updated by deposit/deduct/withdraw |
-| `Admin` | Instance | `Address` | Administrator address | `get_admin()`, `set_admin()` |
-| `UsdcToken` | Instance | `Address` | USDC token contract address | Set during `init()` |
-| `Settlement` | Instance | `Address` | Settlement contract; receives USDC on deduct | `set_settlement()`, `get_settlement()` |
-| `RevenuePool` | Instance | `Option<Address>` | Revenue pool address (informational) | `set_revenue_pool()`, `get_revenue_pool()` |
-| `MaxDeduct` | Instance | `i128` | Maximum USDC per single deduct | Set during `init()`, read by `deduct()` / `batch_deduct()` |
-| `Paused` | Instance | `bool` | Circuit-breaker flag | `pause()`, `unpause()`, `is_paused()` |
-| `Metadata(String)` | Instance | `String` | Per-offering metadata (IPFS CID / URI) | `set_metadata()`, `get_metadata()`, `update_metadata()` |
-| `PendingOwner` | Instance | `Address` | Two-step ownership transfer nominee | `transfer_ownership()`, `accept_ownership()` |
-| `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
-| `DepositorList` (renamed `AllowedDepositors`) | Instance | `Vec<Address>` | Allowed depositor addresses | `add_address()`, `clear_all()`, `get_allowlist()` |
-| `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
-| `ProcessedRequest(Symbol)` | **Persistent** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
-| `LifetimeDeposit(Address)` | **Persistent** | `i128`            | Cumulative USDC ever deposited by a given address; never decrements | Written by `deposit()`; read by `get_lifetime_deposit()` / `list_lifetime_deposits()` |
-| `LifetimeDepositorIndex`   | Instance       | `Vec<Address>`    | Ordered list of all addresses that have deposited at least once; used for paginated listing | Written by `deposit()` on first deposit per address |
+Legacy markers in temporary storage are checked and removed for compatibility with deployments that may contain them. The current implementation does not write new markers to temporary storage.
 
 ## Data Structures
 
@@ -224,18 +191,7 @@ pub struct VaultMeta {
 - `authorized_caller`: `Option<Address>` - Optional address permitted to trigger `deduct()` and `batch_deduct()` operations; can be set via `set_authorized_caller()`
 - `min_deposit`: `i128` - Minimum required per deposit; configured at initialization; prevents dust deposits and rejects zero or sub-unit transfer requests on the deposit path. The same floor is reused as the per-call minimum for `deduct`/`batch_deduct` items and for `propose_sweep`, so every entrypoint that moves USDC out of or into the vault rejects sub-unit/dust amounts consistently (`propose_sweep` returns `VaultError::BelowMinTransferAmount` when `amount` is below this floor)
 
-### DeductItem
-
-```rust
-#[contracttype]
-#[derive(Clone)]
-pub struct DeductItem {
-    pub amount: i128,
-    pub request_id: Option<Symbol>,
-}
-```
-
-Used in `batch_deduct()` to represent individual deduction requests.
+`batch_deduct()` accepts `Vec<(i128, u64)>`; each tuple contains an amount and request ID.
 
 ## Storage Operations
 
@@ -256,8 +212,8 @@ Sets up the vault with initial state:
 | Operation                       | Reads                                                          | Writes                                                                         | Authorization              |
 | ------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------ | -------------------------- |
 | `deposit(amount)`               | MetaKey, DepositorList                                         | MetaKey (balance += amount)                                                    | Owner or AllowedDepositor  |
-| `deduct(amount, request_id)`    | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)?          | MetaKey (balance -= amount); ProcessedRequest(id) if Some; transfers USDC      | Owner or authorized_caller |
-| `batch_deduct(items)`           | MetaKey, MaxDeduct, Settlement, ProcessedRequest(id)? per item | MetaKey (balance -= total); ProcessedRequest(id) per Some item; transfers USDC | Owner or authorized_caller |
+| `deduct(amount, request_id)`    | balance, limits, settlement, `ProcessedRequest(id)` when id is non-zero | balance decrement, transfer, marker on success | Owner or authorized caller |
+| `batch_deduct(items)`           | balance, limits, settlement, each non-zero `ProcessedRequest(id)` | balance decrement, transfer, markers on success | Owner or authorized caller |
 | `withdraw(amount)`              | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to owner                           | Owner only                 |
 | `withdraw_to(to, amount)`       | MetaKey, UsdcToken                                             | MetaKey (balance -= amount); transfers USDC to `to`                            | Owner only                 |
 | `sweep_idle_balance(to, amount)`| MetaKey, UsdcToken, Settlement or RevenuePool                  | MetaKey (balance -= amount); transfers USDC to destination                     | Owner only                 |
@@ -300,7 +256,7 @@ Sets up the vault with initial state:
 - They return only final committed state, never intermediate or pending values
 - Safe for external indexers and off-chain queries
 - Deterministic: identical state inputs always produce identical outputs
-- `get_settlement()` panics if not configured; `get_revenue_pool()` returns `None` gracefully
+- `get_settlement()` panics if not configured; `get_revenue_pool()` returns `0` gracefully
 
 ### Metadata Operations
 
@@ -462,57 +418,9 @@ Monitor storage-related events:
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1.0     | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)`                                                                                                                                |
 | 1.1     | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md                                                                                                                     |
-| 1.2     | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
+| 1.2     | Introduced temporary-storage request markers for `deduct` and `batch_deduct`; current markers use persistent storage and `u64` IDs. Added `VaultError::DuplicateRequestId` (code 28) and `is_request_processed(request_id)`. |
 | 1.4     | **Buffer #5 — TTL bump on hot read paths.** Added public TTL constants (`LEDGERS_PER_DAY`, `INSTANCE_BUMP_THRESHOLD/AMOUNT`, `PERSISTENT_BUMP_THRESHOLD/AMOUNT`, `REQUEST_ID_BUMP_THRESHOLD/AMOUNT`). Instance TTL now bumped at **entry** of EVERY public view call (`balance`, `get_*`, `is_*`) so read-only usage keeps vault alive. Persistent `PendingPause/PendingUpgrade/PendingSweep` keys bumped by `get_pending_*` getters when the proposal exists. Write entrypoints continue to bump at exit. Added new `VaultError` codes 44-47 (proposal/timelock errors) and declared `pub mod timelock`. |
 | 1.5     | Issue #1110 — removed never-written `DataKey::Depositor(Address)` and `DataKey::AllowedDepositorsList`. `is_authorized_depositor()` now reads `Owner` + `StorageKey::AllowedDepositors` through the same private helper as `deposit()`, so the view and the deposit gate can no longer diverge (owner included; documented). |
-| Version | Change |
-|---------|--------|
-| 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |
-| 1.1 | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md |
-| 1.2 | Added `StorageKey::ProcessedRequest(Symbol)` in **persistent storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
-| 1.3 | Added `StorageKey::LifetimeDeposit(Address)` (persistent, TTL ~1 year) and `StorageKey::LifetimeDepositorIndex` (instance) for per-depositor cumulative deposit tracking. Added `get_lifetime_deposit(addr)` and `list_lifetime_deposits(cursor, limit)` view functions. Page cap: 100. Overflow-protected via `checked_add`. |
-| 1.4 | **Buffer #5 — TTL bump on hot read paths.** Instance TTL bumped at entry of EVERY public view call (`balance`, `get_*`, `is_*`, `get_pending_*`) so read-only usage keeps vault alive. Persistent timelock proposal keys also bumped by getters when present. All mutating entrypoints continue to bump instance TTL at exit. Added TTL constants (all `pub`). Declared `pub mod timelock`; added `VaultError` codes 44 (ProposalNotFound), 45 (TimelockNotExpired), 46 (TimelockOverflow), 47 (InvalidTimelockWindow). |
+## Migration notes
 
-## Canonical Storage Keys
-
-All storage is accessed via `StorageKey` enum.
-
-### Keys
-
-| Key                        | Storage Tier  | Description                                                     |
-| -------------------------- | ------------- | --------------------------------------------------------------- |
-| `MetaKey`                  | Instance      | Vault metadata (owner, balance, authorized_caller, min_deposit) |
-| `DepositorList`            | Instance      | Authorized depositors                                           |
-| `Admin`                    | Instance      | Admin address                                                   |
-| `UsdcToken`                | Instance      | Token contract                                                  |
-| `Settlement`               | Instance      | Settlement contract                                             |
-| `RevenuePool`              | Instance      | Revenue pool                                                    |
-| `MaxDeduct`                | Instance      | Deduct cap                                                      |
-| `Paused`                   | Instance      | Circuit breaker                                                 |
-| `Metadata(String)`         | Instance      | Offering metadata                                               |
-| `PendingOwner`             | Instance      | Ownership transfer nominee                                      |
-| `PendingAdmin`             | Instance      | Admin transfer nominee                                          |
-| `ContractVersion`          | Instance      | WASM hash (set by `upgrade()`)                                  |
-| `ProcessedRequest(Symbol)` | **Temporary** | Idempotency marker; auto-expires after ~30 days                 |
-| Key | Storage Tier | Description |
-|-----|-------------|------------|
-| `MetaKey` | Instance | Vault metadata (owner, balance, authorized_caller, min_deposit) |
-| `DepositorList` | Instance | Authorized depositors |
-| `Admin` | Instance | Admin address |
-| `UsdcToken` | Instance | Token contract |
-| `Settlement` | Instance | Settlement contract |
-| `RevenuePool` | Instance | Revenue pool |
-| `MaxDeduct` | Instance | Deduct cap |
-| `Paused` | Instance | Circuit breaker |
-| `Metadata(String)` | Instance | Offering metadata |
-| `PendingOwner` | Instance | Ownership transfer nominee |
-| `PendingAdmin` | Instance | Admin transfer nominee |
-| `ContractVersion` | Instance | WASM hash (set by `upgrade()`) |
-| `ProcessedRequest(Symbol)` | **Persistent** | Idempotency marker; manually pruned |
-
-### Migration
-
-- Removes deprecated `AllowedDepositors`
-- Ensures Admin fallback from Meta.owner
-- `ProcessedRequest` uses temporary storage — no manual cleanup required; markers expire automatically
-- `ProcessedRequest` uses persistent storage — markers must be explicitly pruned using `prune_processed_requests` to avoid state bloat
+Older deployments may contain temporary `ProcessedRequest` markers. The read and prune helpers include temporary-storage compatibility for those legacy records; all newly written markers use the persistent tier described in the canonical table above.
