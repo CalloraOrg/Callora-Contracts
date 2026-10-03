@@ -193,7 +193,7 @@ fuzz_target!(|data: &[u8]| {
                 }));
                 let balance_after = pool.balance();
 
-                if is_success(&result) {
+                if matches!(&result, Ok(Ok(Ok(())))) {
                     assert_eq!(
                         balance_after,
                         balance_before - total,
@@ -328,7 +328,7 @@ fuzz_target!(|data: &[u8]| {
                     "unauthenticated batch_distribute changed balance"
                 );
                 assert!(
-                    !is_success(&result),
+                    !matches!(&result, Ok(Ok(Ok(())))),
                     "unauthenticated batch_distribute unexpectedly succeeded"
                 );
             }
