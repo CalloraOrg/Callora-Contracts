@@ -141,8 +141,9 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 21 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
 | 22 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
 | 23 | `deduction_recorded`         | `event_deduction_recorded`         | Vault accounting deduction recorded            |
+| 24 | `usdc_token_changed` | `event_usdc_token_changed` | Admin selects the immutable USDC withdrawal token |
 
-**Total: 23 topics**
+**Total: 24 topics**
 
 ---
 

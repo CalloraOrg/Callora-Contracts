@@ -43,6 +43,21 @@ mod event_tests {
         assert_eq!(topic2_addr(&env, &removed[0]), token);
     }
 
+    #[test]
+    fn test_set_usdc_token_emits_old_and_new_addresses() {
+        let (env, contract, admin, _, _) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+        let usdc = Address::generate(&env);
+
+        client.set_usdc_token(&admin, &usdc);
+
+        let changed = filter_by_topic(&env, &env.events().all(), "usdc_token_changed");
+        assert_eq!(changed.len(), 1);
+        let (old, new): (Option<Address>, Address) = changed[0].2.into_val(&env);
+        assert!(old.is_none());
+        assert_eq!(new, usdc);
+    }
+
     /// Spin up a registered, initialized settlement contract and return
     /// `(env, contract_addr, admin, vault, token)`.
     fn setup() -> (Env, Address, Address, Address, Address) {

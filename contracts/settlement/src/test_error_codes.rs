@@ -110,7 +110,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 34 | `InvalidConfigDistinct` | Settlement | Init config requires distinct admin and vault |",
         "| 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |",
         "| 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |",
-        "| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |",
+        "| 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid or already configured |",
         "| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |",
         "| 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |",
         "| 40 | `InvalidVault` | Settlement | Vault address is invalid |",

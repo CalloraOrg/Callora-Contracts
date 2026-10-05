@@ -278,6 +278,61 @@ mod settlement_tests {
     }
 
     #[test]
+    fn test_set_usdc_token_rejects_reserved_addresses() {
+        let (env, addr, admin, vault, _, _) = setup_contract();
+        let client = CalloraSettlementClient::new(&env, &addr);
+
+        assert!(is_error(
+            client.try_set_usdc_token(&admin, &addr),
+            SettlementError::InvalidUsdcToken
+        ));
+        assert!(is_error(
+            client.try_set_usdc_token(&admin, &admin),
+            SettlementError::InvalidUsdcToken
+        ));
+        assert!(is_error(
+            client.try_set_usdc_token(&admin, &vault),
+            SettlementError::InvalidUsdcToken
+        ));
+    }
+
+    #[test]
+    fn test_usdc_selection_is_immutable_and_selected_balance_remains_withdrawable() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let developer = Address::generate(&env);
+        let contract = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &contract);
+        let (usdc_address, usdc, usdc_admin) = create_usdc(&env, &admin);
+        let replacement = Address::generate(&env);
+
+        client.init(&admin, &vault);
+        client.set_usdc_token(&admin, &usdc_address);
+        client.receive_payment(
+            &vault,
+            &250i128,
+            &false,
+            &Some(developer.clone()),
+            &usdc_address,
+        );
+        usdc_admin.mint(&contract, &250i128);
+
+        assert!(is_error(
+            client.try_set_usdc_token(&admin, &replacement),
+            SettlementError::InvalidUsdcToken
+        ));
+        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 250i128);
+
+        assert!(client
+            .try_withdraw_developer_balance(&developer, &250i128, &None, &usdc_address)
+            .is_ok());
+        assert_eq!(client.get_developer_balance(&developer, &usdc_address), 0i128);
+        assert_eq!(usdc.balance(&developer), 250i128);
+    }
+
+    #[test]
     fn test_simulate_claim_returns_preview_without_side_effects() {
         let env = Env::default();
         env.mock_all_auths();

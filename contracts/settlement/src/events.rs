@@ -73,6 +73,17 @@ pub fn event_supported_token_removed(env: &Env) -> Symbol {
     Symbol::new(env, "supported_token_removed")
 }
 
+/// Returns the Symbol for the `usdc_token_changed` event topic.
+pub fn event_usdc_token_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "usdc_token_changed")
+}
+
+/// Emit the initial USDC token selection, recording the previous and new values.
+pub fn emit_usdc_token_changed(env: &Env, old: Option<Address>, new: &Address) {
+    env.events()
+        .publish((event_usdc_token_changed(env),), (old, new.clone()));
+}
+
 /// Emit `supported_token_added` when an admin enables a payment token.
 pub fn emit_supported_token_added(env: &Env, caller: &Address, token: &Address) {
     env.events().publish(
@@ -808,6 +819,15 @@ mod tests {
         assert_eq!(
             event_deduction_recorded(&env),
             Symbol::new(&env, "deduction_recorded")
+        );
+    }
+
+    #[test]
+    fn test_event_usdc_token_changed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_usdc_token_changed(&env),
+            Symbol::new(&env, "usdc_token_changed")
         );
     }
 

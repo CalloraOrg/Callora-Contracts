@@ -490,20 +490,33 @@ impl CalloraSettlement {
     /// Configure the USDC token contract address.
     ///
     /// Only the current admin may set the on-chain USDC token address that this
-    /// contract will use to execute withdrawals.
+    /// contract will use to execute withdrawals. The address is immutable once
+    /// configured so existing per-token developer balances remain withdrawable.
     pub fn set_usdc_token(env: Env, caller: Address, usdc_address: Address) {
         caller.require_auth();
-        let current_admin = Self::get_admin(env.clone()).unwrap();
+        let current_admin =
+            Self::get_admin(env.clone()).unwrap_or_else(|error| env.panic_with_error(error));
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
         }
-        if usdc_address == env.current_contract_address() {
+
+        let instance = env.storage().instance();
+        let old_usdc = instance.get::<_, Address>(&StorageKey::Usdc);
+        if old_usdc.is_some() {
             env.panic_with_error(SettlementError::InvalidUsdcToken);
         }
-        env.storage()
-            .instance()
-            .set(&StorageKey::Usdc, &usdc_address);
+
+        let vault = Self::get_vault(env.clone()).unwrap_or_else(|error| env.panic_with_error(error));
+        if usdc_address == env.current_contract_address()
+            || usdc_address == current_admin
+            || usdc_address == vault
+        {
+            env.panic_with_error(SettlementError::InvalidUsdcToken);
+        }
+
+        instance.set(&StorageKey::Usdc, &usdc_address);
         Self::add_supported_token_internal(&env, &caller, &usdc_address);
+        events::emit_usdc_token_changed(&env, old_usdc, &usdc_address);
     }
 
     /// Enable a token for settlement payments. Admin only.

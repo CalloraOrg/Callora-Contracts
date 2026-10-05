@@ -1433,6 +1433,17 @@ backfills the configured USDC token.
 | topic 2 | topics   | Address | Token contract address |
 | data    | data     | Address | Token contract address |
 
+### `usdc_token_changed`
+
+Emitted after the admin selects the USDC withdrawal token for the first time.
+The selection is immutable afterward, preventing existing developer balances
+from becoming unreachable through a token override.
+
+| Index   | Location | Type                  | Description |
+|---------|----------|-----------------------|-------------|
+| topic 0 | topics   | Symbol                | `"usdc_token_changed"` |
+| data    | data     | `(Option<Address>, Address)` | `(old_token, new_token)`; `old_token` is `None` on initial selection |
+
 ### `supported_token_removed`
 
 Emitted when the admin removes a registered token. Existing developer balances
