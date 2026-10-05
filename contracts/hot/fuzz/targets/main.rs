@@ -29,7 +29,7 @@ extern crate std;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use callora_hot::{
-    CalloraHot, CalloraHotClient, HotError, ACTION_PAUSE, ACTION_ROTATE, ACTION_UNPAUSE,
+    CalloraHot, CalloraHotClient, ACTION_PAUSE, ACTION_ROTATE, ACTION_UNPAUSE,
 };
 use libfuzzer_sys::fuzz_target;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
@@ -158,12 +158,8 @@ fn run_sequence(ops: &[HotOp]) {
 
             HotOp::DoubleInit => {
                 if initialized {
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        client.try_init(&admin, &signer, &Some(FUZZ_COOLDOWN));
-                    }));
-                    if let Ok(Err(e)) = result {
-                        assert_eq!(e, HotError::AlreadyInitialized);
-                    }
+                    let result = client.try_init(&admin, &signer, &Some(FUZZ_COOLDOWN));
+                    assert!(result.is_err(), "double init must fail");
                 }
             }
 

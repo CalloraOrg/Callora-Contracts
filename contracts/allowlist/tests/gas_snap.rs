@@ -85,7 +85,7 @@ fn setup_allowlist_fixture() -> AllowlistFixture<'static> {
     let usdc_admin = token::StellarAssetClient::new(env, &usdc_addr);
     usdc_admin.mint(&vault_addr, &1_000);
 
-    client.init(&owner, &usdc_addr, &Some(1_000), &None, &None, &None, &None);
+    client.init(&owner, &usdc_addr, &Some(1_000), &None, &None, &None, &None, &None);
 
     AllowlistFixture {
         env: env.clone(),
@@ -205,7 +205,7 @@ fn gas_snap_set_allowed_depositor() {
     let f = setup_allowlist_fixture();
     measure_snap!(f.env, snap, {
         f.client
-            .set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
+            .add_address(&f.owner, &f.depositor);
     });
     assert_within_budget(
         "callora-allowlist",
@@ -222,9 +222,9 @@ fn gas_snap_set_allowed_depositor() {
 fn gas_snap_clear_allowed_depositors() {
     let f = setup_allowlist_fixture();
     f.client
-        .set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
+        .add_address(&f.owner, &f.depositor);
     measure_snap!(f.env, snap, {
-        f.client.clear_allowed_depositors(&f.owner);
+        f.client.clear_all(&f.owner);
     });
     assert_within_budget(
         "callora-allowlist",

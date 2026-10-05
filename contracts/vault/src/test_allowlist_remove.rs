@@ -256,7 +256,7 @@ fn remove_then_re_add_works() {
 
     // Must be present in the list exactly once.
     let list = client.get_allowlist();
-    let count = list.iter().filter(|a| a == depositor).count();
+    let count = list.iter().filter(|a| *a == depositor).count();
     assert_eq!(count, 1, "address must appear exactly once after re-add");
 
     // Must be able to deposit again.

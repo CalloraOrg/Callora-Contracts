@@ -384,7 +384,7 @@ fn every_set_capability_maps_to_callable_vault_entrypoint() {
 
     // 7. CAP_REQUEST_IDEMPOTENCY (bit 8) -> is_request_processed, prune_processed_requests
     assert_ne!(caps & CAP_REQUEST_IDEMPOTENCY, 0);
-    let req_id = Symbol::new(&env, "req_1");
+    let req_id: u64 = 1;
     assert!(!client.is_request_processed(&req_id));
     let _ = client.prune_processed_requests(&owner, &Vec::new(&env));
 

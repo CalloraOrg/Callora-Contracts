@@ -94,14 +94,12 @@ fn setup_simulate_vault<'a>(
 ///
 /// Returns `Some(code)` when the call returned a `VaultError`, or `None` when
 /// the call succeeded.
-fn err_code_from<V>(
-    result: Result<Result<V, soroban_sdk::Error>, Result<soroban_sdk::Error, soroban_sdk::InvokeError>>,
+fn err_code_from<V, E>(
+    result: Result<Result<V, E>, Result<VaultError, soroban_sdk::InvokeError>>,
 ) -> Option<u32> {
     match result {
-        Err(Ok(e)) => Some(e.get_code()),
-        Ok(Err(e)) => Some(e.get_code()),
-        Ok(Ok(_)) => None,
-        Err(Err(_)) => None,
+        Err(Ok(e)) => Some(e as u32),
+        _ => None,
     }
 }
 
@@ -155,8 +153,8 @@ proptest! {
 
         prop_assert_eq!(
             sim_code, deduct_code,
-            "simulate_deduct and deduct returned different outcomes for \
-             amount={amount} use_auth={use_auth_caller} paused={paused} balance={balance}"
+            "simulate_deduct and deduct returned different outcomes: amount={} use_auth={} paused={} balance={}",
+            amount, use_auth_caller, paused, balance
         );
     }
 }

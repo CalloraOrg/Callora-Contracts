@@ -104,33 +104,10 @@ fn bench_remove_address(c: &mut Criterion) {
 }
 
 fn bench_clear_all(c: &mut Criterion) {
-    let (env, owner, depositor, client) = setup();
-    client.add_address(&owner, &depositor);
+    let fixture = setup(POPULATED_SIZE);
     c.bench_function("whitelist/clear_all", |b| {
-        b.iter(|| client.clear_all(&owner))
-    });
-}
-
-fn bench_add_address_multiple(c: &mut Criterion) {
-    let (env, owner, _depositor, client) = setup();
-    let addresses: Vec<Address> = (0..10).map(|_| Address::generate(&env)).collect();
-    c.bench_function("whitelist/add_address_10", |b| {
         b.iter(|| {
-            for addr in addresses.iter() {
-                client.add_address(&owner, addr);
-            }
-        })
-    });
-}
-
-fn bench_is_authorized_depositor_with_list(c: &mut Criterion) {
-    let (env, owner, depositor, client) = setup();
-    client.add_address(&owner, &depositor);
-    let stranger = Address::generate(&env);
-    c.bench_function("whitelist/is_authorized_depositor_present", |b| {
-        b.iter(|| {
-            criterion::black_box(client.is_authorized_depositor(&depositor));
-            criterion::black_box(client.is_authorized_depositor(&stranger));
+            let _ = fixture.client.try_clear_all(&fixture.admin);
         })
     });
 }

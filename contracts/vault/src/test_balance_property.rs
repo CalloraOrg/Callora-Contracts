@@ -446,7 +446,7 @@ fn run_property_trace(seed: u64) {
 
             x if x == OpKind::DepositorFlip as u8 => {
                 if depositor_allowed {
-                    client.clear_allowed_depositors(&owner);
+                    client.clear_all(&owner);
                     depositor_allowed = false;
                     trace.push(step, "clear_allowed_depositors", "");
                 } else {
@@ -592,7 +592,7 @@ fn test_balance_property_depositor_flips() {
     client.deposit(&depositor, &500);
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(7), 1);
 
-    client.clear_allowed_depositors(&owner);
+    client.clear_all(&owner);
     assert!(client.try_deposit(&depositor, &100).is_err());
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(7), 2);
 

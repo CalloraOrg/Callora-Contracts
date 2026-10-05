@@ -1319,7 +1319,7 @@ fn test_get_checkpoints_for_subject_unknown_subject_returns_empty() {
 
     let result = client.try_get_checkpoints_for_subject(&unknown, &0u32, &10u32);
     assert!(result.is_ok(), "unknown subject must return Ok, not an error");
-    let records = result.unwrap();
+    let records = result.unwrap().unwrap();
     assert!(
         records.is_empty(),
         "unknown subject must return an empty vec"
@@ -1334,7 +1334,7 @@ fn test_get_checkpoints_for_subject_empty_contract_returns_empty() {
 
     let result = client.try_get_checkpoints_for_subject(&subject, &0u32, &10u32);
     assert!(result.is_ok());
-    assert!(result.unwrap().is_empty());
+    assert!(result.unwrap().unwrap().is_empty());
 }
 
 /// AC-6: limit=0 returns InvalidPageSize error.

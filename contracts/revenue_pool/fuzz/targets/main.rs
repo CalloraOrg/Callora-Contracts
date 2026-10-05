@@ -89,13 +89,10 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
     (addr.clone(), RevenuePoolClient::new(env, &addr))
 }
 
-type CatchResult<T> = std::result::Result<
-    std::result::Result<T, std::result::Result<soroban_sdk::Error, InvokeError>>,
-    Box<dyn std::any::Any + Send>,
->;
-
-fn is_success<T>(result: &CatchResult<T>) -> bool {
-    matches!(result, Ok(Ok(_)))
+fn is_success<T, E1, E2, E3>(
+    result: &std::result::Result<std::result::Result<Result<T, E1>, E2>, E3>,
+) -> bool {
+    matches!(result, Ok(Ok(Ok(_))))
 }
 
 // ---------------------------------------------------------------------------

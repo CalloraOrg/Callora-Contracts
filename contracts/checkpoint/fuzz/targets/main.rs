@@ -171,14 +171,14 @@ fuzz_target!(|data: &[u8]| {
                 let count_after = client.get_checkpoint_count();
 
                 if is_success(&result) {
-                    let new_id = result.unwrap().unwrap();
+                    let new_id = result.unwrap().unwrap().unwrap();
                     assert_eq!(caller, admin, "non-admin successfully created checkpoint");
                     assert!(balance >= 0, "checkpoint created with negative balance");
                     assert_eq!(count_after, count_before + 1, "count did not increment");
                     assert_eq!(new_id, count_after, "returned ID does not match count");
 
                     // Verify record stored in persistent storage
-                    let record = client.get_checkpoint(&new_id).expect("record not found");
+                    let record = client.get_checkpoint(&new_id);
                     assert_eq!(record.id, new_id);
                     assert_eq!(record.subject, subject);
                     assert_eq!(record.token, token);
@@ -235,7 +235,7 @@ fuzz_target!(|data: &[u8]| {
                 let count_after = client.get_checkpoint_count();
 
                 if is_success(&result) {
-                    let ids = result.unwrap().unwrap();
+                    let ids = result.unwrap().unwrap().unwrap();
                     assert_eq!(
                         caller, admin,
                         "non-admin successfully batch-created checkpoints"
@@ -248,7 +248,7 @@ fuzz_target!(|data: &[u8]| {
                     for (idx, id) in ids.iter().enumerate() {
                         let expected_id = count_before + 1 + idx as u64;
                         assert_eq!(id, expected_id);
-                        let record = client.get_checkpoint(&id).expect("batch record missing");
+                        let record = client.get_checkpoint(&id);
                         assert_eq!(record.id, id);
                         created_records.push(record);
                     }
@@ -268,7 +268,7 @@ fuzz_target!(|data: &[u8]| {
                     0 => 0,
                     1 => count_before,
                     2 => count_before + 1,
-                    3 => (operand_u32 % (count_before + 5).max(1)) as u64,
+                    3 => (operand_u32 % ((count_before + 5).max(1) as u32)) as u64,
                     _ => u64::MAX,
                 };
 
@@ -282,7 +282,7 @@ fuzz_target!(|data: &[u8]| {
                         "get_checkpoint succeeded for invalid ID {target_id}"
                     );
                 } else if is_success(&res) {
-                    let rec = res.unwrap().unwrap();
+                    let rec = res.unwrap().unwrap().unwrap();
                     assert_eq!(rec.id, target_id);
                 }
 
@@ -328,7 +328,7 @@ fuzz_target!(|data: &[u8]| {
                         "get_checkpoints_range accepted limit 0"
                     );
                 } else if is_success(&result) {
-                    let records = result.unwrap().unwrap();
+                    let records = result.unwrap().unwrap().unwrap();
                     if start_id > count_before {
                         assert!(
                             records.is_empty(),
@@ -356,13 +356,13 @@ fuzz_target!(|data: &[u8]| {
                     admin.clone()
                 };
 
-                let target_id = (operand_u32 % (count_before + 5).max(1)) as u64;
+                let target_id = (operand_u32 % ((count_before + 5).max(1) as u32)) as u64;
 
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     client.try_bump_checkpoint_ttl(&caller, &target_id)
                 }));
 
-                let start_id = (operand_u32 % (count_before + 5).max(1)) as u64;
+                let start_id = (operand_u32 % ((count_before + 5).max(1) as u32)) as u64;
                 let end_id = if flag % 2 == 0 {
                     start_id + (flag as u64 % 10)
                 } else {
@@ -519,9 +519,7 @@ fuzz_target!(|data: &[u8]| {
             // -----------------------------------------------------------
             9 => {
                 for record in created_records.iter() {
-                    let fetched = client
-                        .get_checkpoint(&record.id)
-                        .expect("existing record vanished");
+                    let fetched = client.get_checkpoint(&record.id);
                     assert_eq!(fetched, *record, "checkpoint record content mutated!");
                 }
             }

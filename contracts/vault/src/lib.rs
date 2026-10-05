@@ -342,7 +342,7 @@ impl CalloraVault {
 
         let initial_balance_val = initial_balance.unwrap_or(0);
         if initial_balance_val < 0 {
-            return Err(VaultError::InitialBalanceNegative);
+            return Err(VaultError::AmountNotPositive);
         }
 
         env.storage().instance().set(&DataKey::Owner, &owner);

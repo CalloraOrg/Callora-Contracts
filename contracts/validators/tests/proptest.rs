@@ -18,9 +18,19 @@
 extern crate std;
 
 use callora_validators::{
-    bytes_are_visible_ascii, is_visible_ascii_metadata, normalize_visible_ascii,
-    MAX_VALIDATED_STRING_LEN,
+    is_visible_ascii_metadata, normalize_visible_ascii, MAX_VALIDATED_STRING_LEN,
 };
+
+/// Independent byte-level oracle used to cross-check the host validators.
+fn bytes_are_visible_ascii(bytes: &[u8]) -> bool {
+    if bytes.is_empty() || bytes.len() > MAX_VALIDATED_STRING_LEN as usize {
+        return false;
+    }
+    if bytes[0] == b' ' || bytes[bytes.len() - 1] == b' ' {
+        return false;
+    }
+    bytes.iter().all(|&b| (0x20..=0x7e).contains(&b))
+}
 use proptest::prelude::*;
 use soroban_sdk::{Env, String};
 use std::string::String as StdString;

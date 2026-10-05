@@ -1633,7 +1633,10 @@ impl CalloraSettlement {
         env: Env,
         settlements: soroban_sdk::Vec<batch::SettleInput>,
     ) -> soroban_sdk::Vec<batch::SettleOutcome> {
-        batch::batch_settle(&env, settlements)
+        match batch::batch_settle(&env, settlements) {
+            Ok(outcomes) => outcomes,
+            Err(err) => env.panic_with_error(err),
+        }
     }
 
     /// Freeze a developer's withdrawals.

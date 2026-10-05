@@ -90,14 +90,10 @@ fn create_contract(env: &Env) -> DistributeClient<'_> {
     DistributeClient::new(env, &addr)
 }
 
-type CatchResult<T> = std::result::Result<
-    std::result::Result<T, soroban_sdk::InvokeError>,
-    Box<dyn std::any::Any + Send>,
->;
-
-/// True if the catch_unwind + try_ pattern returned Ok(Ok(_)).
-fn is_success<T>(result: &CatchResult<T>) -> bool {
-    matches!(result, Ok(Ok(_)))
+fn is_success<T, E1, E2, E3>(
+    result: &std::result::Result<std::result::Result<Result<T, E1>, E2>, E3>,
+) -> bool {
+    matches!(result, Ok(Ok(Ok(_))))
 }
 
 // ---------------------------------------------------------------------------

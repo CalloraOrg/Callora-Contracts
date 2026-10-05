@@ -14,7 +14,7 @@
 
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, BytesN, Env};
 
 use crate::{CalloraSettlement, CalloraSettlementClient, SettlementError, UPGRADE_TIMELOCK_SECONDS};
 
@@ -65,7 +65,7 @@ fn test_propose_upgrade_rejects_zero_hash() {
         .try_propose_upgrade(&admin, &zero_hash(&env))
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::ZeroWasmHash);
+    assert_eq!(err, SettlementError::ZeroWasmHash.into());
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_propose_upgrade_rejects_non_admin() {
         .try_propose_upgrade(&stranger, &hash)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::Unauthorized);
+    assert_eq!(err, SettlementError::Unauthorized.into());
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn test_execute_upgrade_rejects_before_delay() {
         .try_execute_upgrade(&admin)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::UpgradeTimelockNotExpired);
+    assert_eq!(err, SettlementError::UpgradeTimelockNotExpired.into());
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn test_execute_upgrade_rejects_non_admin() {
         .try_execute_upgrade(&stranger)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::Unauthorized);
+    assert_eq!(err, SettlementError::Unauthorized.into());
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn test_execute_upgrade_fails_when_no_pending() {
         .try_execute_upgrade(&admin)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::NoUpgradePending);
+    assert_eq!(err, SettlementError::NoUpgradePending.into());
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn test_cancel_upgrade_rejects_non_admin() {
         .try_cancel_upgrade(&stranger)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::Unauthorized);
+    assert_eq!(err, SettlementError::Unauthorized.into());
 }
 
 #[test]
@@ -218,7 +218,7 @@ fn test_cancel_upgrade_fails_when_no_pending() {
         .try_cancel_upgrade(&admin)
         .unwrap_err()
         .unwrap();
-    assert_eq!(err, SettlementError::NoUpgradePending);
+    assert_eq!(err, SettlementError::NoUpgradePending.into());
 }
 
 #[test]

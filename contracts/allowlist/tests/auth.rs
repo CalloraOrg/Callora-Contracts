@@ -85,6 +85,7 @@ fn setup_with_mock_all(
         &None,
         &None,
         &None,
+        &None,
     );
     (
         owner,
@@ -110,6 +111,7 @@ fn setup_no_mock(env: &Env) -> (Address, Address, CalloraVaultClient<'_>, Addres
         &owner,
         &usdc_addr,
         &Some(1_000_000),
+        &None,
         &None,
         &None,
         &None,
@@ -169,7 +171,7 @@ fn set_allowed_depositor_requires_auth() {
     let (owner, _vault_addr, client, _usdc_addr) = setup_no_mock(&env);
     let depositor = Address::generate(&env);
 
-    let res = client.try_set_allowed_depositor(&owner, &Some(depositor));
+    let res = client.try_add_address(&owner, &depositor);
     assert!(
         res.is_err(),
         "set_allowed_depositor must require auth on caller"
@@ -182,7 +184,7 @@ fn clear_allowed_depositors_requires_auth() {
     let env = Env::default();
     let (owner, _vault_addr, client, _usdc_addr) = setup_no_mock(&env);
 
-    let res = client.try_clear_allowed_depositors(&owner);
+    let res = client.try_clear_all(&owner);
     assert!(
         res.is_err(),
         "clear_allowed_depositors must require auth on caller"
@@ -223,7 +225,7 @@ fn get_allowed_depositors_does_not_require_auth() {
     let (_owner, _vault_addr, client, _usdc_addr) = setup_no_mock(&env);
 
     env.set_auths(&[]);
-    let list = client.get_allowed_depositors();
+    let list = client.get_allowlist();
     assert!(
         list.is_empty(),
         "fresh vault must return empty allowed_depositors"
@@ -287,7 +289,7 @@ fn mock_auth_set_allowed_depositor_owner_succeeds() {
         &owner,
         &Some(depositor.clone())
     );
-    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+    client.add_address(&owner, &depositor);
 
     assert!(
         client.is_authorized_depositor(&depositor),
@@ -312,14 +314,14 @@ fn mock_auth_clear_allowed_depositors_owner_succeeds() {
         &owner,
         &Some(depositor.clone())
     );
-    client.set_allowed_depositor(&owner, &Some(depositor.clone()));
+    client.add_address(&owner, &depositor);
 
     // Clear with explicit mock auth.
     mock_single_auth!(&env, &owner, client, "clear_allowed_depositors", &owner);
-    client.clear_allowed_depositors(&owner);
+    client.clear_all(&owner);
 
     assert!(
-        client.get_allowed_depositors().is_empty(),
+        client.get_allowlist().is_empty(),
         "allowlist must be empty after clear_allowed_depositors"
     );
 }
@@ -385,7 +387,7 @@ fn mock_auth_rejects_impersonation_on_set_allowed_depositor() {
         &Some(depositor.clone())
     );
 
-    let res = client.try_set_allowed_depositor(&owner, &Some(depositor));
+    let res = client.try_add_address(&owner, &depositor);
     assert!(
         res.is_err(),
         "mismatched signer must be rejected on set_allowed_depositor"
@@ -409,7 +411,7 @@ fn mock_auth_rejects_impersonation_on_clear_allowed_depositors() {
         &intruder
     );
 
-    let res = client.try_clear_allowed_depositors(&owner);
+    let res = client.try_clear_all(&owner);
     assert!(
         res.is_err(),
         "mismatched signer must be rejected on clear_allowed_depositors"
@@ -461,17 +463,17 @@ fn owner_with_auth_can_call_all_allowlist_entrypoints() {
     assert!(!client.is_authorized_depositor(&dep2));
 
     // --- Legacy API: set_allowed_depositor / get_allowed_depositors ---
-    client.set_allowed_depositor(&owner, &Some(dep1.clone()));
-    let legacy = client.get_allowed_depositors();
+    client.add_address(&owner, &dep1);
+    let legacy = client.get_allowlist();
     assert_eq!(legacy.len(), 1, "legacy list must contain 1 entry");
 
-    client.set_allowed_depositor(&owner, &Some(dep2.clone()));
-    let legacy = client.get_allowed_depositors();
+    client.add_address(&owner, &dep2);
+    let legacy = client.get_allowlist();
     assert_eq!(legacy.len(), 2, "legacy list must contain 2 entries");
 
     // Idempotent: adding dep1 again does not duplicate.
-    client.set_allowed_depositor(&owner, &Some(dep1.clone()));
-    let legacy = client.get_allowed_depositors();
+    client.add_address(&owner, &dep1);
+    let legacy = client.get_allowlist();
     assert_eq!(
         legacy.len(),
         2,
@@ -482,8 +484,8 @@ fn owner_with_auth_can_call_all_allowlist_entrypoints() {
     assert!(client.is_authorized_depositor(&dep2));
 
     // --- Legacy API: clear_allowed_depositors ---
-    client.clear_allowed_depositors(&owner);
-    let legacy = client.get_allowed_depositors();
+    client.clear_all(&owner);
+    let legacy = client.get_allowlist();
     assert!(
         legacy.is_empty(),
         "clear_allowed_depositors must empty the list"
@@ -493,9 +495,9 @@ fn owner_with_auth_can_call_all_allowlist_entrypoints() {
 
     // Idempotent: clear on empty list succeeds.
     client.clear_all(&owner);
-    client.clear_allowed_depositors(&owner);
+    client.clear_all(&owner);
     assert!(client.get_allowlist().is_empty());
-    assert!(client.get_allowed_depositors().is_empty());
+    assert!(client.get_allowlist().is_empty());
 }
 
 // ===========================================================================

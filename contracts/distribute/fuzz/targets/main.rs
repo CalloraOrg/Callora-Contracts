@@ -155,13 +155,13 @@ fuzz_target!(|data: &[u8]| {
     while let Some(op) = parse_op(data, &mut pos) {
         match op {
             FuzzOp::Distribute { to, amount } => {
-                let _ = client.try_distribute(&to, &amount);
+                let _ = client.try_distribute(&admin, &to, &amount);
             }
             FuzzOp::SetMaxDistribute { amount } => {
-                let _ = client.try_set_max_distribute(&amount);
+                let _ = client.try_set_max_distribute(&admin, &amount);
             }
             FuzzOp::SetPaused { paused } => {
-                let _ = client.try_set_paused(&paused);
+                if paused { let _ = client.try_pause(&admin); } else { let _ = client.try_unpause(&admin); }
             }
             FuzzOp::GetAdmin => {
                 client.get_admin();

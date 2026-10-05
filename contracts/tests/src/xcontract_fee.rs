@@ -12,7 +12,7 @@
 
 extern crate std;
 
-use soroban_sdk::{contract, contractimpl, testutils::Events as _, Address, Env, Symbol, Val, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, testutils::Events as _, Address, Env, IntoVal, Symbol, Val, Vec};
 
 // ---------------------------------------------------------------------------
 // Mock settlement contracts
@@ -31,16 +31,22 @@ impl PanickingSettlement {
     }
 }
 
-/// Settlement that succeeds. Used as the control case.
-#[contract]
-pub struct OkSettlement;
+mod ok_settlement {
+    use super::*;
 
-#[contractimpl]
-impl OkSettlement {
-    pub fn record_deduction(_env: Env, amount: i128, _request_id: u64) -> i128 {
-        amount
+    /// Settlement that succeeds. Used as the control case.
+    #[contract]
+    pub struct OkSettlement;
+
+    #[contractimpl]
+    impl OkSettlement {
+        pub fn record_deduction(_env: Env, amount: i128, _request_id: u64) -> i128 {
+            amount
+        }
     }
 }
+
+use ok_settlement::OkSettlement;
 
 // ---------------------------------------------------------------------------
 // Fee caller — mirrors the vault's `deduct` pattern
@@ -91,9 +97,9 @@ impl FeeCaller {
         env.storage().instance().set(&FeeCallerDataKey::Hits, &1u32);
 
         // Cross-contract call — this is the point of failure we test.
-        let args: Vec<Val> = Vec::from_array(&env, [amount.into(), request_id.into()]);
+        let args: Vec<Val> = (amount, request_id).into_val(&env);
         let _result: i128 =
-            env.invoke_contract(&settlement, &Symbol::new(&env, "record_deduction"), &args);
+            env.invoke_contract(&settlement, &Symbol::new(&env, "record_deduction"), args);
 
         env.events().publish((Symbol::new(&env, "deducted"),), ());
 

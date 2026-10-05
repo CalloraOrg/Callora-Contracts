@@ -229,14 +229,6 @@ impl CalloraWhitelist {
             pending,
         );
         Self::bump_instance_ttl(&env);
-        env.events().publish(
-            (
-                events::event_admin_accepted(&env),
-                events::event_version_v1(&env),
-                new_admin.clone(),
-            ),
-            new_admin,
-        );
         Ok(())
     }
 

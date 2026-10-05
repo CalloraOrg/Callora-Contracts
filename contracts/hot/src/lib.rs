@@ -20,7 +20,7 @@ pub mod errors;
 pub mod events;
 pub mod pause;
 
-use errors::HotError;
+pub use errors::HotError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 // ---------------------------------------------------------------------------

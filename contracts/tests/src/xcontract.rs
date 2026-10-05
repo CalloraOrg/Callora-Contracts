@@ -30,16 +30,22 @@ impl AlwaysPanicsCallee {
     }
 }
 
-/// Callee that succeeds. Used as the control case.
-#[contract]
-pub struct OkCallee;
+mod ok_callee {
+    use super::*;
 
-#[contractimpl]
-impl OkCallee {
-    pub fn boom(_env: Env) -> i128 {
-        42
+    /// Callee that succeeds. Used as the control case.
+    #[contract]
+    pub struct OkCallee;
+
+    #[contractimpl]
+    impl OkCallee {
+        pub fn boom(_env: Env) -> i128 {
+            42
+        }
     }
 }
+
+use ok_callee::OkCallee;
 
 /// Minimal caller mirroring the `deduct` pattern used throughout this
 /// workspace: write local state, invoke a callee, then emit an event only

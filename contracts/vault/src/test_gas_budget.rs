@@ -191,7 +191,7 @@ mod gas_budget {
             &None,
         );
         measure!(env, "set_allowed_depositor", {
-            client.set_allowed_depositor(&owner, &Some(depositor));
+            client.add_address(&owner, &depositor);
         });
     }
 
@@ -213,9 +213,9 @@ mod gas_budget {
             &None,
             &None,
         );
-        client.set_allowed_depositor(&owner, &Some(depositor));
+        client.add_address(&owner, &depositor);
         measure!(env, "clear_allowed_depositors", {
-            client.clear_allowed_depositors(&owner);
+            client.clear_all(&owner);
         });
     }
 
