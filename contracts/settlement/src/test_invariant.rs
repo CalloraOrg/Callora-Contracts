@@ -181,13 +181,19 @@ impl Trace {
 /// Verify `total_in_dev == sum(all developer balances)`.
 ///
 /// The global pool is tracked separately; this checks only the developer side.
-/// A full conservation check is: `total_in == dev_sum + pool`.
+/// A full conservation check is:
+/// ```text
+/// TotalReceived == dev_sum + pool_balance + total_withdrawn
+/// ```
+/// where `total_withdrawn` is the cumulative amount removed via
+/// `withdraw_developer_balance`.
 fn check_invariant(
     client: &CalloraSettlementClient<'_>,
     admin: &Address,
     token: &Address,
     expected_dev_total: i128,
     expected_pool_total: i128,
+    expected_total_received: i128,
     trace: &Trace,
     step: u32,
 ) {
@@ -205,6 +211,19 @@ fn check_invariant(
             pool,
         );
     }
+
+    // Full conservation check: TotalReceived must equal all credits ever made
+    // through receive_payment (pool+dev) and batch_receive_payment.
+    // Withdrawals reduce current balances but do NOT reduce TotalReceived —
+    // it is a monotonically increasing metric of inbound credits.
+    let total_received = client.get_total_received();
+    assert_eq!(
+        total_received, expected_total_received,
+        "TotalReceived invariant violated at step {step}: \
+         get_total_received()={total_received} but expected={expected_total_received} \
+         (seed={}, dev_sum={dev_sum}, pool={pool})",
+        trace.seed,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +284,13 @@ fn run_trace(seed: u64) {
     // Running tallies — our "expected" state that must match contract storage.
     let mut expected_dev_total: i128 = 0;
     let mut expected_pool_total: i128 = 0;
+    // TotalReceived is a monotonically increasing credit counter.
+    // Withdrawals do NOT reduce it — they only reduce current developer balances.
+    let mut expected_total_received: i128 = 0;
     let mut ledger_seq = 0u32;
 
     // Check invariant at t=0 (empty state).
-    check_invariant(&client, &admin, &usdc_addr, 0, 0, &trace, 0);
+    check_invariant(&client, &admin, &usdc_addr, 0, 0, 0, &trace, 0);
 
     for step in 1..=TRACE_LENGTH {
         let op = (rng.next_u64() % OP_COUNT) as u8;
@@ -289,6 +311,9 @@ fn run_trace(seed: u64) {
                 expected_dev_total = expected_dev_total
                     .checked_add(amount)
                     .expect("test tally overflow");
+                expected_total_received = expected_total_received
+                    .checked_add(amount)
+                    .expect("test tally overflow");
                 trace.push(
                     step,
                     "receive_payment(dev)",
@@ -301,6 +326,9 @@ fn run_trace(seed: u64) {
                 ledger_seq += 1;
                 client.receive_payment(&vault, &amount, &true, &None, &usdc_addr, &ledger_seq);
                 expected_pool_total = expected_pool_total
+                    .checked_add(amount)
+                    .expect("test tally overflow");
+                expected_total_received = expected_total_received
                     .checked_add(amount)
                     .expect("test tally overflow");
                 trace.push(
@@ -335,6 +363,9 @@ fn run_trace(seed: u64) {
                     expected_dev_total = expected_dev_total
                         .checked_add(batch_total)
                         .expect("test tally overflow");
+                    expected_total_received = expected_total_received
+                        .checked_add(batch_total)
+                        .expect("test tally overflow");
                 }
                 trace.push(
                     step,
@@ -351,6 +382,7 @@ fn run_trace(seed: u64) {
                     let amount = rng.gen_i128(1, current.min(AMOUNT_CAP));
                     let result = client.try_withdraw_developer_balance(&dev, &amount, &None);
                     if result.is_ok() {
+                        // Withdrawal reduces developer balance but does NOT reduce TotalReceived.
                         expected_dev_total = expected_dev_total
                             .checked_sub(amount)
                             .expect("test tally underflow");
@@ -383,6 +415,7 @@ fn run_trace(seed: u64) {
             &usdc_addr,
             expected_dev_total,
             expected_pool_total,
+            expected_total_received,
             &trace,
             step,
         );
@@ -442,6 +475,13 @@ fn test_invariant_pool_only() {
             .map(|b| b.balance)
             .sum();
         assert_eq!(dev_sum, 0, "no developer should have a balance (step {i})");
+
+        // TotalReceived must equal pool total (no developer credits in this test).
+        let total_received = client.get_total_received();
+        assert_eq!(
+            total_received, expected_pool,
+            "TotalReceived invariant failed at step {i}: expected {expected_pool}, got {total_received}"
+        );
     }
 }
 
@@ -508,6 +548,14 @@ fn test_invariant_single_dev_full_withdraw() {
         client.get_global_pool().total_balance,
         0,
         "pool must stay 0"
+    );
+
+    // TotalReceived must equal total credits (3_500) even after the withdrawal.
+    // Withdrawals are debits and do NOT reduce TotalReceived.
+    let total_received = client.get_total_received();
+    assert_eq!(
+        total_received, 3_500,
+        "TotalReceived must remain 3_500 after full withdrawal (got {total_received})"
     );
 }
 
@@ -582,6 +630,7 @@ fn test_invariant_interleaved_dev_and_pool() {
 
     let mut exp_dev: i128 = 0;
     let mut exp_pool: i128 = 0;
+    let mut exp_total_received: i128 = 0;
     let mut ledger_seq = 0u32;
 
     for &(to_pool, amount, is_dev1) in ops {
@@ -595,6 +644,7 @@ fn test_invariant_interleaved_dev_and_pool() {
             client.receive_payment(&vault, &amount, &false, &Some(dev), &usdc_addr, &ledger_seq);
             exp_dev += amount;
         }
+        exp_total_received += amount;
         let dev_sum: i128 = client
             .get_all_developer_balances(&admin, &usdc_addr)
             .iter()
@@ -603,6 +653,13 @@ fn test_invariant_interleaved_dev_and_pool() {
         let pool = client.get_global_pool().total_balance;
         assert_eq!(dev_sum, exp_dev, "dev sum mismatch");
         assert_eq!(pool, exp_pool, "pool mismatch");
+
+        // TotalReceived must equal all credits regardless of routing.
+        let total_received = client.get_total_received();
+        assert_eq!(
+            total_received, exp_total_received,
+            "TotalReceived mismatch: expected {exp_total_received}, got {total_received}"
+        );
     }
 }
 
@@ -620,4 +677,146 @@ proptest! {
     fn proptest_settlement_balance_invariant(seed in 0u64..=u64::from(u32::MAX)) {
         run_trace(seed);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dedicated TotalReceived tests (issue #1149)
+// ---------------------------------------------------------------------------
+
+/// Verify that `get_total_received` returns 0 before any payments are made.
+#[test]
+fn test_total_received_zero_on_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    let usdc_admin = Address::generate(&env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    assert_eq!(
+        client.get_total_received(),
+        0,
+        "TotalReceived must be 0 before any payments"
+    );
+}
+
+/// Verify that `receive_payment` with `to_pool = true` increments `TotalReceived`.
+#[test]
+fn test_total_received_incremented_by_pool_payment() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    let usdc_admin = Address::generate(&env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    // Pool credit.
+    client.receive_payment(&vault, &500, &true, &None, &usdc_addr, &1u32);
+    assert_eq!(
+        client.get_total_received(),
+        500,
+        "pool payment must increment TotalReceived"
+    );
+
+    // Developer credit.
+    client.receive_payment(&vault, &300, &false, &Some(dev.clone()), &usdc_addr, &2u32);
+    assert_eq!(
+        client.get_total_received(),
+        800,
+        "developer payment must also increment TotalReceived"
+    );
+}
+
+/// Verify that `batch_receive_payment` increments `TotalReceived` by the sum
+/// of all items in the batch.
+#[test]
+fn test_total_received_incremented_by_batch_receive() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let dev3 = Address::generate(&env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    let usdc_admin = Address::generate(&env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    let mut items: Vec<(Address, i128)> = Vec::new(&env);
+    items.push_back((dev1.clone(), 100));
+    items.push_back((dev2.clone(), 200));
+    items.push_back((dev3.clone(), 300));
+
+    client.batch_receive_payment(&vault, &items, &usdc_addr, &1u32);
+
+    assert_eq!(
+        client.get_total_received(),
+        600,
+        "batch_receive_payment must increment TotalReceived by the sum of all items"
+    );
+}
+
+/// Verify that a withdrawal does NOT reduce `TotalReceived` — it is a monotonically
+/// increasing inbound credit counter.
+#[test]
+fn test_total_received_not_decremented_by_withdrawal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let dev = Address::generate(&env);
+    let contract = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    let usdc_admin = Address::generate(&env);
+    let ca = env.register_stellar_asset_contract_v2(usdc_admin.clone());
+    let usdc_addr = ca.address();
+    let sac = token_mod::StellarAssetClient::new(&env, &usdc_addr);
+    sac.mint(&contract, &10_000);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc_addr);
+
+    client.receive_payment(
+        &vault,
+        &1_000,
+        &false,
+        &Some(dev.clone()),
+        &usdc_addr,
+        &1u32,
+    );
+    assert_eq!(client.get_total_received(), 1_000);
+
+    // Withdraw half — TotalReceived must remain 1_000.
+    client.withdraw_developer_balance(&dev, &500, &None);
+    assert_eq!(
+        client.get_total_received(),
+        1_000,
+        "TotalReceived must not decrease after withdrawal"
+    );
 }

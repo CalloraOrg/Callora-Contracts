@@ -30,8 +30,8 @@ use crate::limits::MinBalanceChanged;
 use crate::types::{
     AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
     DeductionRecordedEvent, DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent,
-    DeveloperWithdrawEvent, GlobalPool, PaymentReceivedEvent, UpgradeCancelledEvent, UpgradeProposedEvent,
-    VaultAcceptedEvent, VaultProposedEvent,
+    DeveloperWithdrawEvent, GlobalPool, PaymentReceivedEvent, UpgradeCancelledEvent,
+    UpgradeProposedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
@@ -977,6 +977,39 @@ mod tests {
         assert_eq!(
             event_upgrade_cancelled(&env),
             Symbol::new(&env, "upgrade_cancelled")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_added_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_added(&env),
+            Symbol::new(&env, "supported_token_added")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_removed(&env),
+            Symbol::new(&env, "supported_token_removed")
+        );
+    }
+
+    #[test]
+    fn test_event_price_set_bytes() {
+        let env = Env::default();
+        assert_eq!(event_price_set(&env), Symbol::new(&env, "price_set"));
+    }
+
+    #[test]
+    fn test_event_price_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_price_removed(&env),
+            Symbol::new(&env, "price_removed")
         );
     }
 }
