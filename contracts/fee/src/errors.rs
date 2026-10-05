@@ -21,4 +21,6 @@ pub enum ContractError {
     InsufficientBalance = 7,
     /// Recipient address is invalid (contract itself or zero address).
     InvalidRecipient = 8,
+    /// No two-step admin transfer is currently pending.
+    NoAdminTransferPending = 9,
 }

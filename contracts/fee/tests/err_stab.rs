@@ -14,4 +14,5 @@ fn test_fee_error_stability() {
     assert_eq!(ContractError::FeeTooHigh as u32, 6);
     assert_eq!(ContractError::InsufficientBalance as u32, 7);
     assert_eq!(ContractError::InvalidRecipient as u32, 8);
+    assert_eq!(ContractError::NoAdminTransferPending as u32, 9);
 }

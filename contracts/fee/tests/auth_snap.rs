@@ -102,6 +102,125 @@ fn get_admin_does_not_require_auth() {
 }
 
 #[test]
+fn set_admin_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let new_admin = Address::generate(&env);
+    let res = client.try_set_admin(&admin, &new_admin);
+    assert!(res.is_err(), "set_admin must require auth");
+}
+
+#[test]
+fn accept_admin_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+
+    env.set_auths(&[]);
+    let res = client.try_accept_admin(&new_admin);
+    assert!(res.is_err(), "accept_admin must require auth");
+}
+
+#[test]
+fn set_admin_unauthorized_caller() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+
+    let intruder = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let res = client.try_set_admin(&intruder, &new_admin);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        callora_fee::ContractError::Unauthorized
+    );
+}
+
+#[test]
+fn accept_admin_non_nominee_rejected() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+
+    let intruder = Address::generate(&env);
+    let res = client.try_accept_admin(&intruder);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        callora_fee::ContractError::Unauthorized
+    );
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn admin_can_nominate_and_nominee_can_accept() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+    assert_eq!(client.get_pending_admin(), None);
+}
+
+#[test]
+fn cancel_admin_transfer_clears_pending() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(client.get_pending_admin(), Some(new_admin.clone()));
+
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(client.get_pending_admin(), None);
+    assert_eq!(client.get_admin(), admin);
+
+    let res = client.try_accept_admin(&new_admin);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        callora_fee::ContractError::NoAdminTransferPending
+    );
+}
+
+#[test]
+fn cancel_admin_transfer_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+
+    env.set_auths(&[]);
+    let res = client.try_cancel_admin_transfer(&admin);
+    assert!(res.is_err(), "cancel_admin_transfer must require auth");
+}
+
+#[test]
+fn cancel_admin_transfer_unauthorized_caller() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+
+    let intruder = Address::generate(&env);
+    let res = client.try_cancel_admin_transfer(&intruder);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        callora_fee::ContractError::Unauthorized
+    );
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+}
+
+#[test]
 fn admin_with_auth_can_call_all_entrypoints() {
     let env = Env::default();
     env.mock_all_auths();

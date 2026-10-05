@@ -27,6 +27,7 @@ pub enum DataKey {
     Admin,
     FeeBps,
     Accumulated,
+    PendingAdmin,
 }
 
 /// Fee contract configuration stored on-chain.
@@ -255,6 +256,113 @@ impl FeeContract {
             .ok_or(ContractError::NotInitialized)?;
         Self::bump_instance_ttl(&env);
         Ok(admin)
+    }
+
+    /// Return the pending admin address, or `None` if no two-step admin
+    /// transfer is in progress.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        let pending: Option<Address> = env.storage().instance().get(&DataKey::PendingAdmin);
+        Self::bump_instance_ttl(&env);
+        pending
+    }
+
+    /// Nominate a new admin (admin only). The nominee must call
+    /// [`Self::accept_admin`] to finalize the transfer.
+    ///
+    /// # Events
+    /// Emits `admin_nominated` with `(caller,)` topic and `new_admin` payload.
+    ///
+    /// # Errors
+    /// - `NotInitialized` if the contract is not initialised.
+    /// - `Unauthorized` if the caller is not the stored admin.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.events()
+            .publish((Symbol::new(&env, "admin_nominated"), caller), new_admin);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Finalize a pending admin transfer. Must be called by the nominated
+    /// admin; a non-nominee caller is rejected.
+    ///
+    /// # Events
+    /// Emits `admin_accepted` with `(old_admin,)` topic and new admin payload.
+    ///
+    /// # Errors
+    /// - `NotInitialized` if the contract is not initialised.
+    /// - `NoAdminTransferPending` if no nomination is in progress.
+    /// - `Unauthorized` if the caller is not the pending admin.
+    pub fn accept_admin(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(ContractError::NotInitialized);
+        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoAdminTransferPending)?;
+        if caller != pending {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let old_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events()
+            .publish((Symbol::new(&env, "admin_accepted"), old_admin), pending);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer (admin only).
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` with `(caller,)` topic and `()` payload.
+    ///
+    /// # Errors
+    /// - `NotInitialized` if the contract is not initialised.
+    /// - `Unauthorized` if the caller is not the stored admin.
+    /// - `NoAdminTransferPending` if no nomination is in progress.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if !env.storage().instance().has(&DataKey::PendingAdmin) {
+            return Err(ContractError::NoAdminTransferPending);
+        }
+
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events()
+            .publish((Symbol::new(&env, "admin_cancelled"), caller), ());
+        Self::bump_instance_ttl(&env);
+        Ok(())
     }
 }
 
