@@ -634,3 +634,32 @@ fn cancel_succeeds_after_timelock_before_execution() {
     assert_eq!(usdc_client.balance(&treasury), treasury_balance_before);
     assert_eq!(usdc_client.balance(&pool), pool_balance_before);
 }
+
+#[test]
+fn recovery_from_emergency_preserves_prior_paused_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+    let (_pool, client) = init_pool(&env, &admin, &usdc_address);
+
+    // 1. Regular pause by admin
+    client.pause(&admin);
+    assert!(client.is_paused());
+    assert!(!client.is_emergency_paused());
+
+    // 2. Emergency pause triggered
+    client.emergency_pause(&admin);
+    assert!(client.is_paused());
+    assert!(client.is_emergency_paused());
+
+    // 3. Admin recovers from emergency - pool must remain regularly paused
+    client.recover_from_emergency(&admin);
+    assert!(!client.is_emergency_paused());
+    assert!(client.is_paused());
+
+    // 4. Admin explicitly unpauses pool
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+    assert!(!client.is_emergency_paused());
+}

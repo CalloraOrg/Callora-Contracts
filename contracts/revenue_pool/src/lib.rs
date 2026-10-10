@@ -466,13 +466,17 @@ impl RevenuePool {
             .publish((events::event_pause_set(&env), caller), false);
     }
 
-    /// Return `true` if the revenue pool is currently paused.
+    /// Return `true` if the revenue pool is currently paused (either regularly or via emergency mode).
     pub fn is_paused(env: Env) -> bool {
         Self::bump_instance_ttl(&env);
-        env.storage()
-            .instance()
+        let inst = env.storage().instance();
+        let regular = inst
             .get::<_, bool>(&Symbol::new(&env, PAUSED_KEY))
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let emergency = inst
+            .get::<_, bool>(&Symbol::new(&env, EMERGENCY_PAUSED_KEY))
+            .unwrap_or(false);
+        regular || emergency
     }
 
     /// Activate recovery-only emergency mode.
@@ -499,7 +503,6 @@ impl RevenuePool {
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &true);
-        inst.set(&Symbol::new(&env, PAUSED_KEY), &true);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_emergency_pause_set(&env), caller), true);
@@ -507,9 +510,9 @@ impl RevenuePool {
 
     /// Clear recovery-only emergency mode after operator remediation.
     ///
-    /// Only the current admin may recover the pool. Recovery also clears the
-    /// regular pause flag so normal operations resume in a single authorised
-    /// action.
+    /// Only the current admin may recover the pool. Recovery preserves the
+    /// regular pause flag so pools that were regularly paused before the
+    /// emergency remain paused until explicitly resumed.
     ///
     /// # Errors
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
@@ -525,7 +528,6 @@ impl RevenuePool {
         }
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
-        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_emergency_pause_set(&env), caller), false);

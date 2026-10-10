@@ -29,6 +29,9 @@ use soroban_sdk::{Address, Env, Symbol};
 /// Instance storage key for the pool's pause flag.
 pub(crate) const PAUSED_KEY: &str = "paused";
 
+/// Instance storage key for recovery-only emergency mode.
+pub(crate) const EMERGENCY_PAUSED_KEY: &str = "emergency_paused";
+
 /// Instance storage key for the emergency pause guardian address.
 pub(crate) const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 
@@ -41,10 +44,17 @@ pub(crate) const PENDING_ADMIN_KEY: &str = "pending_admin";
 
 /// Read the pool's paused flag. Returns `false` before `init` or if never set.
 pub fn is_paused(env: &Env) -> bool {
-    env.storage()
+    let regular = env
+        .storage()
         .instance()
         .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
-        .unwrap_or(false)
+        .unwrap_or(false);
+    let emergency = env
+        .storage()
+        .instance()
+        .get::<_, bool>(&Symbol::new(env, EMERGENCY_PAUSED_KEY))
+        .unwrap_or(false);
+    regular || emergency
 }
 
 /// Write the pool's paused flag.
