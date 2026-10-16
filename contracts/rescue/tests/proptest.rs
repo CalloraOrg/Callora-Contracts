@@ -576,3 +576,40 @@ fn rescue_capped_enforces_cap_above_balance() {
     assert_eq!(client.total_rescued(), 0);
     assert_eq!(token_client.balance(&contract_id), 10_000);
 }
+
+/// Rescue above the stored per-token cap fails with ExceedsCap and leaves state unchanged.
+#[test]
+fn rescue_enforces_stored_per_token_cap_and_emits_cap_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraRescue, ());
+    let client = CalloraRescueClient::new(&env, &contract_id);
+    let to = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let token_client = token::Client::new(&env, &token_addr);
+    token::StellarAssetClient::new(&env, &token_addr).mint(&contract_id, &10_000);
+
+    client.init(&admin);
+    client.set_rescue_cap(&admin, &token_addr, &Some(1_500));
+    assert_eq!(client.get_rescue_cap(&token_addr), Some(1_500));
+
+    // Rescue above stored cap must fail with ExceedsCap
+    let err = client
+        .try_rescue(&admin, &token_addr, &to, &1_501)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, RescueError::ExceedsCap);
+    assert_eq!(client.total_rescued(), 0);
+    assert_eq!(token_client.balance(&contract_id), 10_000);
+
+    // Rescue within stored cap succeeds
+    client.rescue(&admin, &token_addr, &to, &1_500);
+    assert_eq!(client.total_rescued(), 1_500);
+    assert_eq!(token_client.balance(&contract_id), 8_500);
+}

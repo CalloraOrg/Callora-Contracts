@@ -157,6 +157,19 @@ pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
 }
 
+/// Returns the Symbol for the `"rescue_cap_set"` event topic.
+pub fn event_rescue_cap_set(env: &Env) -> Symbol {
+    Symbol::new(env, "rescue_cap_set")
+}
+
+/// Emit `"rescue_cap_set"` when the per-token rescue cap is updated in storage.
+pub fn emit_rescue_cap_set(env: &Env, admin: &Address, token: &Address, cap: Option<i128>) {
+    env.events().publish(
+        (event_rescue_cap_set(env), admin.clone(), token.clone()),
+        cap,
+    );
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 /// Emit `"initialized"` once when the rescue contract is first set up.

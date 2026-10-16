@@ -59,6 +59,8 @@ pub enum DataKey {
     Admin,
     /// Running total of all tokens rescued across all calls (instance storage).
     TotalRescued,
+    /// Per-token rescue cap stored on-chain (persistent storage).
+    RescueCap(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +135,16 @@ impl CalloraRescue {
             return Err(RescueError::AmountNotPositive);
         }
 
+        let stored_cap: Option<i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RescueCap(token.clone()));
+        if let Some(cap) = stored_cap {
+            if amount > cap {
+                return Err(RescueError::ExceedsCap);
+            }
+        }
+
         let token_client = token::Client::new(&env, &token);
         let vault = env.current_contract_address();
         let on_ledger = token_client.balance(&vault);
@@ -153,14 +165,12 @@ impl CalloraRescue {
         let next = prev.checked_add(amount).ok_or(RescueError::Overflow)?;
         env.storage().instance().set(&DataKey::TotalRescued, &next);
 
-        let payload = events::RescueEvent::new(
-            &env,
-            token.clone(),
-            to.clone(),
-            amount,
-            events::RescueCap::None,
-            next,
-        );
+        let event_cap = match stored_cap {
+            Some(c) => events::RescueCap::Some(c),
+            None => events::RescueCap::None,
+        };
+        let payload =
+            events::RescueEvent::new(&env, token.clone(), to.clone(), amount, event_cap, next);
         events::emit_rescue(&env, &admin, &payload);
 
         Ok(())
@@ -177,6 +187,41 @@ impl CalloraRescue {
     /// # Errors
     /// All errors from [`rescue`], plus:
     /// - [`RescueError::ExceedsCap`] if `amount > cap`.
+    /// Configure or clear the stored per-token rescue cap enforced by [`Self::rescue`].
+    ///
+    /// Passing `Some(cap)` requires `cap > 0`. Passing `None` removes the per-token cap.
+    pub fn set_rescue_cap(
+        env: Env,
+        admin: Address,
+        token: Address,
+        cap: Option<i128>,
+    ) -> Result<(), RescueError> {
+        admin.require_auth();
+        Self::assert_admin(&env, &admin)?;
+
+        let key = DataKey::RescueCap(token.clone());
+        match cap {
+            Some(c) => {
+                if c <= 0 {
+                    return Err(RescueError::ExceedsCap);
+                }
+                env.storage().persistent().set(&key, &c);
+            }
+            None => {
+                env.storage().persistent().remove(&key);
+            }
+        }
+
+        events::emit_rescue_cap_set(&env, &admin, &token, cap);
+        Ok(())
+    }
+
+    /// Return the stored per-token rescue cap, if configured.
+    pub fn get_rescue_cap(env: Env, token: Address) -> Option<i128> {
+        env.storage().persistent().get(&DataKey::RescueCap(token))
+    }
+
+    #[deprecated(note = "Configure per-token caps via set_rescue_cap and call rescue instead")]
     pub fn rescue_capped(
         env: Env,
         admin: Address,
@@ -193,8 +238,17 @@ impl CalloraRescue {
             return Err(RescueError::AmountNotPositive);
         }
 
+        let stored_cap: Option<i128> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RescueCap(token.clone()));
+        let effective_cap = match stored_cap {
+            Some(sc) => sc.min(cap),
+            None => cap,
+        };
+
         // cap must also be positive; use checked comparison.
-        if cap <= 0 || amount > cap {
+        if effective_cap <= 0 || amount > effective_cap {
             return Err(RescueError::ExceedsCap);
         }
 
