@@ -22,7 +22,7 @@ pub mod limits;
 
 use crate::errors::DistributeError;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
 // Storage key constants
@@ -448,6 +448,7 @@ impl Distribute {
     /// * `DistributeError::AmountNotPositive` â€” amount â‰¤ 0.
     /// * `DistributeError::AmountExceedsMaxDistribute` â€” amount exceeds the cap.
     /// * `DistributeError::InvalidRecipient`.
+    /// * `DistributeError::DuplicateRecipient` — a recipient appears more than once in `payments`.
     /// * `DistributeError::InsufficientBalance` â€” contract holds less than `amount`.
     ///
     /// # Events
@@ -517,6 +518,7 @@ impl Distribute {
     /// - `amount` must be positive.
     /// - `amount` must not exceed `max_distribute` (per-leg cap).
     /// - `recipient` must not be the contract address itself.
+    /// - `recipient` must not appear more than once in `payments`.
     ///
     /// # Validation (batch-level)
     /// - Caller must be authorised admin.
@@ -570,6 +572,7 @@ impl Distribute {
 
         // Phase 1 — validate all legs and compute total
         let mut total: i128 = 0;
+        let mut seen: Map<Address, bool> = Map::new(&env);
         for i in 0..n {
             let (ref to, amount) = payments.get(i).expect("payment leg");
             if amount <= 0 {
@@ -579,6 +582,10 @@ impl Distribute {
                 env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
             }
             Self::validate_recipient(&env, to, &contract_address);
+            if seen.contains_key(to.clone()) {
+                env.panic_with_error(DistributeError::DuplicateRecipient);
+            }
+            seen.set(to.clone(), true);
             // Overflow-safe accumulation
             total = total
                 .checked_add(amount)

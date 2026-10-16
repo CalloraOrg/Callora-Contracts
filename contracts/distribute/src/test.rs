@@ -1076,3 +1076,51 @@ fn batch_distribute_single_leg_preserves_shape() {
     assert_eq!(complete_lifecycle.batch_size, 1);
     assert_eq!(complete_lifecycle.amount, 500);
 }
+
+
+#[test]
+fn batch_distribute_rejects_duplicate_recipient_without_moving_usdc() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let dev_a = Address::generate(&env);
+    let dev_b = Address::generate(&env);
+    let dev_c = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
+    usdc_admin.mint(&contract_addr, &1_000);
+    let usdc_token = token::Client::new(&env, &usdc_addr);
+
+    env.events().all();
+
+    let mut payments = Vec::new(&env);
+    payments.push_back((dev_a.clone(), 100));
+    payments.push_back((dev_b.clone(), 200));
+    payments.push_back((dev_a.clone(), 150)); // duplicate recipient mid-list
+    payments.push_back((dev_c.clone(), 100));
+
+    let res = client.try_batch_distribute(&admin, &payments);
+    assert_eq!(res, Err(Ok(DistributeError::DuplicateRecipient)));
+
+    // Verify no USDC moved from the contract or to any recipient
+    assert_eq!(usdc_token.balance(&contract_addr), 1_000);
+    assert_eq!(usdc_token.balance(&dev_a), 0);
+    assert_eq!(usdc_token.balance(&dev_b), 0);
+    assert_eq!(usdc_token.balance(&dev_c), 0);
+
+    // Verify no distribute contract events were emitted
+    let contract_events: std::vec::Vec<_> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| e.0 == contract_addr)
+        .collect();
+    assert_eq!(contract_events.len(), 0);
+}
