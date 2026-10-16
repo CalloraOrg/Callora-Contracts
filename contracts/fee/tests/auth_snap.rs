@@ -4,36 +4,50 @@ extern crate std;
 
 use callora_fee::{FeeConfig, FeeContract, FeeContractClient};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{token, Address, Env};
 
 fn create_contract(env: &Env) -> FeeContractClient<'_> {
     let contract_id = env.register(FeeContract, ());
     FeeContractClient::new(env, &contract_id)
 }
 
-fn setup(env: &Env) -> (Address, FeeContractClient<'_>) {
+fn setup(
+    env: &Env,
+) -> (
+    Address,
+    Address,
+    token::StellarAssetClient<'_>,
+    FeeContractClient<'_>,
+) {
     env.mock_all_auths();
     let admin = Address::generate(env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(env, &token_addr);
     let client = create_contract(env);
-    client.init(&admin);
-    (admin, client)
+    client.init(&admin, &token_addr);
+    (admin, token_addr, token_admin, client)
 }
 
 #[test]
 fn init_requires_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
     let client = create_contract(&env);
 
     env.set_auths(&[]);
-    let res = client.try_init(&admin);
+    let res = client.try_init(&admin, &token_addr);
     assert!(res.is_err(), "init must require auth");
 }
 
 #[test]
 fn set_fee_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _token_addr, _token_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let res = client.try_set_fee(&admin, &250);
@@ -43,7 +57,7 @@ fn set_fee_requires_auth() {
 #[test]
 fn deposit_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (_admin, _token_addr, _token_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let caller = Address::generate(&env);
@@ -54,11 +68,12 @@ fn deposit_requires_auth() {
 #[test]
 fn withdraw_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _token_addr, token_admin, client) = setup(&env);
 
     env.mock_all_auths();
     let caller = Address::generate(&env);
-    client.deposit(&caller, &1000);
+    token_admin.mint(&caller, &1_000);
+    client.deposit(&caller, &1_000);
 
     env.set_auths(&[]);
     let recipient = Address::generate(&env);
@@ -69,7 +84,7 @@ fn withdraw_requires_auth() {
 #[test]
 fn get_fee_config_does_not_require_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (_admin, _token_addr, _token_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let config = client.get_fee_config();
@@ -85,7 +100,7 @@ fn get_fee_config_does_not_require_auth() {
 #[test]
 fn get_accumulated_does_not_require_auth() {
     let env = Env::default();
-    let (_admin, client) = setup(&env);
+    let (_admin, _token_addr, _token_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let accumulated = client.get_accumulated();
@@ -95,10 +110,19 @@ fn get_accumulated_does_not_require_auth() {
 #[test]
 fn get_admin_does_not_require_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (admin, _token_addr, _token_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn get_token_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, token_addr, _token_admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(client.get_token(), token_addr);
 }
 
 #[test]
@@ -107,15 +131,20 @@ fn admin_with_auth_can_call_all_entrypoints() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &token_addr);
     let client = create_contract(&env);
-    client.init(&admin);
+    client.init(&admin, &token_addr);
 
     client.set_fee(&admin, &250);
     assert_eq!(client.get_fee_config().fee_bps, 250);
 
     let caller = Address::generate(&env);
-    client.deposit(&caller, &1000);
-    assert_eq!(client.get_accumulated(), 1000);
+    token_admin.mint(&caller, &1_000);
+    client.deposit(&caller, &1_000);
+    assert_eq!(client.get_accumulated(), 1_000);
 
     let recipient = Address::generate(&env);
     let _ = client.try_withdraw(&admin, &recipient, &400);
