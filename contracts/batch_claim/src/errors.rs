@@ -16,6 +16,7 @@ use soroban_sdk::contracterror;
 /// | 10   | InvalidClaimId       | Identifier is malformed (all-zero)                |
 /// | 11   | BatchTooLarge        | Batch exceeds `MAX_PENDING_AMOUNTS` entries       |
 /// | 12   | BatchEmpty           | Batch input must not be empty                     |
+/// | 13   | InsufficientBalance  | Contract token balance is below the batch total   |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -61,4 +62,6 @@ pub enum BatchClaimError {
     /// so client bugs surface as errors instead of wasting fees on a no-op
     /// settlement.
     BatchEmpty = 12,
+    /// Contract reward-token balance is below the requested batch settlement total (code 13).
+    InsufficientBalance = 13,
 }

@@ -94,7 +94,7 @@ pub mod events;
 
 pub use errors::BatchClaimError;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Vec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -143,6 +143,8 @@ pub const MAX_PENDING_AMOUNTS: u32 = 50;
 pub enum StorageKey {
     /// Contract admin.
     Admin,
+    /// Optional configured reward token contract address used to pay settled claims.
+    RewardToken,
     /// Per-claimant claim record.
     Claim(Address),
     /// Monotonically-increasing count of total claims ever created.
@@ -218,6 +220,55 @@ impl CalloraBatchClaim {
         env.events()
             .publish((events::event_init(&env),), admin.clone());
         Ok(())
+    }
+
+    /// Initialize the batch-claim contract with an admin and a reward token.
+    ///
+    /// # Errors
+    /// Returns [`BatchClaimError::AlreadyInitialized`] if called more than once.
+    pub fn init_with_token(
+        env: Env,
+        admin: Address,
+        reward_token: Address,
+    ) -> Result<(), BatchClaimError> {
+        admin.require_auth();
+        if env.storage().instance().has(&StorageKey::Admin) {
+            return Err(BatchClaimError::AlreadyInitialized);
+        }
+        let inst = env.storage().instance();
+        inst.set(&StorageKey::Admin, &admin);
+        inst.set(&StorageKey::RewardToken, &reward_token);
+        inst.set(&StorageKey::TotalClaims, &0u32);
+        Self::bump_instance(&env);
+        env.events()
+            .publish((events::event_init(&env),), (admin, reward_token));
+        Ok(())
+    }
+
+    /// Configure or update the reward token used to pay settled claims.
+    ///
+    /// Only the admin may call.
+    pub fn set_reward_token(
+        env: Env,
+        caller: Address,
+        reward_token: Address,
+    ) -> Result<(), BatchClaimError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(BatchClaimError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::RewardToken, &reward_token);
+        Self::bump_instance(&env);
+        Ok(())
+    }
+
+    /// Return the configured reward token address, if set.
+    pub fn get_reward_token(env: Env) -> Result<Option<Address>, BatchClaimError> {
+        Self::require_admin(&env)?;
+        Ok(env.storage().instance().get(&StorageKey::RewardToken))
     }
 
     // -----------------------------------------------------------------------
@@ -442,6 +493,7 @@ impl CalloraBatchClaim {
             return Err(BatchClaimError::BatchTooLarge);
         }
         let mut total_claimed: i128 = 0;
+        let mut validated: Vec<(Address, BytesN<32>, ClaimRecord)> = Vec::new(&env);
 
         for (claimant, claim_id) in claimants.iter() {
             claimant.require_auth();
@@ -455,14 +507,11 @@ impl CalloraBatchClaim {
                     .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
             }
 
-            let mut record: ClaimRecord = env
+            let record: ClaimRecord = env
                 .storage()
                 .persistent()
                 .get(&key)
                 .ok_or(BatchClaimError::ClaimNotFound)?;
-
-            // Validation checks — none of these mutate state, so a failed
-            // call leaves storage exactly as it was found.
 
             // 1. Verify the claim_id matches the stored record.
             if record.claim_id != claim_id {
@@ -470,9 +519,6 @@ impl CalloraBatchClaim {
             }
 
             // 2. Verify the claim_id has not been consumed by a prior call.
-            //    This check MUST precede the settled check so that the
-            //    consumed tombstone is the authoritative replay guard.
-            //    Bump consumed-tombstone TTL on every read (hot path).
             if env.storage().persistent().has(&consumed_key) {
                 env.storage().persistent().extend_ttl(
                     &consumed_key,
@@ -490,22 +536,37 @@ impl CalloraBatchClaim {
             }
 
             // 3. Verify the record has not already been settled.
-            //    This is a secondary consistency check; the consumed tombstone
-            //    above is the primary replay guard.
             if record.settled {
                 return Err(BatchClaimError::AlreadySettled);
             }
 
-            // All validation passed.  Accumulate into running total before
-            // writing any state so an overflow error is also non-mutating.
+            // Reject duplicate claim_ids within the same batch before any state change.
+            for (_, seen_id, _) in validated.iter() {
+                if seen_id == claim_id {
+                    return Err(BatchClaimError::ClaimIdAlreadyUsed);
+                }
+            }
+
             total_claimed = total_claimed
                 .checked_add(record.pending_amount)
                 .ok_or(BatchClaimError::Overflow)?;
+            validated.push_back((claimant, claim_id, record));
+        }
+
+        let reward_token: Option<Address> = env.storage().instance().get(&StorageKey::RewardToken);
+        let contract_addr = env.current_contract_address();
+        if let Some(ref token_addr) = reward_token {
+            let token_client = token::Client::new(&env, token_addr);
+            if token_client.balance(&contract_addr) < total_claimed {
+                return Err(BatchClaimError::InsufficientBalance);
+            }
+        }
+
+        for (claimant, claim_id, mut record) in validated.iter() {
+            let key = StorageKey::Claim(claimant.clone());
+            let consumed_key = StorageKey::ClaimConsumed(claim_id.clone());
 
             // Write-before-settle: mark the claim_id as consumed FIRST.
-            // This is the concurrency-safety invariant: if two transactions
-            // race, the one that commits this write second will read
-            // `already_consumed = true` and fail with ClaimIdAlreadyUsed.
             env.storage().persistent().set(&consumed_key, &true);
             env.storage().persistent().extend_ttl(
                 &consumed_key,
@@ -520,15 +581,33 @@ impl CalloraBatchClaim {
                 .persistent()
                 .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 
+            if let Some(ref token_addr) = reward_token {
+                token::Client::new(&env, token_addr).transfer(
+                    &contract_addr,
+                    &claimant,
+                    &record.pending_amount,
+                );
+            }
+
             // Emit consumed event so off-chain indexers can track spent ids.
             env.events()
                 .publish((events::event_claim_consumed(&env),), claim_id.clone());
 
-            // Emit settled event with claimant + amount.
-            env.events().publish(
-                (events::event_claims_settled(&env),),
-                (claimant.clone(), record.pending_amount),
-            );
+            // Emit settled event with claimant + amount (and reward token as topic when configured).
+            match reward_token {
+                Some(ref token_addr) => {
+                    env.events().publish(
+                        (events::event_claims_settled(&env), token_addr.clone()),
+                        (claimant.clone(), record.pending_amount),
+                    );
+                }
+                None => {
+                    env.events().publish(
+                        (events::event_claims_settled(&env),),
+                        (claimant.clone(), record.pending_amount),
+                    );
+                }
+            }
         }
 
         Self::bump_instance(&env);
@@ -1803,5 +1882,89 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
+    }
+
+    #[test]
+    fn test_batch_claim_transfers_reward_tokens_to_each_claimant() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_client = token::Client::new(&env, &token_addr);
+        let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+
+        let contract_id = env.register(CalloraBatchClaim, ());
+        let client = CalloraBatchClaimClient::new(&env, &contract_id);
+        client.init_with_token(&admin, &token_addr);
+        assert_eq!(client.get_reward_token(), Some(token_addr.clone()));
+
+        let c1 = Address::generate(&env);
+        let c2 = Address::generate(&env);
+        let id1 = make_id(&env, 91);
+        let id2 = make_id(&env, 92);
+
+        client.add_claim(&admin, &c1, &350, &id1);
+        client.add_claim(&admin, &c2, &650, &id2);
+
+        token_admin.mint(&contract_id, &1_500);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((c1.clone(), id1.clone()));
+        batch.push_back((c2.clone(), id2.clone()));
+
+        let total = client.batch_claim(&batch);
+        assert_eq!(total, 1_000);
+        assert_eq!(token_client.balance(&c1), 350);
+        assert_eq!(token_client.balance(&c2), 650);
+        assert_eq!(token_client.balance(&contract_id), 500);
+        assert!(client.get_claim(&c1).settled);
+        assert!(client.get_claim(&c2).settled);
+    }
+
+    #[test]
+    fn test_batch_claim_insufficient_contract_balance_fails_without_state_change() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_client = token::Client::new(&env, &token_addr);
+        let token_admin = token::StellarAssetClient::new(&env, &token_addr);
+
+        let contract_id = env.register(CalloraBatchClaim, ());
+        let client = CalloraBatchClaimClient::new(&env, &contract_id);
+        client.init_with_token(&admin, &token_addr);
+
+        let c1 = Address::generate(&env);
+        let c2 = Address::generate(&env);
+        let id1 = make_id(&env, 93);
+        let id2 = make_id(&env, 94);
+
+        client.add_claim(&admin, &c1, &400, &id1);
+        client.add_claim(&admin, &c2, &700, &id2);
+
+        // Fund less than total_claimed (1_100)
+        token_admin.mint(&contract_id, &1_000);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((c1.clone(), id1.clone()));
+        batch.push_back((c2.clone(), id2.clone()));
+
+        let res = client.try_batch_claim(&batch);
+        assert_eq!(res, Err(Ok(BatchClaimError::InsufficientBalance)));
+
+        // Neither claim is consumed or settled, and no tokens moved.
+        assert!(!client.claim_id_consumed(&id1));
+        assert!(!client.claim_id_consumed(&id2));
+        assert!(!client.get_claim(&c1).settled);
+        assert!(!client.get_claim(&c2).settled);
+        assert_eq!(token_client.balance(&c1), 0);
+        assert_eq!(token_client.balance(&c2), 0);
+        assert_eq!(token_client.balance(&contract_id), 1_000);
     }
 }
