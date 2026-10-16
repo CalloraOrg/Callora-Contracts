@@ -150,6 +150,7 @@ must not be reassigned once released.
 | 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |
 | 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |
 | 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |
+| 26 | `EmergencyDrainExpired` | Revenue Pool | Emergency drain execution window has expired |
 
 ## Upgrade
 

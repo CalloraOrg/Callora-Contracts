@@ -247,6 +247,22 @@ pub fn event_emergency_drain_executed(env: &Env) -> Symbol {
     Symbol::new(env, "emergency_drain_executed")
 }
 
+/// Returns the Symbol for the `"drain_replaced"` event topic.
+///
+/// Emitted when the admin proposes a new emergency drain while an earlier
+/// proposal is still pending via [`RevenuePool::propose_emergency_drain`].
+pub fn event_drain_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "drain_replaced")
+}
+
+/// Returns the Symbol for the `"emergency_drain_expired"` event topic.
+///
+/// Emitted when an expired pending emergency drain is purged via
+/// [`RevenuePool::expire_emergency_drain`].
+pub fn event_emergency_drain_expired(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_drain_expired")
+}
+
 /// Returns the Symbol for the `"emergency_drain_cancelled"` event topic.
 ///
 /// Emitted when the admin cancels a pending emergency drain via
@@ -487,6 +503,24 @@ mod tests {
     }
 
     /// Snapshot: proves event_emergency_drain_cancelled still maps to exactly the bytes for "emergency_drain_cancelled".
+    #[test]
+    fn test_event_drain_replaced_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_drain_replaced(&env),
+            Symbol::new(&env, "drain_replaced")
+        );
+    }
+
+    #[test]
+    fn test_event_emergency_drain_expired_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_drain_expired(&env),
+            Symbol::new(&env, "emergency_drain_expired")
+        );
+    }
+
     #[test]
     fn test_event_emergency_drain_cancelled_bytes() {
         let env = Env::default();

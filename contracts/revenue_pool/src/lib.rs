@@ -1031,16 +1031,27 @@ impl RevenuePool {
         let execute_after: u64 = proposed_at
             .checked_add(EMERGENCY_DRAIN_TIMELOCK_SECONDS)
             .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+        let expires_at: u64 = execute_after
+            .checked_add(EMERGENCY_DRAIN_GRACE_PERIOD_SECONDS)
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
 
         let drain = PendingEmergencyDrain {
             to: treasury,
             amount,
             proposed_at,
             execute_after,
+            expires_at,
         };
 
         let inst = env.storage().instance();
-        inst.set(&Symbol::new(&env, EMERGENCY_DRAIN_KEY), &drain);
+        let key = Symbol::new(&env, EMERGENCY_DRAIN_KEY);
+        if let Some(previous) = inst.get::<_, PendingEmergencyDrain>(&key) {
+            env.events().publish(
+                (events::event_drain_replaced(&env), caller.clone()),
+                (previous, drain.clone()),
+            );
+        }
+        inst.set(&key, &drain);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
         env.events().publish(
@@ -1080,6 +1091,10 @@ impl RevenuePool {
         let now: u64 = env.ledger().timestamp();
         if now < drain.execute_after {
             env.panic_with_error(RevenuePoolError::TimelockNotExpired);
+        }
+        if now > drain.expires_at {
+            inst.remove(&Symbol::new(&env, EMERGENCY_DRAIN_KEY));
+            env.panic_with_error(RevenuePoolError::EmergencyDrainExpired);
         }
 
         let usdc_address: Address = inst
@@ -1137,15 +1152,47 @@ impl RevenuePool {
         );
     }
 
-    /// Return the pending emergency drain proposal, or `None` if none exists.
+    /// Purge an expired pending emergency drain proposal from storage.
+    ///
+    /// May be called by any operator or monitor once `env.ledger().timestamp() > drain.expires_at`
+    /// to clear the stale proposal and emit an `emergency_drain_expired` event.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::NoPendingEmergencyDrain`] - no proposal exists.
+    /// * [`RevenuePoolError::TimelockNotExpired`] - proposal has not yet expired.
+    pub fn expire_emergency_drain(env: Env) -> PendingEmergencyDrain {
+        let inst = env.storage().instance();
+        let key = Symbol::new(&env, EMERGENCY_DRAIN_KEY);
+        let drain: PendingEmergencyDrain = inst
+            .get(&key)
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NoPendingEmergencyDrain));
+        let now: u64 = env.ledger().timestamp();
+        if now <= drain.expires_at {
+            env.panic_with_error(RevenuePoolError::TimelockNotExpired);
+        }
+        inst.remove(&key);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_emergency_drain_expired(&env),),
+            drain.clone(),
+        );
+        drain
+    }
+
+    /// Return the pending emergency drain proposal, or `None` if none exists
+    /// or the proposal's execution window (`expires_at`) has elapsed.
     ///
     /// Off-chain monitors and the admin can poll this to verify or cancel a
     /// pending drain before the timelock expires.
     pub fn get_pending_emergency_drain(env: Env) -> Option<PendingEmergencyDrain> {
         Self::bump_instance_ttl(&env);
-        env.storage()
-            .instance()
-            .get(&Symbol::new(&env, EMERGENCY_DRAIN_KEY))
+        let inst = env.storage().instance();
+        let key = Symbol::new(&env, EMERGENCY_DRAIN_KEY);
+        let drain: Option<PendingEmergencyDrain> = inst.get(&key);
+        match drain {
+            Some(d) if env.ledger().timestamp() > d.expires_at => None,
+            other => other,
+        }
     }
 }
 

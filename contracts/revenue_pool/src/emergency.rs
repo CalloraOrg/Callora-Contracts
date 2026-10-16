@@ -39,6 +39,10 @@ use soroban_sdk::{contracttype, Address};
 /// a fraudulent or mistaken proposal.
 pub const EMERGENCY_DRAIN_TIMELOCK_SECONDS: u64 = 86_400;
 
+/// Bounded execution grace window (in seconds) after `execute_after` during
+/// which a pending emergency drain remains executable. Set to 86 400 s = 24 hours.
+pub const EMERGENCY_DRAIN_GRACE_PERIOD_SECONDS: u64 = 86_400;
+
 /// Storage key used to persist the [`PendingEmergencyDrain`] snapshot in the
 /// contract's instance storage. Kept `pub(crate)` so `lib.rs` can reference it
 /// directly without re-exporting the raw string.
@@ -62,4 +66,9 @@ pub struct PendingEmergencyDrain {
     ///
     /// Equals `proposed_at + EMERGENCY_DRAIN_TIMELOCK_SECONDS`.
     pub execute_after: u64,
+    /// Latest ledger timestamp (inclusive) at which `execute_emergency_drain`
+    /// may succeed.
+    ///
+    /// Equals `execute_after + EMERGENCY_DRAIN_GRACE_PERIOD_SECONDS`.
+    pub expires_at: u64,
 }

@@ -55,6 +55,10 @@ fn propose_success() {
         pending.execute_after,
         1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS
     );
+    assert_eq!(
+        pending.expires_at,
+        pending.execute_after + emergency::EMERGENCY_DRAIN_GRACE_PERIOD_SECONDS
+    );
 }
 
 #[test]
@@ -402,6 +406,102 @@ fn reproposal_replaces_existing() {
     assert_eq!(
         pending.execute_after,
         1_700_000_100 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS
+    );
+    assert_eq!(
+        pending.expires_at,
+        pending.execute_after + emergency::EMERGENCY_DRAIN_GRACE_PERIOD_SECONDS
+    );
+}
+
+#[test]
+fn reproposal_emits_drain_replaced_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let other = Address::generate(&env);
+    let (usdc_address, _, usdc_admin) = create_usdc(&env, &admin);
+    let (_pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &_pool, 10_000);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    env.ledger().set_timestamp(1_700_000_100);
+    client.propose_emergency_drain(&admin, &other, &3_000);
+
+    let events = env.events().all();
+    let replaced_event = events
+        .iter()
+        .find(|ev| {
+            let topic: Symbol = Symbol::try_from_val(&env, &ev.1.get(0).unwrap()).unwrap();
+            topic == Symbol::new(&env, "drain_replaced")
+        })
+        .expect("drain_replaced event must be emitted on reproposal");
+    let caller: Address = Address::try_from_val(&env, &replaced_event.1.get(1).unwrap()).unwrap();
+    assert_eq!(caller, admin);
+    let (old_drain, new_drain): (
+        emergency::PendingEmergencyDrain,
+        emergency::PendingEmergencyDrain,
+    ) = <(
+        emergency::PendingEmergencyDrain,
+        emergency::PendingEmergencyDrain,
+    )>::try_from_val(&env, &replaced_event.2)
+    .unwrap();
+    assert_eq!(old_drain.to, treasury);
+    assert_eq!(old_drain.amount, 5_000);
+    assert_eq!(new_drain.to, other);
+    assert_eq!(new_drain.amount, 3_000);
+}
+
+#[test]
+fn execute_succeeds_at_exact_expiry_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let pending = client.get_pending_emergency_drain().unwrap();
+    env.ledger().set_timestamp(pending.expires_at);
+
+    assert_eq!(client.try_execute_emergency_drain(&admin), Ok(Ok(())));
+    assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(usdc_client.balance(&treasury), 5_000);
+}
+
+#[test]
+fn execute_after_expiry_fails_and_clears_proposal() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let pending = client.get_pending_emergency_drain().unwrap();
+    env.ledger().set_timestamp(pending.expires_at + 1);
+
+    assert_eq!(
+        client.try_execute_emergency_drain(&admin),
+        Err(Ok(RevenuePoolError::EmergencyDrainExpired.into()))
+    );
+    assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(usdc_client.balance(&treasury), 0);
+    assert_eq!(usdc_client.balance(&pool), 10_000);
+
+    let expired = client.expire_emergency_drain();
+    assert_eq!(expired.to, treasury);
+    assert_eq!(expired.amount, 5_000);
+    assert_eq!(
+        client.try_execute_emergency_drain(&admin),
+        Err(Ok(RevenuePoolError::NoPendingEmergencyDrain.into()))
     );
 }
 
