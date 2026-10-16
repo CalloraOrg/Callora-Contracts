@@ -17,10 +17,21 @@
 //! | `execute_emergency_drain`      | Yes           | `caller`    | `execute_emergency_drain_requires_auth` |
 //! | `cancel_emergency_drain`       | Yes           | `caller`    | `cancel_emergency_drain_requires_auth`  |
 //! | `get_pending_emergency_drain`  | No            | —           | `get_pending_emergency_drain_no_auth`   |
+//!
+//! ## Guardian‑Denied Entrypoints
+//!
+//! | Entrypoint                     | Guardian Allowed | Expected Error                    | Test Function                                               |
+//! |--------------------------------|------------------|-----------------------------------|-------------------------------------------------------------|
+//! | `unpause`                      | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_unpause_after_guardian_pause`              |
+//! | `recover_from_emergency`       | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_recover_from_emergency`                    |
+//! | `propose_emergency_drain`      | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_emergency_drain_entrypoints`               |
+//! | `execute_emergency_drain`      | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_emergency_drain_entrypoints`               |
+//! | `cancel_emergency_drain`       | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_emergency_drain_entrypoints`               |
+//! | `pause` (after clear)          | No               | `RevenuePoolError::Unauthorized`  | `guardian_denied_pause_after_clear_pause_guardian`          |
 
 extern crate std;
 
-use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
+use callora_revenue_pool::{RevenuePool, RevenuePoolClient, RevenuePoolError};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::token;
 use soroban_sdk::{Address, Env};
@@ -314,4 +325,125 @@ fn admin_with_auth_can_call_all_emergency_entrypoints() {
     env.ledger().set_timestamp(86_401);
     client.execute_emergency_drain(&admin);
     assert_eq!(client.get_pending_emergency_drain(), None);
+}
+
+// ---------------------------------------------------------------------------
+// Guardian-denied entrypoint snapshot tests
+// ---------------------------------------------------------------------------
+
+/// Verify that the pause guardian can pause the pool but is denied `unpause`
+/// with `RevenuePoolError::Unauthorized`.
+#[test]
+fn guardian_denied_unpause_after_guardian_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_pool_addr, client) = create_pool(&env);
+    let (usdc_addr, _usdc_client, _usdc_admin) = create_usdc(&env, &admin);
+    client.init(&admin, &usdc_addr);
+
+    client.set_pause_guardian(&admin, &guardian);
+    client.pause(&guardian);
+    assert!(client.is_paused());
+
+    assert_eq!(
+        client.try_unpause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert!(client.is_paused());
+
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+}
+
+/// Verify that the pause guardian can trigger `emergency_pause` but is denied
+/// `recover_from_emergency` with `RevenuePoolError::Unauthorized`.
+#[test]
+fn guardian_denied_recover_from_emergency() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_pool_addr, client) = create_pool(&env);
+    let (usdc_addr, _usdc_client, _usdc_admin) = create_usdc(&env, &admin);
+    client.init(&admin, &usdc_addr);
+
+    client.set_pause_guardian(&admin, &guardian);
+    client.emergency_pause(&guardian);
+    assert!(client.is_emergency_paused());
+    assert!(client.is_paused());
+
+    assert_eq!(
+        client.try_recover_from_emergency(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert!(client.is_emergency_paused());
+
+    client.recover_from_emergency(&admin);
+    assert!(!client.is_emergency_paused());
+    assert!(!client.is_paused());
+}
+
+/// Verify that the pause guardian is denied all emergency drain entrypoints
+/// (`propose_emergency_drain`, `execute_emergency_drain`, `cancel_emergency_drain`).
+#[test]
+fn guardian_denied_emergency_drain_entrypoints() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (pool_addr, client) = create_pool(&env);
+    let (usdc_addr, _usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    client.init(&admin, &usdc_addr);
+    fund_pool(&usdc_admin, &pool_addr, 10_000);
+
+    client.set_pause_guardian(&admin, &guardian);
+
+    assert_eq!(
+        client.try_propose_emergency_drain(&guardian, &treasury, &5_000),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    assert_eq!(
+        client.try_cancel_emergency_drain(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+
+    env.ledger().set_timestamp(86_401);
+    assert_eq!(
+        client.try_execute_emergency_drain(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+}
+
+/// Verify that clearing the pause guardian immediately revokes its `pause` and
+/// `emergency_pause` rights with `RevenuePoolError::Unauthorized`.
+#[test]
+fn guardian_denied_pause_after_clear_pause_guardian() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_pool_addr, client) = create_pool(&env);
+    let (usdc_addr, _usdc_client, _usdc_admin) = create_usdc(&env, &admin);
+    client.init(&admin, &usdc_addr);
+
+    client.set_pause_guardian(&admin, &guardian);
+    client.clear_pause_guardian(&admin);
+
+    assert_eq!(
+        client.try_pause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert_eq!(
+        client.try_emergency_pause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
 }

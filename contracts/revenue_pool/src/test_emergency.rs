@@ -459,6 +459,60 @@ fn timelock_overflow_at_max_timestamp() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn guardian_can_pause_but_unpause_fails_with_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+    let (_pool, client) = init_pool(&env, &admin, &usdc_address);
+
+    client.set_pause_guardian(&admin, &guardian);
+    client.pause(&guardian);
+    assert!(client.is_paused());
+
+    assert_eq!(
+        client.try_unpause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert!(client.is_paused());
+
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn cleared_guardian_cannot_pause_or_emergency_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+    let (_pool, client) = init_pool(&env, &admin, &usdc_address);
+
+    client.set_pause_guardian(&admin, &guardian);
+    client.pause(&guardian);
+    assert!(client.is_paused());
+    client.unpause(&admin);
+    assert!(!client.is_paused());
+
+    client.clear_pause_guardian(&admin);
+    assert!(client.get_pause_guardian().is_none());
+
+    assert_eq!(
+        client.try_pause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert!(!client.is_paused());
+
+    assert_eq!(
+        client.try_emergency_pause(&guardian),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert!(!client.is_emergency_paused());
+}
+
+#[test]
 fn guardian_can_enter_emergency_pause_but_only_admin_can_recover() {
     let env = Env::default();
     env.mock_all_auths();
