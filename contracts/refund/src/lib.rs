@@ -285,6 +285,59 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Cancel a pending refund request (requester only).
+    ///
+    /// # Arguments
+    /// * `requester` - Original requester address; must authorize and match the request.
+    /// * `request_id` - ID of the pending refund request to cancel.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `NotFound` - Refund request not found.
+    /// * `Unauthorized` - Caller is not the original requester of `request_id`.
+    /// * `InvalidStatus` - Request is not in `Pending` status.
+    pub fn cancel_refund(
+        env: Env,
+        requester: Address,
+        request_id: u64,
+    ) -> Result<(), RefundError> {
+        requester.require_auth();
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let key = StorageKey::PendingRefund(request_id);
+        let mut request: RefundRequest = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RefundError::NotFound)?;
+
+        if request.requester != requester {
+            return Err(RefundError::Unauthorized);
+        }
+
+        if request.status != RefundStatus::Pending {
+            return Err(RefundError::InvalidStatus);
+        }
+
+        request.status = RefundStatus::Cancelled;
+        request.processed_at = Some(env.ledger().timestamp());
+        env.storage().persistent().set(&key, &request);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+
+        Self::emit_refund_processed(
+            &env,
+            request_id,
+            &requester,
+            request.amount,
+            RefundStatus::Cancelled,
+        );
+
+        Ok(())
+    }
+
     /// Process an approved refund request (admin only).
     ///
     /// This marks the refund as processed and updates the total refunds counter.

@@ -422,3 +422,54 @@ fn test_config_updated_event_shape() {
     assert_eq!(data.fee_bps, 500);
     assert_eq!(data.min_refund_amount, 200);
 }
+
+#[test]
+fn test_cancel_refund_by_requester_emits_event() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "mistake"));
+
+    client.cancel_refund(&requester, &request_id);
+
+    let request = client.get_refund_request(&request_id);
+    assert_eq!(request.status, RefundStatus::Cancelled);
+    assert!(request.processed_at.is_some());
+
+    let event = env.events().all().last().unwrap();
+    let topics = &event.1;
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "refund_processed"));
+    let data: RefundProcessedEvent = event.2.into_val(&env);
+    assert_eq!(data.request_id, request_id);
+    assert_eq!(data.processor, requester);
+    assert_eq!(data.amount, 500);
+    assert_eq!(data.status, RefundStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_refund_unauthorized_other_caller_rejected() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let other = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    let result = client.try_cancel_refund(&other, &request_id);
+    assert_eq!(result.unwrap_err().unwrap(), RefundError::Unauthorized);
+}
+
+#[test]
+fn test_cancel_refund_approved_request_rejected() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.approve_refund(&admin, &request_id);
+
+    let result = client.try_cancel_refund(&requester, &request_id);
+    assert_eq!(result.unwrap_err().unwrap(), RefundError::InvalidStatus);
+}
