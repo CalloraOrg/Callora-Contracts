@@ -136,6 +136,7 @@ fuzz_target!(|data: &[u8]| {
             developer: devs[dev_idx].clone(),
             amount,
             to,
+            token: None,
         });
     }
 

@@ -583,10 +583,24 @@ impl CalloraSettlement {
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         developer.require_auth();
-        Self::withdraw_developer_balance_inner(&env, developer, amount, to)
+        Self::withdraw_developer_balance_inner(&env, developer, None, amount, to)
     }
 
-    /// Body of [`withdraw_developer_balance`] after authorization (#1135).
+    /// Withdraw a developer's accrued balance in any supported token (defaults to USDC when `token` is `None`).
+    ///
+    /// Enforces freeze status, claim windows, minimum balance, and per-token daily withdrawal caps.
+    pub fn withdraw_developer_token_balance(
+        env: Env,
+        developer: Address,
+        token: Option<Address>,
+        amount: i128,
+        to: Option<Address>,
+    ) -> Result<(), SettlementError> {
+        developer.require_auth();
+        Self::withdraw_developer_balance_inner(&env, developer, token, amount, to)
+    }
+
+    /// Body of [`withdraw_developer_balance`] and [`withdraw_developer_token_balance`] after authorization (#1135, #1134).
     ///
     /// Shared by the single and batch withdrawal entrypoints so both enforce
     /// exactly the same checks (freeze, amount, claim window, balance,
@@ -595,11 +609,12 @@ impl CalloraSettlement {
     fn withdraw_developer_balance_inner(
         env: &Env,
         developer: Address,
+        token: Option<Address>,
         amount: i128,
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         let env = env.clone();
-        let sim = Self::validate_claim(&env, &developer, amount, to)?;
+        let sim = Self::validate_claim(&env, &developer, token, amount, to)?;
         Self::bump_claim_storage_ttl(&env, &developer);
 
         let contract_address = env.current_contract_address();
@@ -620,19 +635,30 @@ impl CalloraSettlement {
         );
 
         let today = env.ledger().timestamp() / 86400;
-        let today_key = StorageKey::WithdrawalToday(sim.developer.clone());
-        env.storage().persistent().set(
-            &today_key,
-            &DailyWithdrawState {
-                day: today,
-                amount: sim.withdrawn_today_after,
-            },
-        );
+        let daily_state = DailyWithdrawState {
+            day: today,
+            amount: sim.withdrawn_today_after,
+        };
+        let token_today_key =
+            StorageKey::WithdrawalTodayToken(sim.developer.clone(), sim.token.clone());
+        env.storage()
+            .persistent()
+            .set(&token_today_key, &daily_state);
         env.storage().persistent().extend_ttl(
-            &today_key,
+            &token_today_key,
             PERSISTENT_BUMP_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+        let configured_usdc: Option<Address> = env.storage().instance().get(&StorageKey::Usdc);
+        if configured_usdc.as_ref() == Some(&sim.token) {
+            let today_key = StorageKey::WithdrawalToday(sim.developer.clone());
+            env.storage().persistent().set(&today_key, &daily_state);
+            env.storage().persistent().extend_ttl(
+                &today_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
 
         // --- INTERACTION (external token transfer happens last) ---
         usdc.transfer(&contract_address, &sim.recipient, &sim.amount);
@@ -700,24 +726,26 @@ impl CalloraSettlement {
         amount: i128,
         to: Option<Address>,
     ) -> Result<ClaimSimulation, SettlementError> {
-        Self::validate_claim(&env, &developer, amount, to)
+        Self::validate_claim(&env, &developer, None, amount, to)
     }
 
-    /// Shared claim validation used by both `withdraw_developer_balance` and
-    /// `simulate_claim` so the simulation mirrors a real claim exactly.
-    ///
-    /// Checks, in order: developer freeze, positive amount, recipient
-    /// (panics on the contract's own address), open claim window,
-    /// configured USDC token, developer balance vs. amount,
-    /// per-developer minimum balance, daily withdrawal cap, and contract
-    /// token liquidity.
-    ///
-    /// This function is read-only: it never extends TTLs or writes storage.
-    /// The state-changing caller (`withdraw_developer_balance`) performs TTL
-    /// maintenance itself via `bump_claim_storage_ttl`.
+    /// Simulate a developer claim for a specific token (defaults to configured USDC when `token` is `None`).
+    pub fn simulate_token_claim(
+        env: Env,
+        developer: Address,
+        token: Option<Address>,
+        amount: i128,
+        to: Option<Address>,
+    ) -> Result<ClaimSimulation, SettlementError> {
+        Self::validate_claim(&env, &developer, token, amount, to)
+    }
+
+    /// Shared claim validation used by both `withdraw_developer_balance` / `withdraw_developer_token_balance`
+    /// and `simulate_claim` / `simulate_token_claim` so the simulation mirrors a real claim exactly.
     fn validate_claim(
         env: &Env,
         developer: &Address,
+        token: Option<Address>,
         amount: i128,
         to: Option<Address>,
     ) -> Result<ClaimSimulation, SettlementError> {
@@ -736,7 +764,12 @@ impl CalloraSettlement {
 
         Self::require_claim_window_open(env, developer)?;
 
-        let usdc_address = Self::get_usdc_token(env.clone())?;
+        let configured_usdc: Option<Address> = env.storage().instance().get(&StorageKey::Usdc);
+        let usdc_address = match token {
+            Some(t) => t,
+            None => Self::get_usdc_token(env.clone())?,
+        };
+        let is_default_usdc = configured_usdc.as_ref() == Some(&usdc_address);
         let current_balance: i128 = env
             .storage()
             .persistent()
@@ -754,14 +787,24 @@ impl CalloraSettlement {
         }
 
         let today = env.ledger().timestamp() / 86400;
-        let daily = env
-            .storage()
-            .persistent()
-            .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
-            .unwrap_or(DailyWithdrawState {
+        let token_daily = env.storage().persistent().get::<_, DailyWithdrawState>(
+            &StorageKey::WithdrawalTodayToken(developer.clone(), usdc_address.clone()),
+        );
+        let daily = match token_daily {
+            Some(d) => d,
+            None if is_default_usdc => env
+                .storage()
+                .persistent()
+                .get::<_, DailyWithdrawState>(&StorageKey::WithdrawalToday(developer.clone()))
+                .unwrap_or(DailyWithdrawState {
+                    day: today,
+                    amount: 0,
+                }),
+            None => DailyWithdrawState {
                 day: today,
                 amount: 0,
-            });
+            },
+        };
         let withdrawn_today = if daily.day == today { daily.amount } else { 0 };
         let cap: i128 = env
             .storage()
@@ -1619,7 +1662,7 @@ impl CalloraSettlement {
             let developer = developers.get_unchecked(i);
             let amount = amounts.get_unchecked(i);
             developer.require_auth();
-            Self::withdraw_developer_balance_inner(&env, developer, amount, None)?;
+            Self::withdraw_developer_balance_inner(&env, developer, None, amount, None)?;
         }
 
         Ok((end, end == count))

@@ -480,3 +480,115 @@ fn test_supported_token_updates_require_admin() {
     assert!(client.try_remove_supported_token(&attacker, &token).is_err());
     assert!(client.is_supported_token(&token));
 }
+
+/// Acceptance (#1134): developer can withdraw a non-USDC balance to themselves without changing configured USDC.
+#[test]
+fn test_withdraw_non_usdc_developer_balance_to_self() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+
+    let (usdc, usdc_client, usdc_sac) = create_token(&env, &admin);
+    let (eurc, eurc_client, eurc_sac) = create_token(&env, &admin);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc);
+    client.add_supported_token(&admin, &eurc);
+
+    client.receive_payment(
+        &vault,
+        &500i128,
+        &false,
+        &Some(developer.clone()),
+        &usdc,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &800i128,
+        &false,
+        &Some(developer.clone()),
+        &eurc,
+        &2u32,
+    );
+
+    usdc_sac.mint(&addr, &1_000i128);
+    eurc_sac.mint(&addr, &1_000i128);
+
+    // Simulate non-USDC claim before withdrawing
+    let sim = client.simulate_token_claim(&developer, &Some(eurc.clone()), &300i128, &None);
+    assert_eq!(sim.token, eurc);
+    assert_eq!(sim.recipient, developer);
+    assert_eq!(sim.current_balance, 800i128);
+    assert_eq!(sim.remaining_balance, 500i128);
+
+    // Withdraw non-USDC balance directly to developer (to = None) while USDC remains configured
+    client.withdraw_developer_token_balance(&developer, &Some(eurc.clone()), &300i128, &None);
+    assert_eq!(client.get_developer_balance(&developer, &eurc), 500i128);
+    assert_eq!(eurc_client.balance(&developer), 300i128);
+
+    // USDC balance and USDC-only caller path are completely unaffected
+    assert_eq!(client.get_developer_balance(&developer, &usdc), 500i128);
+    client.withdraw_developer_balance(&developer, &200i128, &None);
+    assert_eq!(client.get_developer_balance(&developer, &usdc), 300i128);
+    assert_eq!(usdc_client.balance(&developer), 200i128);
+}
+
+/// Acceptance (#1134): daily withdrawal cap is tracked and enforced independently per token.
+#[test]
+fn test_daily_withdraw_cap_per_token_semantics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let developer = Address::generate(&env);
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+
+    let (usdc, _, usdc_sac) = create_token(&env, &admin);
+    let (eurc, _, eurc_sac) = create_token(&env, &admin);
+
+    client.init(&admin, &vault);
+    client.set_usdc_token(&admin, &usdc);
+    client.add_supported_token(&admin, &eurc);
+    client.set_daily_withdraw_cap(&admin, &developer, &400i128);
+
+    client.receive_payment(
+        &vault,
+        &1_000i128,
+        &false,
+        &Some(developer.clone()),
+        &usdc,
+        &1u32,
+    );
+    client.receive_payment(
+        &vault,
+        &1_000i128,
+        &false,
+        &Some(developer.clone()),
+        &eurc,
+        &2u32,
+    );
+    usdc_sac.mint(&addr, &2_000i128);
+    eurc_sac.mint(&addr, &2_000i128);
+
+    // Withdraw 400 USDC (reaches daily cap for USDC)
+    client.withdraw_developer_balance(&developer, &400i128, &None);
+    assert!(client
+        .try_withdraw_developer_balance(&developer, &1i128, &None)
+        .is_err());
+
+    // Developer can still withdraw up to 400 EURC on the same day because daily cap is per-token
+    client.withdraw_developer_token_balance(&developer, &Some(eurc.clone()), &400i128, &None);
+    assert!(client
+        .try_withdraw_developer_token_balance(&developer, &Some(eurc.clone()), &1i128, &None)
+        .is_err());
+}

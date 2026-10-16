@@ -7,6 +7,7 @@ pub struct SettleInput {
     pub developer: Address,
     pub amount: i128,
     pub to: Option<Address>,
+    pub token: Option<Address>,
 }
 
 #[contracttype]
@@ -73,9 +74,10 @@ pub fn batch_settle(
     for input in settlements.iter() {
         // We use CalloraSettlement::withdraw_developer_balance internally
         // but we must catch the error to allow partial success.
-        let res = CalloraSettlement::withdraw_developer_balance(
+        let res = CalloraSettlement::withdraw_developer_token_balance(
             env.clone(),
             input.developer.clone(),
+            input.token.clone(),
             input.amount,
             input.to.clone(),
         );
@@ -99,6 +101,7 @@ mod test {
             developer: dev,
             amount: 100,
             to: None,
+            token: None,
         }
     }
 

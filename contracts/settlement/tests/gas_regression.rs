@@ -243,6 +243,7 @@ fn batch_settle_single_item_within_budget() {
         developer: dev.clone(),
         amount: 100,
         to: None,
+        token: None,
     });
 
     env.budget().reset_tracker();
@@ -277,6 +278,7 @@ fn batch_settle_over_cap_rejected_within_budget() {
             developer: Address::generate(&env),
             amount: 100,
             to: None,
+            token: None,
         });
     }
 

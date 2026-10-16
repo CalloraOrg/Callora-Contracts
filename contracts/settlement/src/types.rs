@@ -74,6 +74,8 @@ pub enum StorageKey {
     Usdc,
     DailyWithdrawCap(Address),
     WithdrawalToday(Address),
+    /// Per-token daily withdrawal accumulator `(developer, token)`.
+    WithdrawalTodayToken(Address, Address),
     ContractVersion,
     /// Pending timelock'd developer balance migration record.
     /// Key: source developer address.
