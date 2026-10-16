@@ -28,6 +28,21 @@ pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
 }
 
+/// Returns the Symbol for the `"admin_nominated"` event topic.
+pub fn event_admin_nominated(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_nominated")
+}
+
+/// Returns the Symbol for the `"admin_accepted"` event topic.
+pub fn event_admin_accepted(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_accepted")
+}
+
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -42,6 +42,7 @@ pub const INSTANCE_TTL_EXTENSION: u32 = INSTANCE_TTL_THRESHOLD;
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
     Admin,
+    PendingAdmin,
     Catalog,
     RegisteredCount,
     Offering(String),
@@ -295,5 +296,73 @@ impl CalloraRegistry {
             .ok_or(RegistryError::OfferingNotFound)?;
         Self::extend_offering_ttl(&env, &key);
         Ok(record)
+    }
+
+    /// Return the current admin address.
+    pub fn get_admin(env: Env) -> Result<Address, RegistryError> {
+        Self::extend_instance_ttl(&env);
+        Self::admin(&env)
+    }
+
+    /// Return the pending nominated admin address, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::extend_instance_ttl(&env);
+        env.storage().instance().get(&StorageKey::PendingAdmin)
+    }
+
+    /// Nominate a new admin for two-step admin rotation.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        caller.require_auth();
+        let admin = Self::admin(&env)?;
+        if caller != admin {
+            return Err(RegistryError::Unauthorized);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::PendingAdmin, &new_admin);
+        env.events()
+            .publish((events::event_admin_nominated(&env), caller), new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin nomination. Must be authorized by the nominee.
+    pub fn accept_admin(env: Env, caller: Address) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        caller.require_auth();
+        let old_admin = Self::admin(&env)?;
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(RegistryError::NoPendingAdmin)?;
+        if caller != pending {
+            return Err(RegistryError::Unauthorized);
+        }
+        let inst = env.storage().instance();
+        inst.set(&StorageKey::Admin, &pending);
+        inst.remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_accepted(&env), old_admin), pending);
+        Ok(())
+    }
+
+    /// Cancel an active admin nomination. Must be authorized by the current admin.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        caller.require_auth();
+        let admin = Self::admin(&env)?;
+        if caller != admin {
+            return Err(RegistryError::Unauthorized);
+        }
+        let cancelled: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(RegistryError::NoPendingAdmin)?;
+        env.storage().instance().remove(&StorageKey::PendingAdmin);
+        env.events()
+            .publish((events::event_admin_cancelled(&env), caller), cancelled);
+        Ok(())
     }
 }

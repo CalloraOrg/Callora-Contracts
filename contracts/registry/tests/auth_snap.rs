@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use callora_registry::{CalloraRegistry, CalloraRegistryClient};
+use callora_registry::{CalloraRegistry, CalloraRegistryClient, RegistryError};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, String};
 
@@ -86,4 +86,62 @@ fn registered_count_does_not_require_auth() {
 
     let count = client.registered_count();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn set_accept_and_cancel_admin_require_auth() {
+    let env = Env::default();
+    let (admin, _catalog, client) = setup(&env);
+    let nominee = Address::generate(&env);
+
+    env.set_auths(&[]);
+    assert!(client.try_set_admin(&admin, &nominee).is_err());
+
+    env.mock_all_auths();
+    client.set_admin(&admin, &nominee);
+
+    env.set_auths(&[]);
+    assert!(client.try_accept_admin(&nominee).is_err());
+    assert!(client.try_cancel_admin_transfer(&admin).is_err());
+}
+
+#[test]
+fn nominate_accept_and_cancel_admin_transfer_lifecycle() {
+    let env = Env::default();
+    let (admin, _catalog, client) = setup(&env);
+    let nominee = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    assert_eq!(client.get_pending_admin(), Some(nominee.clone()));
+
+    // Outsider cannot accept or cancel
+    assert_eq!(
+        client.try_accept_admin(&outsider),
+        Err(Ok(RegistryError::Unauthorized))
+    );
+    assert_eq!(
+        client.try_cancel_admin_transfer(&outsider),
+        Err(Ok(RegistryError::Unauthorized))
+    );
+
+    // Current admin can cancel
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(client.get_pending_admin(), None);
+    assert_eq!(
+        client.try_accept_admin(&nominee),
+        Err(Ok(RegistryError::NoPendingAdmin))
+    );
+
+    // Re-nominate and accept as nominee
+    client.set_admin(&admin, &nominee);
+    client.accept_admin(&nominee);
+    assert_eq!(client.get_admin(), nominee);
+    assert_eq!(client.get_pending_admin(), None);
+
+    // Old admin is no longer authorized
+    assert_eq!(
+        client.try_set_admin(&admin, &outsider),
+        Err(Ok(RegistryError::Unauthorized))
+    );
 }
