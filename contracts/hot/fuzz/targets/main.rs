@@ -137,6 +137,7 @@ fn run_sequence(ops: &[HotOp]) {
     let mut current_admin = admin.clone();
     let mut current_signer = signer.clone();
     let mut cooldown = FUZZ_COOLDOWN;
+    let mut unpaused_in_window = false;
 
     for op in ops {
         match *op {
@@ -159,9 +160,9 @@ fn run_sequence(ops: &[HotOp]) {
             HotOp::DoubleInit => {
                 if initialized {
                     let result = catch_unwind(AssertUnwindSafe(|| {
-                        client.try_init(&admin, &signer, &Some(FUZZ_COOLDOWN));
+                        client.try_init(&admin, &signer, &Some(FUZZ_COOLDOWN))
                     }));
-                    if let Ok(Err(e)) = result {
+                    if let Ok(Err(Ok(e))) = result {
                         assert_eq!(e, HotError::AlreadyInitialized);
                     }
                 }
@@ -205,6 +206,11 @@ fn run_sequence(ops: &[HotOp]) {
                 let result = catch_unwind(AssertUnwindSafe(|| client.unpause(&current_admin)));
                 match result {
                     Ok(()) => {
+                        assert!(
+                            !unpaused_in_window,
+                            "two unpause calls must never both succeed inside one cooldown window"
+                        );
+                        unpaused_in_window = true;
                         paused = false;
                         assert!(!client.is_paused());
                     }
@@ -341,6 +347,7 @@ fn run_sequence(ops: &[HotOp]) {
                 // Advance ledger timestamp so cooldowns may expire.
                 let now = env.ledger().timestamp();
                 env.ledger().set_timestamp(now + cooldown + 1);
+                unpaused_in_window = false;
             }
         }
     }
