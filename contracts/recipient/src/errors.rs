@@ -23,4 +23,6 @@ pub enum RecipientError {
     InvalidName = 6,
     /// Arithmetic overflow detected (code 7).
     Overflow = 7,
+    /// The given address is already registered under another recipient name (code 8).
+    DuplicateAddress = 8,
 }

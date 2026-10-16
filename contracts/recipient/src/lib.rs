@@ -59,6 +59,9 @@ pub enum StorageKey {
     /// Persistent: reverse lookup — maps a recipient name to its current
     /// position in the [`StorageKey::NameIndex`] array.
     NamePosition(String),
+    /// Persistent: reverse lookup — maps a recipient address to its registered
+    /// recipient name so an address cannot be bound to multiple names.
+    AddressName(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +167,7 @@ impl CalloraRecipient {
     /// # Errors
     /// * [`RecipientError::Unauthorized`] — caller is not the admin.
     /// * [`RecipientError::AlreadyRegistered`] — a recipient with this name exists.
+    /// * [`RecipientError::DuplicateAddress`] — `address` is already bound to another name.
     /// * [`RecipientError::InvalidName`] — name is empty or too long.
     ///
     /// # Events
@@ -181,12 +185,17 @@ impl CalloraRecipient {
         if env.storage().persistent().has(&key) {
             return Err(RecipientError::AlreadyRegistered);
         }
+        let addr_key = StorageKey::AddressName(address.clone());
+        if env.storage().persistent().has(&addr_key) {
+            return Err(RecipientError::DuplicateAddress);
+        }
 
         let record = RecipientRecord {
             name: name.clone(),
             address,
         };
         env.storage().persistent().set(&key, &record);
+        env.storage().persistent().set(&addr_key, &name);
 
         let count: u32 = env
             .storage()
@@ -226,6 +235,7 @@ impl CalloraRecipient {
     /// # Errors
     /// * [`RecipientError::Unauthorized`] — caller is not the admin.
     /// * [`RecipientError::NotFound`] — no recipient with this name exists.
+    /// * [`RecipientError::DuplicateAddress`] — `new_address` is already bound to another name.
     ///
     /// # Events
     /// Emits `"recipient_updated"` with the name as topic and the new record as data.
@@ -238,8 +248,21 @@ impl CalloraRecipient {
         Self::require_admin(&env, &caller)?;
 
         let key = StorageKey::Recipient(name.clone());
-        if !env.storage().persistent().has(&key) {
-            return Err(RecipientError::NotFound);
+        let existing: RecipientRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RecipientError::NotFound)?;
+
+        if existing.address != new_address {
+            let new_addr_key = StorageKey::AddressName(new_address.clone());
+            if env.storage().persistent().has(&new_addr_key) {
+                return Err(RecipientError::DuplicateAddress);
+            }
+            env.storage()
+                .persistent()
+                .remove(&StorageKey::AddressName(existing.address));
+            env.storage().persistent().set(&new_addr_key, &name);
         }
 
         let record = RecipientRecord {
@@ -277,11 +300,16 @@ impl CalloraRecipient {
         Self::require_admin(&env, &caller)?;
 
         let key = StorageKey::Recipient(name.clone());
-        if !env.storage().persistent().has(&key) {
-            return Err(RecipientError::NotFound);
-        }
+        let existing: RecipientRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RecipientError::NotFound)?;
 
         env.storage().persistent().remove(&key);
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::AddressName(existing.address));
 
         let count: u32 = env
             .storage()

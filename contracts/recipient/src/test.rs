@@ -428,3 +428,48 @@ fn every_public_fn_in_lib_has_rustdoc() {
         );
     }
 }
+
+#[test]
+fn register_recipient_duplicate_address_under_second_name_rejected() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let shared_addr = Address::generate(&env);
+    let first_name = name(&env, "primary");
+    let second_name = name(&env, "alias");
+
+    client.register_recipient(&admin, &first_name, &shared_addr);
+    let err = client.try_register_recipient(&admin, &second_name, &shared_addr);
+    assert_eq!(err, Err(Ok(RecipientError::DuplicateAddress)));
+    assert_eq!(client.get_recipient_count(), 1u32);
+}
+
+#[test]
+fn update_recipient_rejects_address_bound_to_another_name_and_releases_old_address() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let addr_a = Address::generate(&env);
+    let addr_b = Address::generate(&env);
+    let addr_c = Address::generate(&env);
+    let name_a = name(&env, "alice");
+    let name_b = name(&env, "bob");
+    let name_c = name(&env, "carol");
+
+    client.register_recipient(&admin, &name_a, &addr_a);
+    client.register_recipient(&admin, &name_b, &addr_b);
+
+    // Updating bob to alice's address must fail with DuplicateAddress
+    let err = client.try_update_recipient(&admin, &name_b, &addr_a);
+    assert_eq!(err, Err(Ok(RecipientError::DuplicateAddress)));
+
+    // Updating alice to a fresh address frees addr_a for reuse
+    client.update_recipient(&admin, &name_a, &addr_c);
+    client.register_recipient(&admin, &name_c, &addr_a);
+    assert_eq!(client.get_recipient(&name_c).address, addr_a);
+
+    // Removing carol frees addr_a again
+    client.remove_recipient(&admin, &name_c);
+    client.update_recipient(&admin, &name_b, &addr_a);
+    assert_eq!(client.get_recipient(&name_b).address, addr_a);
+}
