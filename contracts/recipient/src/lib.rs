@@ -37,6 +37,12 @@ pub const MAX_NAME_LEN: u32 = 64;
 /// Maximum number of entries returned by a single [`CalloraRecipient::list_recipients`] call.
 pub const MAX_PAGE_SIZE: u32 = 50;
 
+/// Minimum remaining TTL (in ledgers, ~30 days) before persistent recipient entries are extended.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = 518_400;
+
+/// Target TTL (in ledgers, ~60 days) applied when extending persistent recipient entries.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = 1_036_800;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -147,6 +153,23 @@ impl CalloraRecipient {
         Ok(())
     }
 
+    /// Extend the persistent storage TTL for a registered recipient record and its index keys.
+    fn bump_recipient_ttl(env: &Env, name: &String) {
+        let persistent = env.storage().persistent();
+        let rec_key = StorageKey::Recipient(name.clone());
+        if persistent.has(&rec_key) {
+            persistent.extend_ttl(&rec_key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        }
+        let pos_key = StorageKey::NamePosition(name.clone());
+        if let Some(pos) = persistent.get::<_, u32>(&pos_key) {
+            persistent.extend_ttl(&pos_key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            let idx_key = StorageKey::NameIndex(pos);
+            if persistent.has(&idx_key) {
+                persistent.extend_ttl(&idx_key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // State-changing entrypoints
     // -----------------------------------------------------------------------
@@ -202,6 +225,7 @@ impl CalloraRecipient {
         env.storage()
             .persistent()
             .set(&StorageKey::NamePosition(name.clone()), &new_pos);
+        Self::bump_recipient_ttl(&env, &name);
 
         env.storage().instance().set(
             &StorageKey::RecipientCount,
@@ -247,6 +271,7 @@ impl CalloraRecipient {
             address: new_address,
         };
         env.storage().persistent().set(&key, &record);
+        Self::bump_recipient_ttl(&env, &name);
 
         env.events()
             .publish((events::event_recipient_updated(&env), name), record);
@@ -353,10 +378,13 @@ impl CalloraRecipient {
     pub fn get_recipient(env: Env, name: String) -> Result<RecipientRecord, RecipientError> {
         Self::admin(&env)?; // ensure initialized
         Self::validate_name(&name)?;
-        env.storage()
+        let record: RecipientRecord = env
+            .storage()
             .persistent()
-            .get(&StorageKey::Recipient(name))
-            .ok_or(RecipientError::NotFound)
+            .get(&StorageKey::Recipient(name.clone()))
+            .ok_or(RecipientError::NotFound)?;
+        Self::bump_recipient_ttl(&env, &name);
+        Ok(record)
     }
 
     /// Return whether a recipient with the given `name` is registered.
@@ -365,7 +393,14 @@ impl CalloraRecipient {
     pub fn has_recipient(env: Env, name: String) -> Result<bool, RecipientError> {
         Self::admin(&env)?; // ensure initialized
         Self::validate_name(&name)?;
-        Ok(env.storage().persistent().has(&StorageKey::Recipient(name)))
+        let exists = env
+            .storage()
+            .persistent()
+            .has(&StorageKey::Recipient(name.clone()));
+        if exists {
+            Self::bump_recipient_ttl(&env, &name);
+        }
+        Ok(exists)
     }
 
     /// Return the total number of registered recipients.
@@ -439,6 +474,7 @@ impl CalloraRecipient {
                 .persistent()
                 .get(&StorageKey::NameIndex(pos))
                 .ok_or(RecipientError::NotFound)?;
+            Self::bump_recipient_ttl(&env, &name);
             result.push_back(name);
         }
 

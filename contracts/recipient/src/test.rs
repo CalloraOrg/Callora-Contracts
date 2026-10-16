@@ -1,4 +1,8 @@
-use crate::{CalloraRecipient, CalloraRecipientClient, RecipientError, MAX_PAGE_SIZE};
+use crate::{
+    CalloraRecipient, CalloraRecipientClient, RecipientError, StorageKey, MAX_PAGE_SIZE,
+    PERSISTENT_BUMP_AMOUNT,
+};
+use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, String as SorobanString};
 
@@ -427,4 +431,36 @@ fn every_public_fn_in_lib_has_rustdoc() {
             trimmed
         );
     }
+}
+
+#[test]
+fn recipient_ttl_refreshed_on_write_and_access() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let addr = Address::generate(&env);
+    let addr2 = Address::generate(&env);
+    let recipient_name = name(&env, "long_lived");
+
+    client.register_recipient(&admin, &recipient_name, &addr);
+
+    let initial_ttl = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&StorageKey::Recipient(recipient_name.clone()))
+    });
+    assert!(initial_ttl >= PERSISTENT_BUMP_AMOUNT);
+
+    // Update and readpaths also refresh TTL on the record and index entries
+    client.update_recipient(&admin, &recipient_name, &addr2);
+    let rec = client.get_recipient(&recipient_name);
+    assert_eq!(rec.address, addr2);
+    assert!(client.has_recipient(&recipient_name));
+
+    let refreshed_ttl = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&StorageKey::Recipient(recipient_name.clone()))
+    });
+    assert!(refreshed_ttl >= PERSISTENT_BUMP_AMOUNT);
 }
