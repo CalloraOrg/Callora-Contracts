@@ -159,7 +159,8 @@ fn assert_invariant(
     seed: u64,
     step: u32,
 ) {
-    let total = client.total_rescued();
+    let total = client.total_rescued_for(&token_client.address);
+    assert_eq!(client.total_rescued(), total);
     let on_ledger = token_client.balance(&client.address);
 
     // total_rescued must never exceed the initial balance
@@ -575,4 +576,40 @@ fn rescue_capped_enforces_cap_above_balance() {
     // State must be unchanged
     assert_eq!(client.total_rescued(), 0);
     assert_eq!(token_client.balance(&contract_id), 10_000);
+}
+
+/// Rescuing one token increases only that token's per-token total and leaves
+/// other tokens' totals untouched.
+#[test]
+fn per_token_totals_isolated_across_multiple_assets() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraRescue, ());
+    let client = CalloraRescueClient::new(&env, &contract_id);
+    let to = Address::generate(&env);
+
+    let token_a_admin = Address::generate(&env);
+    let token_a = env
+        .register_stellar_asset_contract_v2(token_a_admin)
+        .address();
+    let token_b_admin = Address::generate(&env);
+    let token_b = env
+        .register_stellar_asset_contract_v2(token_b_admin)
+        .address();
+
+    token::StellarAssetClient::new(&env, &token_a).mint(&contract_id, &5_000);
+    token::StellarAssetClient::new(&env, &token_b).mint(&contract_id, &8_000);
+
+    client.init(&admin);
+
+    client.rescue(&admin, &token_a, &to, &1_200);
+    assert_eq!(client.total_rescued_for(&token_a), 1_200);
+    assert_eq!(client.total_rescued_for(&token_b), 0);
+
+    client.rescue_capped(&admin, &token_b, &to, &3_400, &5_000);
+    assert_eq!(client.total_rescued_for(&token_a), 1_200);
+    assert_eq!(client.total_rescued_for(&token_b), 3_400);
+    assert_eq!(client.total_rescued(), 4_600);
 }

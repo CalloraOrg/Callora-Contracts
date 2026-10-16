@@ -57,8 +57,10 @@ pub enum RescueError {
 pub enum DataKey {
     /// Stored admin [`Address`] (instance storage).
     Admin,
-    /// Running total of all tokens rescued across all calls (instance storage).
+    /// Legacy aggregate running total across all rescued tokens (instance storage).
     TotalRescued,
+    /// Per-token cumulative rescued amount keyed by token [`Address`] (persistent storage).
+    TotalRescuedToken(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +146,14 @@ impl CalloraRescue {
         // Overflow-safe transfer execution.
         token_client.transfer(&vault, &to, &amount);
 
-        // Update running total with overflow-safe addition.
+        // Update per-token and aggregate running totals with overflow-safe addition.
+        let token_key = DataKey::TotalRescuedToken(token.clone());
+        let token_prev: i128 = env.storage().persistent().get(&token_key).unwrap_or(0_i128);
+        let token_next = token_prev
+            .checked_add(amount)
+            .ok_or(RescueError::Overflow)?;
+        env.storage().persistent().set(&token_key, &token_next);
+
         let prev: i128 = env
             .storage()
             .instance()
@@ -159,7 +168,7 @@ impl CalloraRescue {
             to.clone(),
             amount,
             events::RescueCap::None,
-            next,
+            token_next,
         );
         events::emit_rescue(&env, &admin, &payload);
 
@@ -208,6 +217,13 @@ impl CalloraRescue {
 
         token_client.transfer(&vault, &to, &amount);
 
+        let token_key = DataKey::TotalRescuedToken(token.clone());
+        let token_prev: i128 = env.storage().persistent().get(&token_key).unwrap_or(0_i128);
+        let token_next = token_prev
+            .checked_add(amount)
+            .ok_or(RescueError::Overflow)?;
+        env.storage().persistent().set(&token_key, &token_next);
+
         let prev: i128 = env
             .storage()
             .instance()
@@ -222,7 +238,7 @@ impl CalloraRescue {
             to.clone(),
             amount,
             events::RescueCap::Some(cap),
-            next,
+            token_next,
         );
         events::emit_rescue_capped(&env, &admin, &payload);
 
@@ -233,9 +249,20 @@ impl CalloraRescue {
     // Read-only views (no auth required)
     // -----------------------------------------------------------------------
 
-    /// Return the cumulative amount rescued across all calls.
+    /// Return the cumulative amount rescued for a specific `token`.
     ///
-    /// Returns `0` before `init` is called (no storage entry yet).
+    /// Returns `0` if `token` has never been rescued.
+    pub fn total_rescued_for(env: Env, token: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TotalRescuedToken(token))
+            .unwrap_or(0_i128)
+    }
+
+    /// Return the legacy aggregate amount rescued across all tokens and calls.
+    ///
+    /// Note: prefer [`Self::total_rescued_for`] for per-asset accounting so
+    /// tokens with different decimals are not mixed.
     pub fn total_rescued(env: Env) -> i128 {
         env.storage()
             .instance()
