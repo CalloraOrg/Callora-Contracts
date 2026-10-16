@@ -70,6 +70,15 @@ impl FeeContract {
         env.storage().instance().set(&DataKey::FeeBps, &0u32);
         env.storage().instance().set(&DataKey::Accumulated, &0i128);
 
+        env.events().publish(
+            (
+                Symbol::new(&env, "fee_init"),
+                Symbol::new(&env, "v1"),
+                admin,
+            ),
+            0u32,
+        );
+
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -99,7 +108,14 @@ impl FeeContract {
             return Err(ContractError::FeeTooHigh);
         }
 
+        let old_fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+
+        env.events().publish(
+            (Symbol::new(&env, "fee_set"), Symbol::new(&env, "v1"), admin),
+            (old_fee_bps, fee_bps),
+        );
+
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -136,6 +152,16 @@ impl FeeContract {
         env.storage()
             .instance()
             .set(&DataKey::Accumulated, &new_accumulated);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "fee_deposited"),
+                Symbol::new(&env, "v1"),
+                caller,
+            ),
+            (amount, new_accumulated),
+        );
+
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -211,8 +237,14 @@ impl FeeContract {
             .instance()
             .set(&DataKey::Accumulated, &remaining);
 
-        env.events()
-            .publish((Symbol::new(&env, "fee_withdrawn"),), (recipient, amount));
+        env.events().publish(
+            (
+                Symbol::new(&env, "fee_withdrawn"),
+                Symbol::new(&env, "v1"),
+                admin,
+            ),
+            (recipient, amount),
+        );
 
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -261,7 +293,10 @@ impl FeeContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Events as _},
+        Address, Env, IntoVal,
+    };
 
     #[test]
     fn test_init() {
@@ -510,6 +545,79 @@ mod test {
 
         client.withdraw(&admin, &recipient, &400);
         assert_eq!(client.get_accumulated(), 600);
+    }
+
+    #[test]
+    fn test_events_emitted_for_init_set_fee_deposit_and_withdraw() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let caller = Address::generate(&env);
+        let recipient = Address::generate(&env);
+
+        client.init(&admin);
+        let init_ev = env.events().all().last().unwrap();
+        let t0: Symbol = init_ev.1.get(0).unwrap().into_val(&env);
+        let t1: Symbol = init_ev.1.get(1).unwrap().into_val(&env);
+        let t2: Address = init_ev.1.get(2).unwrap().into_val(&env);
+        assert_eq!(t0, Symbol::new(&env, "fee_init"));
+        assert_eq!(t1, Symbol::new(&env, "v1"));
+        assert_eq!(t2, admin);
+
+        client.set_fee(&admin, &250);
+        let set_ev = env.events().all().last().unwrap();
+        let st0: Symbol = set_ev.1.get(0).unwrap().into_val(&env);
+        let st1: Symbol = set_ev.1.get(1).unwrap().into_val(&env);
+        let st2: Address = set_ev.1.get(2).unwrap().into_val(&env);
+        let set_data: (u32, u32) = set_ev.2.into_val(&env);
+        assert_eq!(st0, Symbol::new(&env, "fee_set"));
+        assert_eq!(st1, Symbol::new(&env, "v1"));
+        assert_eq!(st2, admin);
+        assert_eq!(set_data, (0, 250));
+
+        client.deposit(&caller, &1_000);
+        let dep_ev = env.events().all().last().unwrap();
+        let dt0: Symbol = dep_ev.1.get(0).unwrap().into_val(&env);
+        let dt1: Symbol = dep_ev.1.get(1).unwrap().into_val(&env);
+        let dt2: Address = dep_ev.1.get(2).unwrap().into_val(&env);
+        let dep_data: (i128, i128) = dep_ev.2.into_val(&env);
+        assert_eq!(dt0, Symbol::new(&env, "fee_deposited"));
+        assert_eq!(dt1, Symbol::new(&env, "v1"));
+        assert_eq!(dt2, caller);
+        assert_eq!(dep_data, (1_000, 1_000));
+
+        client.withdraw(&admin, &recipient, &400);
+        let w_ev = env.events().all().last().unwrap();
+        let wt0: Symbol = w_ev.1.get(0).unwrap().into_val(&env);
+        let wt1: Symbol = w_ev.1.get(1).unwrap().into_val(&env);
+        let wt2: Address = w_ev.1.get(2).unwrap().into_val(&env);
+        let w_data: (Address, i128) = w_ev.2.into_val(&env);
+        assert_eq!(wt0, Symbol::new(&env, "fee_withdrawn"));
+        assert_eq!(wt1, Symbol::new(&env, "v1"));
+        assert_eq!(wt2, admin);
+        assert_eq!(w_data, (recipient, 400));
+    }
+
+    #[test]
+    fn test_events_not_emitted_on_zero_or_negative_deposit() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let caller = Address::generate(&env);
+
+        client.init(&admin);
+        let before_len = env.events().all().len();
+
+        let _ = client.try_deposit(&caller, &0);
+        let _ = client.try_deposit(&caller, &-50);
+
+        assert_eq!(env.events().all().len(), before_len);
     }
 }
 
