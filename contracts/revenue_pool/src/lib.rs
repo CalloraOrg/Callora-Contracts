@@ -11,10 +11,15 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
 
-/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
-/// contract. Bumped whenever the on-ledger schema changes so that the
-/// pre-upgrade validation gate can enforce ordered, single-step migrations.
-const STORAGE_MIGRATION_VERSION: u32 = 1;
+/// Initial storage-layout version recorded by [`StorageMigrationValidator`]
+/// when the revenue pool is initialized.
+pub const STORAGE_MIGRATION_VERSION: u32 = 1;
+
+/// Canonical storage-layout descriptor hashed by
+/// [`callora_storage_migration::layout_hash`] to detect on-ledger schema drift
+/// across upgrades.
+pub const STORAGE_LAYOUT_DESCRIPTOR: &str =
+    "revenue_pool:v1:admin,usdc,paused,emergency_paused,pending_admin,pause_guardian,max_distribute,cumulative_yield,version,emergency_drain";
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -148,6 +153,15 @@ impl RevenuePool {
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
+        let initial_layout =
+            callora_storage_migration::layout_hash(&env, STORAGE_LAYOUT_DESCRIPTOR);
+        if let Err(e) = StorageMigrationValidator::record_deployed_schema(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &initial_layout,
+        ) {
+            env.panic_with_error(e);
+        }
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_init(&env), admin), usdc_token);
@@ -859,7 +873,25 @@ impl RevenuePool {
     // Upgrade
     // -----------------------------------------------------------------------
 
-    /// Admin-gated contract upgrade. Replaces the WASM and persists the version.
+    /// Compute the canonical storage-layout hash for this contract binary.
+    pub fn current_layout_hash(env: Env) -> BytesN<32> {
+        callora_storage_migration::layout_hash(&env, STORAGE_LAYOUT_DESCRIPTOR)
+    }
+
+    /// Return the currently recorded storage-migration schema version (`0` if unrecorded).
+    pub fn get_storage_migration_version(env: Env) -> u32 {
+        Self::bump_instance_ttl(&env);
+        StorageMigrationValidator::current_version(&env)
+    }
+
+    /// Return the currently recorded storage-layout hash, or `None` if unrecorded.
+    pub fn get_storage_layout_hash(env: Env) -> Option<BytesN<32>> {
+        Self::bump_instance_ttl(&env);
+        StorageMigrationValidator::current_layout_hash(&env)
+    }
+
+    /// Admin-gated contract upgrade using the current contract storage layout
+    /// and advancing the storage-migration version by one step.
     ///
     /// # Errors
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
@@ -867,31 +899,63 @@ impl RevenuePool {
     /// # Events
     /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
+        let current_ver = StorageMigrationValidator::current_version(&env);
+        let target_version = current_ver
+            .checked_add(1)
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::Overflow));
+        let layout = StorageMigrationValidator::current_layout_hash(&env).unwrap_or_else(|| {
+            callora_storage_migration::layout_hash(&env, STORAGE_LAYOUT_DESCRIPTOR)
+        });
+        Self::upgrade_with_layout(
+            env,
+            caller,
+            new_wasm_hash,
+            target_version,
+            layout.clone(),
+            layout,
+        );
+    }
+
+    /// Admin-gated contract upgrade with explicit target version and storage-layout
+    /// hashes validated by [`StorageMigrationValidator`].
+    ///
+    /// Rejects mismatched `expected_source_layout` with `SchemaMismatch`,
+    /// enforces single-step ordered version progression (`v -> v + 1`), and
+    /// records the new schema state upon upgrade.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`callora_storage_migration::StorageMigrationError::SchemaMismatch`] - `expected_source_layout` does not match the deployed layout hash.
+    ///
+    /// # Events
+    /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
+    pub fn upgrade_with_layout(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+        target_version: u32,
+        expected_source_layout: BytesN<32>,
+        new_layout_hash: BytesN<32>,
+    ) {
         caller.require_auth();
         Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
 
-        // ── Pre-upgrade storage-migration validation ──────────────────────
-        // Runs in the *current* (old) code, before the WASM is swapped, and
-        // never mutates business state. It enforces ordered, single-step
-        // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
-        // rollbacks — ensuring existing deployed data stays readable and no
-        // implicit destructive transformation occurs.
-        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
+        let migration_performed = expected_source_layout != new_layout_hash;
         if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
             &env,
-            STORAGE_MIGRATION_VERSION,
-            &placeholder_layout,
-            &placeholder_layout,
+            target_version,
+            &expected_source_layout,
+            &new_layout_hash,
             &new_wasm_hash,
-            false,
+            migration_performed,
         ) {
             env.panic_with_error(e);
         }
         if let Err(e) = StorageMigrationValidator::finalize_migration(
             &env,
-            STORAGE_MIGRATION_VERSION,
-            &placeholder_layout,
+            target_version,
+            &new_layout_hash,
             &new_wasm_hash,
         ) {
             env.panic_with_error(e);
