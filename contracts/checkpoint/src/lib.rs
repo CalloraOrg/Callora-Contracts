@@ -723,7 +723,8 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
     /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
-    /// * [`CheckpointError::InvalidPageSize`] -- `start_id` is greater than `end_id`.
+    /// * [`CheckpointError::InvalidPageSize`] -- `start_id` is greater than `end_id`,
+    ///   or the inclusive span `end_id - start_id + 1` exceeds [`MAX_PAGE_SIZE`].
     pub fn bump_checkpoints_ttl_range(
         env: Env,
         caller: Address,
@@ -733,6 +734,14 @@ impl CalloraCheckpoint {
         Self::require_admin(&env, &caller)?;
 
         if start_id > end_id {
+            return Err(CheckpointError::InvalidPageSize);
+        }
+
+        let span = end_id
+            .checked_sub(start_id)
+            .and_then(|diff| diff.checked_add(1))
+            .ok_or(CheckpointError::InvalidPageSize)?;
+        if span > u64::from(MAX_PAGE_SIZE) {
             return Err(CheckpointError::InvalidPageSize);
         }
 

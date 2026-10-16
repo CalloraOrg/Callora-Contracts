@@ -527,6 +527,48 @@ fn test_bump_checkpoints_ttl_range_skips_missing_ids() {
     assert!(result.is_ok());
 }
 
+#[test]
+fn test_bump_checkpoints_ttl_range_rejects_span_above_max_page_size() {
+    let (_env, admin, client) = setup();
+
+    // Span of MAX_PAGE_SIZE + 1 (1..=101 -> 101 IDs) must fail with InvalidPageSize.
+    let over_cap_end = u64::from(MAX_PAGE_SIZE) + 1;
+    let res = client.try_bump_checkpoints_ttl_range(&admin, &1u64, &over_cap_end);
+    assert_eq!(res, Err(Ok(CheckpointError::InvalidPageSize)));
+
+    // Full u64 span (0..=u64::MAX) must also fail cleanly with InvalidPageSize.
+    let overflow_res = client.try_bump_checkpoints_ttl_range(&admin, &0u64, &u64::MAX);
+    assert_eq!(overflow_res, Err(Ok(CheckpointError::InvalidPageSize)));
+}
+
+#[test]
+fn test_bump_checkpoints_ttl_range_allows_exact_max_page_size_span() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "exact_cap");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &500i128, &meta);
+    let key = StorageKey::Checkpoint(id);
+
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    // Span of exactly MAX_PAGE_SIZE (1..=100) is accepted and bumps existing IDs.
+    let exact_cap_end = u64::from(MAX_PAGE_SIZE);
+    let res = client.try_bump_checkpoints_ttl_range(&admin, &1u64, &exact_cap_end);
+    assert!(res.is_ok());
+
+    let ttl_after = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
+    assert_eq!(ttl_after, BUMP_AMOUNT);
+}
+
 // ===========================================================================
 // Read-path TTL bump tests (buffer #26)
 // ===========================================================================
