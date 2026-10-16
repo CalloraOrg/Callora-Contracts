@@ -2,11 +2,11 @@
 
 extern crate std;
 
-use callora_freeze::{FreezeOp, MAX_FREEZE_OPS};
+use callora_freeze::{CalloraFreeze, CalloraFreezeClient, FreezeOp, MAX_FREEZE_OPS};
 use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::StellarAssetClient;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Symbol};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn setup(env: &Env) -> (Address, Address, Address, Address, RevenuePoolClient<'_>) {
@@ -146,4 +146,43 @@ fn fuzz_style_sequence_with_malformed_mix() {
         }
         assert_eq!(pool.is_paused(), paused);
     }
+}
+
+#[test]
+fn freeze_contract_blocks_revenue_pool_distribute_when_wired() {
+    let env = Env::default();
+    let (admin, _, recipient, pool_addr, pool) = setup(&env);
+    let usdc_addr = pool.get_usdc_token();
+    let usdc = soroban_sdk::token::Client::new(&env, &usdc_addr);
+
+    let freeze_addr = env.register(CalloraFreeze, ());
+    let freeze = CalloraFreezeClient::new(&env, &freeze_addr);
+    freeze.init(&admin);
+
+    // Unconfigured freeze address keeps current behaviour: freezing CalloraFreeze
+    // before wiring does not pause the revenue pool.
+    assert_eq!(pool.get_freeze_contract(), None);
+    freeze.freeze(&admin, &Symbol::new(&env, "standalone"));
+    assert!(!pool.is_paused());
+    pool.distribute(&admin, &recipient, &100);
+    assert_eq!(usdc.balance(&recipient), 100);
+
+    // Wire CalloraFreeze into RevenuePool: active freeze immediately blocks distribute
+    // and batch_distribute.
+    pool.set_freeze_contract(&admin, &Some(freeze_addr.clone()));
+    assert_eq!(pool.get_freeze_contract(), Some(freeze_addr));
+    assert!(pool.is_paused());
+
+    let before = usdc.balance(&pool_addr);
+    assert!(catch_unwind(AssertUnwindSafe(|| {
+        pool.distribute(&admin, &recipient, &100)
+    }))
+    .is_err());
+    assert_eq!(usdc.balance(&pool_addr), before);
+
+    // Unfreezing via CalloraFreeze restores RevenuePool distributions.
+    freeze.unfreeze(&admin);
+    assert!(!pool.is_paused());
+    pool.distribute(&admin, &recipient, &150);
+    assert_eq!(usdc.balance(&recipient), 250);
 }

@@ -37,6 +37,7 @@ const PAUSED_KEY: &str = "paused";
 const EMERGENCY_PAUSED_KEY: &str = "emergency_paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
+const FREEZE_CONTRACT_KEY: &str = "freeze_contract";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const CUMULATIVE_YIELD_DEPOSITED_KEY: &str = "cumulative_yield";
 const VERSION_KEY: &str = "version";
@@ -179,6 +180,18 @@ impl RevenuePool {
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
     }
 
+    fn is_external_frozen(env: &Env) -> bool {
+        if let Some(freeze_addr) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&Symbol::new(env, FREEZE_CONTRACT_KEY))
+        {
+            env.invoke_contract::<bool>(&freeze_addr, &Symbol::new(env, "is_frozen"), Vec::new(env))
+        } else {
+            false
+        }
+    }
+
     fn require_not_paused(env: &Env) {
         Self::require_not_emergency_paused(env);
         if env
@@ -186,6 +199,7 @@ impl RevenuePool {
             .instance()
             .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
             .unwrap_or(false)
+            || Self::is_external_frozen(env)
         {
             env.panic_with_error(RevenuePoolError::Paused);
         }
@@ -466,13 +480,44 @@ impl RevenuePool {
             .publish((events::event_pause_set(&env), caller), false);
     }
 
-    /// Return `true` if the revenue pool is currently paused.
+    /// Configure or clear an external `CalloraFreeze` circuit-breaker contract.
+    ///
+    /// When configured, `is_paused` and `require_not_paused` (`distribute` /
+    /// `batch_distribute`) consult `is_frozen()` on the freeze contract via a
+    /// cross-contract call. Passing `None` disconnects the external freeze contract.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    pub fn set_freeze_contract(env: Env, caller: Address, freeze_contract: Option<Address>) {
+        caller.require_auth();
+        Self::require_not_emergency_paused(&env);
+        Self::require_admin(&env, &caller);
+        let inst = env.storage().instance();
+        let key = Symbol::new(&env, FREEZE_CONTRACT_KEY);
+        match freeze_contract {
+            Some(addr) => inst.set(&key, &addr),
+            None => inst.remove(&key),
+        }
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+    }
+
+    /// Return the configured external freeze contract address, or `None` if unset.
+    pub fn get_freeze_contract(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&Symbol::new(&env, FREEZE_CONTRACT_KEY))
+    }
+
+    /// Return `true` if the revenue pool is currently paused locally or frozen
+    /// via a configured external `CalloraFreeze` contract.
     pub fn is_paused(env: Env) -> bool {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&Symbol::new(&env, PAUSED_KEY))
             .unwrap_or(false)
+            || Self::is_external_frozen(&env)
     }
 
     /// Activate recovery-only emergency mode.

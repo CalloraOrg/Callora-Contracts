@@ -148,6 +148,13 @@ after `unfreeze()` or before the first `freeze()`.
 
 Returns `FreezeError::NotInitialized` if `init` has not been called.
 
+## Revenue Pool Integration Model
+
+`CalloraFreeze` can operate either as a standalone circuit-breaker or wired into `RevenuePool`:
+
+1. **Unconfigured (default)**: When `RevenuePool::get_freeze_contract()` is `None`, `RevenuePool` relies solely on its internal `pause` / `emergency_pause` flags.
+2. **Wired via `RevenuePool::set_freeze_contract`**: The pool admin calls `set_freeze_contract(admin, Some(freeze_contract_addr))`. Every `RevenuePool::is_paused`, `distribute`, and `batch_distribute` call then invokes `CalloraFreeze::is_frozen()` across contracts, rejecting distributions with `RevenuePoolError::Paused` whenever `CalloraFreeze` is frozen.
+
 ## Running tests
 
 ```bash
