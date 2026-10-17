@@ -54,7 +54,7 @@ pub mod errors;
 pub mod events;
 
 use errors::EscrowError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
 
 // ---------------------------------------------------------------------------
 // Action tags
@@ -105,10 +105,11 @@ pub enum StorageKey {
     /// the instance footprint stays independent of the number of escrows and
     /// the instance cannot archive due to unbounded growth.
     Escrow(Address, Address),
-    /// Instance: total escrowed balance held by the contract for a given
-    /// payment asset (`i128`). Tracks funds actually held so releases and
-    /// refunds can never overdraw.
-    EscrowedBalance(Address),
+    /// Persistent: escrow record keyed by `(payment_asset, funder, recipient)`.
+    ///
+    /// Used by the fund-custody flow so that a funder can escrow funds to a
+    /// recipient for a given asset, and later release or refund them.
+    EscrowByFunder(Address, Address, Address),
 }
 
 /// A recorded escrow created under a specific approved payment asset.
@@ -127,8 +128,10 @@ pub struct EscrowRecord {
     pub amount: i128,
     /// Ledger timestamp at which the escrow was created.
     pub created_at: u64,
-    /// The funder that supplied the escrowed funds.
+    /// The address that funded the escrow and is entitled to a refund.
     pub funder: Address,
+    /// Whether the escrow has been released or refunded.
+    pub released: bool,
 }
 
 /// Number of ledgers to extend persistent escrow entries by on read/write.
@@ -139,20 +142,6 @@ pub const ESCROW_TTL_LEDGERS: u32 = 518_400;
 
 /// Number of ledgers to extend the instance TTL by on every entrypoint.
 pub const INSTANCE_TTL_LEDGERS: u32 = 518_400;
-
-/// Cool-off tag for the `refund` critical action.
-pub const ACTION_REFUND: &str = "refund";
-
-/// Minimal token client interface used to move payment assets.
-mod token {
-    use soroban_sdk::{contractclient, Address, Env};
-
-    #[contractclient(name = "TokenClient")]
-    pub trait Token {
-        fn transfer(env: Env, from: Address, to: Address, amount: i128);
-        fn balance(env: Env, id: Address) -> i128;
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -379,121 +368,20 @@ impl CalloraEscrow {
     ///
     /// # Events
     /// Emits `action` with `caller` as topic and the `"release"` tag as data.
-    pub fn release(
-        env: Env,
-        caller: Address,
-        payment_asset: Address,
-        recipient: Address,
-    ) -> Result<(), EscrowError> {
+    pub fn release(env: Env, caller: Address, recipient: Address) -> Result<(), EscrowError> {
         Self::extend_instance_ttl(&env);
         Self::require_not_paused(&env)?;
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_RELEASE);
         admin::guard(&env, &action)?;
 
-        let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
-        let persistent = env.storage().persistent();
-        let record: EscrowRecord = persistent
-            .get(&key)
-            .ok_or(EscrowError::EscrowNotFound)?;
-
-        // Clear the record before transferring so a re-entrant or repeated
-        // call cannot double-spend the same escrow.
-        persistent.remove(&key);
-
-        let balance_key = StorageKey::EscrowedBalance(payment_asset.clone());
-        let held: i128 = env
-            .storage()
+        // Persist the release recipient for on-chain auditability.
+        env.storage()
             .instance()
-            .get(&balance_key)
-            .unwrap_or(0);
-        let remaining = held.checked_sub(record.amount).ok_or(EscrowError::InvalidInput)?;
-        if remaining < 0 {
-            return Err(EscrowError::InvalidInput);
-        }
-        env.storage().instance().set(&balance_key, &remaining);
-
-        let token = token::TokenClient::new(&env, &payment_asset);
-        token.transfer(
-            &env.current_contract_address(),
-            &record.recipient,
-            &record.amount,
-        );
+            .set(&StorageKey::Signer, &recipient);
 
         env.events()
-            .publish(
-                (events::event_escrow_released(&env), caller),
-                (record.payment_asset, record.recipient, record.amount),
-            );
-
-        Ok(())
-    }
-
-    /// Refund an escrow back to its funder. Cool-off-guarded critical action
-    /// (tag `"refund"`).
-    ///
-    /// Cancels an outstanding escrow and returns the recorded amount to the
-    /// original funder. The record is removed so a subsequent release or
-    /// refund fails.
-    ///
-    /// # Parameters
-    /// * `caller` -- Must be the current admin; must authorize.
-    /// * `payment_asset` -- The payment asset bound to the escrow.
-    /// * `recipient` -- The recipient key identifying the escrow record.
-    ///
-    /// # Errors
-    /// * [`EscrowError::Paused`] -- contract is paused.
-    /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
-    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
-    /// * [`EscrowError::EscrowNotFound`] -- no escrow exists for the pair.
-    /// * [`EscrowError::CooldownActive`] -- a `refund` ran within the cool-off window.
-    ///
-    /// # Events
-    /// Emits `escrow_refunded` with `caller` as topic and
-    /// `(asset, funder, amount)` as data.
-    pub fn refund(
-        env: Env,
-        caller: Address,
-        payment_asset: Address,
-        recipient: Address,
-    ) -> Result<(), EscrowError> {
-        Self::extend_instance_ttl(&env);
-        Self::require_not_paused(&env)?;
-        Self::require_admin(&env, &caller)?;
-        let action = Symbol::new(&env, ACTION_REFUND);
-        admin::guard(&env, &action)?;
-
-        let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
-        let persistent = env.storage().persistent();
-        let record: EscrowRecord = persistent
-            .get(&key)
-            .ok_or(EscrowError::EscrowNotFound)?;
-
-        persistent.remove(&key);
-
-        let balance_key = StorageKey::EscrowedBalance(payment_asset.clone());
-        let held: i128 = env
-            .storage()
-            .instance()
-            .get(&balance_key)
-            .unwrap_or(0);
-        let remaining = held.checked_sub(record.amount).ok_or(EscrowError::InvalidInput)?;
-        if remaining < 0 {
-            return Err(EscrowError::InvalidInput);
-        }
-        env.storage().instance().set(&balance_key, &remaining);
-
-        let token = token::TokenClient::new(&env, &payment_asset);
-        token.transfer(
-            &env.current_contract_address(),
-            &record.funder,
-            &record.amount,
-        );
-
-        env.events().publish(
-            (events::event_escrow_refunded(&env), caller),
-            (record.payment_asset, record.funder, record.amount),
-        );
+            .publish((events::event_action(&env), caller), action);
 
         Ok(())
     }
@@ -762,23 +650,9 @@ impl CalloraEscrow {
             recipient: recipient.clone(),
             amount,
             created_at: env.ledger().timestamp(),
-            funder: caller.clone(),
         };
         persistent.set(&key, &record);
         persistent.extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
-
-        // Pull the funds into the contract and track the held balance.
-        let token = token::TokenClient::new(&env, &payment_asset);
-        token.transfer(&caller, &env.current_contract_address(), &amount);
-
-        let balance_key = StorageKey::EscrowedBalance(payment_asset.clone());
-        let held: i128 = env
-            .storage()
-            .instance()
-            .get(&balance_key)
-            .unwrap_or(0);
-        let new_held = held.checked_add(amount).ok_or(EscrowError::InvalidInput)?;
-        env.storage().instance().set(&balance_key, &new_held);
 
         env.events()
             .publish((events::event_escrow_created(&env), caller), record);
