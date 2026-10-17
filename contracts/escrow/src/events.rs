@@ -1,8 +1,8 @@
 //! Event topic Symbol constructors for the Callora Escrow contract.
-//!
-//! This module centralises all event topic strings into dedicated functions,
-//! ensuring byte-identity is preserved and preventing accidental topic name
-//! drift across call sites.
+///
+/// This module centralises all event topic strings into dedicated functions,
+/// ensuring byte-identity is preserved and preventing accidental topic name
+/// drift across call sites.
 
 use soroban_sdk::{Env, Symbol};
 
@@ -30,6 +30,16 @@ pub fn event_action(env: &Env) -> Symbol {
     Symbol::new(env, "action")
 }
 
+/// Returns the Symbol for the `"signer_rotated"` event topic.
+///
+/// Emitted when the admin rotates the active signer via
+/// [`crate::CalloraEscrow::rotate_signer`]. The event data carries the
+/// previous and new signer addresses so monitors can alert on unpredictable
+/// signer values without reading contract storage.
+pub fn event_signer_rotated(env: &Env) -> Symbol {
+    Symbol::new(env, "signer_rotated")
+}
+
 /// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via
@@ -45,6 +55,15 @@ pub fn event_admin_nominated(env: &Env) -> Symbol {
 /// [`crate::CalloraEscrow::accept_admin`], completing the two-step handover.
 pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
+}
+
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin nomination via
+/// [`crate::CalloraEscrow::cancel_admin_transfer`]. The data contains the
+/// address of the pending admin that was cancelled.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
 }
 
 /// Returns the Symbol for the `"asset_approved"` event topic.
@@ -66,9 +85,28 @@ pub fn event_asset_removed(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"escrow_created"` event topic.
 ///
 /// Emitted when a new escrow is successfully created against an approved
-/// payment asset via [`crate::CalloraEscrow::create_escrow`].
+/// payment asset via [`crate::CalloraEscrow::create_escrow`]. The event data
+/// carries the escrow id, funder, payment asset and amount.
 pub fn event_escrow_created(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_created")
+}
+
+/// Returns the Symbol for the `"escrow_released"` event topic.
+///
+/// Emitted when an escrow is paid out to its recipient via
+/// [`crate::CalloraEscrow::release`]. The event data carries the escrow
+/// id, payment asset, recipient and amount.
+pub fn event_escrow_released(env: &Env) -> Symbol {
+    Symbol::new(env, "escrow_released")
+}
+
+/// Returns the Symbol for the `"escrow_refunded"` event topic.
+///
+/// Emitted when an escrow is cancelled and the recorded amount is returned
+/// to the funder via [`crate::CalloraEscrow::refund`]. The event data
+/// carries the escrow id, payment asset, funder and amount.
+pub fn event_escrow_refunded(env: &Env) -> Symbol {
+    Symbol::new(env, "escrow_refunded")
 }
 
 /// Returns the Symbol for the canonical event version marker used by Callora.
@@ -85,28 +123,35 @@ mod tests {
     #[test]
     fn test_event_init_bytes() {
         let env = Env::default();
-        assert_eq!(event_init(&env), Symbol::new(&env, "init"));
+        assert_eq(event_init(&env), Symbol::new(&env, "init"));
     }
 
     /// Snapshot: proves event_cooldown_set still maps to exactly the bytes for "cooldown_set".
     #[test]
     fn test_event_cooldown_set_bytes() {
         let env = Env::default();
-        assert_eq!(event_cooldown_set(&env), Symbol::new(&env, "cooldown_set"));
+        assert_eq(event_cooldown_set(&env), Symbol::new(&env, "cooldown_set"));
     }
 
     /// Snapshot: proves event_action still maps to exactly the bytes for "action".
     #[test]
     fn test_event_action_bytes() {
         let env = Env::default();
-        assert_eq!(event_action(&env), Symbol::new(&env, "action"));
+        assert_eq(event_action(&env), Symbol::new(&env, "action"));
+    }
+
+    /// Snapshot: proves event_signer_rotated maps to exactly the bytes for "signer_rotated".
+    #[test]
+    fn test_event_signer_rotated_bytes() {
+        let env = Env::default();
+        assert_eq(event_signer_rotated(&env), Symbol::new(&env, "signer_rotated"));
     }
 
     /// Snapshot: proves event_admin_nominated still maps to exactly the bytes for "admin_nominated".
     #[test]
     fn test_event_admin_nominated_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_nominated(&env),
             Symbol::new(&env, "admin_nominated")
         );
@@ -116,7 +161,7 @@ mod tests {
     #[test]
     fn test_event_admin_accepted_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_accepted(&env),
             Symbol::new(&env, "admin_accepted")
         );
@@ -126,7 +171,7 @@ mod tests {
     #[test]
     fn test_event_asset_approved_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_asset_approved(&env),
             Symbol::new(&env, "asset_approved")
         );
@@ -136,7 +181,7 @@ mod tests {
     #[test]
     fn test_event_asset_removed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_asset_removed(&env),
             Symbol::new(&env, "asset_removed")
         );
@@ -146,9 +191,29 @@ mod tests {
     #[test]
     fn test_event_escrow_created_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_escrow_created(&env),
             Symbol::new(&env, "escrow_created")
+        );
+    }
+
+    /// Snapshot: proves event_escrow_released maps to exactly the bytes for "escrow_released".
+    #[test]
+    fn test_event_escrow_released_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_escrow_released(&env),
+            Symbol::new(&env, "escrow_released")
+        );
+    }
+
+    /// Snapshot: proves event_escrow_refunded maps to exactly the bytes for "escrow_refunded".
+    #[test]
+    fn test_event_escrow_refunded_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_escrow_refunded(&env),
+            Symbol::new(&env, "escrow_refunded")
         );
     }
 }
