@@ -33,25 +33,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check format (workspace crates)
-        run: cargo fmt --all -- --check
-
-      - name: Verify all contract crates are workspace members
+      - name: Check workspace members match crates on disk
         shell: bash
         run: |
-          set -euo pipefail
-          missing=0
-          for manifest in contracts/*/Cargo.toml; do
-            dir=$(dirname "$manifest")
-            if ! cargo metadata --no-deps --format-version 1 \
-              | jq -e --arg p "$dir" '.workspace_members[] | select(startswith("path+file://" ) and (endswith("/" + $p)))' >/dev/null; then
-              echo "::error::Crate directory '$dir' is not a workspace member"
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
+      - name: Check format (workspace crates)
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -63,11 +52,18 @@ jobs:
       - name: Build settlement WASM for tests
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
+      - name: Verify cargo metadata workspace members
+        shell: bash
+        run: |
+          count=$(cargo metadata --no-deps --format-version 1 | jq '.workspace_members | length')
+          echo "workspace_members=$count"
+          if [ "$count" -lt 1 ]; then
+            echo "::error::cargo metadata reported no workspace members"
+            exit 1
+          fi
+
       - name: Test (all workspace members)
         run: cargo test --workspace
-
-      - name: Test (default-members via plain cargo test)
-        run: cargo test
 
   # The only non-blocking job in this workflow: it pins the nightly toolchain,
   # which is expected to break on unrelated churn. Every other job is blocking.
@@ -96,6 +92,13 @@ jobs:
           key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-nightly-
+
+      - name: Check workspace members match crates on disk
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
 
       - name: Build settlement WASM for tests
         continue-on-error: true
@@ -126,6 +129,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - name: Check workspace members match crates on disk
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
 
       - name: Check WASM size
         shell: bash
@@ -167,6 +176,12 @@ jobs:
           key: ${{ runner.os }}-cargo-gas-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-gas-
+
+      - name: Check workspace members match crates on disk
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
 
       - name: Build crates needed for gas measurement
         run: |
