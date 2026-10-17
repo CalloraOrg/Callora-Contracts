@@ -86,16 +86,16 @@ pub fn event_asset_removed(env: &Env) -> Symbol {
 ///
 /// Emitted when a new escrow is successfully created against an approved
 /// payment asset via [`crate::CalloraEscrow::create_escrow`]. The event data
-/// carries the escrow id, funder, payment asset and amount.
+/// carries the escrow id, funder, payee, payment asset and amount.
 pub fn event_escrow_created(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_created")
 }
 
 /// Returns the Symbol for the `"escrow_released"` event topic.
 ///
-/// Emitted when an escrow is paid out to its recipient via
-/// [`crate::CalloraEscrow::release`]. The event data carries the escrow
-/// id, payment asset, recipient and amount.
+/// Emitted when an escrow is released to its recipient via
+/// [`crate::CalloraEscrow::release`]. The event data carries the escrow id,
+/// payment asset, recipient and amount.
 pub fn event_escrow_released(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_released")
 }
@@ -104,7 +104,7 @@ pub fn event_escrow_released(env: &Env) -> Symbol {
 ///
 /// Emitted when an escrow is cancelled and the recorded amount is returned
 /// to the funder via [`crate::CalloraEscrow::refund`]. The event data
-/// carries the escrow id, payment asset, funder and amount.
+/// carries the escrow id, payment asset, recipient and amount.
 pub fn event_escrow_refunded(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_refunded")
 }
@@ -117,7 +117,7 @@ pub fn event_version_v1(env: &Env) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::Env;
+    use soroban_sdk:Env;
 
     /// Snapshot: proves event_init still maps to exactly the bytes for "init".
     #[test]
