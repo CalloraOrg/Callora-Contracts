@@ -107,8 +107,8 @@ pub enum StorageKey {
     Escrow(Address, Address),
     /// Persistent: escrow record keyed by `(payment_asset, funder, recipient)`.
     ///
-    /// Used by the fund-custody flow so that a funder can escrow funds to a
-    /// recipient for a given asset, and later release or refund them.
+    /// Used by the fund-custody entrypoints so that multiple funders can escrow
+    /// for the same recipient without colliding on the legacy key.
     EscrowByFunder(Address, Address, Address),
 }
 
@@ -128,7 +128,7 @@ pub struct EscrowRecord {
     pub amount: i128,
     /// Ledger timestamp at which the escrow was created.
     pub created_at: u64,
-    /// The address that funded the escrow and is entitled to a refund.
+    /// The funder that deposited the escrowed funds.
     pub funder: Address,
     /// Whether the escrow has been released or refunded.
     pub released: bool,
