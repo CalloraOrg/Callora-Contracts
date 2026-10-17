@@ -36,6 +36,12 @@ jobs:
       - name: Check format (workspace crates)
         run: cargo fmt --all -- --check
 
+      - name: Verify workspace membership
+        shell: bash
+        run: |
+          chmod +x scripts/check-workspace-members.sh
+          ./scripts/check-workspace-members.sh
+
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -46,14 +52,11 @@ jobs:
       - name: Build settlement WASM for tests
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
-      - name: Verify workspace members match crates on disk
-        shell: bash
-        run: |
-          chmod +x scripts/check-workspace-members.sh
-          ./scripts/check-workspace-members.sh
-
       - name: Test (all workspace members)
         run: cargo test --workspace
+
+      - name: Test (default members)
+        run: cargo test
 
   # The only non-blocking job in this workflow: it pins the nightly toolchain,
   # which is expected to break on unrelated churn. Every other job is blocking.
@@ -90,6 +93,10 @@ jobs:
       - name: Test (with proptest long runs)
         continue-on-error: true
         run: cargo test --workspace -- --nocapture
+
+      - name: Test (default members, with proptest long runs)
+        continue-on-error: true
+        run: cargo test -- --nocapture
 
   build:
     name: Build (release)
