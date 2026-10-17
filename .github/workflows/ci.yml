@@ -36,7 +36,7 @@ jobs:
       - name: Check format (workspace crates)
         run: cargo fmt --all -- --check
 
-      - name: Verify workspace membership
+      - name: Verify all contract crates are workspace members
         shell: bash
         run: |
           chmod +x scripts/check-workspace-members.sh
@@ -52,11 +52,11 @@ jobs:
       - name: Build settlement WASM for tests
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
+      - name: Verify cargo metadata workspace member count
+        run: cargo metadata --no-deps --format-version 1 | jq -e '.workspace_members | length > 0'
+
       - name: Test (all workspace members)
         run: cargo test --workspace
-
-      - name: Test (default members)
-        run: cargo test
 
   # The only non-blocking job in this workflow: it pins the nightly toolchain,
   # which is expected to break on unrelated churn. Every other job is blocking.
@@ -90,13 +90,14 @@ jobs:
         continue-on-error: true
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
+      - name: Verify all contract crates are workspace members
+        continue-on-error: true
+        shell: bash
+        run: ./scripts/check-workspace-members.sh
+
       - name: Test (with proptest long runs)
         continue-on-error: true
         run: cargo test --workspace -- --nocapture
-
-      - name: Test (default members, with proptest long runs)
-        continue-on-error: true
-        run: cargo test -- --nocapture
 
   build:
     name: Build (release)
@@ -119,6 +120,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      - name: Verify all contract crates are workspace members
+        shell: bash
+        run: ./scripts/check-workspace-members.sh
 
       - name: Check WASM size
         shell: bash
