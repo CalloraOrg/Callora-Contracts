@@ -32,8 +32,11 @@ fn setup_with(
 ) -> (Address, CalloraVaultClient<'_>, Address) {
     let owner = Address::generate(env);
     let client = register(env);
-    let (usdc, _) = create_usdc(env, &owner);
+    let (usdc, usdc_admin) = create_usdc(env, &owner);
     env.mock_all_auths();
+    if initial_balance > 0 {
+        usdc_admin.mint(&client.address, &initial_balance);
+    }
     client.init(
         &owner,
         &usdc,

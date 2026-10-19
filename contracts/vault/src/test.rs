@@ -111,8 +111,7 @@ fn init_defaults_balance_to_zero() {
 }
 
 #[test]
-#[ignore = "known bug: init does not enforce InitialBalanceExceedsOnLedger (#17); reported in PR"]
-#[should_panic(expected = "Error(Contract, #17)")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn init_fails_when_initial_balance_exceeds_onchain_usdc_balance() {
     let env = Env::default();
     let owner = Address::generate(&env);
