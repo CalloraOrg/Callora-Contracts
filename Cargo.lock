@@ -273,29 +273,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-batch-distribute-fuzz"
-version = "0.0.0"
-dependencies = [
- "callora-distribute",
- "libfuzzer-sys",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-checkpoint"
 version = "0.1.0"
 dependencies = [
  "callora-storage-migration",
  "proptest",
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-checkpoint-fuzz"
-version = "0.0.0"
-dependencies = [
- "callora-checkpoint",
- "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -313,16 +295,7 @@ dependencies = [
  "callora-distribute",
  "callora-revenue-pool",
  "callora-settlement",
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-cross-contract-tests"
-version = "0.0.1"
-dependencies = [
- "callora-revenue-pool",
- "callora-settlement",
- "rand 0.8.7",
+ "callora-vault",
  "soroban-sdk",
 ]
 
@@ -334,11 +307,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-distribute-fuzz"
-version = "0.0.0"
+name = "callora-emergency"
+version = "0.1.0"
 dependencies = [
- "callora-distribute",
- "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -377,15 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-hot-fuzz"
-version = "0.0.0"
-dependencies = [
- "callora-hot",
- "libfuzzer-sys",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-limits"
 version = "0.0.1"
 dependencies = [
@@ -411,12 +373,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-recipient-fuzz"
-version = "0.0.0"
+name = "callora-refund"
+version = "0.1.0"
 dependencies = [
- "arbitrary",
- "callora-recipient",
- "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -446,28 +405,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "callora-revenue-pool-fuzz"
-version = "0.0.0"
-dependencies = [
- "callora-revenue-pool",
- "libfuzzer-sys",
- "soroban-sdk",
-]
-
-[[package]]
 name = "callora-settlement"
 version = "0.1.0"
 dependencies = [
  "proptest",
- "soroban-sdk",
-]
-
-[[package]]
-name = "callora-settlement-fuzz"
-version = "0.0.0"
-dependencies = [
- "callora-settlement",
- "libfuzzer-sys",
  "soroban-sdk",
 ]
 
@@ -483,6 +424,7 @@ dependencies = [
 name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
@@ -490,6 +432,7 @@ dependencies = [
 name = "callora-topics"
 version = "0.0.0"
 dependencies = [
+ "callora-validators",
  "soroban-sdk",
 ]
 
@@ -515,6 +458,7 @@ dependencies = [
  "callora-revenue-pool",
  "callora-settlement",
  "callora-validators",
+ "proptest",
  "rand 0.8.7",
  "soroban-sdk",
 ]
@@ -532,6 +476,7 @@ name = "callora-yield"
 version = "0.0.1"
 dependencies = [
  "callora-revenue-pool",
+ "callora-storage-migration",
  "soroban-sdk",
 ]
 
@@ -548,8 +493,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
 dependencies = [
  "find-msvc-tools",
- "jobserver",
- "libc",
  "shlex",
 ]
 
@@ -1069,19 +1012,8 @@ checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
  "libc",
- "r-efi 5.3.0",
+ "r-efi",
  "wasip2",
-]
-
-[[package]]
-name = "getrandom"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
-dependencies = [
- "cfg-if",
- "libc",
- "r-efi 6.0.0",
 ]
 
 [[package]]
@@ -1243,16 +1175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jobserver"
-version = "0.1.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
-dependencies = [
- "getrandom 0.4.3",
- "libc",
-]
-
-[[package]]
 name = "js-sys"
 version = "0.3.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1289,16 +1211,6 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
-
-[[package]]
-name = "libfuzzer-sys"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9fd2f41a1cba099f79a0b6b6c35656cf7c03351a7bae8ff0f28f25270f929d2"
-dependencies = [
- "arbitrary",
- "cc",
-]
 
 [[package]]
 name = "libm"
@@ -1525,12 +1437,6 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "r-efi"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
