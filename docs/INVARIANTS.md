@@ -776,3 +776,15 @@ When reviewing value conservation:
 ---
 
 This cross-contract value conservation guarantee is the cornerstone of the Callora protocol's financial integrity. It ensures that every token unit deducted from the vault is precisely accounted for across the protocol's downstream contracts, with no possibility of duplication, loss, or unallocated state.
+
+---
+
+## Escrow Balance and Conservation Invariant
+
+**Invariant**: For every payment asset approved and held by `CalloraEscrow`, the on-ledger token balance of the escrow contract is always greater than or equal to the sum of all active, open escrow records for that asset:
+$$\text{token.balance}(\text{escrow}) \ge \sum \text{open EscrowRecord.amount for each asset}$$
+
+- **Escrow Creation**: `create_escrow` transfers `amount` of `payment_asset` from the admin/funder into `env.current_contract_address()` before writing the persistent `EscrowRecord`. If the transfer fails (e.g., due to insufficient balance), no record is stored.
+- **Escrow Release**: `release` loads the `EscrowRecord`, deletes it from storage before the outbound token transfer (following Checks-Effects-Interactions), and transfers `record.amount` from `env.current_contract_address()` to `recipient`.
+- **Replay Protection**: Because the `(payment_asset, recipient)` storage key is deleted upon release, the same escrow cannot be released twice.
+- **Signer Isolation**: Releasing funds never modifies `StorageKey::Signer`, preserving the configured signer across arbitrary releases.
