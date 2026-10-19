@@ -181,6 +181,33 @@ After migration, confirm:
 
 ---
 
+## Settlement error outcome additions (ABI-additive)
+
+`SettleOutcome` (used by `batch_settle`) gained four new variants so batch
+callers can react to common per-item failures instead of receiving a generic
+`OtherError`:
+
+| Variant | Trigger |
+|---------|---------|
+| `DeveloperFrozen` | The developer's balance is frozen |
+| `MinBalanceViolation` | The withdrawal would drop the balance below the minimum |
+| `InsufficientContractBalance` | The contract's USDC balance is less than the claim amount |
+| `InvalidRecipient` | The recipient is the settlement contract itself |
+
+These variants are **appended** to the enum, which is ABI-additive for
+`contracttype` enums: existing variant discriminants are unchanged, so
+off-chain consumers that already decode `SettleOutcome` keep working. Clients
+that exhaustively match on `SettleOutcome` should add arms for the new
+variants.
+
+Relatedly, `validate_claim` now returns `Err(InvalidRecipient)` instead of
+trapping, so `simulate_claim` no longer panics on an invalid recipient and a
+single bad item no longer aborts an entire `batch_settle`. The validation
+order is also pinned: `InsufficientDeveloperBalance` is reported before
+`MinBalanceViolation`.
+
+---
+
 ## Security considerations
 
 - All migration entry points call `caller.require_auth()` and verify the
