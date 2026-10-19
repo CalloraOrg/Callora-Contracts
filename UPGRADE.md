@@ -129,6 +129,30 @@ pub fn get_version(env: Env) -> Option<BytesN<32>>
 - While paused, `deposit()` is rejected, but **`deduct()` and `batch_deduct()` still execute and still emit `deduct` events**.
 - If you rely on “pause stops all balance movement”, you must update your operational assumptions and monitoring.
 
+### Checkpoint (`contracts/checkpoint/src/lib.rs`)
+
+The checkpoint contract records a SHA-256 hash of its storage schema during
+`init`. The descriptor in `storage_layout_hash` lists the instance and
+persistent keys and their serialized value types. When that schema changes,
+update the descriptor and increment `STORAGE_MIGRATION_VERSION`.
+
+Checkpoint upgrades are a two-call flow:
+
+1. Build and upload the replacement WASM. The current admin calls
+   `upgrade(caller, new_wasm_hash, target_version)`. The current code validates
+   the recorded source schema, requires a single-version step (or a same-version
+   redeploy with the same layout), records the authorization, and swaps the WASM.
+2. Before any checkpoint business call, the admin calls
+   `migrate(caller, target_version, new_layout_hash)` on the new code. Supply the
+   SHA-256 hash of the new code's schema descriptor. The new code verifies this
+   hash and the stored authorization, then commits the version and schema hash.
+   Checkpoint reads and writes return `MigrationPending` until this succeeds.
+
+For example, after a fresh version-1 initialization, an upgrade targets version
+2; a later schema-changing upgrade must target version 3. Do not skip versions.
+If the schema is unchanged, a same-version redeploy may be authorized only with
+the matching layout hash, and it must still be finalized with `migrate`.
+
 ### Revenue Pool (`contracts/revenue_pool/src/lib.rs`)
 
 | Key | Type | Description |

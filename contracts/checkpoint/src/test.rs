@@ -2,6 +2,9 @@ use crate::{
     CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD,
     MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
+use callora_storage_migration::{
+    layout_hash, StorageMigrationValidator, StorageKey as MigrationStorageKey,
+};
 use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
@@ -38,6 +41,19 @@ fn test_init_succeeds() {
     // Verify checkpoint count starts at 0.
     assert_eq!(client.get_checkpoint_count(), 0);
     assert_eq!(client.get_latest_checkpoint_id(), 0);
+
+    env.as_contract(&contract_id, || {
+        let stored_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&MigrationStorageKey::SchemaLayoutHash)
+            .unwrap();
+        assert_ne!(stored_hash, BytesN::from_array(&env, &[0u8; 32]));
+        assert_eq!(
+            stored_hash,
+            CalloraCheckpoint::storage_layout_hash(&env)
+        );
+    });
 }
 
 #[test]
@@ -110,22 +126,24 @@ fn test_accept_admin_succeeds() {
 }
 
 #[test]
-#[should_panic(expected = "no admin transfer pending")]
-fn test_accept_admin_panics_when_no_transfer_pending() {
+fn test_accept_admin_returns_error_when_no_transfer_pending() {
     let (env, _admin, client) = setup();
     let caller = Address::generate(&env);
-    client.accept_admin(&caller);
+    let result = client.try_accept_admin(&caller);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
 }
 
 #[test]
-#[should_panic(expected = "unauthorized: caller is not pending admin")]
-fn test_accept_admin_panics_for_wrong_caller() {
+fn test_accept_admin_returns_error_for_wrong_caller() {
     let (env, admin, client) = setup();
     let new_admin = Address::generate(&env);
     let wrong_caller = Address::generate(&env);
 
     client.set_admin(&admin, &new_admin);
-    client.accept_admin(&wrong_caller);
+    let result = client.try_accept_admin(&wrong_caller);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
 }
 
 #[test]
@@ -156,10 +174,11 @@ fn test_cancel_admin_transfer_fails_for_non_admin() {
 }
 
 #[test]
-#[should_panic(expected = "no admin transfer pending")]
-fn test_cancel_admin_transfer_panics_when_none_pending() {
+fn test_cancel_admin_transfer_returns_error_when_none_pending() {
     let (_env, admin, client) = setup();
-    client.cancel_admin_transfer(&admin);
+    let result = client.try_cancel_admin_transfer(&admin);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
 }
 
 // ===========================================================================
@@ -684,13 +703,15 @@ fn test_get_checkpoint_ttl_survives_past_original_bump_window() {
 // ===========================================================================
 
 #[test]
-#[should_panic]
 fn test_upgrade_succeeds_for_admin() {
     let (env, admin, client) = setup();
-    let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let wasm_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
 
-    let result = client.try_upgrade(&admin, &wasm_hash);
+    let result = client.try_upgrade(&admin, &wasm_hash, &1);
     assert!(result.is_ok());
+    assert!(result.unwrap().is_ok());
 }
 
 #[test]
@@ -699,8 +720,9 @@ fn test_upgrade_fails_for_non_admin() {
     let non_admin = Address::generate(&env);
     let wasm_hash = BytesN::from_array(&env, &[0u8; 32]);
 
-    let result = client.try_upgrade(&non_admin, &wasm_hash);
-    assert!(result.is_err(), "expected Unauthorized error");
+    let result = client.try_upgrade(&non_admin, &wasm_hash, &1);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err(), "expected Unauthorized error");
 }
 
 /// The pre-upgrade storage-migration gate must reject an all-zero WASM hash
@@ -710,8 +732,78 @@ fn test_upgrade_rejects_zero_wasm_hash_via_migration_guard() {
     let (env, admin, client) = setup();
     let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
 
-    let result = client.try_upgrade(&admin, &zero_hash);
-    assert!(result.is_err());
+    let result = client.try_upgrade(&admin, &zero_hash, &1);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn test_upgrade_rejects_skipped_version() {
+    let (env, admin, client) = setup();
+    let wasm_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+
+    let result = client.try_upgrade(&admin, &wasm_hash, &3);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn test_upgrade_rejects_same_version_layout_change() {
+    let (env, admin, client) = setup();
+    let changed_hash = layout_hash(&env, "checkpoint:changed-layout");
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&MigrationStorageKey::SchemaLayoutHash, &changed_hash);
+    });
+
+    let wasm_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+    let result = client.try_upgrade(&admin, &wasm_hash, &1);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
+}
+
+#[test]
+fn test_business_calls_are_blocked_until_migration_is_finalized() {
+    let (env, admin, client) = setup();
+    let layout = CalloraCheckpoint::storage_layout_hash(&env);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+    env.as_contract(&client.address, || {
+        StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            2,
+            &layout,
+            &layout,
+            &wasm_hash,
+            false,
+        )
+        .unwrap();
+    });
+
+    let blocked = client.try_get_checkpoint_count();
+    assert!(blocked.is_ok());
+    assert!(blocked.unwrap().is_err());
+
+    let non_admin = Address::generate(&env);
+    let unauthorized = client.try_migrate(&non_admin, &2, &layout);
+    assert!(unauthorized.is_ok());
+    assert!(unauthorized.unwrap().is_err());
+
+    client.migrate(&admin, &2, &layout);
+    assert_eq!(client.get_checkpoint_count(), 0);
+
+    env.as_contract(&client.address, || {
+        assert_eq!(StorageMigrationValidator::current_version(&env), 2);
+        assert_eq!(
+            StorageMigrationValidator::authorized_upgrade(&env),
+            None
+        );
+    });
 }
 
 // ===========================================================================

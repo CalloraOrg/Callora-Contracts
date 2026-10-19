@@ -496,7 +496,7 @@ fuzz_target!(|data: &[u8]| {
                 let wasm_hash = BytesN::from_array(&env, &[chunk[2]; 32]);
 
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    client.try_upgrade(&caller, &wasm_hash)
+                    client.try_upgrade(&caller, &wasm_hash, &1)
                 }));
             }
 
