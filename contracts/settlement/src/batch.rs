@@ -19,6 +19,10 @@ pub enum SettleOutcome {
     DailyWithdrawCapExceeded,
     DeveloperBalanceUnderflow,
     OtherError,
+    DeveloperFrozen,
+    MinBalanceViolation,
+    InsufficientContractBalance,
+    InvalidRecipient,
 }
 
 impl From<SettlementError> for SettleOutcome {
@@ -29,6 +33,12 @@ impl From<SettlementError> for SettleOutcome {
             SettlementError::InsufficientDeveloperBalance => SettleOutcome::InsufficientBalance,
             SettlementError::DailyWithdrawCapExceeded => SettleOutcome::DailyWithdrawCapExceeded,
             SettlementError::DeveloperBalanceUnderflow => SettleOutcome::DeveloperBalanceUnderflow,
+            SettlementError::DeveloperFrozen => SettleOutcome::DeveloperFrozen,
+            SettlementError::MinBalanceViolation => SettleOutcome::MinBalanceViolation,
+            SettlementError::InsufficientContractBalance => {
+                SettleOutcome::InsufficientContractBalance
+            }
+            SettlementError::InvalidRecipient => SettleOutcome::InvalidRecipient,
             _ => SettleOutcome::OtherError,
         }
     }
