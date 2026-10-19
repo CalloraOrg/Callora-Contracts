@@ -1,4 +1,5 @@
 extern crate std;
+extern crate std;
 
 use crate::{
     CalloraSettlement, CalloraSettlementClient, DeductionRecordedEvent, SettlementError,
@@ -65,56 +66,13 @@ fn record_deduction_rejects_replay_without_changing_total_or_marker() {
 }
 
 #[test]
-fn record_deduction_treats_zero_as_no_idempotency_sentinel() {
-    let (env, contract_id, _) = setup();
-    let client = CalloraSettlementClient::new(&env, &contract_id);
-    // Row 1: id 0 is never deduplicated and never marked.
-    client.record_deduction(&10, &0);
-    client.record_deduction(&10, &0);
-    assert_eq!(client.get_total_received(), 20);
-    assert!(!has_marker(&env, &contract_id, 0));
-}
-
-#[test]
-fn record_deduction_zero_sentinel_rejects_non_positive_without_marker() {
-    let (env, contract_id, _) = setup();
-    let client = CalloraSettlementClient::new(&env, &contract_id);
-    // Row 3: amount validation still applies to the sentinel id.
-    for amount in [0, -1] {
-        assert_eq!(
-            client.try_record_deduction(&amount, &0),
-            Err(Ok(SettlementError::AmountNotPositive.into()))
-        );
-        assert!(!has_marker(&env, &contract_id, 0));
-    }
-    assert_eq!(client.get_total_received(), 0);
-}
-
-#[test]
-fn record_deduction_zero_sentinel_overflow_writes_nothing() {
-    let (env, contract_id, _) = setup();
-    let client = CalloraSettlementClient::new(&env, &contract_id);
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .set(&StorageKey::TotalReceived, &(i128::MAX - 1));
-    });
-    // Row 4: overflow with id 0 must not write anything.
-    assert_eq!(
-        client.try_record_deduction(&2, &0),
-        Err(Ok(SettlementError::PoolOverflow.into()))
-    );
-    assert_eq!(client.get_total_received(), i128::MAX - 1);
-    assert!(!has_marker(&env, &contract_id, 0));
-}
-
-#[test]
 fn record_deduction_emits_exact_payload_and_only_updates_accounting() {
     let (env, contract_id, vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let pool_before = client.get_global_pool();
 
     // All u64 IDs are opaque and valid, including zero and the maximum.
+    // Zero is the no-idempotency sentinel: it is never marked, but still accounted.
     for request_id in [0, u64::MAX] {
         client.record_deduction(&75, &request_id);
         assert_eq!(env.events().all().len(), 1);
@@ -148,29 +106,8 @@ fn record_deduction_emits_exact_payload_and_only_updates_accounting() {
     }
     assert_eq!(client.get_total_received(), 150);
     assert_eq!(client.get_global_pool(), pool_before);
-}
-
-#[test]
-fn record_deduction_zero_sentinel_emits_event_with_zero_request_id() {
-    let (env, contract_id, _) = setup();
-    let client = CalloraSettlementClient::new(&env, &contract_id);
-    // Row 5: the event still carries request_id == 0.
-    client.record_deduction(&75, &0);
-    assert_eq!(env.events().all().len(), 1);
-    let (emitter, topics, data) = env.events().all().last().unwrap();
-    assert_eq!(emitter, contract_id);
-    assert_eq!(
-        topics,
-        soroban_sdk::vec![&env, Symbol::new(&env, "deduction_recorded").into_val(&env)]
-    );
-    assert_eq!(
-        DeductionRecordedEvent::from_val(&env, &data),
-        DeductionRecordedEvent {
-            amount: 75,
-            request_id: 0,
-        }
-    );
     assert!(!has_marker(&env, &contract_id, 0));
+    assert!(has_marker(&env, &contract_id, u64::MAX));
 }
 
 #[test]
@@ -237,22 +174,6 @@ fn record_deduction_overflow_does_not_consume_request_id() {
 }
 
 #[test]
-fn record_deduction_zero_sentinel_requires_vault_authorization() {
-    let (env, contract_id, _) = setup();
-    let client = CalloraSettlementClient::new(&env, &contract_id);
-    // Row 9: auth precedence is unchanged for the sentinel id.
-    env.mock_auths(&[]);
-    assert!(client.try_record_deduction(&100, &0).is_err());
-    assert!(env.events().all().is_empty());
-    assert_eq!(client.get_total_received(), 0);
-    assert!(!has_marker(&env, &contract_id, 0));
-
-    env.mock_all_auths();
-    client.record_deduction(&100, &0);
-    assert_eq!(client.get_total_received(), 100);
-}
-
-#[test]
 fn record_deduction_requires_vault_authorization() {
     let (env, contract_id, _) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
@@ -265,4 +186,98 @@ fn record_deduction_requires_vault_authorization() {
     env.mock_all_auths();
     client.record_deduction(&100, &10);
     assert_eq!(client.get_total_received(), 100);
+}
+
+#[test]
+fn record_deduction_zero_sentinel_is_never_deduplicated() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    client.record_deduction(&10, &0);
+    client.record_deduction(&10, &0);
+
+    assert_eq!(client.get_total_received(), 20);
+    assert!(!has_marker(&env, &contract_id, 0));
+}
+
+#[test]
+fn record_deduction_nonzero_id_is_deduplicated() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    client.record_deduction(&10, &7);
+    assert_eq!(
+        client.try_record_deduction(&10, &7),
+        Err(Ok(SettlementError::DuplicateRequestId.into()))
+    );
+
+    assert_eq!(client.get_total_received(), 10);
+    assert!(has_marker(&env, &contract_id, 7));
+}
+
+#[test]
+fn record_deduction_zero_sentinel_rejects_non_positive_amounts() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    for amount in [0, -1] {
+        assert_eq!(
+            client.try_record_deduction(&amount, &0),
+            Err(Ok(SettlementError::AmountNotPositive.into()))
+        );
+    }
+
+    assert!(env.events().all().is_empty());
+    assert_eq!(client.get_total_received(), 0);
+    assert!(!has_marker(&env, &contract_id, 0));
+}
+
+#[test]
+fn record_deduction_zero_sentinel_overflow_writes_nothing() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&StorageKey::TotalReceived, &i128::MAX);
+    });
+
+    assert_eq!(
+        client.try_record_deduction(&1, &0),
+        Err(Ok(SettlementError::PoolOverflow.into()))
+    );
+
+    assert!(env.events().all().is_empty());
+    assert_eq!(client.get_total_received(), i128::MAX);
+    assert!(!has_marker(&env, &contract_id, 0));
+}
+
+#[test]
+fn record_deduction_zero_sentinel_emits_event_with_zero_request_id() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    client.record_deduction(&42, &0);
+
+    let (emitter, _topics, data) = env.events().all().last().unwrap();
+    assert_eq!(emitter, contract_id);
+    assert_eq!(
+        DeductionRecordedEvent::from_val(&env, &data),
+        DeductionRecordedEvent {
+            amount: 42,
+            request_id: 0,
+        }
+    );
+}
+
+#[test]
+fn record_deduction_zero_sentinel_still_requires_vault_authorization() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    env.mock_auths(&[]);
+    assert!(client.try_record_deduction(&100, &0).is_err());
+    assert!(env.events().all().is_empty());
+    assert_eq!(client.get_total_received(), 0);
+    assert!(!has_marker(&env, &contract_id, 0));
 }
