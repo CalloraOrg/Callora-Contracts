@@ -37,12 +37,16 @@ fn upgrade_valid_wasm_hash_passes_migration_guard() {
     let new_hash = env
         .deployer()
         .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
-    // The migration guard must not reject a valid upgrade; the platform swap
-    // itself is a no-op for a natively-registered test contract.
+    // The legacy `upgrade` entrypoint now only proposes; it must not swap the
+    // WASM immediately. The proposal is visible on-chain and the version is
+    // unchanged until `execute_upgrade` runs after the timelock.
     client.upgrade(&admin, &new_hash);
 
+    let pending = client.get_pending_upgrade().expect("proposal stored");
+    assert_eq!(pending.wasm_hash, new_hash);
+
     let readback: Option<BytesN<32>> = client.get_version();
-    assert_eq!(readback, Some(new_hash));
+    assert_eq!(readback, None);
 }
 
 /// The pre-upgrade storage-migration gate must reject an all-zero WASM hash
@@ -60,4 +64,7 @@ fn upgrade_rejects_zero_wasm_hash_via_migration_guard() {
     let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
     let res = client.try_upgrade(&admin, &zero_hash);
     assert!(res.is_err());
+
+    // No proposal may be recorded for a rejected zero hash.
+    assert!(client.get_pending_upgrade().is_none());
 }

@@ -33,6 +33,11 @@ use soroban_sdk::contracterror;
 /// | 23   | EmergencyPaused               | Recovery-only emergency mode is active               |
 /// | 24   | AlreadyEmergencyPaused        | Emergency pause was already active                   |
 /// | 25   | NotEmergencyPaused            | Emergency recovery was requested while inactive      |
+/// | 26   | NoPendingUpgrade              | No upgrade proposal is pending                       |
+/// | 27   | UpgradeTimelockNotExpired     | Upgrade timelock has not elapsed                     |
+/// | 28   | UpgradeProposalExpired        | Upgrade proposal has expired                         |
+/// | 29   | InvalidWasmHash               | Proposed wasm hash is zero                           |
+/// | 30   | SchemaMismatch                | Storage layout hash does not match expected schema   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -87,4 +92,14 @@ pub enum RevenuePoolError {
     AlreadyEmergencyPaused = 24,
     /// Emergency recovery was requested while inactive (code 25).
     NotEmergencyPaused = 25,
+    /// No upgrade proposal is pending (code 26).
+    NoPendingUpgrade = 26,
+    /// Upgrade timelock has not elapsed (code 27).
+    UpgradeTimelockNotExpired = 27,
+    /// Upgrade proposal has expired (code 28).
+    UpgradeProposalExpired = 28,
+    /// Proposed wasm hash is zero (code 29).
+    InvalidWasmHash = 29,
+    /// Storage layout hash does not match expected schema (code 30).
+    SchemaMismatch = 30,
 }

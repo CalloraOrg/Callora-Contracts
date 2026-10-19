@@ -7,6 +7,30 @@ All topic/data types refer to Soroban/Stellar XDR values.
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
 
+## Change Note (2026-10) — Revenue pool timelocked upgrades
+
+`callora-revenue-pool` now upgrades through a propose/execute/cancel timelock
+instead of swapping WASM in a single admin call. New events:
+
+| Event | Emitted by | Topics | Data |
+|-------|-----------|--------|------|
+| `upgrade_proposed` | `propose_upgrade()` / legacy `upgrade()` | `["upgrade_proposed", admin]` | `(wasm_hash, execute_after, expires_at)` |
+| `upgrade_executed` | `execute_upgrade()` | `["upgrade_executed", admin]` | `wasm_hash` |
+| `upgrade_cancelled` | `cancel_upgrade()` | `["upgrade_cancelled", admin]` | `wasm_hash` |
+| `migrated` | `migrate()` | `["migrated", admin]` | `(from_layout_hash, to_layout_hash)` |
+
+**Breaking change for indexers:** the legacy `upgrade()` entrypoint no longer
+swaps WASM; it only emits `upgrade_proposed`. Indexers that treated `upgrade`
+as an immediate code change must now track `upgrade_executed` for the actual
+swap and `migrated` for the post-swap storage migration.
+
+**Migration note for deployed pool `CC5KINWRSLKSSQG4ZOTP3EZIOUVC6ER7HL5GZALYY4LVE6ZIMX4PMCSE`:**
+the currently deployed code still performs an immediate swap. After deploying
+the new WASM, the admin must call `propose_upgrade(new_wasm_hash)`, wait for
+`execute_after`, then call `execute_upgrade()`, and finally call `migrate()`
+from the new code to finalize the storage layout. `cancel_upgrade()` is
+available until `execute_after`.
+
 ## Change Note (2026-09)
 
 **Two-step admin rotation events (Issue #1163).**
