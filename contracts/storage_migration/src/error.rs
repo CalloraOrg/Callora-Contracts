@@ -29,4 +29,6 @@ pub enum StorageMigrationError {
     UnauthorizedUpgradeState = 9,
     /// The live storage could not be read back under the new code's expectations.
     StorageUnreadable = 10,
+    /// More than the documented maximum number of probe keys was supplied.
+    TooManyProbeKeys = 11,
 }

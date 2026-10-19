@@ -778,6 +778,10 @@ impl CalloraCheckpoint {
         // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
         // rollbacks — ensuring existing deployed data stays readable and no
         // implicit destructive transformation occurs.
+        //
+        // The probe list names the critical instance keys this contract
+        // relies on. `finalize_migration` reads each one and fails with
+        // `StorageUnreadable` if any is missing or fails to decode.
         let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
         if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
             &env,
@@ -786,6 +790,7 @@ impl CalloraCheckpoint {
             &placeholder_layout,
             &new_wasm_hash,
             false,
+            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -794,6 +799,7 @@ impl CalloraCheckpoint {
             STORAGE_MIGRATION_VERSION,
             &placeholder_layout,
             &new_wasm_hash,
+            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -807,6 +813,27 @@ impl CalloraCheckpoint {
         );
 
         Ok(())
+    }
+
+    /// Build the list of critical storage keys probed by the migration
+    /// validator during `upgrade`.
+    ///
+    /// Each entry is `(key, expected_type)`. `finalize_migration` reads every
+    /// key and returns `StorageUnreadable` if any is missing or fails to
+    /// decode as the expected type. Keep this list small (the validator
+    /// documents a maximum of 8 probes) and limited to keys that must exist
+    /// for the contract to be usable after an upgrade.
+    fn critical_probe_keys(env: &Env) -> Vec<(soroban_sdk::Val, soroban_sdk::Val)> {
+        let mut probes: Vec<(soroban_sdk::Val, soroban_sdk::Val)> = Vec::new(env);
+        probes.push_back((
+            StorageKey::Admin.into_val(env),
+            <Address as soroban_sdk::TryIntoVal<Env, soroban_sdk::Val>>::try_into_val(
+                Address::from_contract_id(&env.current_contract_address()),
+                env,
+            )
+            .unwrap_or_else(|_| soroban_sdk::Val::VOID),
+        ));
+        probes
     }
 }
 
