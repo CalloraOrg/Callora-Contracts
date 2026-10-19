@@ -133,6 +133,20 @@ impl CalloraSettlement {
         events::emit_deduction_recorded(&env, DeductionRecordedEvent { amount, request_id });
     }
 
+    /// Remove a previously-recorded deduction marker.
+    ///
+    /// Intended for owner-driven pruning of vault request IDs after the vault
+    /// has explicitly removed the corresponding marker from its own storage.
+    /// This is a no-op if the request was never recorded.
+    pub fn clear_deduction_request(env: Env, request_id: u64) {
+        let vault = Self::get_vault(env.clone()).unwrap();
+        vault.require_auth();
+        let request_key = StorageKey::DeductionRequest(request_id);
+        if env.storage().persistent().has(&request_key) {
+            env.storage().persistent().remove(&request_key);
+        }
+    }
+
     /// Receive payment from vault and credit to pool or developer balance.
     ///
     /// # Arguments
