@@ -57,8 +57,8 @@ pub enum StorageKey {
     DeveloperMember(Address),
     /// One page of the developer index stored in **persistent** storage.
     ///
-    /// Key: zero-based page number.  Each page holds up to
-    /// [`INDEX_PAGE_SIZE`] addresses in ascending order by address bytes.
+    /// Key: zero-based page number. Each page holds up to
+    /// [`INDEX_PAGE_SIZE`] addresses in insertion order.
     IndexPage(u32),
     /// Total number of allocated index pages (stored in instance storage as
     /// a single `u32`).  Replaces the unbounded `DeveloperIndex` vector.

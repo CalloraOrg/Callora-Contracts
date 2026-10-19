@@ -289,3 +289,15 @@ total_rescued_for(token) + on_ledger_balance(contract, token) == initial_mint(to
 
 (Previously: `total_rescued() + on_ledger_balance == initial_mint`, which was
 incorrect when multiple tokens were involved.)
+# Settlement developer-balance pagination
+
+The settlement contract's `get_developer_balances_cursor` ABI now accepts and
+returns `Option<u32>` instead of `Option<Address>`. Treat the returned value as
+the global index position at which the next page starts and pass it unchanged
+to the next call. Unknown positions beyond the current index length return
+`InvalidCursor`.
+
+`get_all_developer_balances` now returns at most
+`MAX_DEVELOPER_BALANCES_PAGE_SIZE` entries and returns `TooManyResults` when
+the index is larger. Replace unbounded calls with
+`get_developer_balances_page` or `get_developer_balances_cursor`.

@@ -56,6 +56,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (48, SettlementError::DuplicateRequestId),
         (49, SettlementError::LengthMismatch),
         (50, SettlementError::InvalidCursor),
+        (51, SettlementError::TooManyResults),
     ];
 
     let mut seen = BTreeSet::new();
@@ -67,7 +68,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 #[test]
@@ -120,7 +121,8 @@ fn error_code_docs_list_every_settlement_code() {
         "| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
         "| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |",
         "| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |",
-        "| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |",
+        "| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |",
+        "| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |",
     ];
 
     for line in expected_lines {

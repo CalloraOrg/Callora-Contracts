@@ -119,7 +119,8 @@ must not be reassigned once released.
 | 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
-| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
+| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
+| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
 
 ## Revenue Pool
 
