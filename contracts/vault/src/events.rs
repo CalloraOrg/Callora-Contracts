@@ -339,6 +339,42 @@ pub fn event_sweep_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "sweep_cancelled")
 }
 
+/// Returns the Symbol for the `"pause_replaced"` event topic.
+///
+/// Emitted when an admin proposes a pause while a live (unexpired) pause
+/// proposal is already pending. The payload carries both the old and new
+/// `(proposed_at, execute_after)` snapshots.
+pub fn event_pause_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_replaced")
+}
+
+/// Returns the Symbol for the `"upgrade_replaced"` event topic.
+///
+/// Emitted when an admin proposes an upgrade while a live (unexpired)
+/// upgrade proposal is already pending. The payload carries both the old and
+/// new `(wasm_hash, proposed_at, execute_after)` snapshots.
+pub fn event_upgrade_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_replaced")
+}
+
+/// Returns the Symbol for the `"sweep_replaced"` event topic.
+///
+/// Emitted when an admin proposes a sweep while a live (unexpired) sweep
+/// proposal is already pending. The payload carries both the old and new
+/// `(to, amount, proposed_at, execute_after)` snapshots.
+pub fn event_sweep_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_replaced")
+}
+
+/// Returns the Symbol for the `"proposal_expired"` event topic.
+///
+/// Emitted once per expired proposal removed by `prune_expired_proposals`.
+/// The data carries `(kind, proposed_at, execute_after, expires_at)`, where
+/// `kind` is one of `"pause"`, `"upgrade"`, or `"sweep"`.
+pub fn event_proposal_expired(env: &Env) -> Symbol {
+    Symbol::new(env, "proposal_expired")
+}
+
 /// Returns the Symbol for the `"timelock_window_changed"` event topic.
 ///
 /// Emitted when the admin updates the configured timelock window length.
@@ -713,6 +749,34 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_sweep_cancelled(&env);
         assert_eq!(sym, Symbol::new(&env, "sweep_cancelled"));
+    }
+
+    #[test]
+    fn test_event_pause_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_replaced"));
+    }
+
+    #[test]
+    fn test_event_upgrade_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_replaced"));
+    }
+
+    #[test]
+    fn test_event_sweep_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_replaced"));
+    }
+
+    #[test]
+    fn test_event_proposal_expired_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_proposal_expired(&env);
+        assert_eq!(sym, Symbol::new(&env, "proposal_expired"));
     }
 
     #[test]

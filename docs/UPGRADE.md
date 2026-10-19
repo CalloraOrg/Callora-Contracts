@@ -129,6 +129,35 @@ pub fn get_version(env: Env) -> Option<BytesN<32>>
 - While paused, `deposit()` is rejected, but **`deduct()` and `batch_deduct()` still execute and still emit `deduct` events**.
 - If you rely on “pause stops all balance movement”, you must update your operational assumptions and monitoring.
 
+#### Vault timelock proposal expiry and replacement
+
+Vault pause/upgrade/sweep proposals carry an `expires_at` deadline
+(`execute_after + PROPOSAL_GRACE_SECONDS`, a 7-day grace period). A proposal
+is **live** while `ledger.timestamp() <= expires_at` and **expired** once the
+timestamp is strictly greater.
+
+- `get_pending_pause`, `get_pending_upgrade`, and `get_pending_sweep` return
+  `null` for expired proposals without clearing storage.
+- `execute_pause`, `execute_upgrade`, and `execute_sweep` return
+  `ProposalExpired (58)` for expired proposals and perform no storage write
+  (any state change would be rolled back by the error return).
+- `prune_expired_proposals(env, caller)` lets the **admin only** reclaim
+  expired proposal storage. It returns the number of entries cleared and emits
+  one `proposal_expired` event per entry. Admin-only was chosen because
+  pruning mutates persistent contract state and rewrites the proposal audit
+  trail; it follows the same authorization as every other timelock lifecycle
+  operation.
+
+**Replacement choice:** if `propose_pause`, `propose_upgrade`, or
+`propose_sweep` is called while a **live** proposal of the same kind exists,
+the new proposal replaces it and restarts the timelock. The contract emits
+`<kind>_replaced` (`pause_replaced` / `upgrade_replaced` /
+`sweep_replaced`) carrying both the old and new proposal snapshots. This is
+preferred over rejecting with a new `ProposalAlreadyPending` error because it
+preserves the prior, intentional "re-propose restarts the timer" behavior and
+keeps existing error codes stable. An expired proposal is treated as absent
+and is silently overwritten.
+
 ### Revenue Pool (`contracts/revenue_pool/src/lib.rs`)
 
 | Key | Type | Description |
