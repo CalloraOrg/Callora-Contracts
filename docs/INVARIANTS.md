@@ -197,6 +197,26 @@ Together with the explicit pre-/post-conditions above, these tests help auditors
 
 ---
 
+## Cross-Contract Value Conservation Invariant
+
+**Invariant**: For every successful `deduct` or `batch_deduct` call, the vault must decrease its tracked balance by exactly the amount it transfers to the settlement contract, and the settlement contract must increase its cumulative `TotalReceived` by the same amount.
+
+- **Contract pair**: `CalloraVault` ↔ `CalloraSettlement`
+- **Fields**:
+  - `vault.balance()`: tracked vault balance in USDC stroops
+  - `usdc.balance(vault_address)`: on-ledger USDC backing held by the vault
+  - `usdc.balance(settlement_address)`: USDC held by the settlement contract
+  - `settlement.get_total_received()`: cumulative total recorded by the settlement contract
+- **Guarantee**:
+  - After any successful deduction, `Δ vault.balance == -amount`.
+  - The vault forwards exactly `amount` USDC to settlement.
+  - `settlement.get_total_received()` increases by exactly `amount` and never by a different value.
+  - The vault-backed invariant remains `usdc.balance(vault) >= vault.balance()` for all reachable states. The settlement side never receives more than the vault deducted, and the vaulted USDC backing remains sufficient to cover the tracked balance.
+
+This is the canonical value-conservation property used by the live cross-contract test suite and must hold for both single and batched deductions.
+
+---
+
 ## Settlement Developer Credit Invariant
 
 **Invariant**: For every reachable state of [`CalloraSettlement`](contracts/settlement/src/lib.rs#L45), every credited developer balance stored under [`DEVELOPER_BALANCES_KEY`](contracts/settlement/src/lib.rs#L42) is always **greater than or equal to 0**.
