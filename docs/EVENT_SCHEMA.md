@@ -1420,6 +1420,25 @@ Side effect: developer balance map entry for `GDEV...` is incremented by
 
 ---
 
+### `allocation_recorded`
+
+Emitted by `receive_payment()` and once per item in `batch_receive_payment()`
+after the corresponding `payment_received` (and, when applicable,
+`balance_credited` / `deposit`) events. Carries the running totals so indexers
+can reconcile `TotalReceived` against `TotalAllocated` without extra reads.
+
+| Index              | Location | Type    | Description                                                       |
+|--------------------|----------|---------|-------------------------------------------------------------------|
+| topic 0            | topics   | Symbol  | `"allocation_recorded"`                                           |
+| topic 1            | topics   | Address | `caller` — authorized vault or admin                              |
+| `amount`           | data     | i128    | amount allocated in this call (USDC micro-units)                  |
+| `total_allocated`  | data     | i128    | `TotalAllocated` after this credit (post-state)                   |
+| `total_received`   | data     | i128    | `TotalReceived` at the time of this credit                        |
+| `unallocated`      | data     | i128    | `total_received - total_allocated` after this credit (post-state) |
+
+
+---
+
 ### `supported_token_added`
 
 Emitted when the admin registers a token for settlement payments. The event is
