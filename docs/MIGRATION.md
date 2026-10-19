@@ -191,3 +191,74 @@ After migration, confirm:
 - Arithmetic uses `checked_add` throughout; no silent integer overflow is
   possible.
 - The `StorageVersion` marker ensures migration is not re-run accidentally.
+
+---
+
+# callora-rescue: Per-token `TotalRescued` counter (v0.2.0)
+
+## Background
+
+The original rescue contract kept a single global `TotalRescued` counter in
+instance storage.  Every call to `rescue` or `rescue_capped` added `amount` to
+this counter regardless of which token was being rescued.  This produced a
+meaningless aggregate (e.g. "100 USDC + 200 XLM = 300") that could not be used
+for auditing because it mixed amounts of unrelated tokens.
+
+Additionally, an admin could call `rescue` with `to == current_contract_address()`,
+which transferred nothing off-chain but still incremented `TotalRescued` and
+emitted a rescue event — fabricating an audit trail without moving any funds.
+
+## What changed
+
+| Area | Before (v0.1.x) | After (v0.2.0) |
+|------|-----------------|----------------|
+| Storage key | `DataKey::TotalRescued` (single `i128`) | `DataKey::TotalRescued(Address)` (per-token `i128`) |
+| View function | `total_rescued() -> i128` | `total_rescued_for(token: Address) -> i128` |
+| Self-transfer | Allowed; incremented counter | Rejected with `RescueError::InvalidRecipient` (code 8) |
+| `cap <= 0` in `rescue_capped` | `ExceedsCap` | `InvalidCap` (code 9) |
+| CEI ordering | Counter updated **after** transfer | Counter updated **before** transfer |
+| Instance TTL | Never bumped | Bumped on every entrypoint |
+
+## New error codes
+
+These are append-only; all existing codes are unchanged.
+
+| Code | Variant | Trigger |
+|------|---------|---------|
+| 8 | `InvalidRecipient` | `to == current_contract_address()` |
+| 9 | `InvalidCap` | `cap <= 0` in `rescue_capped` |
+
+## Deprecated API
+
+`total_rescued()` is kept for backwards compatibility but **always returns 0**.
+It will be removed in a future major version.  Migrate callers to
+`total_rescued_for(token)`.
+
+```rust
+// Before
+let total = client.total_rescued();
+
+// After
+let total = client.total_rescued_for(&token_address);
+```
+
+## On-chain state migration
+
+There is **no automatic on-chain state migration**.  The old single-key
+`DataKey::TotalRescued` entry (if any exists from a v0.1.x deployment) is
+simply ignored after the upgrade; it will eventually expire with the instance
+TTL.  Per-token entries start from zero.
+
+If you need to preserve historical totals, read the old value via any v0.1.x
+client before upgrading and record it off-chain.
+
+## Invariant changes
+
+The balance-sync invariant used in property tests now reads:
+
+```
+total_rescued_for(token) + on_ledger_balance(contract, token) == initial_mint(token)
+```
+
+(Previously: `total_rescued() + on_ledger_balance == initial_mint`, which was
+incorrect when multiple tokens were involved.)
