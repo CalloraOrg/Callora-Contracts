@@ -68,6 +68,34 @@ Helper and view functions such as `get_meta`, `get_max_deduct`, `get_revenue_poo
 - Because `amount >= 0` in practice (negative amounts are not useful and would fail at the token layer) and `balance` is already non-negative, we maintain:
   - `VaultMeta.balance' >= 0`
 
+### Deposit reserve cap
+
+The configured reserve cap applies only to the tracked `DataKey::Balance` for
+the vault's configured USDC token. It does not inspect or cap unrelated token
+balances. A deposit is accepted at the cap boundary (`new_balance <= cap`);
+only a resulting balance greater than the cap is rejected with
+`VaultError::ExceedsReserveCap` (code 43).
+
+- An unset cap and an explicitly configured `i128::MAX` cap are both
+  unlimited. The unlimited path reads the cap once and does not perform cap
+  arithmetic; deposit's normal checked addition still detects overflow.
+- Lowering a cap below the existing tracked balance is permitted. The existing
+  balance is not changed, but every positive deposit remains rejected until
+  the resulting balance, including the new deposit, fits within the cap or the cap is raised.
+- Withdrawals and deducts are not subject to the reserve cap and remain
+  available under their existing authorization, pause, and balance rules.
+- `set_reserve_cap` accepts only the configured USDC token. A different token
+  returns `ReserveCapError::CapTokenNotUsdc` (code 59) without changing cap
+  storage or emitting the cap-set event.
+
+Deposit validation order is authentication, pause, amount validation,
+allowlist, reserve-cap check, then checked balance addition. On a finite cap,
+the cap guard performs checked addition before comparing with the cap, so an
+overflow returns `VaultError::Overflow` rather than
+`VaultError::ExceedsReserveCap`. On the unlimited path, the normal checked
+addition returns the same overflow error. A rejected deposit changes no
+tracked balance or token balance and emits no deposit event.
+
 ---
 
 ### `deduct`

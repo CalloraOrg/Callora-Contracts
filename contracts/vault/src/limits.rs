@@ -1,7 +1,7 @@
 //! Per-token reserve caps for the Callora Vault.
 //!
-//! A reserve cap sets the maximum total balance the vault may hold for a given
-//! token.  Deposit attempts that would push the balance past the cap are
+//! A reserve cap sets the maximum tracked balance the vault may hold for a
+//! given token. Deposit attempts that would push the balance past the cap are
 //! rejected with [`VaultError::ExceedsReserveCap`].
 //!
 //! # Storage
@@ -10,7 +10,8 @@
 //!
 //! # Default
 //! When no cap has been set for a token, [`get`] returns `i128::MAX`, which
-//! is effectively unlimited and keeps [`check`] on the fast path.
+//! is effectively unlimited and keeps [`check`] on the fast path. A configured
+//! cap of `i128::MAX` has the same unlimited behavior.
 
 use soroban_sdk::{Address, Env};
 
@@ -58,9 +59,10 @@ pub fn get(env: &Env, token: &Address) -> i128 {
 
 /// Guard called inside `deposit()`.
 ///
-/// Checks whether `current_balance + deposit_amount` would exceed the
-/// configured cap for `token` and returns [`VaultError::ExceedsReserveCap`]
-/// if so.  When no cap is set the check is skipped entirely (fast path).
+/// Checks whether the post-deposit tracked balance would exceed the
+/// configured cap for `token`. The cap is inclusive. When the cap is unset or
+/// `i128::MAX`, this performs no addition (fast path). A finite-cap addition
+/// that overflows returns [`VaultError::Overflow`] before checking the cap.
 ///
 /// # Errors
 /// - [`VaultError::Overflow`] — if the addition overflows `i128`.

@@ -65,6 +65,11 @@ must not be reassigned once released.
 | 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
+| 59 | `CapTokenNotUsdc` | Vault reserve-cap setter | Token is not the configured USDC token |
+
+The reserve-cap setter returns this error through `ReserveCapError`. Its
+existing `NotInitialized` (1), `Unauthorized` (3), and `AmountNotPositive` (6)
+cases preserve the corresponding `VaultError` numeric codes.
 
 ## Settlement
 

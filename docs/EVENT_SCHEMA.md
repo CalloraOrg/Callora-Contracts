@@ -581,15 +581,16 @@ Updated in Issue #1118 to include the version marker at topic[1].
 
 ### `reserve_cap_set`
 
-Emitted when the owner sets or updates the deposit reserve cap for a token via
-`set_reserve_cap()`. Updated in Issue #1118 to include the version marker at topic[1].
+Emitted when the owner sets or updates the deposit reserve cap for the
+configured USDC token via `set_reserve_cap()`. Updated in Issue #1118 to include
+the version marker at topic[1].
 
 | Index   | Location | Type         | Description                             |
 |---------|----------|--------------|-----------------------------------------|
 | topic 0 | topics   | Symbol       | `"reserve_cap_set"`                     |
 | topic 1 | topics   | Symbol       | `"callora_v1"` (version marker)         |
 | topic 2 | topics   | Address      | `caller` — owner address                |
-| topic 3 | topics   | Address      | `token` — token the cap applies to      |
+| topic 3 | topics   | Address      | `token` — configured USDC token         |
 | data    | data     | (Option\<i128\>, i128) | `(prev_cap, new_cap)` — previous cap (None if unset) and new cap |
 
 ```json

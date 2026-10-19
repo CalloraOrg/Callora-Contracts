@@ -73,7 +73,7 @@ The catalogue below omits the Soroban `Env` argument. See the [vault contract in
 - `transfer_ownership(caller, new_owner)` / `accept_ownership()` — Two-step ownership transfer; acceptance is authorized by the pending owner.
 - `prune_processed_requests(caller, ids)` — Owner-only removal of processed request markers.
 - `add_address(caller, depositor)` / `clear_all(caller)` — Owner-only deposit-allowlist management.
-- `set_reserve_cap(caller, token, cap)` — Owner-only reserve-cap update for a token.
+- `set_reserve_cap(caller, token, cap)` — Owner-only inclusive reserve-cap update for the tracked USDC balance; other tokens are rejected.
 
 **Admin and pending-admin actions**
 

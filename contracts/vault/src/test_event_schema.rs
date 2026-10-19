@@ -277,9 +277,14 @@ fn event_version_shape_admin_rescue() {
 fn event_version_shape_set_reserve_cap() {
     let env = Env::default();
     let (owner, vault, client, _) = setup_full(&env);
-    let dummy_token = Address::generate(&env);
+    let usdc_token = env.as_contract(&vault, || {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap()
+    });
 
-    client.set_reserve_cap(&owner, &dummy_token, &100_000);
+    client.set_reserve_cap(&owner, &usdc_token, &100_000);
 
     let evts = vault_events(&env, &vault);
     assert_eq!(evts.len(), 1);
@@ -350,7 +355,13 @@ fn lifecycle_all_events_carry_version_topic() {
     assert_vault_events_versioned!(env, vault, "distribute");
 
     // set_reserve_cap
-    client.set_reserve_cap(&owner, &Address::generate(&env), &999_999);
+    let usdc_token = env.as_contract(&vault, || {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap()
+    });
+    client.set_reserve_cap(&owner, &usdc_token, &999_999);
     assert_vault_events_versioned!(env, vault, "set_reserve_cap");
 
     // admin_rescue (use a second token to avoid the protected-balance guard)

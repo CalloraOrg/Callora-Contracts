@@ -164,3 +164,22 @@ pub enum VaultError {
     /// Proposal has passed its grace period and is no longer executable (code 58).
     ProposalExpired = 58,
 }
+
+/// Stable error codes returned by `set_reserve_cap`.
+///
+/// Existing setter errors retain the corresponding `VaultError` numeric
+/// values. `CapTokenNotUsdc` uses the previously unused code 59.
+/// A separate enum preserves `VaultError`, which is at the XDR 50-case limit.
+#[contracterror]
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub enum ReserveCapError {
+    /// Vault has not been initialized (code 1).
+    NotInitialized = 1,
+    /// Caller is not the vault owner (code 3).
+    Unauthorized = 3,
+    /// Cap must be positive (code 6).
+    AmountNotPositive = 6,
+    /// Cap token must be the configured USDC token (code 59).
+    CapTokenNotUsdc = 59,
+}
