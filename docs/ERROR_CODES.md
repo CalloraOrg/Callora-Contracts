@@ -86,7 +86,7 @@ must not be reassigned once released.
 | 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
 | 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |
 | 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
-| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
+| 17 | `InvalidHigrationTarget` | Settlement | Migration target is the settlement contract |
 | 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |
 | 19 | `TimelockOverflow` | Settlement | Timelock timestamp addition overflowed |
 | 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
@@ -120,6 +120,8 @@ must not be reassigned once released.
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
+| 51 | `FutureLedgerSeq` | Settlement | Caller-supplied `ledger_seq` exceeds the current ledger sequence |
+| 52 | `DuplicateDeveloperInBatch` | Settlement | A batch lists the same developer more than once |
 
 ## Revenue Pool
 
@@ -159,43 +161,3 @@ must not be reassigned once released.
 | 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
 | 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
 | 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
-| 5 | `UpgradeNotAllowed` | Upgrade | Upgrade operation is currently disabled |
-| 6 | `MigrationPending` | Upgrade | A migration or upgrade is already pending |
-| 7 | `TimelockNotExpired` | Upgrade | Required timelock delay has not elapsed |
-| 8 | `SameWasmHash` | Upgrade | New WASM hash is identical to current WASM hash |
-| 9 | `SameVersion` | Upgrade | Proposed version matches current version |
-| 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
-| 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
-| 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
-| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
-| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
-| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
-| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
-| 17 | `CooldownNotElapsed` | Upgrade | The cooldown period for upgrades has not yet elapsed |
-| 18 | `InvalidCooldown` | Upgrade | Requested cooldown is outside `MIN_COOLDOWN_SECONDS..=MAX_COOLDOWN_SECONDS` |
-
-## Freeze
-
-| Code | Variant | Contract | Meaning |
-|------|---------|----------|---------|
-| 1 | `NotInitialized` | Freeze | Contract has not been initialized yet |
-| 2 | `AlreadyInitialized` | Freeze | `init` was called more than once |
-| 3 | `Unauthorized` | Freeze | Caller is not authorized for the operation |
-| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
-| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
-| 6 | `Overflow` | Freeze | Arithmetic overflow detected |
-
-## Errors
-
-| Code | Variant | Contract | Meaning |
-|------|---------|----------|---------|
-| 1 | `NotInitialized` | Errors | `register_error` / `update_error` was called before `init` |
-| 2 | `AlreadyInitialized` | Errors | `init` was called more than once |
-| 3 | `Unauthorized` | Errors | Caller is not the stored admin |
-| 4 | `Overflow` | Errors | `log_error` received `u32::MAX`; checked arithmetic refused to increment |
-| 5 | `UnknownErrorCode` | Errors | `log_error` was called with a code that `register_error` never defined |
-| 6 | `DescriptionTooLong` | Errors | Description exceeds `MAX_DESC_LEN` (256 bytes) on `register_error` or `update_error` |
-| 7 | `AlreadyRegistered` | Errors | The code is already registered; use `update_error` to change its description |
-| 8 | `NotRegistered` | Errors | `update_error` was called for a code that was never registered |
-
-

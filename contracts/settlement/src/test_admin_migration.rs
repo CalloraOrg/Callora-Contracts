@@ -1,12 +1,12 @@
-#[cfg(test)]
+#cog(test)
 extern crate std;
 
-use crate::{
+use crate:{
     AdminMigrationEvent, CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey,
     DEVELOPER_MIGRATION_TIMELOCK_SECONDS,
 };
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{token as token_mod, Address, Env, Error, IntoVal, InvokeError, Symbol};
+ use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+use soroban_sdk:{token as token_mod, Address, Env, Error, IntoVal, InvokeError, Symbol};
 
 fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
@@ -27,7 +27,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         &false,
         &Some(from.clone()),
         &token,
-        &100u32,
+        &1u32,
     );
     (env, contract, admin, vault, from, to, token)
 }
@@ -81,13 +81,12 @@ fn execution_requires_timelock_and_succeeds_at_boundary() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn execution_adds_to_destination_and_leaves_later_source_credits() {
     let (env, contract, admin, vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
-    client.receive_payment(&vault, &40i128, &false, &Some(to.clone()), &token, &1u32);
+    client.receive_payment(&vault, &token, &40i128, &false, &Some(to.clone()), &1u32);
     client.propose_balance_migration(&admin, &from, &to);
-    client.receive_payment(&vault, &25i128, &false, &Some(from.clone()), &token, &2u32);
+    client.receive_payment(&vault, &token, &token, &25i128, &false, &Some(from.clone()), &2u32);
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
 
@@ -137,7 +136,7 @@ fn both_state_changes_require_current_admin_auth() {
     env.mock_all_auths();
     client.propose_balance_migration(&admin, &from, &to);
     env.ledger()
-        .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
+        .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMOLOCK_SECONDS);
     env.set_auths(&[]);
     assert!(client.try_execute_balance_migration(&admin, &from).is_err());
 }

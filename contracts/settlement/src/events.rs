@@ -1,3 +1,4 @@
+
 //! Event topic Symbol constructors and structured emit helpers for the
 //! Callora Settlement contract.
 //!
@@ -63,6 +64,21 @@ pub fn event_initialized(env: &Env) -> Symbol {
 pub fn event_payment_received(env: &Env) -> Symbol {
     Symbol::new(env, "payment_received")
 }
+
+/// Returns the Symbol for the `"hwm_reset"` event topic.
+///
+/// **What**: Returns the canonical symbol for replay high-water-mark reset events.
+///
+/// **How**: Creates a `Symbol` from `"hwm_reset"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+pub fn event_hwm_reset(env: &Env) -> Symbol {
+    Symbol::new(env, "hwm_reset")
+}
+
 /// Returns the Symbol for the `supported_token_added` event topic.
 pub fn event_supported_token_added(env: &Env) -> Symbol {
     Symbol::new(env, "supported_token_added")
@@ -105,6 +121,35 @@ pub fn event_deduction_recorded(env: &Env) -> Symbol {
 /// Emit an accounting-only vault deduction after its replay marker is stored.
 pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
     env.events().publish((event_deduction_recorded(env),), data);
+}
+
+/// Emit `"hwm_reset"` when the admin resets a replay high-water mark.
+///
+/// **What**: Publishes the old and new high-water-mark values for a developer
+/// or the global pool.
+///
+/// **How**: Calls `env.events().publish()` with topic `(hwm_reset, caller)` and
+/// payload `(target, old_mark, new_mark)`.
+///
+/// **Why**: Provides an auditable trail for administrative replay-guard recovery.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address performing the reset.
+/// * `target` - Developer whose mark is reset, or `None` for the global pool.
+/// * `old_mark` - Previous high-water-mark value.
+/// * `new_mark` - New high-water-mark value.
+pub fn emit_hwm_reset(
+    env: &Env,
+    caller: &Address,
+    target: Option<Address>,
+    old_mark: u32,
+    new_mark: u32,
+) {
+    env.events().publish(
+        (event_hwm_reset(env), caller.clone()),
+        (target, old_mark, new_mark),
+    );
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
@@ -818,6 +863,12 @@ mod tests {
             event_payment_received(&env),
             Symbol::new(&env, "payment_received")
         );
+    }
+
+    #[test]
+    fn test_event_hwm_reset_bytes() {
+        let env = Env::default();
+        assert_eq!(event_hwm_reset(&env), Symbol::new(&env, "hwm_reset"));
     }
 
     #[test]
