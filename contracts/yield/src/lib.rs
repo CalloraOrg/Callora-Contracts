@@ -34,5 +34,5 @@ pub mod views;
 pub use errors::YieldLimitError;
 pub use limits::{AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient};
 
-#[config(test)]
+#[cfg(test)]
 mod test_limits;
