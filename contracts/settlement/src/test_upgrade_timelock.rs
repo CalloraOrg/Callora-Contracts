@@ -16,7 +16,7 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
-    Address, Bytes, BytesN, Env, Symbol, TryFromVal,
+    Address, Bytes, BytesN, Env, IntoVal, Symbol,
 };
 
 use crate::{
