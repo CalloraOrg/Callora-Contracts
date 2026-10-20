@@ -1,7 +1,5 @@
 use soroban_sdk::contracterror;
 
-use soroban_sdk::contracterror;
-
 // Stable, machine-readable error codes for the settlement contract.
 // The numeric discriminants in this enum are part of the contract interface and
 // must remain stable over time. Callers and indexers may branch on these `u32`
