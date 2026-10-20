@@ -707,23 +707,37 @@ impl CalloraWhitelist {
         true
     }
 
-    /// Return the current whitelist (admin only, deprecated).
+    /// Return the current whitelist (deprecated).
     ///
-    /// Capped at [`MAX_PAGE`]. Prefer [`get_whitelist_page`] for large whitelists.
+    /// Reads from the legacy `WhitelistList` instance-storage key for
+    /// backward compatibility during migration. Capped at [`MAX_PAGE`].
     ///
     /// # Deprecated
     /// Use [`get_whitelist_page`] instead. This method loads the full
     /// enumeration index and is subject to instance-storage size limits.
     ///
-    /// # Parameters
-    /// - `caller` — Must be the current admin.
-    ///
     /// # Returns
     /// `Vec<Address>` containing up to `MAX_PAGE` whitelisted addresses.
     #[deprecated(note = "Use get_whitelist_page instead")]
-    pub fn get_whitelist(env: Env, caller: Address) -> Result<Vec<Address>, WhitelistError> {
-        Self::require_admin(&env, &caller)?;
-        Self::get_whitelist_page(env, caller, 0, MAX_PAGE)
+    pub fn get_whitelist(env: Env) -> Vec<Address> {
+        Self::bump_instance_ttl(&env);
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::WhitelistList)
+            .unwrap_or_else(|| Vec::new(&env));
+        if list.len() > MAX_PAGE as usize {
+            let mut truncated: Vec<Address> = Vec::new(&env);
+            for (i, addr) in list.iter().enumerate() {
+                if i >= MAX_PAGE as usize {
+                    break;
+                }
+                truncated.push_back(addr.clone());
+            }
+            truncated
+        } else {
+            list
+        }
     }
 
     /// Get a paginated page of whitelisted addresses (admin only).
