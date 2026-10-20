@@ -347,10 +347,7 @@ fn test_execute_upgrade_rejects_after_expiry() {
 
     env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
     let err = client.try_execute_upgrade(&admin).unwrap_err().unwrap();
-    assert_eq!(
-        err,
-        soroban_sdk::Error::from_contract_error(SettlementError::UpgradeProposalExpired as u32)
-    );
+    assert_eq!(err, SettlementError::UpgradeProposalExpired);
 
     // Proposal untouched on the failing path.
     let pending = client.get_pending_upgrade().expect("proposal must survive");
@@ -377,10 +374,7 @@ fn test_rotation_clears_pending_upgrade() {
     assert!(event_emitted(&env, "upgrade_cancelled"));
 
     let err = client.try_execute_upgrade(&new_admin).unwrap_err().unwrap();
-    assert_eq!(
-        err,
-        soroban_sdk::Error::from_contract_error(SettlementError::NoUpgradePending as u32)
-    );
+    assert_eq!(err, SettlementError::NoUpgradePending);
 }
 
 #[test]
@@ -388,10 +382,7 @@ fn test_accept_admin_with_no_transfer_pending_is_typed_error() {
     // Row 5: `accept_admin` with nothing pending → NoAdminTransferPending.
     let (_env, client, _admin, _vault) = setup();
     let err = client.try_accept_admin().unwrap_err().unwrap();
-    assert_eq!(
-        err,
-        soroban_sdk::Error::from_contract_error(SettlementError::NoAdminTransferPending as u32)
-    );
+    assert_eq!(err, SettlementError::NoAdminTransferPending);
 }
 
 // ─── Test plan: replace on re-propose ─────────────────────────────────────
@@ -432,10 +423,7 @@ fn test_propose_upgrade_expires_at_overflow() {
         .try_propose_upgrade(&admin, &hash)
         .unwrap_err()
         .unwrap();
-    assert_eq!(
-        err,
-        soroban_sdk::Error::from_contract_error(SettlementError::TimelockOverflow as u32)
-    );
+    assert_eq!(err, SettlementError::TimelockOverflow);
 }
 
 // ─── Test plan: legacy proposal decoding ─────────────────────────────────
