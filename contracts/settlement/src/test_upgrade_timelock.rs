@@ -371,7 +371,7 @@ fn test_rotation_clears_pending_upgrade() {
     let new_admin = Address::generate(&env);
     client.set_admin(&admin, &new_admin);
     env.events().all(); // clear nomination events
-    client.accept_admin(&new_admin);
+    client.accept_admin();
 
     assert!(client.get_pending_upgrade().is_none());
     assert!(event_emitted(&env, "upgrade_cancelled"));
