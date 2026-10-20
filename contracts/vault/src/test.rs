@@ -827,7 +827,7 @@ fn withdraw_reduces_balance() {
         &None,
     );
 
-    let remaining = client.withdraw(&200);
+    let remaining = client.withdraw(&200).unwrap();
     assert_eq!(remaining, 300);
     assert_eq!(client.balance(), 300);
 }
@@ -852,7 +852,7 @@ fn withdraw_full_balance_succeeds() {
         &None,
     );
 
-    let remaining = client.withdraw(&1000);
+    let remaining = client.withdraw(&1000).unwrap();
     assert_eq!(remaining, 0);
     assert_eq!(client.balance(), 0);
 }
@@ -926,7 +926,7 @@ fn withdraw_to_reduces_balance() {
         &None,
     );
 
-    let remaining = client.withdraw_to(&recipient, &150);
+    let remaining = client.withdraw_to(&recipient, &150).unwrap();
     assert_eq!(remaining, 350);
     assert_eq!(client.balance(), 350);
     assert_eq!(usdc_client.balance(&recipient), 150);
@@ -985,7 +985,6 @@ fn withdraw_to_insufficient_balance_fails() {
 }
 
 #[test]
-#[should_panic(expected = "cannot withdraw to vault address")]
 fn withdraw_to_vault_address_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1006,11 +1005,15 @@ fn withdraw_to_vault_address_fails() {
     );
 
     // Attempt to withdraw to the vault itself
-    client.withdraw_to(&vault_address, &100);
+    let result = client.try_withdraw_to(&vault_address, &100);
+    assert!(result.is_err());
+    match result {
+        Err(Ok(VaultError::InvalidRecipient)) => {}
+        other => panic!("expected InvalidRecipient, got {:?}", other),
+    }
 }
 
 #[test]
-#[should_panic(expected = "cannot withdraw to token address")]
 fn withdraw_to_token_address_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1031,7 +1034,12 @@ fn withdraw_to_token_address_fails() {
     );
 
     // Attempt to withdraw to the USDC token contract
-    client.withdraw_to(&usdc, &100);
+    let result = client.try_withdraw_to(&usdc, &100);
+    assert!(result.is_err());
+    match result {
+        Err(Ok(VaultError::InvalidRecipient)) => {}
+        other => panic!("expected InvalidRecipient, got {:?}", other),
+    }
 }
 
 #[test]
@@ -1060,7 +1068,7 @@ fn withdraw_to_while_paused_succeeds() {
     assert!(client.is_paused());
 
     // Withdraw should still work while paused (emergency recovery)
-    let remaining = client.withdraw_to(&recipient, &300);
+    let remaining = client.withdraw_to(&recipient, &300).unwrap();
     assert_eq!(remaining, 700);
     assert_eq!(client.balance(), 700);
     assert_eq!(usdc_client.balance(&recipient), 300);
@@ -1091,7 +1099,7 @@ fn withdraw_while_paused_succeeds() {
     assert!(client.is_paused());
 
     // Withdraw should still work while paused (emergency recovery)
-    let remaining = client.withdraw(&200);
+    let remaining = client.withdraw(&200).unwrap();
     assert_eq!(remaining, 800);
     assert_eq!(client.balance(), 800);
     assert_eq!(usdc_client.balance(&owner), 200);
@@ -1618,7 +1626,7 @@ fn set_settlement_stores_and_get_returns_address() {
     );
 
     client.set_settlement(&owner, &settlement);
-    assert_eq!(client.get_settlement(), settlement);
+    assert_eq!(client.get_settlement().unwrap(), settlement);
 }
 
 #[test]
@@ -1648,14 +1656,12 @@ fn set_settlement_unauthorized_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Settlement not set")]
-fn get_settlement_before_set_panics() {
+fn get_settlement_before_set_returns_error() {
     let env = Env::default();
     let owner = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
 
-    env.mock_all_auths();
     env.mock_all_auths();
     client.init(
         &owner,
@@ -1667,7 +1673,8 @@ fn get_settlement_before_set_panics() {
         &Some(10000000000),
         &None,
     );
-    client.get_settlement();
+    let result = client.try_get_settlement();
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1695,12 +1702,12 @@ fn get_settlement_returns_correct_after_update() {
     // Set first settlement address
     client.set_settlement(&owner, &settlement1);
 
-    assert_eq!(client.get_settlement(), settlement1);
+    assert_eq!(client.get_settlement().unwrap(), settlement1);
 
     // Update to second settlement address
     client.set_settlement(&owner, &settlement2);
 
-    assert_eq!(client.get_settlement(), settlement2);
+    assert_eq!(client.get_settlement().unwrap(), settlement2);
 }
 
 #[test]
@@ -1728,14 +1735,14 @@ fn get_settlement_consistent_after_deduct_operations() {
     client.set_settlement(&owner, &settlement);
 
     // Query settlement before deduct
-    let before = client.get_settlement();
+    let before = client.get_settlement().unwrap();
     assert_eq!(before, settlement);
 
     // Perform deduct operation
     client.deduct(&caller, &200, &15u64);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement();
+    let after = client.get_settlement().unwrap();
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -1769,7 +1776,7 @@ fn get_settlement_no_mutation_on_multiple_calls() {
 
     // Call get_settlement multiple times
     for _ in 0..10 {
-        let result = client.get_settlement();
+        let result = client.get_settlement().unwrap();
         assert_eq!(result, settlement);
     }
 
@@ -1909,7 +1916,7 @@ fn withdraw_to_zero_succeeds() {
         &None,
     );
 
-    assert_eq!(client.withdraw(&300), 0);
+    assert_eq!(client.withdraw(&300).unwrap(), 0);
 }
 
 #[test]
@@ -1933,7 +1940,7 @@ fn withdraw_near_i128_max_succeeds() {
         &None,
     );
 
-    let remaining = client.withdraw(&(initial - 1));
+    let remaining = client.withdraw(&(initial - 1)).unwrap();
     assert_eq!(remaining, 1);
 }
 
@@ -2134,7 +2141,6 @@ fn accept_ownership_without_pending_fails() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "AmountNotPositive")]
 fn withdraw_negative_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2152,11 +2158,15 @@ fn withdraw_negative_fails() {
         &None,
         &None,
     );
-    client.withdraw(&-1);
+    let result = client.try_withdraw(&-1);
+    assert!(result.is_err());
+    match result {
+        Err(Ok(VaultError::AmountNotPositive)) => {}
+        other => panic!("expected AmountNotPositive, got {:?}", other),
+    }
 }
 
 #[test]
-#[should_panic(expected = "AmountNotPositive")]
 fn withdraw_to_negative_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2175,7 +2185,12 @@ fn withdraw_to_negative_fails() {
         &None,
         &None,
     );
-    client.withdraw_to(&recipient, &-1);
+    let result = client.try_withdraw_to(&recipient, &-1);
+    assert!(result.is_err());
+    match result {
+        Err(Ok(VaultError::AmountNotPositive)) => {}
+        other => panic!("expected AmountNotPositive, got {:?}", other),
+    }
 }
 
 #[test]
@@ -2246,7 +2261,7 @@ fn withdraw_emits_event() {
         &None,
         &None,
     );
-    client.withdraw(&100);
+    client.withdraw(&100).unwrap();
     let events = env.events().all();
     let ev = events
         .iter()
@@ -2281,7 +2296,7 @@ fn withdraw_to_emits_event() {
         &None,
         &None,
     );
-    client.withdraw_to(&recipient, &150);
+    client.withdraw_to(&recipient, &150).unwrap();
     let events = env.events().all();
     let ev = events
         .iter()
@@ -2519,7 +2534,7 @@ fn instance_ttl_extended_on_mutating_entrypoints() {
     );
 
     // withdraw — bumps TTL
-    client.withdraw(&100);
+    client.withdraw(&100).unwrap();
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
@@ -2530,7 +2545,7 @@ fn instance_ttl_extended_on_mutating_entrypoints() {
     );
 
     // withdraw_to — bumps TTL
-    client.withdraw_to(&recipient, &50);
+    client.withdraw_to(&recipient, &50).unwrap();
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
