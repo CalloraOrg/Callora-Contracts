@@ -828,7 +828,7 @@ impl CalloraCheckpoint {
         probes.push_back((
             StorageKey::Admin.into_val(env),
             <Address as soroban_sdk::TryIntoVal<Env, soroban_sdk::Val>>::try_into_val(
-                env.current_contract_address(),
+                &env.current_contract_address(),
                 env,
             )
             .unwrap_or_else(|_| soroban_sdk::Val::VOID.into()),
