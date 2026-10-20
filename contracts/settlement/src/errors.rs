@@ -1,65 +1,63 @@
 use soroban_sdk::contracterror;
 
-/// Stable, machine-readable error codes for the settlement contract.
-///
-/// The numeric discriminants in this enum are part of the contract interface and
-/// must remain stable over time. Callers and indexers may branch on these `u32`
-/// codes instead of parsing panic strings.
-///
-/// | Code | Variant                      | Meaning                                              |
-/// |------|------------------------------|------------------------------------------------------|
-/// | 1    | NotInitialized               | A function was called before `init`                  |
-/// | 2    | AlreadyInitialized           | `init` was called more than once                     |
-/// | 3    | Unauthorized                 | Caller is not the vault or current admin             |
-/// | 4    | AmountNotPositive            | Amount must be greater than zero                     |
-/// | 5    | DeveloperRequired            | `to_pool=false` requires a developer address         |
-/// | 6    | DeveloperMustBeNone          | `to_pool=true` forbids a developer address           |
-/// | 7    | PoolOverflow                 | Global pool credit would overflow `i128`             |
-/// | 8    | DeveloperOverflow            | Developer balance credit would overflow `i128`       |
-/// | 9    | UsdcTokenNotConfigured       | USDC token address is not configured                 |
-/// | 10   | InsufficientDeveloperBalance | Developer balance is lower than the withdrawal       |
-/// | 11   | DeveloperBalanceUnderflow    | Developer balance debit would underflow              |
-/// | 12   | InsufficientContractBalance  | Contract USDC balance is lower than requested amount |
-/// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
-/// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
-/// | 15   | _reserved_ (was ReasonTooLong) | Retired; never returned                            |
-/// | 16   | MigrationSameAddress         | Migration source and target are identical            |
-/// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
-/// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
-/// | 19   | TimelockOverflow             | Timelock timestamp addition overflowed                |
-/// | 20   | MigrationNotFound            | No migration is pending for the source                |
-/// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
-/// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
-/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
-/// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
-/// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
-/// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
-/// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
-/// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
-/// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
-/// | 30   | DeveloperFrozen              | Developer is frozen and cannot withdraw              |
-/// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
-/// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
-/// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
-/// | 34   | InvalidConfigDistinct        | Init config requires distinct admin and vault        |
-/// | 35   | InvalidConfigAdminContract   | Init config forbids the admin being the contract     |
-/// | 36   | InvalidConfigVaultContract   | Init config forbids the vault being the contract     |
-/// | 37   | InvalidUsdcToken             | USDC token address is invalid                        |
-/// | 38   | InvalidRecipient             | Withdrawal recipient cannot be the contract          |
-/// | 39   | NoAdminTransferPending       | No admin transfer is pending                         |
-/// | 40   | InvalidVault                 | Vault address is invalid                             |
-/// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
-/// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
-/// | 43   | CrossTenantBatch             | Batch settlement mixes developers from different tenants |
-/// | 44   | NoUpgradePending             | No upgrade proposal is currently pending             |
-/// | 45   | ZeroWasmHash                 | Proposed WASM hash is all-zero (rejected)            |
-/// | 46   | UpgradeTimelockNotExpired    | Upgrade timelock delay has not yet elapsed           |
-/// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
-/// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
-/// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
-/// | 50   | InvalidCursor                | Batch cursor is past the end or the listing cursor is past the end |
-/// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
-/// | 52   | UpgradeProposalExpired       | Upgrade proposal is past its expiry                  |
+// Stable, machine-readable error codes for the settlement contract.
+// The numeric discriminants in this enum are part of the contract interface and
+// must remain stable over time. Callers and indexers may branch on these `u32`
+// codes instead of parsing panic strings.
+//
+// | Code | Variant | Meaning |
+// |------|---------|---------|
+// | 1 | NotInitialized | Called before `init` |
+// | 2 | AlreadyInitialized | `init` called more than once |
+// | 3 | Unauthorized | Caller is not the vault or current admin |
+// | 4 | AmountNotPositive | Amount must be greater than zero |
+// | 5 | DeveloperRequired | `to_pool=false` requires a developer address |
+// | 6 | DeveloperMustBeNone | `to_pool=true` forbids a developer address |
+// | 7 | PoolOverflow | Global pool credit would overflow `i128` |
+// | 8 | DeveloperOverflow | Developer balance credit would overflow `i128` |
+// | 9 | UsdcTokenNotConfigured | USDC token address is not configured |
+// | 10 | InsufficientDeveloperBalance | Developer balance is lower than the withdrawal |
+// | 11 | DeveloperBalanceUnderflow | Developer balance debit would underflow |
+// | 12 | InsufficientContractBalance | Contract USDC balance is lower than requested amount |
+// | 13 | DailyWithdrawCapExceeded | Daily developer withdrawal cap would be exceeded |
+// | 14 | GasExhaustionRisk | Full scan is too large; use paginated access |
+// | 15 | ReasonTooLong | Reason `Symbol` exceeds the allowed length |
+// | 16 | MigrationSameAddress | Migration source and target are identical |
+// | 17 | InvalidMigrationTarget | Migration target is the settlement contract |
+// | 18 | NoDeveloperBalance | Migration source has no positive balance |
+// | 19 | TimelockOverflow | Timelock timestamp addition overflowed |
+// | 20 | MigrationNotFound | No migration is pending for the source |
+// | 21 | TimelockNotExpired | Migration delay has not elapsed |
+// | 22 | MigrationBalanceChanged | Approved amount is no longer available |
+// | 23 | OverDraft | Withdrawal amount exceeds the developer's balance |
+// | 24 | InvalidClaimWindow | Claim window parameters are invalid |
+// | 25 | ClaimWindowClosed | Developer claim window is not currently open |
+// | 26 | MinBalanceViolation | Withdrawal would leave balance below the minimum |
+// | 27 | ReplayDetected | Settlement claim was replayed or out of order |
+// | 28 | BatchEmpty | Batch operation received an empty vector |
+// | 29 | BatchTooLarge | Batch operation exceeded the maximum allowed size |
+// | 30 | DeveloperFrozen | Developer is frozen and cannot withdraw |
+// | 31 | DeveloperNotFrozen | Developer is not frozen; cannot unfreeze |
+// | 32 | FreezeUnauthorized | Caller is not authorized to freeze/unfreeze |
+// | 33 | WriteRateLimitExceeded | Admin wrote prices too frequently |
+// | 34 | InvalidConfigDistinct | Init config requires distinct admin and vault |
+// | 35 | InvalidConfigAdminContract | Init config forbids the admin being the contract |
+// | 36 | InvalidConfigVaultContract | Init config forbids the vault being the contract |
+// | 37 | InvalidUsdcToken | USDC token address is invalid |
+// | 38 | InvalidRecipient | Withdrawal recipient cannot be the contract |
+// | 39 | NoAdminTransferPending | No admin transfer is pending |
+// | 40 | InvalidVault | Vault address is invalid |
+// | 41 | NoVaultRotationPending | No vault rotation is pending |
+// | 42 | BroadcastMessageTooLong | Admin broadcast message exceeds the maximum length |
+// | 43 | CrossTenantBatch | Batch settlement mixes developers from different tenants |
+// | 44 | NoUpgradePending | No upgrade proposal is currently pending |
+// | 45 | ZeroWasmHash | Proposed WASM hash is all-zero (rejected) |
+// | 46 | UpgradeTimelockNotExpired | Upgrade timelock delay has not yet elapsed |
+// | 47 | UnsupportedToken | Token is not enabled for settlement payments |
+// | 48 | DuplicateRequestId | Deduction request ID has already been recorded |
+// | 49 | LengthMismatch | Paired batch vectors have different lengths |
+// | 50 | InvalidCursor | Batch cursor is past the end or the limit is zero |
+// | 51 | UpgradeProposalExpired | Upgrade proposal is past its expiry |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -78,8 +76,7 @@ pub enum SettlementError {
     InsufficientContractBalance = 12,
     DailyWithdrawCapExceeded = 13,
     GasExhaustionRisk = 14,
-    // code 15 reserved (was ReasonTooLong; never returned). Retired so the
-    // enum stays within Soroban's 50-case limit for contract error specs.
+    ReasonTooLong = 15,
     MigrationSameAddress = 16,
     InvalidMigrationTarget = 17,
     NoDeveloperBalance = 18,
@@ -128,10 +125,7 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
-    /// `get_all_developer_balances` index exceeds
-    /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
-    TooManyResults = 51,
     /// Upgrade proposal is past its expiry (`execute_after + grace`) and can
     /// no longer be executed.
-    UpgradeProposalExpired = 52,
+    UpgradeProposalExpired = 51,
 }
