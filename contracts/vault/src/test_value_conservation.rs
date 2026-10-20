@@ -616,7 +616,6 @@ fn propose_sweep_fails_when_amount_exceeds_current_surplus() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
     let env = Env::default();
     // Tracked = 100, on-ledger = 140 -> surplus = 40.
@@ -630,7 +629,7 @@ fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
 
     // Reduce surplus before execution by distributing 10 surplus USDC to another address
     let other = Address::generate(&env);
-    client.distribute(&owner, &other, &10i128);
+    assert!(client.try_distribute(&owner, &other, &10i128).is_ok());
     // Now on-ledger = 130, tracked = 100 -> surplus = 30 < 40.
 
     env.ledger().set_timestamp(1_000_000);
@@ -682,7 +681,7 @@ fn withdrawal_between_proposal_and_execution_specifically() {
 
     // Intervening operation reduces available surplus (e.g. distribute 15 surplus USDC).
     let drain_addr = Address::generate(&env);
-    client.distribute(&owner, &drain_addr, &15i128);
+    assert!(client.try_distribute(&owner, &drain_addr, &15i128).is_ok());
     // Surplus is now 125 - 100 = 25.
 
     // Advance time past timelock window.
@@ -695,3 +694,4 @@ fn withdrawal_between_proposal_and_execution_specifically() {
     assert_eq!(client.balance(), 100);
     assert_eq!(usdc.balance(&client.address), 125);
 }
+
