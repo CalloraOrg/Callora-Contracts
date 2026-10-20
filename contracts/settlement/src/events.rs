@@ -1,4 +1,5 @@
 //! Event topic Symbol constructors and structured emit helpers for the
+//! Event topic Symbol constructors and structured emit helpers for the
 //! Callora Settlement contract.
 //!
 //! # Design
@@ -105,6 +106,27 @@ pub fn event_deduction_recorded(env: &Env) -> Symbol {
 /// Emit an accounting-only vault deduction after its replay marker is stored.
 pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
     env.events().publish((event_deduction_recorded(env),), data);
+}
+
+/// Emit one `deduction_recorded` event per item in a batch settlement.
+///
+/// **What**: Publishes the same `deduction_recorded` event that
+/// `emit_deduction_recorded` produces, once for each item, preserving event
+/// parity with N single `record_deduction` calls.
+///
+/// **How**: Iterates `items` and calls `emit_deduction_recorded` for each
+/// `DeductionRecordedEvent` in order.
+///
+/// **Why**: `record_deductions` batches writes but must keep the observable
+/// event stream identical to the per-item path.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `events` - Ordered per-item deduction events to publish.
+pub fn emit_deduction_recorded_batch(env: &Env, events: &soroban_sdk::Vec<DeductionRecordedEvent>) {
+    for data in events.iter() {
+        emit_deduction_recorded(env, data);
+    }
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
@@ -809,6 +831,14 @@ mod tests {
             event_deduction_recorded(&env),
             Symbol::new(&env, "deduction_recorded")
         );
+    }
+
+    #[test]
+    fn test_emit_deduction_recorded_batch_empty_is_noop() {
+        let env = Env::default();
+        let events: soroban_sdk::Vec<DeductionRecordedEvent> = soroban_sdk::Vec::new(&env);
+        emit_deduction_recorded_batch(&env, &events);
+        assert_eq!(env.events().all().len(), 0);
     }
 
     #[test]

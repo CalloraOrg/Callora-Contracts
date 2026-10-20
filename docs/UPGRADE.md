@@ -223,6 +223,13 @@ Because contracts reference each other by address, upgrades must be sequenced ca
 ```
 
 **Rationale**: The vault can reference either a settlement contract or a revenue pool. Update the target first, then update the vault's reference.
+### Batch Deduction Upgrade Order
+
+The vault's `batch_deduct` was changed from one `record_deduction` cross-contract call per
+item to a single `record_deductions(items)` call. This is a **breaking cross-contract
+interface change**, so the two contracts must be upgraded in a strict order:
+
+
 
 ### Per-Contract Upgrade Steps
 
