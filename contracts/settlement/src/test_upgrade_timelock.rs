@@ -445,7 +445,7 @@ fn test_legacy_proposal_without_expires_at_decodes_with_grace_window() {
     let execute_after = proposed_at + UPGRADE_TIMELOCK_SECONDS;
 
     let legacy = LegacyPendingUpgrade {
-        wasm_hash: hash,
+        wasm_hash: hash.clone(),
         proposed_at,
         execute_after,
     };
