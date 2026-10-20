@@ -34,5 +34,7 @@ pub enum StorageMigrationError {
     /// Emitted by contract-level wrappers (for example
     /// `EmergencyMigration::validate_before_upgrade`) after `require_auth`
     /// succeeds but the authenticated caller does not match the stored admin.
-    Unauthorized = 11,
+    Unauthorized = 12,
+    /// More than the documented maximum number of probe keys was supplied.
+    TooManyProbeKeys = 11,
 }
