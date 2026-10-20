@@ -313,9 +313,8 @@ fn test_upgrade_alias_does_not_execute_immediately() {
 fn event_emitted(env: &Env, topic: &str) -> bool {
     let expected = Symbol::new(env, topic);
     env.events().all().iter().any(|e| {
-        e.topics
-            .first()
-            .map(|t| Symbol::try_from_val(env, t).unwrap_or(Symbol::new(env, "")) == expected)
+        e.1.first()
+            .map(|t| Symbol::try_from_val(env, *t).unwrap_or(Symbol::new(env, "")) == expected)
             .unwrap_or(false)
     })
 }
@@ -346,7 +345,7 @@ fn test_execute_upgrade_rejects_after_expiry() {
     let expires_at = client.get_pending_upgrade().unwrap().expires_at;
 
     env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
-    let err = client.try_execute_upgrade(&admin).unwrap_err().unwrap();
+    let err = SettlementError::try_from(client.try_execute_upgrade(&admin).unwrap_err()).unwrap();
     assert_eq!(err, SettlementError::UpgradeProposalExpired);
 
     // Proposal untouched on the failing path.
@@ -373,7 +372,8 @@ fn test_rotation_clears_pending_upgrade() {
     assert!(client.get_pending_upgrade().is_none());
     assert!(event_emitted(&env, "upgrade_cancelled"));
 
-    let err = client.try_execute_upgrade(&new_admin).unwrap_err().unwrap();
+    let err =
+        SettlementError::try_from(client.try_execute_upgrade(&new_admin).unwrap_err()).unwrap();
     assert_eq!(err, SettlementError::NoUpgradePending);
 }
 
@@ -381,7 +381,7 @@ fn test_rotation_clears_pending_upgrade() {
 fn test_accept_admin_with_no_transfer_pending_is_typed_error() {
     // Row 5: `accept_admin` with nothing pending → NoAdminTransferPending.
     let (_env, client, _admin, _vault) = setup();
-    let err = client.try_accept_admin().unwrap_err().unwrap();
+    let err = SettlementError::try_from(client.try_accept_admin().unwrap_err()).unwrap();
     assert_eq!(err, SettlementError::NoAdminTransferPending);
 }
 
@@ -419,10 +419,8 @@ fn test_propose_upgrade_expires_at_overflow() {
     client.init(&admin, &vault);
 
     let hash = dummy_hash(&env);
-    let err = client
-        .try_propose_upgrade(&admin, &hash)
-        .unwrap_err()
-        .unwrap();
+    let err =
+        SettlementError::try_from(client.try_propose_upgrade(&admin, &hash).unwrap_err()).unwrap();
     assert_eq!(err, SettlementError::TimelockOverflow);
 }
 
