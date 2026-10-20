@@ -26,8 +26,14 @@ use crate::{
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Register the contract, call `init`, and return `(env, client, admin, vault)`.
-fn setup() -> (Env, CalloraSettlementClient<'static>, Address, Address) {
+/// Register the contract, call `init`, and return `(env, client, admin, vault, contract_id)`.
+fn setup() -> (
+    Env,
+    CalloraSettlementClient<'static>,
+    Address,
+    Address,
+    Address,
+) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register(CalloraSettlement, ());
@@ -35,7 +41,7 @@ fn setup() -> (Env, CalloraSettlementClient<'static>, Address, Address) {
     let admin = Address::generate(&env);
     let vault = Address::generate(&env);
     client.init(&admin, &vault);
-    (env, client, admin, vault)
+    (env, client, admin, vault, contract_id)
 }
 
 /// Return a non-zero 32-byte WASM hash.
@@ -59,7 +65,7 @@ fn test_wasm_hash(env: &Env) -> BytesN<32> {
 
 #[test]
 fn test_propose_upgrade_creates_pending_entry() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     let now = env.ledger().timestamp();
 
@@ -73,7 +79,7 @@ fn test_propose_upgrade_creates_pending_entry() {
 
 #[test]
 fn test_propose_upgrade_rejects_zero_hash() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let err = client
         .try_propose_upgrade(&admin, &zero_hash(&env))
         .unwrap_err()
@@ -86,7 +92,7 @@ fn test_propose_upgrade_rejects_zero_hash() {
 
 #[test]
 fn test_propose_upgrade_rejects_non_admin() {
-    let (env, client, _admin, _vault) = setup();
+    let (env, client, _admin, _vault, _contract_id) = setup();
     let stranger = Address::generate(&env);
     let hash = dummy_hash(&env);
     let err = client
@@ -101,7 +107,7 @@ fn test_propose_upgrade_rejects_non_admin() {
 
 #[test]
 fn test_propose_upgrade_replaces_existing_proposal() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash1 = dummy_hash(&env);
     let hash2 = BytesN::from_array(&env, &[0xCDu8; 32]);
 
@@ -124,7 +130,7 @@ fn test_propose_upgrade_replaces_existing_proposal() {
 
 #[test]
 fn test_execute_upgrade_rejects_before_delay() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
@@ -141,7 +147,7 @@ fn test_execute_upgrade_rejects_before_delay() {
 
 #[test]
 fn test_execute_upgrade_rejects_non_admin() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let stranger = Address::generate(&env);
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
@@ -158,7 +164,7 @@ fn test_execute_upgrade_rejects_non_admin() {
 
 #[test]
 fn test_execute_upgrade_fails_when_no_pending() {
-    let (_env, client, admin, _vault) = setup();
+    let (_env, client, admin, _vault, _contract_id) = setup();
     let err = client.try_execute_upgrade(&admin).unwrap_err().unwrap();
     assert_eq!(
         err,
@@ -168,7 +174,7 @@ fn test_execute_upgrade_fails_when_no_pending() {
 
 #[test]
 fn test_execute_upgrade_clears_proposal_after_success() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
@@ -188,7 +194,7 @@ fn test_execute_upgrade_clears_proposal_after_success() {
 #[test]
 fn test_execute_upgrade_at_exact_deadline() {
     // Execute_after is the earliest inclusive timestamp, so `now == execute_after` should pass.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
@@ -205,7 +211,7 @@ fn test_execute_upgrade_at_exact_deadline() {
 
 #[test]
 fn test_cancel_upgrade_clears_proposal() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
@@ -224,7 +230,7 @@ fn test_cancel_upgrade_clears_proposal() {
 
 #[test]
 fn test_cancel_upgrade_rejects_non_admin() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let stranger = Address::generate(&env);
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
@@ -238,7 +244,7 @@ fn test_cancel_upgrade_rejects_non_admin() {
 
 #[test]
 fn test_cancel_upgrade_fails_when_no_pending() {
-    let (_env, client, admin, _vault) = setup();
+    let (_env, client, admin, _vault, _contract_id) = setup();
     let err = client.try_cancel_upgrade(&admin).unwrap_err().unwrap();
     assert_eq!(
         err,
@@ -249,7 +255,7 @@ fn test_cancel_upgrade_fails_when_no_pending() {
 #[test]
 fn test_cancel_upgrade_before_delay_is_allowed() {
     // Cancellation must work even if the timelock has not expired yet.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
@@ -265,13 +271,13 @@ fn test_cancel_upgrade_before_delay_is_allowed() {
 
 #[test]
 fn test_get_pending_upgrade_returns_none_before_proposal() {
-    let (_env, client, _admin, _vault) = setup();
+    let (_env, client, _admin, _vault, _contract_id) = setup();
     assert!(client.get_pending_upgrade().is_none());
 }
 
 #[test]
 fn test_get_pending_upgrade_returns_some_after_proposal() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     client.propose_upgrade(&admin, &hash);
     assert!(client.get_pending_upgrade().is_some());
@@ -281,7 +287,7 @@ fn test_get_pending_upgrade_returns_some_after_proposal() {
 
 #[test]
 fn test_upgrade_alias_behaves_like_propose() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     let now = env.ledger().timestamp();
 
@@ -298,7 +304,7 @@ fn test_upgrade_alias_behaves_like_propose() {
 
 #[test]
 fn test_upgrade_alias_does_not_execute_immediately() {
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     client.upgrade(&admin, &hash);
 
@@ -325,7 +331,7 @@ fn event_emitted(env: &Env, topic: &str) -> bool {
 #[test]
 fn test_execute_upgrade_succeeds_at_expiry_boundary() {
     // Row 2: `now == expires_at` is inclusive and succeeds.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
     let expires_at = client.get_pending_upgrade().unwrap().expires_at;
@@ -340,7 +346,7 @@ fn test_execute_upgrade_succeeds_at_expiry_boundary() {
 #[test]
 fn test_execute_upgrade_rejects_after_expiry() {
     // Row 3: `now == expires_at + 1` → UpgradeProposalExpired, no write.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
     let expires_at = client.get_pending_upgrade().unwrap().expires_at;
@@ -361,7 +367,7 @@ fn test_execute_upgrade_rejects_after_expiry() {
 fn test_rotation_clears_pending_upgrade() {
     // Row 4: propose, rotate admin, new admin cannot execute old hash;
     // `upgrade_cancelled` emitted at rotation.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
     assert!(client.get_pending_upgrade().is_some());
@@ -383,7 +389,7 @@ fn test_rotation_clears_pending_upgrade() {
 #[test]
 fn test_accept_admin_with_no_transfer_pending_is_typed_error() {
     // Row 5: `accept_admin` with nothing pending → NoAdminTransferPending.
-    let (_env, client, _admin, _vault) = setup();
+    let (_env, client, _admin, _vault, _contract_id) = setup();
     let err = SettlementError::try_from(client.try_accept_admin().unwrap_err().unwrap()).unwrap();
     assert_eq!(err, SettlementError::NoAdminTransferPending);
 }
@@ -394,7 +400,7 @@ fn test_accept_admin_with_no_transfer_pending_is_typed_error() {
 fn test_propose_upgrade_twice_emits_upgrade_replaced() {
     // Row 6: proposing over an existing proposal replaces it and emits
     // `upgrade_replaced`.
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash1 = dummy_hash(&env);
     let hash2 = dummy_hash(&env);
 
@@ -440,7 +446,7 @@ fn test_legacy_proposal_without_expires_at_decodes_with_grace_window() {
     // re-animated with `expires_at = execute_after + grace`.
     use crate::timelock::LegacyPendingUpgrade;
 
-    let (env, client, admin, _vault) = setup();
+    let (env, client, admin, _vault, _contract_id) = setup();
     let hash = dummy_hash(&env);
     let proposed_at = env.ledger().timestamp();
     let execute_after = proposed_at + UPGRADE_TIMELOCK_SECONDS;
@@ -450,9 +456,11 @@ fn test_legacy_proposal_without_expires_at_decodes_with_grace_window() {
         proposed_at,
         execute_after,
     };
-    env.storage()
-        .persistent()
-        .set(&StorageKey::PendingUpgrade, &legacy);
+    env.as_contract(&_contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&StorageKey::PendingUpgrade, &legacy);
+    });
 
     let pending = client.get_pending_upgrade().unwrap();
     assert_eq!(pending.wasm_hash, hash);
