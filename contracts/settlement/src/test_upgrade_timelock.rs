@@ -16,11 +16,12 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    Address, BytesN, Env,
+    Address, Bytes, BytesN, Env, Symbol, TryFromVal,
 };
 
 use crate::{
-    CalloraSettlement, CalloraSettlementClient, SettlementError, UPGRADE_TIMELOCK_SECONDS,
+    CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey, UPGRADE_GRACE_SECONDS,
+    UPGRADE_TIMELOCK_SECONDS,
 };
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -45,6 +46,13 @@ fn dummy_hash(env: &Env) -> BytesN<32> {
 /// Return an all-zero 32-byte hash (sentinel for "invalid").
 fn zero_hash(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0u8; 32])
+}
+
+/// Upload an empty (but valid) WASM blob and return its 32-byte hash. The
+/// Soroban test deployer treats the bytes as a mock contract, so `execute_upgrade`
+/// can install the hash without a real WASM module.
+fn test_wasm_hash(env: &Env) -> BytesN<32> {
+    env.deployer().upload_contract_wasm(Bytes::new(&env))
 }
 
 // ─── propose_upgrade ────────────────────────────────────────────────────────
@@ -159,12 +167,9 @@ fn test_execute_upgrade_fails_when_no_pending() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_execute_upgrade_clears_proposal_after_success() {
-    // NOTE: In the Soroban test environment `update_current_contract_wasm` is a
-    // no-op mock, so we can verify state transitions without actual WASM.
     let (env, client, admin, _vault) = setup();
-    let hash = dummy_hash(&env);
+    let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
     env.ledger()
@@ -172,19 +177,19 @@ fn test_execute_upgrade_clears_proposal_after_success() {
 
     client.execute_upgrade(&admin);
 
-    // Proposal must be gone after execution.
+    // Proposal must be gone after execution; version updated to the installed hash.
     assert!(
         client.get_pending_upgrade().is_none(),
         "pending proposal should be cleared after execution"
     );
+    assert_eq!(client.get_version(), Some(hash));
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_execute_upgrade_at_exact_deadline() {
     // Execute_after is the earliest inclusive timestamp, so `now == execute_after` should pass.
     let (env, client, admin, _vault) = setup();
-    let hash = dummy_hash(&env);
+    let hash = test_wasm_hash(&env);
     client.propose_upgrade(&admin, &hash);
 
     env.ledger()
@@ -193,6 +198,7 @@ fn test_execute_upgrade_at_exact_deadline() {
     // Should not panic.
     client.execute_upgrade(&admin);
     assert!(client.get_pending_upgrade().is_none());
+    assert_eq!(client.get_version(), Some(hash));
 }
 
 // ─── cancel_upgrade ─────────────────────────────────────────────────────────
@@ -301,4 +307,166 @@ fn test_upgrade_alias_does_not_execute_immediately() {
         client.get_version().is_none(),
         "`upgrade` alias must not execute immediately"
     );
+}
+
+/// Returns `true` if any recorded event has topic[0] equal to `topic`.
+fn event_emitted(env: &Env, topic: &str) -> bool {
+    let expected = Symbol::new(env, topic);
+    env.events().all().iter().any(|e| {
+        e.topics
+            .first()
+            .map(|t| Symbol::try_from_val(env, t).unwrap_or(Symbol::new(env, "")) == expected)
+            .unwrap_or(false)
+    })
+}
+
+// ─── Test plan: expiry boundary ────────────────────────────────────────────
+
+#[test]
+fn test_execute_upgrade_succeeds_at_expiry_boundary() {
+    // Row 2: `now == expires_at` is inclusive and succeeds.
+    let (env, client, admin, _vault) = setup();
+    let hash = test_wasm_hash(&env);
+    client.propose_upgrade(&admin, &hash);
+    let expires_at = client.get_pending_upgrade().unwrap().expires_at;
+
+    env.ledger().with_mut(|l| l.timestamp = expires_at);
+    client.execute_upgrade(&admin);
+
+    assert!(client.get_pending_upgrade().is_none());
+    assert_eq!(client.get_version(), Some(hash));
+}
+
+#[test]
+fn test_execute_upgrade_rejects_after_expiry() {
+    // Row 3: `now == expires_at + 1` → UpgradeProposalExpired, no write.
+    let (env, client, admin, _vault) = setup();
+    let hash = test_wasm_hash(&env);
+    client.propose_upgrade(&admin, &hash);
+    let expires_at = client.get_pending_upgrade().unwrap().expires_at;
+
+    env.ledger().with_mut(|l| l.timestamp = expires_at + 1);
+    let err = client.try_execute_upgrade(&admin).unwrap_err().unwrap();
+    assert_eq!(
+        err,
+        soroban_sdk::Error::from_contract_error(SettlementError::UpgradeProposalExpired as u32)
+    );
+
+    // Proposal untouched on the failing path.
+    let pending = client.get_pending_upgrade().expect("proposal must survive");
+    assert_eq!(pending.wasm_hash, hash);
+}
+
+// ─── Test plan: rotation clears pending upgrade ────────────────────────────
+
+#[test]
+fn test_rotation_clears_pending_upgrade() {
+    // Row 4: propose, rotate admin, new admin cannot execute old hash;
+    // `upgrade_cancelled` emitted at rotation.
+    let (env, client, admin, _vault) = setup();
+    let hash = test_wasm_hash(&env);
+    client.propose_upgrade(&admin, &hash);
+    assert!(client.get_pending_upgrade().is_some());
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    env.events().all(); // clear nomination events
+    client.accept_admin(&new_admin);
+
+    assert!(client.get_pending_upgrade().is_none());
+    assert!(event_emitted(&env, "upgrade_cancelled"));
+
+    let err = client.try_execute_upgrade(&new_admin).unwrap_err().unwrap();
+    assert_eq!(
+        err,
+        soroban_sdk::Error::from_contract_error(SettlementError::NoUpgradePending as u32)
+    );
+}
+
+#[test]
+fn test_accept_admin_with_no_transfer_pending_is_typed_error() {
+    // Row 5: `accept_admin` with nothing pending → NoAdminTransferPending.
+    let (_env, client, _admin, _vault) = setup();
+    let err = client.try_accept_admin().unwrap_err().unwrap();
+    assert_eq!(
+        err,
+        soroban_sdk::Error::from_contract_error(SettlementError::NoAdminTransferPending as u32)
+    );
+}
+
+// ─── Test plan: replace on re-propose ─────────────────────────────────────
+
+#[test]
+fn test_propose_upgrade_twice_emits_upgrade_replaced() {
+    // Row 6: proposing over an existing proposal replaces it and emits
+    // `upgrade_replaced`.
+    let (env, client, admin, _vault) = setup();
+    let hash1 = dummy_hash(&env);
+    let hash2 = dummy_hash(&env);
+
+    client.propose_upgrade(&admin, &hash1);
+    env.events().all(); // clear first proposal event
+    client.propose_upgrade(&admin, &hash2);
+
+    assert!(event_emitted(&env, "upgrade_replaced"));
+    let pending = client.get_pending_upgrade().unwrap();
+    assert_eq!(pending.wasm_hash, hash2);
+}
+
+// ─── Test plan: expires_at overflow ───────────────────────────────────────
+
+#[test]
+fn test_propose_upgrade_expires_at_overflow() {
+    // Row 7: `execute_after + grace` overflows → TimelockOverflow.
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(u64::MAX - 500_000);
+    let contract_id = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    client.init(&admin, &vault);
+
+    let hash = dummy_hash(&env);
+    let err = client
+        .try_propose_upgrade(&admin, &hash)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        err,
+        soroban_sdk::Error::from_contract_error(SettlementError::TimelockOverflow as u32)
+    );
+}
+
+// ─── Test plan: legacy proposal decoding ─────────────────────────────────
+
+#[test]
+fn test_legacy_proposal_without_expires_at_decodes_with_grace_window() {
+    // Row 8: a proposal stored without `expires_at` still decodes and is
+    // re-animated with `expires_at = execute_after + grace`.
+    use crate::timelock::LegacyPendingUpgrade;
+
+    let (env, client, admin, _vault) = setup();
+    let hash = dummy_hash(&env);
+    let proposed_at = env.ledger().timestamp();
+    let execute_after = proposed_at + UPGRADE_TIMELOCK_SECONDS;
+
+    let legacy = LegacyPendingUpgrade {
+        wasm_hash: hash,
+        proposed_at,
+        execute_after,
+    };
+    env.storage()
+        .persistent()
+        .set(&StorageKey::PendingUpgrade, &legacy);
+
+    let pending = client.get_pending_upgrade().unwrap();
+    assert_eq!(pending.wasm_hash, hash);
+    assert_eq!(pending.expires_at, execute_after + UPGRADE_GRACE_SECONDS);
+
+    // Executing at `execute_after` (within the grace window) succeeds.
+    env.ledger().with_mut(|l| l.timestamp = execute_after);
+    client.execute_upgrade(&admin);
+    assert!(client.get_pending_upgrade().is_none());
+    assert_eq!(client.get_version(), Some(hash));
 }

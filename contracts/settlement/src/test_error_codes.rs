@@ -56,6 +56,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (48, SettlementError::DuplicateRequestId),
         (49, SettlementError::LengthMismatch),
         (50, SettlementError::InvalidCursor),
+        (51, SettlementError::UpgradeProposalExpired),
     ];
 
     let mut seen = BTreeSet::new();
@@ -67,7 +68,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 #[test]

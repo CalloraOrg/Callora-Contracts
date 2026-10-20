@@ -328,4 +328,17 @@ pub struct UpgradeProposedEvent {
 pub struct UpgradeCancelledEvent {
     pub wasm_hash: soroban_sdk::BytesN<32>,
     pub cancelled_at: u64,
+    /// Reason for cancellation, e.g. `"admin_rotation"` or `"user_initiated"`.
+    pub reason: Symbol,
+}
+
+/// Emitted when `propose_upgrade` supersedes an existing pending proposal.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeReplacedEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+    pub expires_at: u64,
+    pub replaced_at: u64,
 }

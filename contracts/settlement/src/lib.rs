@@ -39,7 +39,7 @@ pub use errors::SettlementError;
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
 pub use timelock::{
     PendingDeveloperMigration, PendingUpgrade, DEVELOPER_MIGRATION_TIMELOCK_SECONDS,
-    UPGRADE_TIMELOCK_SECONDS,
+    UPGRADE_GRACE_SECONDS, UPGRADE_TIMELOCK_SECONDS,
 };
 pub use types::*;
 
@@ -1240,22 +1240,45 @@ impl CalloraSettlement {
 
     /// Finalize a pending admin transfer. Must be called by the nominated admin.
     ///
+    /// Clears any pending upgrade proposal (and emits `upgrade_cancelled` with
+    /// reason `"admin_rotation"`) so a new admin cannot execute code chosen by
+    /// the previous admin. Pending developer migrations are intentionally left
+    /// in place — they are bound to a developer, not to an admin identity, and
+    /// remain executable by the new admin.
+    ///
     /// # Panics
-    /// * `"no admin transfer pending"` â€” `set_admin` was not called first.
+    /// * [`SettlementError::NoAdminTransferPending`] — `set_admin` was not
+    ///   called first.
     ///
     /// # Events
-    /// Emits `admin_accepted` with `(old_admin, new_admin)`.
+    /// Emits `admin_accepted` with `(old_admin, new_admin)`. If a pending
+    /// upgrade exists, also emits `upgrade_cancelled`.
     pub fn accept_admin(env: Env) {
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| panic!("no admin transfer pending"));
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::NoAdminTransferPending));
         pending.require_auth();
         let old_admin = Self::get_admin(env.clone()).unwrap();
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &pending);
         inst.remove(&StorageKey::PendingAdmin);
+        // Clear any pending upgrade so a rotated admin cannot install code
+        // proposed by the previous (possibly compromised) admin.
+        if timelock::get_pending_upgrade(&env).is_some() {
+            let proposal = timelock::get_pending_upgrade(&env).expect("just checked");
+            timelock::clear_pending_upgrade(&env);
+            events::emit_upgrade_cancelled(
+                &env,
+                &old_admin,
+                UpgradeCancelledEvent {
+                    wasm_hash: proposal.wasm_hash,
+                    cancelled_at: env.ledger().timestamp(),
+                    reason: Symbol::new(&env, "admin_rotation"),
+                },
+            );
+        }
         events::emit_admin_accepted(&env, &old_admin, &pending);
     }
 
@@ -1366,9 +1389,14 @@ impl CalloraSettlement {
 
     /// Propose a timelocked WASM upgrade (admin only).
     ///
-    /// Records a [`PendingUpgrade`] snapshot containing `new_wasm_hash` and an
-    /// execution deadline of `now + UPGRADE_TIMELOCK_SECONDS` (48 h). A second
-    /// call replaces any existing proposal and restarts the delay.
+    /// Records a [`PendingUpgrade`] snapshot containing `new_wasm_hash`, an
+    /// execution deadline of `now + UPGRADE_TIMELOCK_SECONDS` (48 h) and an
+    /// expiry of `execute_after + UPGRADE_GRACE_SECONDS` (7 days). Proposals
+    /// past expiry are rejected by `execute_upgrade`.
+    ///
+    /// A second call replaces any existing proposal, restarts the delay, and
+    /// emits `upgrade_replaced` (the old proposal is superseded, not cancelled
+    /// — a fresh timelock window begins for the new hash).
     ///
     /// # Arguments
     /// * `caller` - Must be the current admin; must authorize.
@@ -1378,10 +1406,13 @@ impl CalloraSettlement {
     /// # Errors
     /// * `Unauthorized` — caller is not the admin.
     /// * `ZeroWasmHash` — all-zero `new_wasm_hash` is rejected.
-    /// * `TimelockOverflow` — `proposed_at + delay` overflows `u64`.
+    /// * `TimelockOverflow` — `proposed_at + delay` or `execute_after + grace`
+    ///   overflows `u64`.
     ///
     /// # Events
-    /// Emits `upgrade_proposed` with the hash, `proposed_at`, and `execute_after`.
+    /// Emits `upgrade_proposed` with the hash, `proposed_at`, and
+    /// `execute_after`. Emits `upgrade_replaced` when a proposal already
+    /// exists.
     pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).unwrap();
@@ -1396,10 +1427,29 @@ impl CalloraSettlement {
         let execute_after = proposed_at
             .checked_add(UPGRADE_TIMELOCK_SECONDS)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::TimelockOverflow));
+        let expires_at = execute_after
+            .checked_add(UPGRADE_GRACE_SECONDS)
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::TimelockOverflow));
+        // A proposal already exists: supersede it and signal the replacement.
+        if timelock::get_pending_upgrade(&env).is_some() {
+            let old = timelock::get_pending_upgrade(&env).expect("just checked");
+            events::emit_upgrade_replaced(
+                &env,
+                &caller,
+                UpgradeReplacedEvent {
+                    wasm_hash: old.wasm_hash,
+                    proposed_at: old.proposed_at,
+                    execute_after: old.execute_after,
+                    expires_at: old.expires_at,
+                    replaced_at: env.ledger().timestamp(),
+                },
+            );
+        }
         let proposal = timelock::PendingUpgrade {
             wasm_hash: new_wasm_hash.clone(),
             proposed_at,
             execute_after,
+            expires_at,
         };
         timelock::set_pending_upgrade(&env, &proposal);
         events::emit_upgrade_proposed(
@@ -1419,10 +1469,15 @@ impl CalloraSettlement {
     /// WASM hash recorded at proposal time is installed; the proposal is cleared
     /// atomically to prevent replay.
     ///
+    /// Error precedence: `Unauthorized`, `NoUpgradePending`,
+    /// `UpgradeTimelockNotExpired`, then `UpgradeProposalExpired`. Failing
+    /// paths perform no state writes.
+    ///
     /// # Errors
     /// * `Unauthorized` — caller is not the admin.
     /// * `NoUpgradePending` — no proposal exists.
     /// * `UpgradeTimelockNotExpired` — `execute_after` has not been reached.
+    /// * `UpgradeProposalExpired` — `now` is past `expires_at`.
     ///
     /// # Events
     /// Emits `upgraded` with the installed WASM hash (existing event topic,
@@ -1438,6 +1493,9 @@ impl CalloraSettlement {
         let now = env.ledger().timestamp();
         if now < proposal.execute_after {
             env.panic_with_error(SettlementError::UpgradeTimelockNotExpired);
+        }
+        if now > proposal.expires_at {
+            env.panic_with_error(SettlementError::UpgradeProposalExpired);
         }
         // Consume the proposal before calling the deployer to prevent re-entry.
         timelock::clear_pending_upgrade(&env);
@@ -1472,6 +1530,7 @@ impl CalloraSettlement {
             UpgradeCancelledEvent {
                 wasm_hash: proposal.wasm_hash,
                 cancelled_at: env.ledger().timestamp(),
+                reason: Symbol::new(&env, "user_initiated"),
             },
         );
     }

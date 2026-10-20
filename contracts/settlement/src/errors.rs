@@ -58,6 +58,7 @@ use soroban_sdk::contracterror;
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
+/// | 51   | UpgradeProposalExpired       | Upgrade proposal is past its expiry                  |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -125,4 +126,7 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
+    /// Upgrade proposal is past its expiry (`execute_after + grace`) and can
+    /// no longer be executed.
+    UpgradeProposalExpired = 51,
 }
