@@ -120,7 +120,7 @@ must not be reassigned once released.
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
-| 51 | `UpgradeProposalExpired` | Settlement | Upgrade proposal is past its expiry (`execute_after + grace`) |
+| 51 | `UpgradeProposalExpired` | Settlement | Upgrade proposal is past its expiry |
 
 ## Revenue Pool
 

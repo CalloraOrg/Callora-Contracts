@@ -1,7 +1,7 @@
 //! Timelock state and storage helpers for developer balance migrations and
 //! contract upgrades.
 
-use soroban_sdk::{contracttype, Address, BytesN, Env};
+use soroban_sdk::{contracttype, Address, BytesN, Env, TryFromVal, Val};
 
 use crate::{StorageKey, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD};
 
@@ -115,16 +115,13 @@ pub(crate) fn get_pending_upgrade(env: &Env) -> Option<PendingUpgrade> {
             .persistent()
             .extend_ttl(&key, PROPOSAL_BUMP_THRESHOLD, PROPOSAL_BUMP_AMOUNT);
     }
+    let raw: Val = env.storage().persistent().get(&key)?;
     // Try new format first (with expires_at)
-    if let Some(proposal) = env.storage().persistent().get::<_, PendingUpgrade>(&key) {
+    if let Ok(proposal) = PendingUpgrade::try_from_val(env, &raw) {
         return Some(proposal);
     }
     // Try legacy format (without expires_at)
-    if let Some(legacy) = env
-        .storage()
-        .persistent()
-        .get::<_, LegacyPendingUpgrade>(&key)
-    {
+    if let Ok(legacy) = LegacyPendingUpgrade::try_from_val(env, &raw) {
         let expires_at =
             saturating_deadline(legacy.execute_after, UPGRADE_GRACE_SECONDS).unwrap_or(u64::MAX);
         let proposal = PendingUpgrade {
