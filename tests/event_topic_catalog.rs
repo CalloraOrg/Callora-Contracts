@@ -284,6 +284,9 @@ const DISTRIBUTE_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("distribute_completed", |e| {
         callora_distribute::events::event_distribute_completed(e)
     }),
+    ("batch_distribute", |e| {
+        callora_distribute::events::event_batch_distribute(e)
+    }),
     ("upgraded", |e| {
         callora_distribute::events::event_upgraded(e)
     }),
@@ -373,7 +376,7 @@ fn topic_counts_match_catalog_documentation() {
     );
     assert_eq!(
         DISTRIBUTE_TOPICS.len(),
-        11,
+        12,
         "distribute topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
@@ -381,7 +384,7 @@ fn topic_counts_match_catalog_documentation() {
             + SETTLEMENT_TOPICS.len()
             + REVENUE_POOL_TOPICS.len()
             + DISTRIBUTE_TOPICS.len(),
-        90,
+        91,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }
