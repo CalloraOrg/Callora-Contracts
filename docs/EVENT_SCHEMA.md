@@ -3,6 +3,15 @@
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
 
+## Change Note (2026-10) — Issue #1411: fee contract real token transfers
+
+`contracts/fee`: `init` now takes a `token: Address` argument (stored under
+`DataKey::Token`), `deposit` pulls real tokens via `token::Client::transfer`
+before incrementing `Accumulated`, and `withdraw` transfers tokens to the
+recipient after decrementing the counter. New events `fee_initialized`,
+`fee_set`, and `fee_deposited` are emitted with the `"callora_v1"` version
+marker at topic[1].
+
 ## Change Note (2026-10) — Issue #1411: recipient audit trail and TTL management
 
 `contracts/recipient`: `update_recipient` now emits `RecipientUpdatedEvent` carrying `{ name, old_address, new_address }` instead of only the new record, providing a verifiable audit trail of payout address modifications. Registry instances and persistent entries are bumped across write and view entrypoints.
