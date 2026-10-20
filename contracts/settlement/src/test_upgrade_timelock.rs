@@ -15,7 +15,7 @@
 #![cfg(test)]
 
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     Address, Bytes, BytesN, Env, Symbol, TryFromVal,
 };
 
