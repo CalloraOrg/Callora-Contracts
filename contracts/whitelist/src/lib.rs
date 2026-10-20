@@ -544,9 +544,12 @@ impl CalloraWhitelist {
         }
 
         inst.set(&StorageKey::WhitelistIndex, &remaining);
-        // Keep legacy WhitelistList in sync with WhitelistIndex so the
-        // deprecated get_whitelist returns consistent data during migration.
-        inst.set(&StorageKey::WhitelistList, &remaining);
+        // Keep legacy WhitelistList in sync only when entries were actually
+        // cleared, to avoid wiping legacy-only entries (e.g. seed_member in
+        // tests) when WhitelistIndex is empty.
+        if to_clear > 0 {
+            inst.set(&StorageKey::WhitelistList, &remaining);
+        }
         inst.set(&StorageKey::MemberCount, &remaining.len() as u32);
 
         if remaining.is_empty() {
