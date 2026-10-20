@@ -543,15 +543,14 @@ impl CalloraWhitelist {
         }
 
         inst.set(&StorageKey::WhitelistIndex, &remaining);
+        // Keep legacy WhitelistList in sync with WhitelistIndex so the
+        // deprecated get_whitelist returns consistent data during migration.
+        inst.set(&StorageKey::WhitelistList, &remaining);
         inst.set(&StorageKey::MemberCount, &remaining.len() as u32);
 
         if remaining.is_empty() {
             let gen: u64 = inst.get(&StorageKey::ClearGeneration).unwrap_or(0);
             inst.set(&StorageKey::ClearGeneration, &(gen + 1));
-            // Also clear legacy WhitelistList if present.
-            if inst.has(&StorageKey::WhitelistList) {
-                inst.remove(&StorageKey::WhitelistList);
-            }
         }
 
         cleared
@@ -629,9 +628,19 @@ impl CalloraWhitelist {
         if remaining.is_empty() {
             inst.remove(&StorageKey::WhitelistList);
             inst.set(&StorageKey::MigrationComplete, &true);
+            // Also clear WhitelistIndex when migration fully drains legacy Vec.
+            inst.set(&StorageKey::WhitelistIndex, &Vec::new(env));
+            inst.set(&StorageKey::MemberCount, &0u32);
         } else {
             inst.set(&StorageKey::WhitelistList, &remaining);
         }
+
+        // Keep WhitelistIndex in sync with persisted members after migration.
+        let mut index: Vec<Address> = Vec::new(env);
+        for addr in remaining.iter() {
+            index.push_back(addr.clone());
+        }
+        inst.set(&StorageKey::WhitelistIndex, &index);
 
         let count: u32 = inst.get(&StorageKey::MemberCount).unwrap_or(0);
         inst.set(
