@@ -412,7 +412,7 @@ impl CalloraWhitelist {
             .unwrap_or_else(|| Vec::new(&env));
         let mut new_index: Vec<Address> = Vec::new(&env);
         for a in old_index.iter() {
-            if a != &address {
+            if a != address {
                 new_index.push_back(a.clone());
             }
         }
@@ -424,7 +424,7 @@ impl CalloraWhitelist {
             .unwrap_or_else(|| Vec::new(&env));
         let mut new_legacy: Vec<Address> = Vec::new(&env);
         for a in legacy.iter() {
-            if a != &address {
+            if a != address {
                 new_legacy.push_back(a.clone());
             }
         }
@@ -547,7 +547,7 @@ impl CalloraWhitelist {
         // Keep legacy WhitelistList in sync with WhitelistIndex so the
         // deprecated get_whitelist returns consistent data.
         inst.set(&StorageKey::WhitelistList, &remaining);
-        inst.set(&StorageKey::MemberCount, &remaining.len() as u32);
+        inst.set(&StorageKey::MemberCount, &(remaining.len() as u32));
 
         if remaining.is_empty() {
             let gen: u64 = inst.get(&StorageKey::ClearGeneration).unwrap_or(0);
@@ -744,7 +744,7 @@ impl CalloraWhitelist {
             .instance()
             .get(&StorageKey::WhitelistList)
             .unwrap_or_else(|| Vec::new(&env));
-        if list.len() > MAX_PAGE as usize {
+        if list.len() > MAX_PAGE {
             let mut truncated: Vec<Address> = Vec::new(&env);
             for (i, addr) in list.iter().enumerate() {
                 if i >= MAX_PAGE as usize {
