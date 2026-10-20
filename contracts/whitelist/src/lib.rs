@@ -529,7 +529,8 @@ impl CalloraWhitelist {
         let mut remaining: Vec<Address> = Vec::new(env);
 
         for (i, addr) in index.iter().enumerate() {
-            if i < to_clear {
+            let idx = i as u32;
+            if idx < to_clear {
                 env.storage()
                     .persistent()
                     .remove(&StorageKey::Member(addr.clone()));
