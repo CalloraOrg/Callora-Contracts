@@ -40,7 +40,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Ve
 /// every call. The legacy `WhitelistList` Vec remains in instance storage only
 /// during migration; it is drained by `migrate_list` and then removed.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
     /// Contract owner address (instance).
     WhitelistOwner,
@@ -1591,20 +1591,14 @@ mod tests {
         client.add_address(&admin, &addr1.clone()).unwrap();
 
         // Check TTL after add.
-        let ttl_after_add = env
-            .storage()
-            .persistent()
-            .get_ttl(&StorageKey::Member(addr1.clone()));
+        let ttl_after_add = env.storage().get_ttl(&StorageKey::Member(addr1.clone()));
         assert!(ttl_after_add > 0);
 
         // Read triggers TTL extension.
         client.is_whitelisted(addr1.clone());
 
         // Check TTL after read.
-        let ttl_after_read = env
-            .storage()
-            .persistent()
-            .get_ttl(&StorageKey::Member(addr1.clone()));
+        let ttl_after_read = env.storage().get_ttl(&StorageKey::Member(addr1.clone()));
         assert!(ttl_after_read >= MEMBER_TTL);
     }
 }
