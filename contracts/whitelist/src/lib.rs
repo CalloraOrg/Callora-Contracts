@@ -593,6 +593,7 @@ impl CalloraWhitelist {
             .unwrap_or_else(|| Vec::new(&env));
 
         let mut remaining: Vec<Address> = Vec::new(&env);
+        let mut newly_migrated: Vec<Address> = Vec::new(&env);
         let mut count_migrated: u32 = 0;
         let mut migrated: u32 = 0;
 
@@ -621,6 +622,7 @@ impl CalloraWhitelist {
                         MEMBER_TTL,
                         MEMBER_TTL,
                     );
+                    newly_migrated.push_back(addr.clone());
                     count_migrated += 1;
                 }
                 migrated += 1;
@@ -632,17 +634,23 @@ impl CalloraWhitelist {
         if remaining.is_empty() {
             inst.remove(&StorageKey::WhitelistList);
             inst.set(&StorageKey::MigrationComplete, &true);
-            // Also clear WhitelistIndex when migration fully drains legacy Vec.
-            inst.set(&StorageKey::WhitelistIndex, &Vec::new(env));
-            inst.set(&StorageKey::MemberCount, &0u32);
         } else {
             inst.set(&StorageKey::WhitelistList, &remaining);
         }
 
-        // Keep WhitelistIndex in sync with persisted members after migration.
-        let mut index: Vec<Address> = Vec::new(env);
+        // Rebuild WhitelistIndex: existing index + remaining + newly migrated.
+        let mut index: Vec<Address> = inst
+            .get(&StorageKey::WhitelistIndex)
+            .unwrap_or_else(|| Vec::new(&env));
         for addr in remaining.iter() {
-            index.push_back(addr.clone());
+            if !index.iter().any(|a| a == addr) {
+                index.push_back(addr.clone());
+            }
+        }
+        for addr in newly_migrated.iter() {
+            if !index.iter().any(|a| a == addr) {
+                index.push_back(addr.clone());
+            }
         }
         inst.set(&StorageKey::WhitelistIndex, &index);
 
