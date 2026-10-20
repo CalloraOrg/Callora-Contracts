@@ -59,6 +59,7 @@ pub fn set_developer_min_balance(
     min_balance: i128,
 ) {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     let admin = crate::CalloraSettlement::get_admin(env.clone()).unwrap();
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);

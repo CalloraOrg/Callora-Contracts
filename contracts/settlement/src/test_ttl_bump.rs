@@ -6,7 +6,7 @@ use crate::{
 };
 use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Ledger};
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, IntoVal, Symbol, Val, Vec};
 
 fn setup() -> (Env, Address, Address, CalloraSettlementClient<'static>) {
     let env = Env::default();
@@ -19,8 +19,23 @@ fn setup() -> (Env, Address, Address, CalloraSettlementClient<'static>) {
     (env, admin, vault, client)
 }
 
+/// Read the instance TTL from inside a contract frame.
+///
+/// `get_ttl` is only exposed while a contract frame is active, so reading it
+/// directly from the test body panics.
+fn instance_ttl(env: &Env, client: &CalloraSettlementClient) -> u32 {
+    env.as_contract(&client.address, || env.storage().instance().get_ttl())
+}
+
+/// Read a persistent entry's TTL from inside a contract frame.
+fn persistent_ttl<K>(env: &Env, client: &CalloraSettlementClient, key: &K) -> u32
+where
+    K: IntoVal<Env, Val>,
+{
+    env.as_contract(&client.address, || env.storage().persistent().get_ttl(key))
+}
+
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_admin_bumps_instance_ttl() {
     let (env, admin, _vault, client) = setup();
 
@@ -29,18 +44,17 @@ fn test_get_admin_bumps_instance_ttl() {
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
 
-    let ttl_before = env.storage().instance().get_ttl();
+    let ttl_before = instance_ttl(&env, &client);
     assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
 
     let res = client.get_admin();
     assert_eq!(res, admin);
 
-    let ttl_after = env.storage().instance().get_ttl();
+    let ttl_after = instance_ttl(&env, &client);
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_vault_bumps_instance_ttl() {
     let (env, _admin, vault, client) = setup();
 
@@ -51,12 +65,11 @@ fn test_get_vault_bumps_instance_ttl() {
     let res = client.get_vault();
     assert_eq!(res, vault);
 
-    let ttl_after = env.storage().instance().get_ttl();
+    let ttl_after = instance_ttl(&env, &client);
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_global_pool_bumps_instance_ttl() {
     let (env, _admin, vault, client) = setup();
 
@@ -72,12 +85,11 @@ fn test_get_global_pool_bumps_instance_ttl() {
     let pool = client.get_global_pool();
     assert_eq!(pool.total_balance, 1000i128);
 
-    let ttl_after = env.storage().instance().get_ttl();
+    let ttl_after = instance_ttl(&env, &client);
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_total_received_bumps_instance_ttl() {
     let (env, _admin, _vault, client) = setup();
 
@@ -88,12 +100,11 @@ fn test_get_total_received_bumps_instance_ttl() {
     let total = client.get_total_received();
     assert_eq!(total, 0);
 
-    let ttl_after = env.storage().instance().get_ttl();
+    let ttl_after = instance_ttl(&env, &client);
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_developer_balance_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev = Address::generate(&env);
@@ -109,21 +120,20 @@ fn test_get_developer_balance_bumps_ttl() {
     env.ledger()
         .set_sequence_number(seq + PERSISTENT_BUMP_AMOUNT - PERSISTENT_BUMP_THRESHOLD + 10);
 
-    let ttl_before = env.storage().persistent().get_ttl(&key);
+    let ttl_before = persistent_ttl(&env, &client, &key);
     assert!(ttl_before < PERSISTENT_BUMP_THRESHOLD);
 
     let bal = client.get_developer_balance(&dev, &token);
     assert_eq!(bal, 500);
 
-    let ttl_after = env.storage().persistent().get_ttl(&key);
+    let ttl_after = persistent_ttl(&env, &client, &key);
     assert_eq!(ttl_after, PERSISTENT_BUMP_AMOUNT);
 
-    let inst_ttl = env.storage().instance().get_ttl();
+    let inst_ttl = instance_ttl(&env, &client);
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_developer_min_balance_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev = Address::generate(&env);
@@ -136,18 +146,17 @@ fn test_get_developer_min_balance_bumps_ttl() {
     env.ledger()
         .set_sequence_number(seq + PERSISTENT_BUMP_AMOUNT - PERSISTENT_BUMP_THRESHOLD + 10);
 
-    let ttl_before = env.storage().persistent().get_ttl(&key);
+    let ttl_before = persistent_ttl(&env, &client, &key);
     assert!(ttl_before < PERSISTENT_BUMP_THRESHOLD);
 
     let min_bal = client.get_developer_min_balance(&dev);
     assert_eq!(min_bal, 100);
 
-    let ttl_after = env.storage().persistent().get_ttl(&key);
+    let ttl_after = persistent_ttl(&env, &client, &key);
     assert_eq!(ttl_after, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_developer_claim_window_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev = Address::generate(&env);
@@ -160,19 +169,18 @@ fn test_get_developer_claim_window_bumps_ttl() {
     env.ledger()
         .set_sequence_number(seq + PERSISTENT_BUMP_AMOUNT - PERSISTENT_BUMP_THRESHOLD + 10);
 
-    let ttl_before = env.storage().persistent().get_ttl(&key);
+    let ttl_before = persistent_ttl(&env, &client, &key);
     assert!(ttl_before < PERSISTENT_BUMP_THRESHOLD);
 
     let win = client.get_developer_claim_window(&dev).unwrap();
     assert_eq!(win.start_ts, 1000);
     assert_eq!(win.end_ts, 2000);
 
-    let ttl_after = env.storage().persistent().get_ttl(&key);
+    let ttl_after = persistent_ttl(&env, &client, &key);
     assert_eq!(ttl_after, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_daily_withdraw_cap_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev = Address::generate(&env);
@@ -188,12 +196,11 @@ fn test_get_daily_withdraw_cap_bumps_ttl() {
     let cap = client.get_daily_withdraw_cap(&dev);
     assert_eq!(cap, 5000);
 
-    let ttl_after = env.storage().persistent().get_ttl(&key);
+    let ttl_after = persistent_ttl(&env, &client, &key);
     assert_eq!(ttl_after, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_withdrawal_today_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev = Address::generate(&env);
@@ -213,12 +220,11 @@ fn test_get_withdrawal_today_bumps_ttl() {
     assert_eq!(today_withdrawn, 0);
 
     // If key existed, it would bump TTL; calling get_withdrawal_today on empty key doesn't crash
-    let inst_ttl = env.storage().instance().get_ttl();
+    let inst_ttl = instance_ttl(&env, &client);
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_all_developer_balances_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev1 = Address::generate(&env);
@@ -238,14 +244,13 @@ fn test_get_all_developer_balances_bumps_ttl() {
     let balances = client.get_all_developer_balances(&admin, &token);
     assert_eq!(balances.len(), 2);
 
-    let ttl1 = env.storage().persistent().get_ttl(&key1);
-    let ttl2 = env.storage().persistent().get_ttl(&key2);
+    let ttl1 = persistent_ttl(&env, &client, &key1);
+    let ttl2 = persistent_ttl(&env, &client, &key2);
     assert_eq!(ttl1, PERSISTENT_BUMP_AMOUNT);
     assert_eq!(ttl2, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_developer_balances_page_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev1 = Address::generate(&env);
@@ -262,12 +267,11 @@ fn test_get_developer_balances_page_bumps_ttl() {
     let page = client.get_developer_balances_page(&admin, &0u32, &10u32, &token);
     assert_eq!(page.len(), 1);
 
-    let ttl1 = env.storage().persistent().get_ttl(&key1);
+    let ttl1 = persistent_ttl(&env, &client, &key1);
     assert_eq!(ttl1, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_developer_balances_cursor_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
     let dev1 = Address::generate(&env);
@@ -284,12 +288,11 @@ fn test_get_developer_balances_cursor_bumps_ttl() {
     let (items, _) = client.get_developer_balances_cursor(&admin, &None, &10u32, &token);
     assert_eq!(items.len(), 1);
 
-    let ttl1 = env.storage().persistent().get_ttl(&key1);
+    let ttl1 = persistent_ttl(&env, &client, &key1);
     assert_eq!(ttl1, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_pending_admin_bumps_instance_ttl() {
     let (env, admin, _vault, client) = setup();
     let new_admin = Address::generate(&env);
@@ -303,12 +306,11 @@ fn test_get_pending_admin_bumps_instance_ttl() {
     let pending = client.get_pending_admin();
     assert_eq!(pending, Some(new_admin));
 
-    let inst_ttl = env.storage().instance().get_ttl();
+    let inst_ttl = instance_ttl(&env, &client);
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_version_bumps_instance_ttl() {
     let (env, _admin, _vault, client) = setup();
 
@@ -319,17 +321,24 @@ fn test_get_version_bumps_instance_ttl() {
     let ver = client.get_version();
     assert_eq!(ver, None);
 
-    let inst_ttl = env.storage().instance().get_ttl();
+    let inst_ttl = instance_ttl(&env, &client);
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_get_balance_migration_bumps_ttl() {
     let (env, admin, _vault, client) = setup();
+    let usdc = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.set_usdc_token(&admin, &usdc);
+
     let dev1 = Address::generate(&env);
     let dev2 = Address::generate(&env);
 
+    // The migration amount is read from the source balance, so the source needs
+    // a positive tracked balance for the proposal to succeed.
+    client.force_credit_developer(&admin, &dev1, &10, &usdc, &Symbol::new(&env, "credit"));
     client.propose_balance_migration(&admin, &dev1, &dev2);
 
     let key = StorageKey::PendingDeveloperMigration(dev1.clone());
@@ -341,12 +350,11 @@ fn test_get_balance_migration_bumps_ttl() {
     let mig = client.get_balance_migration(&dev1);
     assert!(mig.is_some());
 
-    let ttl = env.storage().persistent().get_ttl(&key);
+    let ttl = persistent_ttl(&env, &client, &key);
     assert_eq!(ttl, PERSISTENT_BUMP_AMOUNT);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_migration_storage_version_bumps_instance_ttl() {
     let (env, _admin, _vault, client) = setup();
 
@@ -357,7 +365,7 @@ fn test_migration_storage_version_bumps_instance_ttl() {
     let ver = client.migration_storage_version();
     assert_eq!(ver, 1);
 
-    let inst_ttl = env.storage().instance().get_ttl();
+    let inst_ttl = instance_ttl(&env, &client);
     assert_eq!(inst_ttl, INSTANCE_BUMP_AMOUNT);
 }
 
@@ -621,5 +629,220 @@ mod write_paths {
             PERSISTENT_BUMP_AMOUNT,
             "extended once below the threshold"
         );
+    }
+}
+
+/// #1405 — the contract instance must outlive the persistent entries it is
+/// required to read, and every state-changing entrypoint must refresh it.
+mod instance_lifetime {
+    use crate::{
+        CalloraSettlement, CalloraSettlementClient, Severity, INSTANCE_BUMP_AMOUNT,
+        INSTANCE_BUMP_THRESHOLD, LEDGERS_PER_DAY, PERSISTENT_BUMP_AMOUNT,
+    };
+    use soroban_sdk::testutils::storage::Instance as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
+
+    struct Ctx {
+        env: Env,
+        id: Address,
+        admin: Address,
+        vault: Address,
+        usdc: Address,
+    }
+
+    impl Ctx {
+        fn client(&self) -> CalloraSettlementClient<'_> {
+            CalloraSettlementClient::new(&self.env, &self.id)
+        }
+    }
+
+    fn setup() -> Ctx {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let vault = Address::generate(&env);
+        let id = env.register(CalloraSettlement, ());
+        let client = CalloraSettlementClient::new(&env, &id);
+        client.init(&admin, &vault);
+        let usdc = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        client.set_usdc_token(&admin, &usdc);
+        token::StellarAssetClient::new(&env, &usdc).mint(&id, &1_000_000);
+        // `age_instance` must not archive the token state that the withdrawal
+        // cases still read.
+        crate::test_support::keep_token_state_alive(&env, &usdc, &id);
+        Ctx {
+            env,
+            id,
+            admin,
+            vault,
+            usdc,
+        }
+    }
+
+    fn instance_ttl(ctx: &Ctx) -> u32 {
+        ctx.env
+            .as_contract(&ctx.id, || ctx.env.storage().instance().get_ttl())
+    }
+
+    /// Advance the ledger until the instance is below its bump threshold but
+    /// still archived-free.
+    fn age_instance(ctx: &Ctx) {
+        let step = INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10;
+        let seq = ctx.env.ledger().sequence();
+        ctx.env.ledger().set_sequence_number(seq + step);
+        assert!(instance_ttl(ctx) < INSTANCE_BUMP_THRESHOLD);
+    }
+
+    #[test]
+    fn init_extends_the_instance_ttl_to_the_full_lifetime() {
+        let ctx = setup();
+        assert!(
+            instance_ttl(&ctx) >= INSTANCE_BUMP_AMOUNT - 1,
+            "init must start the instance lifetime at INSTANCE_BUMP_AMOUNT"
+        );
+    }
+
+    #[test]
+    fn instance_lifetime_is_at_least_the_persistent_lifetime() {
+        // Also enforced at compile time in `types.rs`.
+        const { assert!(INSTANCE_BUMP_AMOUNT >= PERSISTENT_BUMP_AMOUNT) };
+        assert!(INSTANCE_BUMP_AMOUNT >= PERSISTENT_BUMP_AMOUNT);
+        // Stay under the network `max_entry_ttl` (~180 days on pubnet).
+        assert!(INSTANCE_BUMP_AMOUNT < LEDGERS_PER_DAY * 180);
+        const { assert!(INSTANCE_BUMP_THRESHOLD < INSTANCE_BUMP_AMOUNT) };
+    }
+
+    #[test]
+    fn receive_payment_succeeds_after_100_idle_days() {
+        let ctx = setup();
+        let dev = Address::generate(&ctx.env);
+        let seq = ctx.env.ledger().sequence();
+        ctx.env
+            .ledger()
+            .set_sequence_number(seq + LEDGERS_PER_DAY * 100);
+
+        ctx.client().receive_payment(
+            &ctx.vault,
+            &1_000,
+            &false,
+            &Some(dev.clone()),
+            &ctx.usdc,
+            &1,
+        );
+        assert_eq!(ctx.client().get_developer_balance(&dev, &ctx.usdc), 1_000);
+        assert!(instance_ttl(&ctx) >= INSTANCE_BUMP_AMOUNT - 1);
+    }
+
+    #[test]
+    fn balance_and_instance_survive_100_idle_days() {
+        let ctx = setup();
+        let dev = Address::generate(&ctx.env);
+        ctx.client()
+            .receive_payment(&ctx.vault, &500, &false, &Some(dev.clone()), &ctx.usdc, &1);
+
+        let seq = ctx.env.ledger().sequence();
+        ctx.env
+            .ledger()
+            .set_sequence_number(seq + LEDGERS_PER_DAY * 100);
+
+        // Both the instance and the developer balance entry are still live.
+        assert_eq!(ctx.client().get_developer_balance(&dev, &ctx.usdc), 500);
+        assert!(instance_ttl(&ctx) >= INSTANCE_BUMP_AMOUNT - 1);
+    }
+
+    #[test]
+    fn write_entrypoints_refresh_the_instance_ttl() {
+        type Case = (&'static str, fn(&Ctx));
+        let cases: &[Case] = &[
+            ("receive_payment", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client()
+                    .receive_payment(&ctx.vault, &10, &false, &Some(dev), &ctx.usdc, &1);
+            }),
+            ("batch_receive_payment", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                let mut items = Vec::new(&ctx.env);
+                items.push_back((dev, 10_i128));
+                ctx.client()
+                    .batch_receive_payment(&ctx.vault, &items, &ctx.usdc, &1);
+            }),
+            ("record_deduction", |ctx| {
+                ctx.client().record_deduction(&5, &1);
+            }),
+            ("withdraw_developer_balance", |ctx| {
+                // Must succeed: a typed error rolls the invocation's storage
+                // changes back, including the instance TTL extension.
+                let dev = Address::generate(&ctx.env);
+                ctx.client().force_credit_developer(
+                    &ctx.admin,
+                    &dev,
+                    &10,
+                    &ctx.usdc,
+                    &Symbol::new(&ctx.env, "credit"),
+                );
+                ctx.client().withdraw_developer_balance(&dev, &5, &None);
+            }),
+            ("set_daily_withdraw_cap", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client().set_daily_withdraw_cap(&ctx.admin, &dev, &100);
+            }),
+            ("set_developer_min_balance", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client().set_developer_min_balance(&ctx.admin, &dev, &1);
+            }),
+            ("set_developer_claim_window", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client()
+                    .set_developer_claim_window(&ctx.admin, &dev, &0, &u64::MAX);
+            }),
+            ("force_credit_developer", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client().force_credit_developer(
+                    &ctx.admin,
+                    &dev,
+                    &1,
+                    &ctx.usdc,
+                    &Symbol::new(&ctx.env, "credit"),
+                );
+            }),
+            ("add_supported_token", |ctx| {
+                let other = Address::generate(&ctx.env);
+                ctx.client().add_supported_token(&ctx.admin, &other);
+            }),
+            ("set_admin", |ctx| {
+                let next = Address::generate(&ctx.env);
+                ctx.client().set_admin(&ctx.admin, &next);
+            }),
+            ("propose_vault", |ctx| {
+                let next = Address::generate(&ctx.env);
+                ctx.client().propose_vault(&ctx.admin, &next);
+            }),
+            ("broadcast", |ctx| {
+                ctx.client().broadcast(
+                    &ctx.admin,
+                    &Severity::Info,
+                    &String::from_str(&ctx.env, "hi"),
+                );
+            }),
+            ("freeze_developer", |ctx| {
+                let dev = Address::generate(&ctx.env);
+                ctx.client()
+                    .freeze_developer(&ctx.admin, &dev, &Symbol::new(&ctx.env, "audit"));
+            }),
+        ];
+
+        for (name, case) in cases {
+            let ctx = setup();
+            age_instance(&ctx);
+            case(&ctx);
+            assert_eq!(
+                instance_ttl(&ctx),
+                INSTANCE_BUMP_AMOUNT,
+                "{name} did not refresh the instance TTL"
+            );
+        }
     }
 }
