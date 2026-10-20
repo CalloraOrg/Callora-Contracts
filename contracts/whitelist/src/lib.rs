@@ -34,20 +34,43 @@ pub mod events;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
 /// Instance / persistent storage keys for the whitelist contract.
+///
+/// Per-address membership (`Member`, `MemberGeneration`) lives in **persistent**
+/// storage so `is_whitelisted` is O(1) and does not load instance storage on
+/// every call. The legacy `WhitelistList` Vec remains in instance storage only
+/// during migration; it is drained by `migrate_list` and then removed.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
-    /// Contract owner address.
+    /// Contract owner address (instance).
     WhitelistOwner,
-    /// Current admin address (defaults to owner at init).
+    /// Current admin address (defaults to owner at init, instance).
     WhitelistAdmin,
-    /// Pending admin address awaiting acceptance (two-step transfer).
+    /// Pending admin address awaiting acceptance (two-step transfer, instance).
     WhitelistPendingAdmin,
-    /// Vector of whitelisted addresses.
+    /// Per-address membership flag `bool` (persistent).
+    Member(Address),
+    /// Per-address clear-generation marker `u64` (persistent), used by
+    /// `clear_page` to invalidate all members without scanning.
+    MemberGeneration(Address),
+    /// Total number of whitelisted addresses `u32` (instance).
+    MemberCount,
+    /// Clear-all generation counter `u64` (instance). Incremented by
+    /// `clear_page` when the whitelist becomes empty; compared against
+    /// `MemberGeneration` in `is_whitelisted`.
+    ClearGeneration,
+    /// Ordered enumeration index `Vec<Address>` (instance). Used only by
+    /// `get_whitelist_page`; not consulted by `is_whitelisted`.
+    WhitelistIndex,
+    /// Legacy whitelist Vec `Vec<Address>` (instance). Present only before
+    /// migration completes; removed by `migrate_list`.
     WhitelistList,
-    /// Global cool-off window between critical whitelist admin executions.
+    /// Migration completion marker `bool` (instance). Set to `true` once the
+    /// legacy `WhitelistList` has been fully drained.
+    MigrationComplete,
+    /// Global cool-off window between critical whitelist admin executions (instance).
     WhitelistAdminCooldown,
-    /// Audit record for the most recently executed critical whitelist admin action.
+    /// Audit record for the most recently executed critical whitelist admin action (instance).
     WhitelistLastCriticalAction,
 }
 
@@ -63,6 +86,12 @@ pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// TTL extension target for instance storage keys (~60 days of ledgers at 5 s/ledger).
 pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Maximum number of addresses returned in a single `get_whitelist_page` call.
+pub const MAX_PAGE: u32 = 100;
+
+/// Default TTL (in ledger seqs) for persistent member entries.
+pub const MEMBER_TTL: u32 = 50_000;
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -99,6 +128,12 @@ impl CalloraWhitelist {
         env.storage()
             .instance()
             .set(&StorageKey::WhitelistAdmin, &admin);
+        env.storage()
+            .instance()
+            .set(&StorageKey::MemberCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&StorageKey::ClearGeneration, &0u64);
 
         Self::bump_instance_ttl(&env);
         env.events().publish(
@@ -157,10 +192,6 @@ impl CalloraWhitelist {
         env.storage()
             .instance()
             .set(&StorageKey::WhitelistPendingAdmin, &new_admin);
-        env.events().publish(
-            (Symbol::new(&env, "admin_nominated"), caller.clone()),
-            new_admin.clone(),
-        );
         Self::bump_instance_ttl(&env);
         env.events().publish(
             (
@@ -257,20 +288,66 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
 
-        let mut list = env
+        // Check persistent membership first (O(1)).
+        let member: bool = env
             .storage()
-            .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .unwrap_or_else(|| Vec::new(&env));
-
-        if list.contains(&address) {
+            .persistent()
+            .get(&StorageKey::Member(address.clone()))
+            .unwrap_or(false);
+        if member {
             return Err(WhitelistError::AddressAlreadyInWhitelist);
         }
 
-        list.push_back(address.clone());
+        // Write membership to persistent storage (O(1)).
         env.storage()
+            .persistent()
+            .set(&StorageKey::Member(address.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::Member(address.clone()),
+            MEMBER_TTL,
+            MEMBER_TTL,
+        );
+
+        // Record the clear generation at time of insertion.
+        let gen: u64 = env
+            .storage()
             .instance()
-            .set(&StorageKey::WhitelistList, &list);
+            .get(&StorageKey::ClearGeneration)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&StorageKey::MemberGeneration(address.clone()), &gen);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::MemberGeneration(address.clone()),
+            MEMBER_TTL,
+            MEMBER_TTL,
+        );
+
+        // Update instance counter.
+        let inst = env.storage().instance();
+        let count: u32 = inst.get(&StorageKey::MemberCount).unwrap_or(0);
+        let new_count = count
+            .checked_add(1)
+            .ok_or(WhitelistError::MemberCountOverflow)?;
+        inst.set(&StorageKey::MemberCount, &new_count);
+
+        // Maintain enumeration index.
+        let mut index: Vec<Address> = inst
+            .get(&StorageKey::WhitelistIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !index.iter().any(|a| a == address) {
+            index.push_back(address.clone());
+            inst.set(&StorageKey::WhitelistIndex, &index);
+        }
+
+        // Also append to legacy WhitelistList for migration compatibility.
+        let mut legacy: Vec<Address> = inst
+            .get(&StorageKey::WhitelistList)
+            .unwrap_or_else(|| Vec::new(&env));
+        if !legacy.iter().any(|a| a == address) {
+            legacy.push_back(address.clone());
+            inst.set(&StorageKey::WhitelistList, &legacy);
+        }
 
         Self::bump_instance_ttl(&env);
         env.events().publish(
@@ -305,26 +382,56 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "remove_address"))?;
 
-        let mut list = env
+        // Check persistent membership.
+        let member: bool = env
             .storage()
-            .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .ok_or(WhitelistError::AddressNotInWhitelist)?;
-
-        let pos = list.iter().position(|a| a == address);
-        match pos {
-            Some(idx) => {
-                list.remove(idx as u32);
-            }
-            None => return Err(WhitelistError::AddressNotInWhitelist),
+            .persistent()
+            .get(&StorageKey::Member(address.clone()))
+            .unwrap_or(false);
+        if !member {
+            return Err(WhitelistError::AddressNotInWhitelist);
         }
 
-        if list.is_empty() {
-            env.storage().instance().remove(&StorageKey::WhitelistList);
+        // Clear membership from persistent storage.
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::Member(address.clone()));
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::MemberGeneration(address.clone()));
+
+        // Update instance counter.
+        let inst = env.storage().instance();
+        let count: u32 = inst.get(&StorageKey::MemberCount).unwrap_or(0);
+        let new_count = count.saturating_sub(1);
+        inst.set(&StorageKey::MemberCount, &new_count);
+
+        // Remove from enumeration index (manual filter).
+        let old_index: Vec<Address> = inst
+            .get(&StorageKey::WhitelistIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut new_index: Vec<Address> = Vec::new(&env);
+        for a in old_index.iter() {
+            if a != &address {
+                new_index.push_back(a.clone());
+            }
+        }
+        inst.set(&StorageKey::WhitelistIndex, &new_index);
+
+        // Remove from legacy WhitelistList.
+        let mut legacy: Vec<Address> = inst
+            .get(&StorageKey::WhitelistList)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut new_legacy: Vec<Address> = Vec::new(&env);
+        for a in legacy.iter() {
+            if a != &address {
+                new_legacy.push_back(a.clone());
+            }
+        }
+        if new_legacy.is_empty() {
+            inst.remove(&StorageKey::WhitelistList);
         } else {
-            env.storage()
-                .instance()
-                .set(&StorageKey::WhitelistList, &list);
+            inst.set(&StorageKey::WhitelistList, &new_legacy);
         }
 
         Self::bump_instance_ttl(&env);
@@ -343,7 +450,8 @@ impl CalloraWhitelist {
     /// Remove all addresses from the whitelist (admin only, cooldown-gated).
     ///
     /// This operation is idempotent — calling it on an empty whitelist succeeds
-    /// but still arms the cool-off window.
+    /// but still arms the cool-off window. Uses `clear_page` internally with a
+    /// large limit to fully drain the whitelist in one call.
     ///
     /// # Parameters
     /// - `caller` — Must be the current admin.
@@ -357,13 +465,13 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
-        let cleared: u32 = env
-            .storage()
-            .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .map(|list| list.len())
-            .unwrap_or(0);
-        env.storage().instance().remove(&StorageKey::WhitelistList);
+        // Drain all pages until empty.
+        loop {
+            let cleared = Self::clear_page_inner(&env, &caller, u32::MAX);
+            if cleared == 0 {
+                break;
+            }
+        }
 
         Self::bump_instance_ttl(&env);
         env.events().publish(
@@ -372,42 +480,306 @@ impl CalloraWhitelist {
                 events::event_version_v1(&env),
                 caller,
             ),
-            cleared,
+            0u32,
         );
         Ok(())
+    }
+
+    /// Clear whitelisted entries with bounded cost (admin only, cooldown-gated).
+    ///
+    /// Removes up to `limit` members per call. Repeated calls until the
+    /// whitelist is empty fully clear the whitelist. Each call is bounded
+    /// by `limit` persistent removals, avoiding instance-storage size limits.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `limit` — Maximum number of members to clear this call.
+    ///
+    /// # Returns
+    /// Number of addresses cleared this call.
+    ///
+    /// # Errors
+    /// - [`WhitelistError::Unauthorized`] if `caller` is not the admin.
+    /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
+    /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
+    pub fn clear_page(env: Env, caller: Address, limit: u32) -> Result<u32, WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+
+        admin::guard(&env, Symbol::new(&env, "clear_page"))?;
+
+        let cleared = Self::clear_page_inner(&env, &caller, limit);
+        Self::bump_instance_ttl(&env);
+        Ok(cleared)
+    }
+
+    /// Internal bounded clear: removes up to `limit` members from persistent
+    /// and instance storage. Does not perform auth or cooldown checks.
+    fn clear_page_inner(env: &Env, _caller: &Address, limit: u32) -> u32 {
+        if limit == 0 {
+            return 0;
+        }
+
+        let inst = env.storage().instance();
+        let index: Vec<Address> = inst
+            .get(&StorageKey::WhitelistIndex)
+            .unwrap_or_else(|| Vec::new(env));
+
+        let to_clear = index.len().min(limit);
+        let mut cleared: u32 = 0;
+        let mut remaining: Vec<Address> = Vec::new(env);
+
+        for (i, addr) in index.iter().enumerate() {
+            if i < to_clear {
+                env.storage()
+                    .persistent()
+                    .remove(&StorageKey::Member(addr.clone()));
+                env.storage()
+                    .persistent()
+                    .remove(&StorageKey::MemberGeneration(addr.clone()));
+                cleared += 1;
+            } else {
+                remaining.push_back(addr.clone());
+            }
+        }
+
+        inst.set(&StorageKey::WhitelistIndex, &remaining);
+        inst.set(&StorageKey::MemberCount, &remaining.len() as u32);
+
+        if remaining.is_empty() {
+            let gen: u64 = inst.get(&StorageKey::ClearGeneration).unwrap_or(0);
+            inst.set(&StorageKey::ClearGeneration, &(gen + 1));
+            // Also clear legacy WhitelistList if present.
+            if inst.has(&StorageKey::WhitelistList) {
+                inst.remove(&StorageKey::WhitelistList);
+            }
+        }
+
+        cleared
+    }
+
+    /// Migrate the legacy `WhitelistList` Vec into per-address persistent
+    /// entries in chunks (admin only, cooldown-gated).
+    ///
+    /// Each call drains up to `limit` addresses from the legacy instance
+    /// storage Vec and writes them as persistent `Member` entries. When the
+    /// legacy Vec is empty, it is removed and migration is marked complete.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `limit` — Maximum number of legacy entries to migrate this call.
+    ///
+    /// # Returns
+    /// Number of addresses migrated this call.
+    ///
+    /// # Errors
+    /// - [`WhitelistError::Unauthorized`] if `caller` is not the admin.
+    /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
+    /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
+    pub fn migrate_list(env: Env, caller: Address, limit: u32) -> Result<u32, WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+
+        admin::guard(&env, Symbol::new(&env, "migrate_list"))?;
+
+        if !env.storage().instance().has(&StorageKey::WhitelistList) {
+            return Ok(0);
+        }
+
+        let inst = env.storage().instance();
+        let legacy: Vec<Address> = inst
+            .get(&StorageKey::WhitelistList)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut remaining: Vec<Address> = Vec::new(&env);
+        let mut count_migrated: u32 = 0;
+        let mut migrated: u32 = 0;
+
+        for addr in legacy.iter() {
+            if migrated < limit {
+                let member: bool = env
+                    .storage()
+                    .persistent()
+                    .get(&StorageKey::Member(addr.clone()))
+                    .unwrap_or(false);
+                if !member {
+                    env.storage()
+                        .persistent()
+                        .set(&StorageKey::Member(addr.clone()), &true);
+                    env.storage().persistent().extend_ttl(
+                        &StorageKey::Member(addr.clone()),
+                        MEMBER_TTL,
+                        MEMBER_TTL,
+                    );
+                    let gen: u64 = inst.get(&StorageKey::ClearGeneration).unwrap_or(0u64);
+                    env.storage()
+                        .persistent()
+                        .set(&StorageKey::MemberGeneration(addr.clone()), &gen);
+                    env.storage().persistent().extend_ttl(
+                        &StorageKey::MemberGeneration(addr.clone()),
+                        MEMBER_TTL,
+                        MEMBER_TTL,
+                    );
+                    count_migrated += 1;
+                }
+                migrated += 1;
+            } else {
+                remaining.push_back(addr.clone());
+            }
+        }
+
+        if remaining.is_empty() {
+            inst.remove(&StorageKey::WhitelistList);
+            inst.set(&StorageKey::MigrationComplete, &true);
+        } else {
+            inst.set(&StorageKey::WhitelistList, &remaining);
+        }
+
+        let count: u32 = inst.get(&StorageKey::MemberCount).unwrap_or(0);
+        inst.set(
+            &StorageKey::MemberCount,
+            &count.saturating_add(count_migrated),
+        );
+
+        Self::bump_instance_ttl(&env);
+        Ok(count_migrated)
     }
 
     /// Check whether an address is in the whitelist.
     ///
     /// No authentication required — this is a public read-only view function.
     ///
+    /// Costs at most two persistent storage reads (`Member` + `MemberGeneration`)
+    /// plus one instance read (`ClearGeneration`). During an unfinished migration,
+    /// also consults the legacy `WhitelistList` Vec.
+    ///
     /// # Returns
     /// `true` if the address is present in the whitelist, `false` otherwise.
     pub fn is_whitelisted(env: Env, address: Address) -> bool {
-        match env
+        // Fast path: check persistent member entry.
+        let member: bool = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::Member(address.clone()))
+            .unwrap_or(false);
+
+        if !member {
+            // During migration, fall back to legacy Vec.
+            if env.storage().instance().has(&StorageKey::WhitelistList) {
+                let list: Vec<Address> = env
+                    .storage()
+                    .instance()
+                    .get(&StorageKey::WhitelistList)
+                    .unwrap_or_else(|| Vec::new(&env));
+                if list.iter().any(|a| a == address) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Verify the member is still valid under the current clear generation.
+        let gen: u64 = env
             .storage()
             .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-        {
-            Some(list) => list.contains(&address),
-            None => false,
+            .get(&StorageKey::ClearGeneration)
+            .unwrap_or(0);
+        let member_gen: u64 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::MemberGeneration(address.clone()))
+            .unwrap_or(0);
+
+        if member_gen != gen {
+            return false;
         }
+
+        // Extend TTL on read.
+        env.storage().persistent().extend_ttl(
+            &StorageKey::Member(address.clone()),
+            MEMBER_TTL,
+            MEMBER_TTL,
+        );
+        env.storage().persistent().extend_ttl(
+            &StorageKey::MemberGeneration(address.clone()),
+            MEMBER_TTL,
+            MEMBER_TTL,
+        );
+
+        true
     }
 
-    /// Return the current whitelist.
+    /// Return the current whitelist (admin only, deprecated).
     ///
-    /// No authentication required — this is a public read-only view function.
-    /// Addresses are returned in insertion order.
+    /// Capped at [`MAX_PAGE`]. Prefer [`get_whitelist_page`] for large whitelists.
+    ///
+    /// # Deprecated
+    /// Use [`get_whitelist_page`] instead. This method loads the full
+    /// enumeration index and is subject to instance-storage size limits.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
     ///
     /// # Returns
-    /// `Vec<Address>` containing all addresses currently in the whitelist.
-    /// Returns an empty vector if no whitelist has been configured.
-    pub fn get_whitelist(env: Env) -> Vec<Address> {
-        Self::bump_instance_ttl(&env);
+    /// `Vec<Address>` containing up to `MAX_PAGE` whitelisted addresses.
+    #[deprecated(note = "Use get_whitelist_page instead")]
+    pub fn get_whitelist(env: Env, caller: Address) -> Result<Vec<Address>, WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+        Self::get_whitelist_page(env, caller, 0, MAX_PAGE)
+    }
+
+    /// Get a paginated page of whitelisted addresses (admin only).
+    ///
+    /// Returns up to `limit` addresses starting at index `start` in the
+    /// enumeration index. `limit` is capped at [`MAX_PAGE`].
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `start` — Zero-based offset into the whitelist index.
+    /// - `limit` — Maximum number of addresses to return (capped at MAX_PAGE).
+    ///
+    /// # Returns
+    /// `Vec<Address>` containing up to `limit` whitelisted addresses.
+    pub fn get_whitelist_page(
+        env: Env,
+        caller: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<Address>, WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+
+        let index: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::WhitelistIndex)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if limit == 0 || start >= index.len() {
+            return Ok(Vec::new(&env));
+        }
+
+        let effective_limit = limit.min(MAX_PAGE);
+        let end = start.saturating_add(effective_limit).min(index.len());
+
+        let mut result = Vec::new(&env);
+        for (i, addr) in index.iter().enumerate() {
+            let idx = i as u32;
+            if idx >= end {
+                break;
+            }
+            if idx >= start {
+                result.push_back(addr.clone());
+            }
+        }
+        Ok(result)
+    }
+
+    /// Return the number of whitelisted addresses.
+    ///
+    /// No authentication required — this is a public read-only view function.
+    pub fn get_member_count(env: Env) -> u32 {
         env.storage()
             .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .unwrap_or_else(|| Vec::new(&env))
+            .get(&StorageKey::MemberCount)
+            .unwrap_or(0)
     }
 
     // -----------------------------------------------------------------------
@@ -693,15 +1065,15 @@ mod tests {
         let client = deploy_whitelist(&env, &admin);
         client.set_admin_cooldown(&admin, &1);
 
-        client.add_address(&admin, &addr1);
+        client.add_address(&admin, &addr1).unwrap();
         env.ledger().set_timestamp(1_000_001);
-        client.add_address(&admin, &addr2);
+        client.add_address(&admin, &addr2).unwrap();
 
-        assert_eq!(client.get_whitelist().len(), 2);
+        assert_eq!(client.get_member_count(), 2);
 
         env.ledger().set_timestamp(1_000_002);
-        client.clear_all(&admin);
-        assert!(client.get_whitelist().is_empty());
+        client.clear_all(&admin).unwrap();
+        assert_eq!(client.get_member_count(), 0);
     }
 
     #[test]
@@ -713,7 +1085,7 @@ mod tests {
         let client = CalloraWhitelistClient::new(&env, &contract_id);
 
         // Before init, whitelist should be empty
-        assert!(client.get_whitelist().is_empty());
+        assert_eq!(client.get_member_count(), 0);
         assert!(!client.is_whitelisted(&addr));
     }
 
@@ -934,10 +1306,281 @@ mod tests {
         assert_eq!(WhitelistError::Unauthorized as u32, 3);
         assert_eq!(WhitelistError::AddressAlreadyInWhitelist as u32, 4);
         assert_eq!(WhitelistError::AddressNotInWhitelist as u32, 5);
+        assert_eq!(WhitelistError::MemberCountOverflow as u32, 6);
 
         assert_eq!(WhitelistError::AdminCooldownActive as u32, 49);
         assert_eq!(WhitelistError::InvalidAdminCooldown as u32, 50);
         assert_eq!(WhitelistError::NoAdminTransferPending as u32, 51);
         assert_eq!(WhitelistError::NewAdminSameAsCurrent as u32, 52);
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #1421: Per-address persistent membership tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_add_then_is_whitelisted_count_plus_one() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        client.add_address(&admin, &addr1).unwrap();
+        assert!(client.is_whitelisted(addr1.clone()));
+        assert_eq!(client.get_member_count(), 1);
+    }
+
+    #[test]
+    fn test_add_duplicate_returns_already_in_whitelist() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        client.add_address(&admin, &addr1.clone()).unwrap();
+        env.ledger().set_timestamp(1_000_001);
+        let result = client.try_add_address(&admin, &addr1);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::AddressAlreadyInWhitelist)
+        );
+        assert_eq!(client.get_member_count(), 1);
+    }
+
+    #[test]
+    fn test_remove_non_member_returns_not_in_whitelist() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        let result = client.try_remove_address(&admin, &addr1);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::AddressNotInWhitelist)
+        );
+    }
+
+    #[test]
+    fn test_is_whitelisted_flat_with_1000_members() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        // Add 1000 members.
+        for _ in 0..1000u32 {
+            let a = Address::generate(&env);
+            client.add_address(&admin, &a).unwrap();
+            env.ledger().set_timestamp(env.ledger().timestamp() + 1);
+        }
+
+        assert_eq!(client.get_member_count(), 1000);
+    }
+
+    #[test]
+    fn test_get_whitelist_page_walks_all_members() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        // Add 50 members.
+        let mut expected: Vec<Address> = Vec::new(&env);
+        for _ in 0..50u32 {
+            let a = Address::generate(&env);
+            client.add_address(&admin, &a.clone()).unwrap();
+            env.ledger().set_timestamp(env.ledger().timestamp() + 1);
+            expected.push_back(a);
+        }
+
+        // Walk all pages.
+        let mut found: Vec<Address> = Vec::new(&env);
+        let mut start: u32 = 0;
+        let page_size: u32 = 10;
+
+        loop {
+            let page = client.get_whitelist_page(&admin, start, page_size).unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for a in page.iter() {
+                found.push_back(a.clone());
+            }
+            start += page_size;
+        }
+
+        // Every member appears exactly once.
+        assert_eq!(found.len(), expected.len());
+        for e in expected.iter() {
+            assert!(found.iter().any(|f| f == e));
+        }
+    }
+
+    #[test]
+    fn test_migrate_list_300_in_chunks_of_100() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        // Populate legacy WhitelistList with 300 entries directly in instance storage.
+        let mut legacy: Vec<Address> = Vec::new(&env);
+        for _ in 0..300u32 {
+            let a = Address::generate(&env);
+            legacy.push_back(a);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::WhitelistList, &legacy);
+
+        // Migrate in chunks of 100.
+        let m1 = client.migrate_list(&admin, 100).unwrap();
+        let m2 = client.migrate_list(&admin, 100).unwrap();
+        let m3 = client.migrate_list(&admin, 100).unwrap();
+
+        assert_eq!(m1 + m2 + m3, 300);
+        assert_eq!(client.get_member_count(), 300);
+
+        // Legacy key removed.
+        assert!(!env.storage().instance().has(&StorageKey::WhitelistList));
+
+        // All 300 members are in persistent storage.
+        let mut found = 0u32;
+        for a in legacy.iter() {
+            let m: bool = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::Member(a.clone()))
+                .unwrap_or(false);
+            if m {
+                found += 1;
+            }
+        }
+        assert_eq!(found, 300);
+    }
+
+    #[test]
+    fn test_clear_page_makes_all_not_whitelisted() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        let mut members: Vec<Address> = Vec::new(&env);
+        for _ in 0..20u32 {
+            let a = Address::generate(&env);
+            client.add_address(&admin, &a.clone()).unwrap();
+            env.ledger().set_timestamp(env.ledger().timestamp() + 1);
+            members.push_back(a);
+        }
+        assert_eq!(client.get_member_count(), 20);
+
+        // Clear in pages of 5 until empty.
+        let mut total_cleared: u32 = 0;
+        loop {
+            let cleared = client.clear_page(&admin, 5).unwrap();
+            total_cleared += cleared;
+            if cleared == 0 {
+                break;
+            }
+        }
+
+        assert_eq!(total_cleared, 20);
+        assert_eq!(client.get_member_count(), 0);
+
+        for m in members.iter() {
+            assert!(!client.is_whitelisted(m.clone()));
+        }
+    }
+
+    #[test]
+    fn test_set_admin_emits_one_nominated_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        let events_before = env.events().all();
+        let count_before = events_before.len();
+
+        client.set_admin(&admin, &new_admin.clone()).unwrap();
+
+        let events_after = env.events().all();
+        let nominated_count = events_after
+            .iter()
+            .skip(count_before)
+            .filter(|e| {
+                let (topics, _data) = e;
+                topics.iter().any(|t| {
+                    if let soroban_sdk::Val::Symbol(s) = t {
+                        s == Symbol::new(&env, "admin_nominated")
+                    } else {
+                        false
+                    }
+                })
+            })
+            .count();
+
+        assert_eq!(nominated_count, 1);
+    }
+
+    #[test]
+    fn test_member_ttl_extended_on_add_and_read() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        client.add_address(&admin, &addr1.clone()).unwrap();
+
+        // Check TTL after add.
+        let ttl_after_add = env
+            .storage()
+            .persistent()
+            .get_ttl(&StorageKey::Member(addr1.clone()));
+        assert!(ttl_after_add > 0);
+
+        // Read triggers TTL extension.
+        client.is_whitelisted(addr1.clone());
+
+        // Check TTL after read.
+        let ttl_after_read = env
+            .storage()
+            .persistent()
+            .get_ttl(&StorageKey::Member(addr1.clone()));
+        assert!(ttl_after_read >= MEMBER_TTL);
     }
 }

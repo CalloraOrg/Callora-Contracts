@@ -13,6 +13,7 @@ use soroban_sdk::contracterror;
 /// | 3    | Unauthorized                | Caller is not authorized for the operation           |
 /// | 4    | AddressAlreadyInWhitelist   | Address is already in the whitelist                  |
 /// | 5    | AddressNotInWhitelist       | Address is not in the whitelist                      |
+/// | 6    | MemberCountOverflow         | Member count would overflow `u32`                    |
 /// | 49   | AdminCooldownActive         | Admin cool-off window is still active                |
 /// | 50   | InvalidAdminCooldown        | Admin cool-off window is outside accepted bounds     |
 /// | 51   | NoAdminTransferPending      | No admin transfer is pending                         |
@@ -33,6 +34,8 @@ pub enum WhitelistError {
     /// Address is not found in the whitelist (code 5).
     /// Returned by `remove_address` when the address is absent.
     AddressNotInWhitelist = 5,
+    /// Member count would overflow `u32` (code 6).
+    MemberCountOverflow = 6,
 
     /// A critical admin action is still inside the global cool-off window (code 49).
     AdminCooldownActive = 49,
