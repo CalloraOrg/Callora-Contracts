@@ -21,29 +21,53 @@
 //!
 //! # Storage Layout
 //!
-//! - [`AccountLimits`] are stored in **instance** storage under
-//!   [`StorageKey::AccountLimits`]`(Address)`. They are sparse overrides; an
-//!   account with no explicit override falls back to the global
-//!   [`DEFAULT_LIMITS`] constant.
+//! - [`AccountLimits`] overrides are stored in **persistent** storage under
+//!   [`StorageKey::AccountLimits`]`(Address)` and their TTL is extended on
+//!   every read and write ([`CAPS_BUMP_THRESHOLD`] /
+//!   [`CAPS_BUMP_AMOUNT`]). They are sparse overrides; an account with no
+//!   explicit override falls back to the global [`DEFAULT_LIMITS`] constant.
+//!
+//!   Limits used to live in **instance** storage, which is loaded on every
+//!   call and bounded in size. With one entry per capped account they grew the
+//!   instance entry without bound and evicted the caps of existing accounts as
+//!   new ones were configured (#1414). Reads still fall back to the legacy
+//!   instance slot and migrate it to persistent storage on first touch, so an
+//!   upgrade does not drop existing overrides.
 //!
 //! - [`AccountState`] counters are stored in **persistent** storage under
 //!   [`StorageKey::AccountState`]`(Address)`. Persistent storage lets the
-//!   contract scale to many accounts (instance storage is small and shared
-//!   with config) and keeps counters alive across the typical 7-day ledger
-//!   archival window via TTL extensions on every increment/decrement.
+//!   contract scale to many accounts and keeps counters alive across the
+//!   typical ledger archival window via TTL extensions on every
+//!   increment/decrement.
+//!
+//! - Registered operators are stored as a persistent flag under
+//!   [`StorageKey::Operator`]`(Address)` with the same TTL policy.
 //!
 //! # Auth Model
 //!
+//! Counter mutations are **operator-gated**, not caller-gated (#1414). An
+//! account can no longer mint or clear its own counters, so a capped account
+//! cannot reset its own cap by calling `clear_bet` and then `place_bet` again.
+//! The operator must sign the call and be registered with
+//! [`CalloraYieldLimits::set_operator`]; the *cap* is always enforced on the
+//! account named in the call.
+//!
 //! | Entrypoint                                       | Authorized by                              |
 //! |--------------------------------------------------|-------------------------------------------|
-//! | `init`, `set_admin`, `accept_admin`, `upgrade`   | admin (`caller == admin`)                |
+//! | `init`                                           | `admin.require_auth()`                    |
+//! | `set_admin`, `accept_admin`, `upgrade`           | admin (`caller == admin`)                |
 //! | `cancel_admin_transfer`                          | admin (`caller == admin`)                |
 //! | `set_default_limits`, `set_account_limits`, `clear_account_limits` | admin (`caller == admin`) |
-//! | `place_bet`, `clear_bet`, `open_position`, `close_position`,       | caller (their own counter) |
-//! | `subscribe`, `unsubscribe`                      | caller (their own counter)                |
+//! | `set_operator`, `remove_operator`                | admin (`caller == admin`)                |
+//! | `place_bet`, `clear_bet`, `open_position`,       | registered operator; cap enforced on the |
+//! | `close_position`, `subscribe`, `unsubscribe`     | account named in the call                |
+//!
+//! Error precedence for counter mutations is: operator `require_auth`,
+//! then operator registration, then the per-account cap.
 //!
 //! Read-only views (`get_admin`, `get_default_limits`, `get_account_limits`,
-//! `get_account_state`, `can_*`) do **not** call `require_auth`.
+//! `get_account_state`, `get_operator`, `can_*`) do **not** call
+//! `require_auth`.
 //!
 //! # Overflow Safety
 //!
@@ -65,7 +89,7 @@ use crate::events;
 /// Storage-layout version recorded by [`StorageMigrationValidator`] for this
 /// contract. Bumped whenever the on-ledger schema changes so the pre-upgrade
 /// validation gate can enforce ordered, single-step migrations.
-const STORAGE_MIGRATION_VERSION: u32 = 1;
+const STORAGE_MIGRATION_VERSION: u32 = 2;
 
 /// Human-readable descriptor of the on-ledger storage layout.
 ///
@@ -75,8 +99,8 @@ const STORAGE_MIGRATION_VERSION: u32 = 1;
 /// [`StorageMigrationValidator`] can detect an accidental silent layout change
 /// (`StorageMigrationError::SilentLayoutChange`).
 const STORAGE_LAYOUT_DESCRIPTOR: &str = concat!(
-    "callora-yield-limits:v1:",
-    "StorageKey[Admin,PendingAdmin,DefaultLimits,AccountLimits,AccountState,WasmVersion];",
+    "callora-yield-limits:v2:",
+    "StorageKey[Admin,PendingAdmin,DefaultLimits,AccountLimits,AccountState,WasmVersion,Operator];",
     "AccountLimits[max_bets:u32,max_positions:u32,max_subscriptions:u32];",
     "AccountState[bets:u32,positions:u32,subscriptions:u32]"
 );
@@ -113,6 +137,17 @@ pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// TTL bump amount for instance storage keys.
 pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// TTL bump threshold for persistent cap overrides (`AccountLimits`) and the
+/// operator registry (`Operator`).
+///
+/// Caps used to live in instance storage, whose lifetime was tied to the
+/// contract config entry. They are now persistent and must be re-extended on
+/// read/write once their remaining TTL falls below this threshold.
+pub const CAPS_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 7;
+
+/// TTL bump amount for persistent cap overrides and operator flags (~30 days).
+pub const CAPS_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 
 /// Global default per-account limits applied when no explicit override exists
 /// for an account.
@@ -170,6 +205,12 @@ pub enum StorageKey {
     /// colliding with the `StorageKey::Version` marker written by
     /// [`StorageMigrationValidator`] in the same instance-storage namespace.
     WasmVersion,
+    /// Registered operator flag (`bool`, persistent storage).
+    ///
+    /// Only registered operators may mutate per-account counters, and only the
+    /// admin may register or remove them. Appended last so the discriminants of
+    /// every pre-existing key stay stable across the v1 → v2 layout change.
+    Operator(Address),
 }
 
 // ---------------------------------------------------------------------
@@ -362,27 +403,47 @@ pub fn write_default_limits(env: &Env, caps: &AccountLimits) -> Result<(), Yield
 
 /// Read the per-account override or fall back to [`read_default_limits`].
 ///
-/// Per-account overrides stored in instance storage survive across calls
-/// along with other config; persistent storage is reserved for the live
-/// state counters.
+/// Per-account overrides live in **persistent** storage so configuring caps for
+/// one account never grows (or evicts) the shared instance entry. The entry's
+/// TTL is extended on every read.
+///
+/// # Migration fallback
+///
+/// Overrides written by the pre-#1414 layout are still in *instance* storage
+/// under the same key. When the persistent slot is absent but the instance slot
+/// is present, the value is migrated to persistent storage (and the instance
+/// slot removed) before being returned. The migration is therefore lazy, does
+/// not require a dedicated entrypoint, and keeps working if an account is first
+/// touched long after the WASM upgrade.
 pub fn read_account_limits(env: &Env, account: &Address) -> AccountLimits {
-    if let Some(caps) = env
-        .storage()
-        .instance()
-        .get::<_, AccountLimits>(&StorageKey::AccountLimits(account.clone()))
-    {
+    let key = StorageKey::AccountLimits(account.clone());
+    if let Some(caps) = env.storage().persistent().get::<_, AccountLimits>(&key) {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, CAPS_BUMP_THRESHOLD, CAPS_BUMP_AMOUNT);
+        return caps;
+    }
+
+    // Legacy (v1) instance-storage slot: migrate it on first touch.
+    if let Some(caps) = env.storage().instance().get::<_, AccountLimits>(&key) {
+        env.storage().persistent().set(&key, &caps);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, CAPS_BUMP_THRESHOLD, CAPS_BUMP_AMOUNT);
+        env.storage().instance().remove(&key);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         return caps;
     }
-    env.storage()
-        .instance()
-        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
     read_default_limits(env)
 }
 
-/// Persist a per-account override and extend instance TTL.
+/// Persist a per-account override in persistent storage and extend its TTL.
+///
+/// Any legacy instance-storage slot for the same account is removed so the two
+/// layouts cannot disagree.
 ///
 /// # Errors
 /// - [`YieldLimitError::InvalidLimit`] — any cap exceeds [`MAX_CAP`].
@@ -394,24 +455,69 @@ pub fn write_account_limits(
     if !caps.is_valid() {
         return Err(YieldLimitError::InvalidLimit);
     }
+    let key = StorageKey::AccountLimits(account.clone());
+    env.storage().persistent().set(&key, caps);
     env.storage()
-        .instance()
-        .set(&StorageKey::AccountLimits(account.clone()), caps);
+        .persistent()
+        .extend_ttl(&key, CAPS_BUMP_THRESHOLD, CAPS_BUMP_AMOUNT);
+    if env.storage().instance().has(&key) {
+        env.storage().instance().remove(&key);
+    }
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     Ok(())
 }
 
-/// Remove any per-account override. After this call the account falls back
-/// to the global default caps.
+/// Remove any per-account override (persistent and legacy instance slots).
+/// After this call the account falls back to the global default caps.
 pub fn clear_account_limits(env: &Env, account: &Address) {
-    env.storage()
-        .instance()
-        .remove(&StorageKey::AccountLimits(account.clone()));
+    let key = StorageKey::AccountLimits(account.clone());
+    env.storage().persistent().remove(&key);
+    env.storage().instance().remove(&key);
     env.storage()
         .instance()
         .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+}
+
+/// Return `true` when `operator` is a registered operator.
+///
+/// Extends the persistent flag's TTL when it exists so an operator that is only
+/// used occasionally does not silently drop out of the registry.
+pub fn read_operator(env: &Env, operator: &Address) -> bool {
+    let key = StorageKey::Operator(operator.clone());
+    let registered = env
+        .storage()
+        .persistent()
+        .get::<_, bool>(&key)
+        .unwrap_or(false);
+    if registered {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, CAPS_BUMP_THRESHOLD, CAPS_BUMP_AMOUNT);
+    }
+    registered
+}
+
+/// Authenticate `operator` and require that it is registered.
+///
+/// # Error precedence
+/// 1. `operator.require_auth()` — an unsigned call never reaches contract
+///    logic.
+/// 2. [`YieldLimitError::Unauthorized`] — the signer is not a registered
+///    operator.
+///
+/// The per-account cap is evaluated by the caller after this check, so cap
+/// errors are never reported to an unregistered caller.
+pub fn require_operator(env: &Env, operator: &Address) -> Result<(), YieldLimitError> {
+    operator.require_auth();
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    if !read_operator(env, operator) {
+        return Err(YieldLimitError::Unauthorized);
+    }
+    Ok(())
 }
 
 /// Read the live per-account counters, returning a zero struct if the
@@ -493,6 +599,11 @@ impl CalloraYieldLimits {
     /// # Errors
     /// - [`YieldLimitError::AlreadyInitialized`] — admin already set.
     pub fn init(env: Env, admin: Address) -> Result<(), YieldLimitError> {
+        // Authenticate before touching storage. Without this, whoever calls
+        // `init` first between deploy and initialization becomes the admin and
+        // permanently controls every admin entrypoint, including `upgrade`
+        // (#1414).
+        admin.require_auth();
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(YieldLimitError::AlreadyInitialized);
         }
@@ -659,99 +770,182 @@ impl CalloraYieldLimits {
     }
 
     // -----------------------------------------------------------------
-    // User-gated counter mutators
+    // Operator registry (admin only)
     // -----------------------------------------------------------------
 
-    /// Increment the caller's open-bet counter after enforcing auth and
-    /// the per-account cap.
-    pub fn place_bet(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let caps = read_account_limits(&env, &caller);
-        let mut state = read_account_state(&env, &caller);
+    /// Register `operator` as an authorised counter mutator (admin only).
+    ///
+    /// Re-registering an operator refreshes its persistent TTL and emits the
+    /// event again; it is otherwise a no-op.
+    pub fn set_operator(
+        env: Env,
+        caller: Address,
+        operator: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
+        let key = StorageKey::Operator(operator.clone());
+        env.storage().persistent().set(&key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, CAPS_BUMP_THRESHOLD, CAPS_BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_operator_set(&env), caller, operator.clone()),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Remove an operator from the registry (admin only).
+    ///
+    /// Removing an unknown operator is a safe no-op and emits no event.
+    /// Counter mutations from the removed address fail with `Unauthorized`
+    /// immediately afterwards; existing counters are untouched.
+    pub fn remove_operator(
+        env: Env,
+        caller: Address,
+        operator: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
+        let key = StorageKey::Operator(operator.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            env.events().publish(
+                (
+                    events::event_operator_removed(&env),
+                    caller,
+                    operator.clone(),
+                ),
+                (),
+            );
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------
+    // Operator-gated counter mutators
+    // -----------------------------------------------------------------
+
+    /// Increment `account`'s open-bet counter after enforcing operator auth
+    /// and the account's per-account cap.
+    ///
+    /// Error precedence: operator auth, then operator registration, then the
+    /// cap (`BetsAtCap`).
+    pub fn place_bet(env: Env, operator: Address, account: Address) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let caps = read_account_limits(&env, &account);
+        let mut state = read_account_state(&env, &account);
         // Pre-check: surfacing BetsAtCap as a typed error gives callers a
         // stable code to branch on rather than a generic panic.
         if state.bets >= caps.max_bets {
             return Err(YieldLimitError::BetsAtCap);
         }
         state.add_bet()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_bet_placed(&env), caller.clone()),
+            (events::event_bet_placed(&env), operator, account.clone()),
             (state.bets, caps.max_bets),
         );
         Ok(())
     }
 
-    /// Decrement the caller's open-bet counter after enforcing auth.
-    pub fn clear_bet(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let mut state = read_account_state(&env, &caller);
+    /// Decrement `account`'s open-bet counter (operator only).
+    pub fn clear_bet(env: Env, operator: Address, account: Address) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let mut state = read_account_state(&env, &account);
         state.sub_bet()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_bet_cleared(&env), caller.clone()),
+            (events::event_bet_cleared(&env), operator, account.clone()),
             state.bets,
         );
         Ok(())
     }
 
-    /// Increment the caller's open-position counter after enforcing auth
-    /// and the per-account cap.
-    pub fn open_position(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let caps = read_account_limits(&env, &caller);
-        let mut state = read_account_state(&env, &caller);
+    /// Increment `account`'s open-position counter after enforcing operator
+    /// auth and the account's per-account cap.
+    pub fn open_position(
+        env: Env,
+        operator: Address,
+        account: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let caps = read_account_limits(&env, &account);
+        let mut state = read_account_state(&env, &account);
         if state.positions >= caps.max_positions {
             return Err(YieldLimitError::PositionsAtCap);
         }
         state.add_position()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_position_opened(&env), caller.clone()),
+            (
+                events::event_position_opened(&env),
+                operator,
+                account.clone(),
+            ),
             (state.positions, caps.max_positions),
         );
         Ok(())
     }
 
-    /// Decrement the caller's open-position counter after enforcing auth.
-    pub fn close_position(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let mut state = read_account_state(&env, &caller);
+    /// Decrement `account`'s open-position counter (operator only).
+    pub fn close_position(
+        env: Env,
+        operator: Address,
+        account: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let mut state = read_account_state(&env, &account);
         state.sub_position()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_position_closed(&env), caller.clone()),
+            (
+                events::event_position_closed(&env),
+                operator,
+                account.clone(),
+            ),
             state.positions,
         );
         Ok(())
     }
 
-    /// Increment the caller's subscription counter after enforcing auth
-    /// and the per-account cap.
-    pub fn subscribe(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let caps = read_account_limits(&env, &caller);
-        let mut state = read_account_state(&env, &caller);
+    /// Increment `account`'s subscription counter after enforcing operator
+    /// auth and the account's per-account cap.
+    pub fn subscribe(env: Env, operator: Address, account: Address) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let caps = read_account_limits(&env, &account);
+        let mut state = read_account_state(&env, &account);
         if state.subscriptions >= caps.max_subscriptions {
             return Err(YieldLimitError::SubscriptionsAtCap);
         }
         state.add_subscription()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_subscription_added(&env), caller.clone()),
+            (
+                events::event_subscription_added(&env),
+                operator,
+                account.clone(),
+            ),
             (state.subscriptions, caps.max_subscriptions),
         );
         Ok(())
     }
 
-    /// Decrement the caller's subscription counter after enforcing auth.
-    pub fn unsubscribe(env: Env, caller: Address) -> Result<(), YieldLimitError> {
-        caller.require_auth();
-        let mut state = read_account_state(&env, &caller);
+    /// Decrement `account`'s subscription counter (operator only).
+    pub fn unsubscribe(
+        env: Env,
+        operator: Address,
+        account: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_operator(&env, &operator)?;
+        let mut state = read_account_state(&env, &account);
         state.sub_subscription()?;
-        write_account_state(&env, &caller, &state);
+        write_account_state(&env, &account, &state);
         env.events().publish(
-            (events::event_subscription_removed(&env), caller.clone()),
+            (
+                events::event_subscription_removed(&env),
+                operator,
+                account.clone(),
+            ),
             state.subscriptions,
         );
         Ok(())
@@ -774,6 +968,11 @@ impl CalloraYieldLimits {
     /// Read the live per-account counters.
     pub fn get_account_state(env: Env, account: Address) -> AccountState {
         read_account_state(&env, &account)
+    }
+
+    /// Return `true` when `operator` may mutate counters.
+    pub fn get_operator(env: Env, operator: Address) -> bool {
+        read_operator(&env, &operator)
     }
 
     /// Dry-run check: would `place_bet` succeed for `account`?
