@@ -313,9 +313,10 @@ fn test_upgrade_alias_does_not_execute_immediately() {
 fn event_emitted(env: &Env, topic: &str) -> bool {
     let expected = Symbol::new(env, topic);
     env.events().all().iter().any(|e| {
-        e.1.first()
-            .map(|t| Symbol::try_from_val(env, t).unwrap_or(Symbol::new(env, "")) == expected)
-            .unwrap_or(false)
+        !e.1.is_empty() && {
+            let sym: Symbol = e.1.get(0).unwrap().into_val(env);
+            sym == expected
+        }
     })
 }
 
