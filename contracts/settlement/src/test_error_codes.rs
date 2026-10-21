@@ -56,6 +56,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (48, SettlementError::DuplicateRequestId),
         (49, SettlementError::LengthMismatch),
         (50, SettlementError::InvalidCursor),
+        (51, SettlementError::UpgradeProposalExpired),
     ];
 
     let mut seen = BTreeSet::new();
@@ -67,7 +68,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 #[test]
@@ -80,8 +81,8 @@ fn error_code_docs_list_every_settlement_code() {
         "| 4 | `AmountNotPositive` | Settlement | Amount must be greater than zero |",
         "| 5 | `DeveloperRequired` | Settlement | `to_pool=false` requires a developer address |",
         "| 6 | `DeveloperMustBeNone` | Settlement | `to_pool=true` forbids a developer address |",
-        "| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `ii28` |",
-        "| 8 | `DeveloperOverflow` | Settlement | Developer balance credit would overflow `ii128` |",
+        "| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `i128` |",
+        "| 8 | `DeveloperOverflow` | Settlement | Developer balance credit would overflow `i128` |",
         "| 9 | `UsdcTokenNotConfigured` | Settlement | USDC token address is not configured |",
         "| 10 | `InsufficientDeveloperBalance` | Settlement | Developer balance is lower than the withdrawal |",
         "| 11 | `DeveloperBalanceUnderflow` | Settlement | Developer balance debit would underflow |",
@@ -121,6 +122,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |",
         "| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |",
         "| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |",
+        "| 51 | `UpgradeProposalExpired` | Settlement | Upgrade proposal is past its expiry |",
     ];
 
     for line in expected_lines {

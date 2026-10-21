@@ -404,6 +404,31 @@ This records a [`PendingUpgrade`] snapshot and emits an `upgrade_proposed` event
 | `wasm_hash` | `<NEW_WASM_HASH>` |
 | `proposed_at` | ledger timestamp at proposal |
 | `execute_after` | `proposed_at + 172800` (48 h) |
+| `expires_at` | `execute_after + 604800` (7 days grace; inclusive upper bound) |
+
+A proposal may be executed any time in the window
+`[execute_after, expires_at]`. After `expires_at`, `execute_upgrade` rejects
+it with `UpgradeProposalExpired (51)` and the proposal is left untouched.
+Re-proposing over an existing proposal supersedes it (restarting the timelock)
+and emits an `upgrade_replaced` event; the old proposal is not cancelled.
+
+**Upgrade expiry and legacy proposals**
+
+Proposals created before the `expires_at` field was added are stored without
+it. They still decode: a legacy proposal (no `expires_at`) is re-animated on
+first read with `expires_at = execute_after + UPGRADE_GRACE_SECONDS` (a fresh
+7-day grace window) and re-persisted. This keeps historical proposals
+executable within their grace window rather than treating them as immediately
+expired. The legacy on-disk shape is [`LegacyPendingUpgrade`].
+
+**Admin rotation**
+
+When an admin rotates via `set_admin` / `accept_admin`, any pending upgrade
+proposal is cleared and an `upgrade_cancelled` event with reason
+`"admin_rotation"` is emitted. This prevents a new admin from executing code
+chosen by the previous (possibly compromised) admin without re-proposing it.
+Pending developer migrations are intentionally left in place: they are bound to
+a developer, not an admin identity, and remain executable by the new admin.
 
 **Step 4 — Verify the proposal is visible**
 
@@ -456,16 +481,18 @@ soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_global_pool
 | Event topic | Emitted by | Key data |
 |---|---|---|
 | `upgrade_proposed` | `propose_upgrade` | `wasm_hash`, `proposed_at`, `execute_after` |
-| `upgrade_cancelled` | `cancel_upgrade` | `wasm_hash`, `cancelled_at` |
+| `upgrade_replaced` | `propose_upgrade` | superseded `wasm_hash`, `proposed_at`, `execute_after`, `expires_at`, `replaced_at` |
+| `upgrade_cancelled` | `cancel_upgrade`, `accept_admin` (rotation) | `wasm_hash`, `cancelled_at`, `reason` (`"user_initiated"` or `"admin_rotation"`) |
 | `upgraded` | `execute_upgrade` | `new_wasm_hash` |
 
 ##### Error Codes
 
 | Code | Variant | Meaning |
 |---|---|---|
-| 43 | `NoUpgradePending` | `execute_upgrade` / `cancel_upgrade` called with no active proposal |
-| 44 | `ZeroWasmHash` | All-zero `new_wasm_hash` rejected by `propose_upgrade` |
-| 45 | `UpgradeTimelockNotExpired` | `execute_upgrade` called before `execute_after` |
+| 44 | `NoUpgradePending` | `execute_upgrade` / `cancel_upgrade` called with no active proposal |
+| 45 | `ZeroWasmHash` | All-zero `new_wasm_hash` rejected by `propose_upgrade` |
+| 46 | `UpgradeTimelockNotExpired` | `execute_upgrade` called before `execute_after` |
+| 51 | `UpgradeProposalExpired` | `execute_upgrade` called after `expires_at`; proposal left untouched |
 
 ##### Full Redeployment (Legacy / Fallback)
 

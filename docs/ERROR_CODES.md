@@ -120,6 +120,7 @@ must not be reassigned once released.
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
+| 51 | `UpgradeProposalExpired` | Settlement | Upgrade proposal is past its expiry |
 
 ## Revenue Pool
 
@@ -159,3 +160,14 @@ must not be reassigned once released.
 | 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
 | 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
 | 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
+
+## Freeze
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Freeze | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Freeze | `init` was called more than once |
+| 3 | `Unauthorized` | Freeze | Caller is not authorized for the operation |
+| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
+| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
+| 6 | `Overflow` | Freeze | Arithmetic overflow detected |
