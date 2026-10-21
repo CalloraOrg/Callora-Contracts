@@ -866,3 +866,42 @@ remaining TTL is at or below `INSTANCE_BUMP_THRESHOLD`.
   `test_get_error_description_bumps_instance_ttl`,
   `test_log_error_bumps_instance_ttl`,
   `test_get_recent_error_bumps_instance_ttl`.
+
+### CPU impact of the instance-TTL bumps
+
+**Methodology.** CPU and memory are read from the Soroban test host with
+`env.cost_estimate().resources()` (`instructions` for CPU, `read_bytes +
+write_bytes` for memory) after a single entrypoint invocation — the same
+mechanism used by the repository's gas-snapshot tests
+(`docs/GAS_SNAPSHOT.md`, `contracts/vault/src/test_gas_budget.rs`). The
+"before" column was measured against the pre-change contract code (the base
+revision of `contracts/{freeze,checkpoint,errors}/src/lib.rs`) with the same
+harness, the same host configuration, and `--test-threads=1`; the "after" column
+was measured against the code in this branch. Values are host-side instruction
+counts, not mainnet fee simulations.
+
+| Contract | Entrypoint | CPU before | CPU after | Δ CPU | Δ CPU % | Mem before | Mem after |
+|----------|------------|-----------:|----------:|------:|--------:|-----------:|----------:|
+| `callora-freeze` | `init` | 36,469 | 41,876 | +5,407 | +14.8 % | 388 | 440 |
+| `callora-freeze` | `freeze` | 66,145 | 83,832 | +17,687 | +26.7 % | 592 | 644 |
+| `callora-freeze` | `unfreeze` | 74,877 | 100,004 | +25,127 | +33.6 % | 592 | 644 |
+| `callora-freeze` | `get_admin` | 21,594 | 27,746 | +6,152 | +28.5 % | 212 | 264 |
+| `callora-freeze` | `is_frozen` | 20,959 | 27,111 | +6,152 | +29.4 % | 212 | 264 |
+| `callora-freeze` | `get_freeze_status` | 30,237 | 36,389 | +6,152 | +20.3 % | 212 | 264 |
+| `callora-checkpoint` | `init` | 42,370 | 47,777 | +5,407 | +12.8 % | 448 | 500 |
+| `callora-checkpoint` | `create_checkpoint` | 114,370 | 122,002 | +7,632 | +6.7 % | 1,116 | 1,168 |
+| `callora-checkpoint` | `get_checkpoint` | 35,490 | 42,663 | +7,173 | +20.2 % | 620 | 672 |
+| `callora-checkpoint` | `get_checkpoint_count` | 28,718 | 35,876 | +7,158 | +24.9 % | 272 | 324 |
+| `callora-checkpoint` | `get_latest_checkpoint` | 29,875 | 43,619 | +13,744 | +46.0 % | 272 | 324 |
+| `callora-checkpoint` | `get_admin` | 27,584 | 34,742 | +7,158 | +25.9 % | 272 | 324 |
+| `callora-errors` | `init` | 28,786 | 34,193 | +5,407 | +18.8 % | 352 | 404 |
+| `callora-errors` | `register_error` | 50,317 | 55,871 | +5,554 | +11.0 % | 356 | 408 |
+| `callora-errors` | `log_error` | 50,799 | 56,113 | +5,314 | +10.5 % | 492 | 544 |
+| `callora-errors` | `get_error_description` | 24,362 | 29,337 | +4,975 | +20.4 % | 284 | 336 |
+| `callora-errors` | `get_recent_error` | 20,533 | 25,556 | +5,023 | +24.5 % | 312 | 364 |
+
+A single instance `extend_ttl` costs roughly 5,000–7,200 host instructions
+(one instance read + one instance write of the TTL). `callora-freeze::unfreeze`
+and `callora-checkpoint::get_latest_checkpoint` are higher because they perform
+two bumps in one call (the wrapper view bumps the instance and then delegates to
+another entrypoint that bumps it again).
