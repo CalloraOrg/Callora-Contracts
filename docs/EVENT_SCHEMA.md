@@ -3,6 +3,10 @@
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
 
+## Change Note (2026-10) — Issue #1411: recipient audit trail and TTL management
+
+`contracts/recipient`: `update_recipient` now emits `RecipientUpdatedEvent` carrying `{ name, old_address, new_address }` instead of only the new record, providing a verifiable audit trail of payout address modifications. Registry instances and persistent entries are bumped across write and view entrypoints.
+
 ## Change Note (2026-04)
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
@@ -1880,6 +1884,90 @@ Emitted by `set_freeze_operator()` for both set and clear operations.
 
 ---
 
+## Contract: `callora-recipient` (v0.1.0)
+
+Events emitted by the recipient registry contract for payout address resolution, indexing, and auditing updates.
+
+### `init`
+
+Emitted once by `init()` when initializing the registry admin.
+
+| Index   | Location | Type    | Description                     |
+|---------|----------|---------|---------------------------------|
+| topic 0 | topics   | Symbol  | `"init"`                        |
+| topic 1 | topics   | Address | `admin` — initial admin address |
+| data    | data     | `()`    | empty                           |
+
+```json
+{
+  "topics": ["init", "GADMIN..."],
+  "data": null
+}
+```
+
+---
+
+### `recipient_registered`
+
+Emitted by `register_recipient()` when a new recipient is mapped to an address.
+
+| Index     | Location | Type    | Description                       |
+|-----------|----------|---------|-----------------------------------|
+| topic 0   | topics   | Symbol  | `"recipient_registered"`          |
+| topic 1   | topics   | String  | `name` — recipient name           |
+| `name`    | data     | String  | recipient name identifier         |
+| `address` | data     | Address | on-ledger payout address          |
+
+```json
+{
+  "topics": ["recipient_registered", "vendor"],
+  "data": { "name": "vendor", "address": "GADDR..." }
+}
+```
+
+---
+
+### `recipient_updated`
+
+Emitted by `update_recipient()` when an existing recipient's payout address is changed.
+Carries both `old_address` and `new_address` to provide an immutable audit trail for indexers and compliance.
+
+| Index         | Location | Type    | Description                       |
+|---------------|----------|---------|-----------------------------------|
+| topic 0       | topics   | Symbol  | `"recipient_updated"`             |
+| topic 1       | topics   | String  | `name` — recipient name           |
+| `name`        | data     | String  | recipient name identifier         |
+| `old_address` | data     | Address | previous on-ledger payout address |
+| `new_address` | data     | Address | updated on-ledger payout address  |
+
+```json
+{
+  "topics": ["recipient_updated", "vendor"],
+  "data": { "name": "vendor", "old_address": "GOLD...", "new_address": "GNEW..." }
+}
+```
+
+---
+
+### `recipient_removed`
+
+Emitted by `remove_recipient()` when a recipient is removed from the registry.
+
+| Index   | Location | Type   | Description             |
+|---------|----------|--------|-------------------------|
+| topic 0 | topics   | Symbol | `"recipient_removed"`   |
+| topic 1 | topics   | String | `name` — recipient name |
+| data    | data     | `()`   | empty                   |
+
+```json
+{
+  "topics": ["recipient_removed", "vendor"],
+  "data": null
+}
+```
+
+---
+
 ## Contract: Callora Refund
 
 ### `initialized`
@@ -2064,6 +2152,10 @@ Emitted when the admin updates the refund configuration.
 | `freeze_set`             | freeze          | `freeze()`                               |
 | `freeze_cleared`         | freeze          | `unfreeze()`                             |
 | `freeze_operator_set`    | freeze          | `set_freeze_operator()` (set or clear)   |
+| `init`                   | recipient       | `init()`                                 |
+| `recipient_registered`   | recipient       | `register_recipient()`                   |
+| `recipient_updated`      | recipient       | `update_recipient()`                     |
+| `recipient_removed`      | recipient       | `remove_recipient()`                     |
 | `initialized`            | refund          | `init()`                                 |
 | `refund_requested`       | refund          | `request_refund()`                       |
 | `refund_processed`       | refund          | `approve_refund()`, `reject_refund()`, `process_refund()` |
@@ -2093,5 +2185,6 @@ Emitted when the admin updates the refund configuration.
 | 0.1.1   | distribute    | Publish per-leg transfer events (`distribute_started`, `distribute`, `distribute_completed`) with recipient topic and `DistributionLifecycleEvent` payload for payout reconciliation |
 | 0.0.1   | freeze        | Added `freeze_initialized`, `freeze_set`, `freeze_cleared`, `freeze_operator_set` events; `reason` persisted in storage; `get_freeze_status()` view added (Issue #1217) |
 | 0.3.0   | revenue-pool  | Moved `admin_changed` from `set_admin()` to `accept_admin()` so nomination no longer announces a change (Issue #1163) |
+| 0.1.0   | recipient     | Registry TTL management and audit trail: `recipient_updated` emits `RecipientUpdatedEvent { name, old_address, new_address }` (Issue #1411) |
 | 0.1.0   | refund        | Extended `refund_processed` event with `token`, `fee`, and `net`; added `fees_withdrawn` event on `withdraw_fees()` |
 

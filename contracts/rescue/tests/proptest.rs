@@ -2,12 +2,12 @@
 //!
 //! # Invariants
 //!
-//! 1. **Balance sync** — After every operation, the sum of the cumulative
-//!    `total_rescued` counter plus the on-ledger token balance held by the
-//!    contract must equal the initial contract balance.  Rejected operations
-//!    must leave both values unchanged.
+//! 1. **Balance sync** — After every operation, the sum of the per-token
+//!    `total_rescued_for(token)` counter plus the on-ledger token balance held
+//!    by the contract must equal the initial contract balance.  Rejected
+//!    operations must leave both values unchanged.
 //!
-//! 2. **Counter monotonicity** — `total_rescued` is monotonically
+//! 2. **Counter monotonicity** — `total_rescued_for(token)` is monotonically
 //!    non-decreasing; it increases only by the exact `amount` of a successful
 //!    rescue and never changes on failure.
 //!
@@ -18,8 +18,13 @@
 //! 4. **Amount validation** — Zero and negative amounts are always rejected
 //!    with [`RescueError::AmountNotPositive`] regardless of the caller.
 //!
-//! 5. **Cap enforcement** — `rescue_capped` with `amount > cap` (or
-//!    `cap <= 0`) always fails with [`RescueError::ExceedsCap`].
+//! 5. **Cap enforcement** — `rescue_capped` with `amount > cap` always fails
+//!    with [`RescueError::ExceedsCap`].  `cap <= 0` always fails with
+//!    [`RescueError::InvalidCap`].
+//!
+//! 6. **Self-transfer guard** — `rescue` / `rescue_capped` with
+//!    `to == current_contract_address()` always fails with
+//!    [`RescueError::InvalidRecipient`].
 //!
 //! # Generator
 //!
@@ -90,7 +95,7 @@ enum Op {
     RescueCapped,
     /// rescue_capped with amount > cap — must be rejected.
     RescueCappedExceedsCap,
-    /// rescue_capped with cap <= 0 — must be rejected.
+    /// rescue_capped with cap <= 0 — must be rejected with InvalidCap.
     RescueCappedZeroCap,
     /// rescue / rescue_capped with a non-admin caller — must be rejected.
     RescueUnauthorized,
@@ -141,7 +146,7 @@ fn setup(
         token_admin_client.mint(&contract_id, &initial_balance);
     }
 
-    // Mint some tokens to the to-address so we can attempt transfers later.
+    // Mint some tokens to the admin so we can attempt transfers later.
     token_admin_client.mint(&admin, &initial_balance);
 
     client.init(&admin);
@@ -149,8 +154,8 @@ fn setup(
     (client, admin, token_client, token_admin_client)
 }
 
-/// Assert the core invariant: `total_rescued` + on-ledger balance == initial
-/// balance, and `total_rescued` is non-negative.
+/// Assert the core invariant: `total_rescued_for(token)` + on-ledger balance
+/// == initial balance, and the counter is non-negative.
 fn assert_invariant(
     client: &CalloraRescueClient<'_>,
     token_client: &token::Client<'_>,
@@ -159,22 +164,22 @@ fn assert_invariant(
     seed: u64,
     step: u32,
 ) {
-    let total = client.total_rescued();
+    let total = client.total_rescued_for(&token_client.address);
     let on_ledger = token_client.balance(&client.address);
 
-    // total_rescued must never exceed the initial balance
+    // total_rescued_for must never go negative
     assert!(
         total >= 0,
-        "seed={seed} step={step}: total_rescued ({total}) went negative"
+        "seed={seed} step={step}: total_rescued_for ({total}) went negative"
     );
 
-    // total_rescued must equal what we expect
+    // total_rescued_for must equal what we expect
     assert_eq!(
         total, expected_total,
-        "seed={seed} step={step}: total_rescued ({total}) != expected ({expected_total})"
+        "seed={seed} step={step}: total_rescued_for ({total}) != expected ({expected_total})"
     );
 
-    // on-ledger balance must be exactly initial minus total_rescued
+    // on-ledger balance must be exactly initial minus total_rescued_for
     let expected_on_ledger = initial_balance - total;
     assert_eq!(
         on_ledger, expected_on_ledger,
@@ -197,7 +202,7 @@ fn run_trace(seed: u64) {
     assert_invariant(&client, &token_client, INITIAL_BALANCE, 0, seed, 0);
 
     for step in 1..=TRACE_LEN {
-        let total_before = client.total_rescued();
+        let total_before = client.total_rescued_for(&token_client.address);
         let balance_before = token_client.balance(&client.address);
 
         match pick_op(&mut rng) {
@@ -291,8 +296,9 @@ fn run_trace(seed: u64) {
 
             // --- Capped rescue exceeding cap ---------------------------------------
             Op::RescueCappedExceedsCap => {
-                let amount = rng.range_i128(1, MAX_RESCUE);
-                let cap = rng.range_i128(0, amount - 1);
+                // cap must be at least 1 (positive), amount must exceed it
+                let cap = rng.range_i128(1, MAX_RESCUE);
+                let amount = rng.range_i128(cap + 1, cap + MAX_RESCUE);
                 let result = client.try_rescue_capped(
                     &admin,
                     &token_client.address,
@@ -307,20 +313,22 @@ fn run_trace(seed: u64) {
                 );
             }
 
-            // --- Capped rescue with zero cap ---------------------------------------
+            // --- Capped rescue with zero/negative cap — InvalidCap ----------------
             Op::RescueCappedZeroCap => {
                 let amount = rng.range_i128(1, MAX_RESCUE);
+                // Use either 0 or a negative cap to trigger InvalidCap.
+                let cap = rng.range_i128(-MAX_RESCUE, 0);
                 let result = client.try_rescue_capped(
                     &admin,
                     &token_client.address,
                     &recovered,
                     &amount,
-                    &0,
+                    &cap,
                 );
                 assert_eq!(
                     result.unwrap_err().unwrap(),
-                    RescueError::ExceedsCap,
-                    "seed={seed} step={step}: rescue_capped({amount}, cap=0) must return ExceedsCap"
+                    RescueError::InvalidCap, // changed from ExceedsCap
+                    "seed={seed} step={step}: rescue_capped({amount}, cap={cap}) must return InvalidCap"
                 );
             }
 
@@ -352,11 +360,11 @@ fn run_trace(seed: u64) {
             step,
         );
 
-        // **Monotonicity**: total_rescued must not have decreased.
-        let total_after = client.total_rescued();
+        // **Monotonicity**: total_rescued_for must not have decreased.
+        let total_after = client.total_rescued_for(&token_client.address);
         assert!(
             total_after >= total_before,
-            "seed={seed} step={step}: total_rescued decreased from {total_before} to {total_after}"
+            "seed={seed} step={step}: total_rescued_for decreased from {total_before} to {total_after}"
         );
     }
 }
@@ -402,11 +410,11 @@ fn rescue_exact_full_balance_succeeds_and_drains() {
     // Rescue the entire balance
     client.rescue(&admin, &token_addr, &to, &5000);
 
-    assert_eq!(client.total_rescued(), 5000);
+    assert_eq!(client.total_rescued_for(&token_addr), 5000);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
 
-/// After a rejected operation (AmountNotPositive), total_rescued and
+/// After a rejected operation (AmountNotPositive), total_rescued_for and
 /// on-ledger balance must be unchanged.
 #[test]
 fn rejected_amount_not_positive_does_not_mutate_state() {
@@ -430,19 +438,19 @@ fn rejected_amount_not_positive_does_not_mutate_state() {
 
     // Perform a successful rescue first to have non-zero state
     client.rescue(&admin, &token_addr, &to, &500);
-    assert_eq!(client.total_rescued(), 500);
+    assert_eq!(client.total_rescued_for(&token_addr), 500);
 
     // Now try zero amount
-    let total_before = client.total_rescued();
+    let total_before = client.total_rescued_for(&token_addr);
     let balance_before = token_client.balance(&contract_id);
 
     let result = client.try_rescue(&admin, &token_addr, &to, &0);
     assert_eq!(result.unwrap_err().unwrap(), RescueError::AmountNotPositive);
 
     assert_eq!(
-        client.total_rescued(),
+        client.total_rescued_for(&token_addr),
         total_before,
-        "total_rescued changed after rejected zero-amount rescue"
+        "total_rescued_for changed after rejected zero-amount rescue"
     );
     assert_eq!(
         token_client.balance(&contract_id),
@@ -451,7 +459,7 @@ fn rejected_amount_not_positive_does_not_mutate_state() {
     );
 }
 
-/// After a rejected Unauthorized operation, total_rescued and on-ledger
+/// After a rejected Unauthorized operation, total_rescued_for and on-ledger
 /// balance must be unchanged.
 #[test]
 fn rejected_unauthorized_does_not_mutate_state() {
@@ -475,21 +483,21 @@ fn rejected_unauthorized_does_not_mutate_state() {
 
     // Perform a successful rescue first
     client.rescue(&admin, &token_addr, &to, &300);
-    assert_eq!(client.total_rescued(), 300);
+    assert_eq!(client.total_rescued_for(&token_addr), 300);
 
     let imposter = Address::generate(&env);
     env.set_auths(&[]);
 
-    let total_before = client.total_rescued();
+    let total_before = client.total_rescued_for(&token_addr);
     let balance_before = token_client.balance(&contract_id);
 
     let result = client.try_rescue(&imposter, &token_addr, &to, &100);
     assert!(result.is_err());
 
     assert_eq!(
-        client.total_rescued(),
+        client.total_rescued_for(&token_addr),
         total_before,
-        "total_rescued changed after rejected unauthorized rescue"
+        "total_rescued_for changed after rejected unauthorized rescue"
     );
     assert_eq!(
         token_client.balance(&contract_id),
@@ -499,7 +507,7 @@ fn rejected_unauthorized_does_not_mutate_state() {
 }
 
 /// Multiple rescues from the same token accumulate correctly in
-/// total_rescued and deplete the on-ledger balance accordingly.
+/// total_rescued_for and deplete the on-ledger balance accordingly.
 #[test]
 fn multiple_rescues_accumulate_correctly() {
     let env = Env::default();
@@ -529,9 +537,9 @@ fn multiple_rescues_accumulate_correctly() {
         let expected_balance: i128 = 10_000 - expected_total;
 
         assert_eq!(
-            client.total_rescued(),
+            client.total_rescued_for(&token_addr),
             expected_total,
-            "total_rescued mismatch after rescue {}",
+            "total_rescued_for mismatch after rescue {}",
             i + 1
         );
         assert_eq!(
@@ -573,6 +581,62 @@ fn rescue_capped_enforces_cap_above_balance() {
     assert_eq!(err, RescueError::ExceedsCap);
 
     // State must be unchanged
-    assert_eq!(client.total_rescued(), 0);
+    assert_eq!(client.total_rescued_for(&token_addr), 0);
     assert_eq!(token_client.balance(&contract_id), 10_000);
+}
+
+/// rescue_capped with cap == 0 must return InvalidCap, not ExceedsCap.
+#[test]
+fn rescue_capped_zero_cap_returns_invalid_cap_not_exceeds_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraRescue, ());
+    let client = CalloraRescueClient::new(&env, &contract_id);
+    let to = Address::generate(&env);
+
+    let token_admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin_client.mint(&contract_id, &1000);
+    client.init(&admin);
+
+    let err = client
+        .try_rescue_capped(&admin, &token_addr, &to, &1, &0)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, RescueError::InvalidCap);
+}
+
+/// Self-transfer via rescue must return InvalidRecipient and not mutate state.
+#[test]
+fn rescue_self_transfer_returns_invalid_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraRescue, ());
+    let client = CalloraRescueClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token_addr = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &token_addr);
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_addr);
+    token_admin_client.mint(&contract_id, &1000);
+    client.init(&admin);
+
+    let err = client
+        .try_rescue(&admin, &token_addr, &contract_id, &100)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, RescueError::InvalidRecipient);
+
+    // State must be completely unchanged
+    assert_eq!(client.total_rescued_for(&token_addr), 0);
+    assert_eq!(token_client.balance(&contract_id), 1000);
 }
