@@ -5,8 +5,9 @@
 //! - Min balance is enforced during withdrawal
 //! - Event is emitted on min balance change
 //! - Edge cases: zero min, negative min, boundary values
-//! - Vault-originated deductions are accounting-only and leave the
-//!   per-developer minimum balance untouched
+//! - Vault-originated deductions are validated and deduplicated, and are
+//!   accounting-only (they leave developer balances and the per-developer
+//!   minimum balance untouched).
 
 use callora_settlement::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
 use soroban_sdk::testutils::{Address as _, Events as _};
@@ -165,22 +166,55 @@ fn set_min_balance_for_many_developers() {
 
 // ── Vault-originated deductions ──────────────────────────────────────────────
 //
-// `record_deduction` is an accounting-only entrypoint: the vault authorizes
-// the call, the amount is added to the cumulative received total, and no
-// developer or pool balance moves. The registered vault is read from instance
-// storage by the contract itself, so the client call takes only the amount
-// and the request ID — there is no vault argument to pass.
+// `record_deduction(env, amount, request_id)` is the accounting-only
+// entrypoint the vault calls to keep the cumulative received total in sync.
+// The registered vault is read from instance storage by the contract itself
+// and must authorize the call, so the client call takes only the amount and
+// the request ID — there is no vault argument to pass.
+//
+// Request IDs are uniformly deduplicated: every successful call writes a
+// `DeductionRequest(request_id)` marker and a repeat of the same ID is
+// rejected with `SettlementError::DuplicateRequestId`. Note that this differs
+// from the *vault* contract, where `request_id == 0` is a documented
+// "no idempotency" sentinel; settlement has no such sentinel, so ID `0` is
+// deduplicated like any other ID.
 
 #[test]
-fn record_deduction_increases_total_received() {
+fn record_deduction_zero_id_is_deduplicated() {
     let (env, contract, _admin, _vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
 
     client.record_deduction(&10, &0);
     assert_eq!(client.get_total_received(), 10);
 
-    client.record_deduction(&32, &1);
-    assert_eq!(client.get_total_received(), 42);
+    // A repeated ID `0` is rejected exactly like any other repeated ID.
+    assert_eq!(
+        client.try_record_deduction(&10, &0),
+        Err(Ok(SettlementError::DuplicateRequestId.into()))
+    );
+    assert_eq!(client.get_total_received(), 10);
+
+    let marked: bool = env.as_contract(&contract, || {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::DeductionRequest(0))
+    });
+    assert!(marked, "id 0 must be marked in settlement storage");
+}
+
+#[test]
+fn record_deduction_nonzero_id_is_deduplicated() {
+    let (env, contract, _admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&10, &7);
+    let before = client.get_total_received();
+
+    assert_eq!(
+        client.try_record_deduction(&10, &7),
+        Err(Ok(SettlementError::DuplicateRequestId.into()))
+    );
+    assert_eq!(client.get_total_received(), before);
 }
 
 #[test]
@@ -188,35 +222,45 @@ fn record_deduction_rejects_non_positive_amount() {
     let (env, contract, _admin, _vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
 
-    // The amount is a signed `i128`: a negative deduction must be rejected as
-    // such, not reinterpreted as an unsigned value.
+    // The amount is a signed `i128`: a negative deduction is rejected as
+    // such, never reinterpreted as an unsigned value.
     assert_eq!(
-        client.try_record_deduction(&-1, &1),
+        client.try_record_deduction(&0, &0),
         Err(Ok(SettlementError::AmountNotPositive.into()))
     );
     assert_eq!(
-        client.try_record_deduction(&0, &2),
+        client.try_record_deduction(&-1, &0),
         Err(Ok(SettlementError::AmountNotPositive.into()))
     );
 
-    // A rejected deduction changes no accounting state.
     assert_eq!(client.get_total_received(), 0);
+    let marked: bool = env.as_contract(&contract, || {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::DeductionRequest(0))
+    });
+    assert!(!marked, "a rejected deduction must not mark the request ID");
 }
 
 #[test]
-fn record_deduction_rejects_duplicate_request_id() {
+fn record_deduction_emits_event() {
     let (env, contract, _admin, _vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
 
-    client.record_deduction(&10, &7);
-    assert_eq!(
-        client.try_record_deduction(&10, &7),
-        Err(Ok(SettlementError::DuplicateRequestId.into()))
-    );
+    client.record_deduction(&42, &0);
 
-    // A different request ID is still accepted afterwards.
-    client.record_deduction(&5, &8);
-    assert_eq!(client.get_total_received(), 15);
+    let events = env.events().all();
+    let matching: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if e.1.is_empty() {
+                return false;
+            }
+            let sym: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(&env);
+            sym == soroban_sdk::Symbol::new(&env, "deduction_recorded")
+        })
+        .collect();
+    assert_eq!(matching.len(), 1);
 }
 
 #[test]
