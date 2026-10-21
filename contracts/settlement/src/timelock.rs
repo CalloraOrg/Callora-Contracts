@@ -1,7 +1,7 @@
 //! Timelock state and storage helpers for developer balance migrations and
 //! contract upgrades.
 
-use soroban_sdk::{contracttype, Address, BytesN, Env, TryFromVal, Val};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Map, Symbol, TryFromVal, Val};
 
 use crate::{StorageKey, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD};
 
@@ -116,24 +116,27 @@ pub(crate) fn get_pending_upgrade(env: &Env) -> Option<PendingUpgrade> {
             .extend_ttl(&key, PROPOSAL_BUMP_THRESHOLD, PROPOSAL_BUMP_AMOUNT);
     }
     let raw: Val = env.storage().persistent().get(&key)?;
-    // Try new format first (with expires_at)
-    if let Ok(proposal) = PendingUpgrade::try_from_val(env, &raw) {
-        return Some(proposal);
+    let map: Map<Symbol, Val> = Map::try_from_val(env, &raw).ok()?;
+    if map.contains_key(Symbol::new(env, "expires_at")) {
+        // New format with expires_at
+        PendingUpgrade::try_from_val(env, &raw).ok()
+    } else {
+        // Legacy format without expires_at — re-animate with a fresh grace window
+        if let Ok(legacy) = LegacyPendingUpgrade::try_from_val(env, &raw) {
+            let expires_at = saturating_deadline(legacy.execute_after, UPGRADE_GRACE_SECONDS)
+                .unwrap_or(u64::MAX);
+            let proposal = PendingUpgrade {
+                wasm_hash: legacy.wasm_hash,
+                proposed_at: legacy.proposed_at,
+                execute_after: legacy.execute_after,
+                expires_at,
+            };
+            set_pending_upgrade(env, &proposal);
+            Some(proposal)
+        } else {
+            None
+        }
     }
-    // Try legacy format (without expires_at)
-    if let Ok(legacy) = LegacyPendingUpgrade::try_from_val(env, &raw) {
-        let expires_at =
-            saturating_deadline(legacy.execute_after, UPGRADE_GRACE_SECONDS).unwrap_or(u64::MAX);
-        let proposal = PendingUpgrade {
-            wasm_hash: legacy.wasm_hash,
-            proposed_at: legacy.proposed_at,
-            execute_after: legacy.execute_after,
-            expires_at,
-        };
-        set_pending_upgrade(env, &proposal);
-        return Some(proposal);
-    }
-    None
 }
 
 /// Persist a new upgrade proposal and refresh its storage lifetime.
