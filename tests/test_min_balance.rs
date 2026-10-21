@@ -5,8 +5,10 @@
 //! - Min balance is enforced during withdrawal
 //! - Event is emitted on min balance change
 //! - Edge cases: zero min, negative min, boundary values
+//! - Vault-originated deductions are accounting-only and leave the
+//!   per-developer minimum balance untouched
 
-use callora_settlement::{CalloraSettlement, CalloraSettlementClient, StorageKey};
+use callora_settlement::{CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{Address, Env, IntoVal};
 
@@ -159,4 +161,90 @@ fn set_min_balance_for_many_developers() {
     for (i, dev) in devs.iter().enumerate() {
         assert_eq!(client.get_developer_min_balance(dev), (i as i128) * 100);
     }
+}
+
+// ── Vault-originated deductions ──────────────────────────────────────────────
+//
+// `record_deduction` is an accounting-only entrypoint: the vault authorizes
+// the call, the amount is added to the cumulative received total, and no
+// developer or pool balance moves. The registered vault is read from instance
+// storage by the contract itself, so the client call takes only the amount
+// and the request ID — there is no vault argument to pass.
+
+#[test]
+fn record_deduction_increases_total_received() {
+    let (env, contract, _admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&10, &0);
+    assert_eq!(client.get_total_received(), 10);
+
+    client.record_deduction(&32, &1);
+    assert_eq!(client.get_total_received(), 42);
+}
+
+#[test]
+fn record_deduction_rejects_non_positive_amount() {
+    let (env, contract, _admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    // The amount is a signed `i128`: a negative deduction must be rejected as
+    // such, not reinterpreted as an unsigned value.
+    assert_eq!(
+        client.try_record_deduction(&-1, &1),
+        Err(Ok(SettlementError::AmountNotPositive.into()))
+    );
+    assert_eq!(
+        client.try_record_deduction(&0, &2),
+        Err(Ok(SettlementError::AmountNotPositive.into()))
+    );
+
+    // A rejected deduction changes no accounting state.
+    assert_eq!(client.get_total_received(), 0);
+}
+
+#[test]
+fn record_deduction_rejects_duplicate_request_id() {
+    let (env, contract, _admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&10, &7);
+    assert_eq!(
+        client.try_record_deduction(&10, &7),
+        Err(Ok(SettlementError::DuplicateRequestId.into()))
+    );
+
+    // A different request ID is still accepted afterwards.
+    client.record_deduction(&5, &8);
+    assert_eq!(client.get_total_received(), 15);
+}
+
+#[test]
+fn record_deduction_does_not_touch_developer_balances_or_min_balance() {
+    let (env, contract, admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+    let dev = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+
+    client.set_developer_min_balance(&admin, &dev, &1_000);
+    client.record_deduction(&10, &0);
+
+    // The deduction is accounting-only: it credits neither the developer nor
+    // the global pool, and it leaves the configured minimum untouched.
+    assert_eq!(client.get_total_received(), 10);
+    assert_eq!(client.get_developer_min_balance(&dev), 1_000);
+    assert_eq!(client.get_developer_balance(&dev, &token_addr), 0);
+    assert_eq!(client.get_global_pool().total_balance, 0);
+}
+
+#[test]
+fn record_deduction_requires_registered_vault_authorization() {
+    let (env, contract, _admin, _vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    // The vault is taken from instance storage and must authorize the call;
+    // there is no caller-supplied vault argument that could bypass it.
+    env.mock_auths(&[]);
+    assert!(client.try_record_deduction(&10, &0).is_err());
+    assert_eq!(client.get_total_received(), 0);
 }
