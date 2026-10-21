@@ -794,6 +794,7 @@ are *not* changed by instance-TTL work.
 | Contract | Instance threshold | Instance bump | Persistent TTL behaviour | Other storage TTL |
 |----------|--------------------|---------------|--------------------------|-------------------|
 | `callora-freeze` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | none — the contract has no persistent entries | none — all freeze state is instance storage |
+| `callora-checkpoint` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | unchanged — `Checkpoint(id)` and `SubjectIndex(subject)` are extended to `BUMP_AMOUNT` (3,110,400 ledgers, ~180 days) when their remaining TTL drops below `LIFETIME_THRESHOLD` (17,280 ledgers, ~1 day) | none |
 
 **Instance-TTL invariant (freeze).** Every entrypoint of `callora-freeze` —
 including the read-only views `get_admin`, `is_frozen`, `get_freeze_status` and
@@ -811,3 +812,24 @@ prevent `freeze()` from succeeding.
 - **Tests:** `contracts/freeze/src/test.rs` — `test_init_sets_instance_ttl_to_bump_amount`,
   `test_freeze_succeeds_after_90_idle_days`, and the per-entrypoint
   `*_bumps_instance_ttl` cases.
+
+**Instance-TTL invariant (checkpoint).** Every entrypoint of
+`callora-checkpoint` — including the read-only views `get_admin`,
+`get_pending_admin`, `get_checkpoint`, `get_checkpoints_range`,
+`get_checkpoints_for_subject`, `get_checkpoint_count`, `get_latest_checkpoint_id`
+and `get_latest_checkpoint` — calls the internal `bump_instance` helper before
+touching instance state. The helper extends the instance TTL to
+`INSTANCE_BUMP_AMOUNT` whenever the remaining TTL is at or below
+`INSTANCE_BUMP_THRESHOLD`.
+
+- **Storage tier:** `Instance` (admin, pending admin, next checkpoint id, checkpoint count).
+- **Persistent entries are unaffected:** the `Checkpoint(id)` records and the
+  per-subject `SubjectIndex(subject)` keep their pre-existing
+  `LIFETIME_THRESHOLD` / `BUMP_AMOUNT` policy, which is independent of the
+  instance policy and deliberately much longer (~180 days).
+- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
+  well below the Soroban maximum entry TTL (6,312,000 ledgers).
+- **Tests:** `contracts/checkpoint/src/test.rs` —
+  `test_init_sets_instance_ttl_to_bump_amount`, `test_create_checkpoint_bumps_instance_ttl`,
+  and the remaining per-entrypoint `*_bumps_instance_ttl` cases, plus
+  `test_persistent_checkpoint_ttl_unchanged`.

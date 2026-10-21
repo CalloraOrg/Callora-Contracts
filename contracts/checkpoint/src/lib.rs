@@ -35,6 +35,19 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 pub const BUMP_AMOUNT: u32 = 3_110_400;
 pub const LIFETIME_THRESHOLD: u32 = 17_280;
 
+/// Approximate number of ledgers per day on Stellar (5 seconds per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Threshold at which instance storage TTL is extended (~30 days).
+///
+/// Admin, pending-admin, and checkpoint counters live in instance storage;
+/// the entrypoint-level [`CalloraCheckpoint::bump_instance`] helper keeps the
+/// instance from archiving independently of the persistent record policy.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL when instance storage is extended (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
 // ---------------------------------------------------------------------------
 // Data types
 // ---------------------------------------------------------------------------
@@ -99,6 +112,21 @@ pub struct CalloraCheckpoint;
 #[contractimpl]
 impl CalloraCheckpoint {
     // -----------------------------------------------------------------------
+    // TTL helpers
+    // -----------------------------------------------------------------------
+
+    /// Extend the instance storage TTL.
+    ///
+    /// Called on every entrypoint — including read-only views — so the
+    /// instance (admin, counters) never archives due to inactivity. Persistent
+    /// checkpoint records keep their own independent policy (`BUMP_AMOUNT`).
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
 
@@ -118,6 +146,7 @@ impl CalloraCheckpoint {
     /// Emits `init` with `admin` as topic and `()` as data.
     pub fn init(env: Env, admin: Address) -> Result<(), CheckpointError> {
         admin.require_auth();
+        Self::bump_instance(&env);
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(CheckpointError::AlreadyInitialized);
         }
@@ -154,6 +183,7 @@ impl CalloraCheckpoint {
     /// when the caller does not match.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), CheckpointError> {
         caller.require_auth();
+        Self::bump_instance(env);
         let admin = Self::admin(env)?;
         if caller != &admin {
             return Err(CheckpointError::Unauthorized);
@@ -213,12 +243,14 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::NotInitialized`] -- contract was never initialized.
     pub fn get_admin(env: Env) -> Result<Address, CheckpointError> {
+        Self::bump_instance(&env);
         Self::admin(&env)
     }
 
     /// Return the pending admin address for a two-step admin rotation, or
     /// `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::bump_instance(&env);
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
@@ -271,6 +303,7 @@ impl CalloraCheckpoint {
     /// Emits `admin_accepted` with `(old_admin, new_admin)`.
     pub fn accept_admin(env: Env, caller: Address) -> Result<(), CheckpointError> {
         caller.require_auth();
+        Self::bump_instance(&env);
 
         let pending: Address = env
             .storage()
@@ -495,6 +528,7 @@ impl CalloraCheckpoint {
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
     pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
+        Self::bump_instance(&env);
         let key = StorageKey::Checkpoint(id);
         let record = env
             .storage()
@@ -534,6 +568,7 @@ impl CalloraCheckpoint {
         start_id: u64,
         limit: u32,
     ) -> Result<Vec<CheckpointRecord>, CheckpointError> {
+        Self::bump_instance(&env);
         if limit == 0 {
             return Err(CheckpointError::InvalidPageSize);
         }
@@ -590,6 +625,7 @@ impl CalloraCheckpoint {
         start: u32,
         limit: u32,
     ) -> Result<Vec<CheckpointRecord>, CheckpointError> {
+        Self::bump_instance(&env);
         if limit == 0 {
             return Err(CheckpointError::InvalidPageSize);
         }
@@ -637,6 +673,7 @@ impl CalloraCheckpoint {
     /// assigned so far (which is equal to the count since IDs are sequential
     /// starting at 1).
     pub fn get_checkpoint_count(env: Env) -> u64 {
+        Self::bump_instance(&env);
         env.storage()
             .instance()
             .get(&StorageKey::CheckpointCount)
@@ -647,6 +684,7 @@ impl CalloraCheckpoint {
     ///
     /// Returns `0` when no checkpoints have been created yet.
     pub fn get_latest_checkpoint_id(env: Env) -> u64 {
+        Self::bump_instance(&env);
         env.storage()
             .instance()
             .get(&StorageKey::NextCheckpointId)
@@ -661,6 +699,7 @@ impl CalloraCheckpoint {
     /// [`CalloraCheckpoint::get_checkpoint`], and so also bumps the
     /// returned record's persistent TTL (buffer #26).
     pub fn get_latest_checkpoint(env: Env) -> Option<CheckpointRecord> {
+        Self::bump_instance(&env);
         let latest_id = Self::get_latest_checkpoint_id(env.clone());
         if latest_id == 0 {
             return None;
@@ -779,9 +818,8 @@ impl CalloraCheckpoint {
         // rollbacks — ensuring existing deployed data stays readable and no
         // implicit destructive transformation occurs.
         //
-        // The probe list names the critical instance keys this contract
-        // relies on. `finalize_migration` reads each one and fails with
-        // `StorageUnreadable` if any is missing or fails to decode.
+        // `finalize_migration` re-probes the live instance storage and fails
+        // with `StorageUnreadable` if it cannot be read back.
         let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
         if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
             &env,
@@ -790,7 +828,6 @@ impl CalloraCheckpoint {
             &placeholder_layout,
             &new_wasm_hash,
             false,
-            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -799,7 +836,6 @@ impl CalloraCheckpoint {
             STORAGE_MIGRATION_VERSION,
             &placeholder_layout,
             &new_wasm_hash,
-            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -813,27 +849,6 @@ impl CalloraCheckpoint {
         );
 
         Ok(())
-    }
-
-    /// Build the list of critical storage keys probed by the migration
-    /// validator during `upgrade`.
-    ///
-    /// Each entry is `(key, expected_type)`. `finalize_migration` reads every
-    /// key and returns `StorageUnreadable` if any is missing or fails to
-    /// decode as the expected type. Keep this list small (the validator
-    /// documents a maximum of 8 probes) and limited to keys that must exist
-    /// for the contract to be usable after an upgrade.
-    fn critical_probe_keys(env: &Env) -> Vec<(soroban_sdk::Val, soroban_sdk::Val)> {
-        let mut probes: Vec<(soroban_sdk::Val, soroban_sdk::Val)> = Vec::new(env);
-        probes.push_back((
-            StorageKey::Admin.into_val(env),
-            <Address as soroban_sdk::TryIntoVal<Env, soroban_sdk::Val>>::try_into_val(
-                Address::from_contract_id(&env.current_contract_address()),
-                env,
-            )
-            .unwrap_or_else(|_| soroban_sdk::Val::VOID),
-        ));
-        probes
     }
 }
 
