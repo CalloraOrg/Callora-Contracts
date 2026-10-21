@@ -795,6 +795,7 @@ are *not* changed by instance-TTL work.
 |----------|--------------------|---------------|--------------------------|-------------------|
 | `callora-freeze` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | none — the contract has no persistent entries | none — all freeze state is instance storage |
 | `callora-checkpoint` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | unchanged — `Checkpoint(id)` and `SubjectIndex(subject)` are extended to `BUMP_AMOUNT` (3,110,400 ledgers, ~180 days) when their remaining TTL drops below `LIFETIME_THRESHOLD` (17,280 ledgers, ~1 day) | none |
+| `callora-errors` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | unchanged — `ErrorReg(code)` is extended to 60 days (1,036,800 ledgers) when its remaining TTL drops below 30 days (518,400 ledgers) | `RecentErr(user)` is temporary storage with a fixed 100-ledger lifetime (~8 min 20 s at 5 s/ledger) |
 
 **Instance-TTL invariant (freeze).** Every entrypoint of `callora-freeze` —
 including the read-only views `get_admin`, `is_frozen`, `get_freeze_status` and
@@ -833,3 +834,35 @@ touching instance state. The helper extends the instance TTL to
   `test_init_sets_instance_ttl_to_bump_amount`, `test_create_checkpoint_bumps_instance_ttl`,
   and the remaining per-entrypoint `*_bumps_instance_ttl` cases, plus
   `test_persistent_checkpoint_ttl_unchanged`.
+
+**Instance-TTL invariant (errors).** Every entrypoint of `callora-errors` —
+including the read-only views `get_error_description` and `get_recent_error` —
+calls the internal `bump_instance` helper before touching instance state. The
+helper extends the instance TTL to `INSTANCE_BUMP_AMOUNT` whenever the
+remaining TTL is at or below `INSTANCE_BUMP_THRESHOLD`.
+
+- **Storage tier:** `Instance` (admin address).
+- **Persistent entries are unaffected:** the `ErrorReg(code)` registry keeps its
+  pre-existing 30-day threshold / 60-day bump policy, applied on both the write
+  path (`register_error`, `update_error`, `log_error`) and the read path
+  (`get_error_description`).
+- **`RecentErr` lifetime is intentional and short.** The most recent code logged
+  by a user is stored in temporary storage with a fixed 100-ledger lifetime
+  (~8 min 20 s at 5 s/ledger, `RECENT_ERR_TTL_LEDGERS`). It exists only for
+  short-term debugging / rate-limiting feedback, is *not* refreshed on reads,
+  and must not be treated as durable state — the persistent `ErrorReg(code)`
+  registry is the durable source of truth. The lifetime is asserted by
+  `contracts/errors/src/test.rs::test_recent_err_lifetime_is_short`.
+- **Maximum error code.** `log_error` performs no arithmetic on the code, so
+  `u32::MAX` is a valid code: `register_error(u32::MAX)` followed by
+  `log_error(u32::MAX)` succeeds. Asserted by
+  `contracts/errors/src/test.rs::test_register_and_log_max_error_code` and
+  `contracts/errors/tests/proptest.rs::overflow_guard_is_robust_at_u32_max`.
+- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
+  well below the Soroban maximum entry TTL (6,312,000 ledgers).
+- **Tests:** `contracts/errors/src/test.rs` —
+  `test_register_error_bumps_instance_ttl`,
+  `test_update_error_bumps_instance_ttl`,
+  `test_get_error_description_bumps_instance_ttl`,
+  `test_log_error_bumps_instance_ttl`,
+  `test_get_recent_error_bumps_instance_ttl`.
