@@ -776,3 +776,38 @@ When reviewing value conservation:
 ---
 
 This cross-contract value conservation guarantee is the cornerstone of the Callora protocol's financial integrity. It ensures that every token unit deducted from the vault is precisely accounted for across the protocol's downstream contracts, with no possibility of duplication, loss, or unallocated state.
+
+---
+
+## Storage TTL Policy
+
+Soroban ledger entries expire ("archive") once their remaining TTL is exhausted.
+Contracts therefore carry an explicit TTL policy, expressed in ledgers, using the
+workspace-wide cadence of `LEDGERS_PER_DAY = 17_280` (5 s per ledger).
+
+The table below lists the policy per contract for the contracts covered by the
+instance-TTL work. **Instance** rows describe the contract instance entry (the
+`Instance` storage tier, which holds per-contract configuration such as the
+admin address). **Persistent** rows describe `Persistent` storage entries and
+are *not* changed by instance-TTL work.
+
+| Contract | Instance threshold | Instance bump | Persistent TTL behaviour | Other storage TTL |
+|----------|--------------------|---------------|--------------------------|-------------------|
+| `callora-freeze` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | none — the contract has no persistent entries | none — all freeze state is instance storage |
+
+**Instance-TTL invariant (freeze).** Every entrypoint of `callora-freeze` —
+including the read-only views `get_admin`, `is_frozen`, `get_freeze_status` and
+`get_freeze_operator` — calls the internal `bump_instance` helper before
+touching instance state. The helper extends the instance TTL to
+`INSTANCE_BUMP_AMOUNT` whenever the remaining TTL is at or below
+`INSTANCE_BUMP_THRESHOLD`. Consequently the contract instance cannot archive
+while the contract is in use, and a long idle period (e.g. 90 days) does not
+prevent `freeze()` from succeeding.
+
+- **Storage tier:** `Instance` (admin, frozen flag, freeze operator, reason, timestamp).
+- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
+  well below the Soroban maximum entry TTL (6,312,000 ledgers), so the
+  extension is always accepted by the host.
+- **Tests:** `contracts/freeze/src/test.rs` — `test_init_sets_instance_ttl_to_bump_amount`,
+  `test_freeze_succeeds_after_90_idle_days`, and the per-entrypoint
+  `*_bumps_instance_ttl` cases.
