@@ -221,6 +221,62 @@ order is also pinned: `InsufficientDeveloperBalance` is reported before
 
 ---
 
+## Storage-migration validator key namespacing (Issue #1415)
+
+The shared `callora-storage-migration` crate records its bookkeeping in the
+host contract's **instance** storage. Through version 1 those keys were not
+namespaced (`Version`, `SchemaLayoutHash`, `AuthorizedUpgrade`,
+`BackupPresent`). Soroban encodes every `#[contracttype]` unit variant as
+`Vec[Symbol("VariantName")]` regardless of the enum it belongs to, so any host
+that declared a key with the same name shared the slot.
+
+That was exploitable in `EmergencyMigration`: an unauthenticated call to
+`validate_before_upgrade` wrote the validator's `AuthorizedUpgrade` slot, which
+`is_upgrade_authorized` read as if it were the admin's own authorization.
+
+### Key map
+
+| Purpose | Legacy key (v1) | Namespaced key (v2) |
+|---------|-----------------|---------------------|
+| Storage-layout version | `Version` | `SmVersion` |
+| Schema/layout hash | `SchemaLayoutHash` | `SmSchemaLayoutHash` |
+| Upgrade authorization | `AuthorizedUpgrade` | `SmAuthorizedUpgrade` |
+| Rollback backup marker | `BackupPresent` | `SmBackupPresent` |
+
+`STORAGE_MIGRATION_VERSION` in the validator crate is now `2`. Host
+`STORAGE_MIGRATION_VERSION` constants are unchanged because the *business*
+storage layout did not change; only the validator's own bookkeeping moved.
+
+### Read-through migration
+
+Deployed hosts keep working without an explicit migration transaction:
+
+1. On the first validator read, if a namespaced slot is absent, the legacy
+   slot is copied into it.
+2. Once the namespaced slot exists it is authoritative and the legacy slot is
+   never consulted again.
+3. Legacy slots are **not deleted**. In `EmergencyMigration` those same
+   encodings belong to the host's own business keys, so deleting them would
+   destroy host state.
+
+`record_deployed_schema`, `current_version`, `is_upgrade_authorized`,
+`validate_before_upgrade`, `finalize_migration`, and `authorized_upgrade` all
+perform this read-through.
+
+### Upgrade authorization is now admin-only
+
+`EmergencyMigration::validate_before_upgrade(caller, target_version, wasm_hash,
+allow_rollback)` calls `caller.require_auth()` and requires `caller == Admin`
+before it touches storage. Error precedence is **auth → admin → hash →
+version**; a non-admin receives `StorageMigrationError::Unauthorized` and can
+neither forge nor overwrite an authorization. The entrypoint remains
+state-changing (it records the validator authorization guard), so it is not a
+read-only dry run.
+
+Hosts that embed the validator (`revenue_pool`, `checkpoint`, `yield`, and
+`migrate` itself) are covered by a cross-host collision regression test that
+compares the canonical `ScVal` XDR encoding of every key.
+
 # callora-rescue: Per-token `TotalRescued` counter (v0.2.0)
 
 ## Background
@@ -289,15 +345,56 @@ total_rescued_for(token) + on_ledger_balance(contract, token) == initial_mint(to
 
 (Previously: `total_rescued() + on_ledger_balance == initial_mint`, which was
 incorrect when multiple tokens were involved.)
-# Settlement developer-balance pagination
 
-The settlement contract's `get_developer_balances_cursor` ABI now accepts and
-returns `Option<u32>` instead of `Option<Address>`. Treat the returned value as
-the global index position at which the next page starts and pass it unchanged
-to the next call. Unknown positions beyond the current index length return
-`InvalidCursor`.
+## Vault Typed Recovery Errors (Issue #1396)
 
-`get_all_developer_balances` now returns at most
-`MAX_DEVELOPER_BALANCES_PAGE_SIZE` entries and returns `TooManyResults` when
-the index is larger. Replace unbounded calls with
-`get_developer_balances_page` or `get_developer_balances_cursor`.
+### Summary
+
+The Callora Vault recovery paths (`withdraw`, `withdraw_to`) and several admin
+and config entrypoints (`pause`, `unpause`, `set_max_deduct`, `set_settlement`,
+`get_owner`, `get_usdc_token`, `get_settlement`) previously used `panic!`,
+`assert!`, `.unwrap()`, and `.expect()` on error. Integrators received opaque
+`HostError` traps instead of stable `VaultError` codes. This change converts
+those paths to return `Result<_, VaultError>`.
+
+### Public Signature Changes
+
+| Function | Before | After |
+|----------|--------|-------|
+| `withdraw(env, amount)` | `-> i128` | `-> Result<i128, VaultError>` |
+| `withdraw_to(env, to, amount)` | `-> i128` | `-> Result<i128, VaultError>` |
+| `get_owner(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `get_usdc_token(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `get_settlement(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `pause(env, caller)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `unpause(env, caller)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `set_max_deduct(env, caller, max)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `set_settlement(env, caller, addr)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+
+### New Error Codes
+
+| Code | Variant | Meaning |
+|------|---------|---------|
+| 45 | `InvalidRecipient` | Withdrawal recipient is the vault address or USDC token address |
+| 46 | `ZeroAddressRecipient` | Withdrawal recipient is the zero address |
+
+### Client Integration Notes
+
+- Use `try_withdraw` / `try_withdraw_to` (generated by the Soroban SDK
+  client) to receive `Result<i128, VaultError>` instead of trapping on a host
+  error.
+- Use `try_get_owner`, `try_get_usdc_token`, `try_get_settlement` to receive
+  `Result<Address, VaultError>`.
+- Distinguish user errors (`AmountNotPositive`, `InsufficientBalance`,
+  `InvalidRecipient`, `ZeroAddressRecipient`) from misconfiguration
+  (`NotInitialized`, `SettlementNotSet`) by matching on the `VaultError`
+  variant.
+- Error precedence for `withdraw_to`: owner lookup → auth → amount → recipient
+  → balance.
+- All existing `VaultError` codes keep their values; new codes are appended.
+
+### Error Stability
+
+`tests/err_stab.rs` verifies all discriminant values are stable and new codes
+are appended only. `docs/ERROR_CODES.md` is updated accordingly.
+

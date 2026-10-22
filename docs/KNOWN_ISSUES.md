@@ -24,5 +24,4 @@ The remaining ~1850 tests pass.
 
 ## Other notes
 
-- The vault's native (non-wasm) `settlement::Client` is a no-op stub used by unit tests; on wasm it is a real cross-contract client.
 - Vault `init` with a negative `initial_balance` now returns `AmountNotPositive` (the `InitialBalanceNegative` code 10 is reserved).

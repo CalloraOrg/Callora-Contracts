@@ -39,10 +39,12 @@ fn record_deduction_rejects_non_positive_without_consuming_request_id() {
         );
         assert!(env.events().all().is_empty());
         assert_eq!(client.get_total_received(), 50);
+        assert_eq!(client.get_unallocated(), 50);
         assert!(!has_marker(&env, &contract_id, 2));
     }
     client.record_deduction(&25, &2);
     assert_eq!(client.get_total_received(), 75);
+    assert_eq!(client.get_unallocated(), 75);
 }
 
 #[test]
@@ -58,10 +60,12 @@ fn record_deduction_rejects_replay_without_changing_total_or_marker() {
         );
         assert!(env.events().all().is_empty());
         assert_eq!(client.get_total_received(), 100);
+        assert_eq!(client.get_unallocated(), 100);
         assert!(has_marker(&env, &contract_id, 42));
     }
     client.record_deduction(&200, &43);
     assert_eq!(client.get_total_received(), 300);
+    assert_eq!(client.get_unallocated(), 300);
 }
 
 #[test]
@@ -103,6 +107,7 @@ fn record_deduction_emits_exact_payload_and_only_updates_accounting() {
         );
     }
     assert_eq!(client.get_total_received(), 150);
+    assert_eq!(client.get_unallocated(), 150);
     assert_eq!(client.get_global_pool(), pool_before);
 }
 
@@ -136,6 +141,7 @@ fn record_deduction_bumps_persistent_marker_and_instance_ttl() {
         );
     });
     assert_eq!(client.get_total_received(), 1);
+    assert_eq!(client.get_unallocated(), 1);
     client.record_deduction(&1, &8);
     env.as_contract(&contract_id, || {
         assert_eq!(
@@ -162,10 +168,12 @@ fn record_deduction_overflow_does_not_consume_request_id() {
     );
     assert!(env.events().all().is_empty());
     assert_eq!(client.get_total_received(), i128::MAX - 1);
+    assert_eq!(client.get_unallocated(), i128::MAX - 1);
     assert!(!has_marker(&env, &contract_id, 9));
 
     client.record_deduction(&1, &9);
     assert_eq!(client.get_total_received(), i128::MAX);
+    assert_eq!(client.get_unallocated(), i128::MAX);
     assert!(has_marker(&env, &contract_id, 9));
 }
 
@@ -177,9 +185,11 @@ fn record_deduction_requires_vault_authorization() {
     assert!(client.try_record_deduction(&100, &10).is_err());
     assert!(env.events().all().is_empty());
     assert_eq!(client.get_total_received(), 0);
+    assert_eq!(client.get_unallocated(), 0);
     assert!(!has_marker(&env, &contract_id, 10));
 
     env.mock_all_auths();
     client.record_deduction(&100, &10);
     assert_eq!(client.get_total_received(), 100);
+    assert_eq!(client.get_unallocated(), 100);
 }
