@@ -221,6 +221,62 @@ order is also pinned: `InsufficientDeveloperBalance` is reported before
 
 ---
 
+## Storage-migration validator key namespacing (Issue #1415)
+
+The shared `callora-storage-migration` crate records its bookkeeping in the
+host contract's **instance** storage. Through version 1 those keys were not
+namespaced (`Version`, `SchemaLayoutHash`, `AuthorizedUpgrade`,
+`BackupPresent`). Soroban encodes every `#[contracttype]` unit variant as
+`Vec[Symbol("VariantName")]` regardless of the enum it belongs to, so any host
+that declared a key with the same name shared the slot.
+
+That was exploitable in `EmergencyMigration`: an unauthenticated call to
+`validate_before_upgrade` wrote the validator's `AuthorizedUpgrade` slot, which
+`is_upgrade_authorized` read as if it were the admin's own authorization.
+
+### Key map
+
+| Purpose | Legacy key (v1) | Namespaced key (v2) |
+|---------|-----------------|---------------------|
+| Storage-layout version | `Version` | `SmVersion` |
+| Schema/layout hash | `SchemaLayoutHash` | `SmSchemaLayoutHash` |
+| Upgrade authorization | `AuthorizedUpgrade` | `SmAuthorizedUpgrade` |
+| Rollback backup marker | `BackupPresent` | `SmBackupPresent` |
+
+`STORAGE_MIGRATION_VERSION` in the validator crate is now `2`. Host
+`STORAGE_MIGRATION_VERSION` constants are unchanged because the *business*
+storage layout did not change; only the validator's own bookkeeping moved.
+
+### Read-through migration
+
+Deployed hosts keep working without an explicit migration transaction:
+
+1. On the first validator read, if a namespaced slot is absent, the legacy
+   slot is copied into it.
+2. Once the namespaced slot exists it is authoritative and the legacy slot is
+   never consulted again.
+3. Legacy slots are **not deleted**. In `EmergencyMigration` those same
+   encodings belong to the host's own business keys, so deleting them would
+   destroy host state.
+
+`record_deployed_schema`, `current_version`, `is_upgrade_authorized`,
+`validate_before_upgrade`, `finalize_migration`, and `authorized_upgrade` all
+perform this read-through.
+
+### Upgrade authorization is now admin-only
+
+`EmergencyMigration::validate_before_upgrade(caller, target_version, wasm_hash,
+allow_rollback)` calls `caller.require_auth()` and requires `caller == Admin`
+before it touches storage. Error precedence is **auth → admin → hash →
+version**; a non-admin receives `StorageMigrationError::Unauthorized` and can
+neither forge nor overwrite an authorization. The entrypoint remains
+state-changing (it records the validator authorization guard), so it is not a
+read-only dry run.
+
+Hosts that embed the validator (`revenue_pool`, `checkpoint`, `yield`, and
+`migrate` itself) are covered by a cross-host collision regression test that
+compares the canonical `ScVal` XDR encoding of every key.
+
 # callora-rescue: Per-token `TotalRescued` counter (v0.2.0)
 
 ## Background
