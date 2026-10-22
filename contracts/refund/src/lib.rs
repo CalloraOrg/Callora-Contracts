@@ -8,9 +8,7 @@ mod test;
 #[cfg(test)]
 mod test_ttl_bump;
 
-#[cfg(test)]
-use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol};
 
 pub use errors::RefundError;
 pub use types::*;
@@ -72,7 +70,7 @@ impl RefundContract {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::RefundCounter, &0u64);
-        inst.set(&StorageKey::TotalRefunds, &0i128);
+        inst.set(&StorageKey::TotalRefundsLegacy, &0i128);
         inst.set(
             &StorageKey::RefundConfig,
             &RefundConfig {
@@ -225,6 +223,9 @@ impl RefundContract {
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            0,
+            0,
             RefundStatus::Approved,
         );
 
@@ -277,6 +278,9 @@ impl RefundContract {
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            0,
+            0,
             RefundStatus::Rejected,
         );
 
@@ -285,7 +289,10 @@ impl RefundContract {
 
     /// Process an approved refund request (admin only).
     ///
-    /// This marks the refund as processed and updates the total refunds counter.
+    /// Validates request status, calculates fee and net payout using integer arithmetic
+    /// `(amount * fee_bps) / 10_000` (truncating towards zero / rounding down in the protocol's favour),
+    /// checks contract token balance against net payout, persists `Processed` state,
+    /// updates per-token totals and accumulated fees, and transfers net refund tokens to requester.
     ///
     /// # Arguments
     /// * `admin` - Admin address; must authorize and match stored admin.
@@ -296,7 +303,8 @@ impl RefundContract {
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
     /// * `InvalidStatus` - Request is not in Approved status.
-    /// * `Overflow` - Total refunds counter would overflow.
+    /// * `Overflow` - Total refunds counter or fee calculation would overflow.
+    /// * `InsufficientBalance` - Contract token balance is below net payout amount.
     pub fn process_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
@@ -318,6 +326,34 @@ impl RefundContract {
             return Err(RefundError::InvalidStatus);
         }
 
+        let config: RefundConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::RefundConfig)
+            .ok_or(RefundError::NotInitialized)?;
+
+        // Fee computation: fee = (amount * fee_bps) / 10_000
+        // Integer division truncates towards zero (rounds down in protocol's favour).
+        let fee = request
+            .amount
+            .checked_mul(config.fee_bps as i128)
+            .ok_or(RefundError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(RefundError::Overflow)?;
+
+        let net = request
+            .amount
+            .checked_sub(fee)
+            .ok_or(RefundError::Overflow)?;
+
+        // Solvency check: ensure contract holds at least `net` tokens before mutating state.
+        let token_client = token::Client::new(&env, &request.token);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if contract_balance < net {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        // CEI: Persist state updates before external transfer.
         request.status = RefundStatus::Processed;
         request.processed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &request);
@@ -327,25 +363,116 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        let total: i128 = env
+        // Per-token total refunds
+        let token_key = StorageKey::TotalRefunds(request.token.clone());
+        let total: i128 = env.storage().instance().get(&token_key).unwrap_or(0);
+        let new_total = total
+            .checked_add(request.amount)
+            .ok_or(RefundError::Overflow)?;
+        env.storage().instance().set(&token_key, &new_total);
+
+        // Legacy total refunds
+        let legacy_total: i128 = env
             .storage()
             .instance()
-            .get(&StorageKey::TotalRefunds)
+            .get(&StorageKey::TotalRefundsLegacy)
             .unwrap_or(0);
-        let new_total = total
+        let new_legacy_total = legacy_total
             .checked_add(request.amount)
             .ok_or(RefundError::Overflow)?;
         env.storage()
             .instance()
-            .set(&StorageKey::TotalRefunds, &new_total);
+            .set(&StorageKey::TotalRefundsLegacy, &new_legacy_total);
+
+        // Retain fee
+        if fee > 0 {
+            let fee_key = StorageKey::AccumulatedFees(request.token.clone());
+            let accumulated: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            let new_accumulated = accumulated.checked_add(fee).ok_or(RefundError::Overflow)?;
+            env.storage().instance().set(&fee_key, &new_accumulated);
+        }
 
         Self::emit_refund_processed(
             &env,
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            fee,
+            net,
             RefundStatus::Processed,
         );
+
+        // Outbound transfer: transfer net payout to requester.
+        // If net is 0 (e.g. 100% fee rate), no outbound transfer is executed.
+        if net > 0 {
+            token_client.transfer(&env.current_contract_address(), &request.requester, &net);
+        }
+
+        Ok(())
+    }
+
+    /// Withdraw accumulated protocol fees for a specific token (admin only).
+    ///
+    /// # Arguments
+    /// * `admin` - Admin address; must authorize and match stored admin.
+    /// * `token` - Token address of the fees to withdraw.
+    /// * `to` - Recipient address to receive the fees.
+    /// * `amount` - Amount of fees to withdraw; must be > 0.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `Unauthorized` - Caller is not the admin.
+    /// * `InvalidAmount` - Amount is not positive.
+    /// * `InvalidRecipient` - Recipient address is this contract or the token address.
+    /// * `InsufficientBalance` - Accumulated fees or contract token balance is below amount.
+    /// * `Overflow` - Arithmetic overflow.
+    pub fn withdraw_fees(
+        env: Env,
+        admin: Address,
+        token: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), RefundError> {
+        admin.require_auth();
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let stored_admin: Address = Self::get_admin_internal(&env)?;
+        if admin != stored_admin {
+            return Err(RefundError::Unauthorized);
+        }
+
+        if amount <= 0 {
+            return Err(RefundError::InvalidAmount);
+        }
+
+        // Recipient validation
+        if to == env.current_contract_address() || to == token {
+            return Err(RefundError::InvalidRecipient);
+        }
+
+        let fee_key = StorageKey::AccumulatedFees(token.clone());
+        let accumulated: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+        if accumulated < amount {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if contract_balance < amount {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        // CEI: Update state before external transfer
+        let new_accumulated = accumulated
+            .checked_sub(amount)
+            .ok_or(RefundError::Overflow)?;
+        env.storage().instance().set(&fee_key, &new_accumulated);
+
+        Self::emit_fees_withdrawn(&env, &admin, &token, &to, amount);
+
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         Ok(())
     }
@@ -435,16 +562,44 @@ impl RefundContract {
             .ok_or(RefundError::NotFound)
     }
 
-    /// Get total refunds processed.
+    /// Get total refunds processed for a specific token.
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
+    pub fn get_total_refunds_for(env: Env, token: Address) -> Result<i128, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalRefunds(token))
+            .unwrap_or(0))
+    }
+
+    /// Get total refunds processed across all tokens (legacy).
+    ///
+    /// Deprecated: use [`Self::get_total_refunds_for`] instead.
+    /// Bumps instance storage TTL on read to prevent premature archival.
+    #[deprecated(note = "Use get_total_refunds_for(token) instead")]
     pub fn get_total_refunds(env: Env) -> Result<i128, RefundError> {
         Self::bump_instance_ttl(&env);
         Self::ensure_initialized(&env)?;
         Ok(env
             .storage()
             .instance()
-            .get(&StorageKey::TotalRefunds)
+            .get(&StorageKey::TotalRefundsLegacy)
+            .unwrap_or(0))
+    }
+
+    /// Get accumulated protocol fees retained for a specific token.
+    ///
+    /// Bumps instance storage TTL on read to prevent premature archival.
+    pub fn get_accumulated_fees(env: Env, token: Address) -> Result<i128, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&StorageKey::AccumulatedFees(token))
             .unwrap_or(0))
     }
 
@@ -600,6 +755,9 @@ impl RefundContract {
         request_id: u64,
         processor: &Address,
         amount: i128,
+        token: &Address,
+        fee: i128,
+        net: i128,
         status: RefundStatus,
     ) {
         env.events().publish(
@@ -608,7 +766,35 @@ impl RefundContract {
                 request_id,
                 processor: processor.clone(),
                 amount,
+                token: token.clone(),
+                fee,
+                net,
                 status,
+            },
+        );
+    }
+
+    /// Publish the `"fees_withdrawn"` event.
+    ///
+    /// **What**: Records an admin withdrawal of accumulated protocol fees.
+    /// **How**: Called from [`Self::withdraw_fees`] after fee deduction is persisted.
+    /// **Why**: Gives indexers and treasuries an audit trail of fee payouts.
+    ///
+    /// Topic: `("fees_withdrawn",)`. Data: [`FeesWithdrawnEvent`].
+    fn emit_fees_withdrawn(
+        env: &Env,
+        admin: &Address,
+        token: &Address,
+        to: &Address,
+        amount: i128,
+    ) {
+        env.events().publish(
+            (Symbol::new(env, "fees_withdrawn"),),
+            FeesWithdrawnEvent {
+                admin: admin.clone(),
+                token: token.clone(),
+                to: to.clone(),
+                amount,
             },
         );
     }
@@ -675,7 +861,9 @@ pub struct RefundRequestedEvent {
 ///
 /// Published by [`RefundContract::emit_refund_processed`] on every admin
 /// decision on a refund request. `status` distinguishes which transition
-/// occurred — see [`RefundStatus`].
+/// occurred — see [`RefundStatus`]. For `Approved` and `Rejected` transitions,
+/// `fee` and `net` are `0`. For `Processed` transitions, `fee` is the retained
+/// fee and `net` is the token amount transferred to the requester.
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefundProcessedEvent {
@@ -685,8 +873,31 @@ pub struct RefundProcessedEvent {
     pub processor: Address,
     /// Amount recorded on the original request at decision time.
     pub amount: i128,
+    /// Token contract address for the refund.
+    pub token: Address,
+    /// Fee deducted from the refund amount.
+    pub fee: i128,
+    /// Net amount transferred to the requester.
+    pub net: i128,
     /// New status of the request: `Approved`, `Rejected`, or `Processed`.
     pub status: RefundStatus,
+}
+
+/// Payload for the `"fees_withdrawn"` event.
+///
+/// Published by [`RefundContract::emit_fees_withdrawn`] when accumulated protocol
+/// fees are withdrawn by the admin.
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeesWithdrawnEvent {
+    /// Admin address that initiated the withdrawal.
+    pub admin: Address,
+    /// Token address of the withdrawn fees.
+    pub token: Address,
+    /// Recipient address that received the fees.
+    pub to: Address,
+    /// Amount of fees withdrawn.
+    pub amount: i128,
 }
 
 /// Payload for the `"config_updated"` event.
