@@ -56,6 +56,7 @@ use soroban_sdk::contracterror;
 /// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
 /// | 54   | InvalidTimelockWindow          | Proposed timelock window is outside allowed bounds       |
 /// | 55   | BelowMinTransferAmount         | Amount is below the minimum transfer unit                |
+/// | 59   | SettlementEqualsRevenuePool    | Settlement and revenue pool must be distinct addresses   |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -163,4 +164,6 @@ pub enum VaultError {
     SettlementCannotBeToken = 57,
     /// Proposal has passed its grace period and is no longer executable (code 58).
     ProposalExpired = 58,
+    /// Settlement and revenue pool addresses must be distinct (code 59).
+    SettlementEqualsRevenuePool = 59,
 }

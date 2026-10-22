@@ -287,18 +287,34 @@ impl CalloraVault {
     /// # Parameters
     /// - `owner` — vault owner; only this address may call owner-gated functions.
     /// - `usdc_token` — USDC token contract address used for all transfers.
-    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0).
+    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0
+    ///   and, when non-zero, backed by the vault's on-ledger USDC balance).
     /// - `authorized_caller` — address permitted to call [`deduct`] and [`batch_deduct`].
     /// - `min_deposit` — minimum accepted deposit amount in stroops; must be > 0.
     /// - `revenue_pool` — optional revenue pool address; may be `None`.
     /// - `max_deduct` — per-call deduction cap in stroops; must be > 0 and ≥ `min_deposit`.
     /// - `settlement` — settlement contract address that receives deducted funds.
     ///
-    /// # Panics
-    /// - If already initialized.
-    /// - If `min_deposit <= 0`, `max_deduct <= 0`, or `min_deposit > max_deduct`.
+    /// # Authorization
+    /// `owner.require_auth()` is enforced. This prevents a third party from
+    /// front-running the deployment and initializing the vault with an owner
+    /// they control.
     ///
-    /// No auth is required; `init` is a constructor and may only succeed once.
+    /// # Errors
+    /// - [`VaultError::AlreadyInitialized`] — `init` has already succeeded.
+    /// - [`VaultError::MinDepositNotPositive`] — `min_deposit <= 0`.
+    /// - [`VaultError::MaxDeductNotPositive`] — `max_deduct <= 0`.
+    /// - [`VaultError::MinDepositExceedsMaxDeduct`] — `min_deposit > max_deduct`.
+    /// - [`VaultError::AmountNotPositive`] — `initial_balance < 0`.
+    /// - [`VaultError::UsdcTokenCannotBeVault`] — `usdc_token` is the vault address.
+    /// - [`VaultError::RevenuePoolCannotBeVault`] — `revenue_pool` is the vault address.
+    /// - [`VaultError::SettlementCannotBeVault`] — `settlement` is the vault address.
+    /// - [`VaultError::SettlementEqualsRevenuePool`] — `settlement == revenue_pool`.
+    /// - [`VaultError::InsufficientBalance`] — `initial_balance > 0` exceeds the
+    ///   vault's current on-ledger USDC balance.
+    ///
+    /// All validation runs before the first storage write, so a failed `init`
+    /// leaves the contract untouched and can be retried.
     pub fn init(
         env: Env,
         owner: Address,
@@ -313,6 +329,34 @@ impl CalloraVault {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
         }
+
+        // Require the owner's authorization before any state is written so a
+        // front-runner cannot initialize the vault on the owner's behalf.
+        owner.require_auth();
+
+        // Address sanity checks: none of the configured contracts may alias the
+        // vault itself, and settlement proceeds must not be routed to the same
+        // address that receives revenue-pool funds.
+        let contract_address = env.current_contract_address();
+        if usdc_token == contract_address {
+            return Err(VaultError::UsdcTokenCannotBeVault);
+        }
+        if let Some(ref pool) = revenue_pool {
+            if *pool == contract_address {
+                return Err(VaultError::RevenuePoolCannotBeVault);
+            }
+        }
+        if let Some(ref settlement_addr) = settlement {
+            if *settlement_addr == contract_address {
+                return Err(VaultError::SettlementCannotBeVault);
+            }
+            if let Some(ref pool) = revenue_pool {
+                if settlement_addr == pool {
+                    return Err(VaultError::SettlementEqualsRevenuePool);
+                }
+            }
+        }
+
         let min_dep_val = min_deposit.unwrap_or(0);
         if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
@@ -328,6 +372,15 @@ impl CalloraVault {
         let initial_balance_val = initial_balance.unwrap_or(0);
         if initial_balance_val < 0 {
             return Err(VaultError::AmountNotPositive);
+        }
+
+        // Never record unbacked funds. The tracked balance may not exceed the
+        // USDC actually held by the vault at initialization time.
+        if initial_balance_val > 0 {
+            let usdc_client = crate::token::Client::new(&env, &usdc_token);
+            if usdc_client.balance(&contract_address) < initial_balance_val {
+                return Err(VaultError::InsufficientBalance);
+            }
         }
 
         env.storage().instance().set(&DataKey::Owner, &owner);
@@ -2909,6 +2962,11 @@ mod test_views;
 
 #[cfg(test)]
 mod test_reentrancy;
+
+/// Issue #1395 — init owner authorization, backed initial balance, and
+/// address-alias validation.
+#[cfg(test)]
+mod test_init_hardening;
 
 #[cfg(test)]
 mod test;
