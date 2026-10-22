@@ -17,6 +17,13 @@ The USDC token is a Stellar asset contract for an asset issued by the deployer a
 
 ## Initialisation
 
+> The vault `init` requires the `owner` to authorize the call, so the deployer
+> key that owns the vault must be the transaction source. The vault address is
+> not a constructor argument: `init` remains a one-time entrypoint for
+> compatibility with the already-initialised deployment below. If
+> `initial_balance > 0`, the vault must already hold at least that much USDC
+> on-ledger, otherwise `init` fails with `InsufficientBalance`.
+
 | Contract | Call | Transaction |
 |---|---|---|
 | Settlement | `init(admin = deployer, vault_address = vault)` | [619aa61b...](https://stellar.expert/explorer/testnet/tx/619aa61bdf4189cc4f1ef91253851a4741abb803fe9207ce5b1ea5ccd2150b91) |
@@ -40,7 +47,8 @@ stellar contract build --package callora-settlement
 stellar contract build --package callora-revenue-pool
 stellar contract asset deploy --asset USDC:<deployer-address> --network testnet --source my-deployer
 stellar contract deploy --wasm target/wasm32v1-none/release/callora_settlement.wasm --network testnet --source my-deployer
-# ... then init each contract as in the table above
+# ... then init each contract as in the table above.
+# The vault owner must sign, so use the owner key as `--source`.
 stellar contract invoke --id <vault> --network testnet --source my-deployer -- init \
   --owner <deployer> --usdc_token <usdc> --initial_balance 0 --authorized_caller '"<deployer>"' \
   --min_deposit 1 --revenue_pool '"<pool>"' --max_deduct 1000000000 --settlement '"<settlement>"'

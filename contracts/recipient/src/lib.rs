@@ -37,6 +37,21 @@ pub const MAX_NAME_LEN: u32 = 64;
 /// Maximum number of entries returned by a single [`CalloraRecipient::list_recipients`] call.
 pub const MAX_PAGE_SIZE: u32 = 50;
 
+/// Approximate number of ledgers per day on Stellar (5 seconds per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Threshold at which instance storage TTL is extended (30 days).
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL when instance storage is extended (60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Threshold at which persistent storage TTL is extended (30 days).
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL when persistent storage is extended (120 days).
+pub const PERSISTENT_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -73,6 +88,18 @@ pub struct RecipientRecord {
     pub name: String,
     /// On-ledger address of the recipient.
     pub address: Address,
+}
+
+/// Event payload emitted when an existing recipient's address is updated.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecipientUpdatedEvent {
+    /// Human-readable name of the recipient.
+    pub name: String,
+    /// Previous on-ledger address.
+    pub old_address: Address,
+    /// New on-ledger address.
+    pub new_address: Address,
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +140,7 @@ impl CalloraRecipient {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::RecipientCount, &0u32);
+        Self::bump_instance(&env);
         env.events().publish((events::event_init(&env), admin), ());
         Ok(())
     }
@@ -120,6 +148,40 @@ impl CalloraRecipient {
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Extend the instance storage TTL.
+    ///
+    /// Called on entrypoints so the contract instance (holding admin address and
+    /// recipient count) never archives due to inactivity.
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
+    /// Extend the persistent storage TTL for a recipient record.
+    fn bump_recipient(env: &Env, name: &String) {
+        env.storage().persistent().extend_ttl(
+            &StorageKey::Recipient(name.clone()),
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
+
+    /// Extend the persistent storage TTL for all three persistent keys of a recipient.
+    fn bump_recipient_persistent(env: &Env, name: &String, pos: u32) {
+        Self::bump_recipient(env, name);
+        env.storage().persistent().extend_ttl(
+            &StorageKey::NameIndex(pos),
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        env.storage().persistent().extend_ttl(
+            &StorageKey::NamePosition(name.clone()),
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+    }
 
     /// Read the admin address from instance storage.
     fn admin(env: &Env) -> Result<Address, RecipientError> {
@@ -174,6 +236,7 @@ impl CalloraRecipient {
         name: String,
         address: Address,
     ) -> Result<(), RecipientError> {
+        Self::bump_instance(&env);
         Self::require_admin(&env, &caller)?;
         Self::validate_name(&name)?;
 
@@ -208,6 +271,8 @@ impl CalloraRecipient {
             &count.checked_add(1).ok_or(RecipientError::Overflow)?,
         );
 
+        Self::bump_recipient_persistent(&env, &name, new_pos);
+
         env.events()
             .publish((events::event_recipient_registered(&env), name), record);
         Ok(())
@@ -228,28 +293,45 @@ impl CalloraRecipient {
     /// * [`RecipientError::NotFound`] — no recipient with this name exists.
     ///
     /// # Events
-    /// Emits `"recipient_updated"` with the name as topic and the new record as data.
+    /// Emits `"recipient_updated"` with the name as topic and [`RecipientUpdatedEvent`] as data.
     pub fn update_recipient(
         env: Env,
         caller: Address,
         name: String,
         new_address: Address,
     ) -> Result<(), RecipientError> {
+        Self::bump_instance(&env);
         Self::require_admin(&env, &caller)?;
 
         let key = StorageKey::Recipient(name.clone());
-        if !env.storage().persistent().has(&key) {
-            return Err(RecipientError::NotFound);
-        }
+        let old_record: RecipientRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RecipientError::NotFound)?;
+        let old_address = old_record.address;
 
         let record = RecipientRecord {
             name: name.clone(),
-            address: new_address,
+            address: new_address.clone(),
         };
         env.storage().persistent().set(&key, &record);
 
+        let pos: u32 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::NamePosition(name.clone()))
+            .ok_or(RecipientError::NotFound)?;
+        Self::bump_recipient_persistent(&env, &name, pos);
+
+        let update_event = RecipientUpdatedEvent {
+            name: name.clone(),
+            old_address,
+            new_address,
+        };
+
         env.events()
-            .publish((events::event_recipient_updated(&env), name), record);
+            .publish((events::event_recipient_updated(&env), name), update_event);
         Ok(())
     }
 
@@ -274,6 +356,7 @@ impl CalloraRecipient {
     /// # Events
     /// Emits `"recipient_removed"` with the name as topic.
     pub fn remove_recipient(env: Env, caller: Address, name: String) -> Result<(), RecipientError> {
+        Self::bump_instance(&env);
         Self::require_admin(&env, &caller)?;
 
         let key = StorageKey::Recipient(name.clone());
@@ -343,6 +426,7 @@ impl CalloraRecipient {
     /// # Errors
     /// * [`RecipientError::NotInitialized`] — contract was never initialized.
     pub fn get_admin(env: Env) -> Result<Address, RecipientError> {
+        Self::bump_instance(&env);
         Self::admin(&env)
     }
 
@@ -351,27 +435,40 @@ impl CalloraRecipient {
     ///
     /// Pure view: no auth, no storage writes.
     pub fn get_recipient(env: Env, name: String) -> Result<RecipientRecord, RecipientError> {
+        Self::bump_instance(&env);
         Self::admin(&env)?; // ensure initialized
         Self::validate_name(&name)?;
-        env.storage()
+        let record: RecipientRecord = env
+            .storage()
             .persistent()
-            .get(&StorageKey::Recipient(name))
-            .ok_or(RecipientError::NotFound)
+            .get(&StorageKey::Recipient(name.clone()))
+            .ok_or(RecipientError::NotFound)?;
+        Self::bump_recipient(&env, &name);
+        Ok(record)
     }
 
     /// Return whether a recipient with the given `name` is registered.
     ///
     /// Pure view: no auth, no storage writes.
     pub fn has_recipient(env: Env, name: String) -> Result<bool, RecipientError> {
+        Self::bump_instance(&env);
         Self::admin(&env)?; // ensure initialized
         Self::validate_name(&name)?;
-        Ok(env.storage().persistent().has(&StorageKey::Recipient(name)))
+        let exists = env
+            .storage()
+            .persistent()
+            .has(&StorageKey::Recipient(name.clone()));
+        if exists {
+            Self::bump_recipient(&env, &name);
+        }
+        Ok(exists)
     }
 
     /// Return the total number of registered recipients.
     ///
     /// Pure view: no auth, no storage writes.
     pub fn get_recipient_count(env: Env) -> Result<u32, RecipientError> {
+        Self::bump_instance(&env);
         if !env.storage().instance().has(&StorageKey::Admin) {
             return Err(RecipientError::NotInitialized);
         }
@@ -409,6 +506,7 @@ impl CalloraRecipient {
         start: u32,
         limit: u32,
     ) -> Result<Vec<String>, RecipientError> {
+        Self::bump_instance(&env);
         if !env.storage().instance().has(&StorageKey::Admin) {
             return Err(RecipientError::NotInitialized);
         }
@@ -439,6 +537,7 @@ impl CalloraRecipient {
                 .persistent()
                 .get(&StorageKey::NameIndex(pos))
                 .ok_or(RecipientError::NotFound)?;
+            Self::bump_recipient_persistent(&env, &name, pos);
             result.push_back(name);
         }
 

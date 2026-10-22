@@ -136,8 +136,9 @@ fn setup_funded_vault_with_min(
     let settlement = create_settlement(env, &owner, &vault_addr);
 
     env.mock_all_auths();
-    // Pre-fund both the tracked balance (deducted down) and the on-ledger USDC
-    // (actually transferred out).
+    // Pre-fund the on-ledger USDC that backs the tracked balance (and the
+    // surplus actually transferred out), then record the tracked amount.
+    usdc_admin.mint(&vault_addr, &on_ledger);
     client.init(
         &owner,
         &usdc,
@@ -148,7 +149,6 @@ fn setup_funded_vault_with_min(
         &Some(max_deduct),
         &Some(settlement.clone()),
     );
-    usdc_admin.mint(&vault_addr, &on_ledger);
 
     (client, owner, usdc_client, usdc_admin, settlement)
 }
@@ -162,6 +162,7 @@ fn setup_vault_with_optional_settlement(
     let (usdc, usdc_client, usdc_admin) = create_usdc(env, &owner);
 
     env.mock_all_auths();
+    usdc_admin.mint(&vault_addr, &1_000i128);
     client.init(
         &owner,
         &usdc,
@@ -172,7 +173,6 @@ fn setup_vault_with_optional_settlement(
         &Some(1_000i128),
         &settlement,
     );
-    usdc_admin.mint(&vault_addr, &1_000i128);
 
     (client, owner, usdc_client)
 }
@@ -186,6 +186,7 @@ fn settlement_client_records_deduction_on_native_target() {
     let settlement_addr = create_settlement(&env, &owner, &vault_addr);
     let settlement_client =
         callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    let settlement_client = callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
 
     env.mock_all_auths();
     vault_client.init(

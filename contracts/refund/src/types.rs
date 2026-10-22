@@ -8,7 +8,9 @@ pub enum StorageKey {
     RefundConfig,
     PendingRefund(u64),
     RequesterRefunds(Address),
-    TotalRefunds,
+    TotalRefunds(Address),
+    TotalRefundsLegacy,
+    AccumulatedFees(Address),
     RefundCounter,
 }
 
