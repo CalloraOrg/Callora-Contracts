@@ -6,7 +6,7 @@
 
 extern crate std;
 
-use callora_vault::VaultError;
+use callora_vault::{ReserveCapError, VaultError};
 use std::collections::BTreeSet;
 
 /// Frozen snapshot of the error code mapping.
@@ -94,6 +94,17 @@ fn test_vault_error_codes_frozen_against_snapshot() {
         FROZEN_ERROR_SNAPSHOT.len(),
         "Snapshot size mismatch"
     );
+}
+
+#[test]
+fn reserve_cap_error_uses_new_non_colliding_code() {
+    assert_eq!(ReserveCapError::NotInitialized as u32, 1);
+    assert_eq!(ReserveCapError::Unauthorized as u32, 3);
+    assert_eq!(ReserveCapError::AmountNotPositive as u32, 6);
+    assert_eq!(ReserveCapError::CapTokenNotUsdc as u32, 59);
+    assert!(FROZEN_ERROR_SNAPSHOT
+        .iter()
+        .all(|(code, _)| *code != ReserveCapError::CapTokenNotUsdc as u32));
 }
 
 /// Verify `NotInitialized` still has discriminant 1.

@@ -159,7 +159,6 @@ fn every_view_call_bumps_instance_ttl() {
     let (usdc, _, _) = create_usdc(&env, &owner);
     let (vault_address, client) = create_vault(&env);
     let settlement = create_settlement(&env, &owner, &vault_address);
-    let token_cap = Address::generate(&env);
 
     env.mock_all_auths();
     client.init(
@@ -174,7 +173,7 @@ fn every_view_call_bumps_instance_ttl() {
     );
     // Put an entry so views have something non-default to return.
     client.set_authorized_caller(&owner);
-    client.set_reserve_cap(&owner, &token_cap, &1_000_000_000);
+    client.set_reserve_cap(&owner, &usdc, &1_000_000_000);
 
     // For each view call, advance to THRESHOLD-1 (about to need bump), call
     // the view, then advance THRESHOLD-1 again and verify it's still live.

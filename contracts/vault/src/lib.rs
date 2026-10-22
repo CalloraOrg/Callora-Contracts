@@ -70,7 +70,7 @@ pub use timelock::{
 pub use callora_validators as validators;
 
 mod errors;
-pub use errors::VaultError;
+pub use errors::{ReserveCapError, VaultError};
 
 /// A single item in a batch deduction.
 #[contracttype]
@@ -448,25 +448,27 @@ impl CalloraVault {
     /// `Ok(())` on success.
     ///
     /// ### Errors
+    /// - Missing caller authentication fails at `require_auth` with a host auth error.
     /// - [`VaultError::Paused`] — vault is paused (circuit-breaker active).
     /// - [`VaultError::AmountNotPositive`] — `amount ≤ 0`.
     /// - [`VaultError::BelowMinDeposit`] — `amount < min_deposit`.
     /// - [`VaultError::CallerNotInAllowlist`] — non-owner caller not in allowlist.
-    /// - [`VaultError::Overflow`] — tracked balance overflow.
+    /// - [`VaultError::ExceedsReserveCap`] — tracked USDC balance after deposit
+    ///   would exceed the configured inclusive cap.
+    /// - [`VaultError::Overflow`] — tracked balance plus amount overflows `i128`.
+    ///
+    /// Checks run in this order: authentication, pause, amount validation,
+    /// allowlist, reserve cap, then arithmetic overflow. An unset cap or a cap
+    /// of `i128::MAX` is unlimited. A cap may be lowered below the current
+    /// tracked balance; positive deposits then fail until balance is withdrawn
+    /// or deducted, or the cap is raised. Withdrawals and deducts are unaffected.
+    /// A rejected deposit writes no balance, transfers no tokens, and emits no events.
     ///
     /// ### Events
     /// Emits `deposit` with `caller` as topic and `(amount, new_balance)` as data.
     pub fn deposit(env: Env, caller: Address, amount: i128) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_not_paused(env.clone())?;
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::Paused);
-        }
         let min_dep = env
             .storage()
             .instance()
@@ -481,18 +483,18 @@ impl CalloraVault {
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
+        let usdc_token = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .unwrap_or_else(|| panic!("USDC Token not set"));
+        limits::check(&env, &usdc_token, current_bal, amount)?;
         let new_bal = current_bal
             .checked_add(amount)
             .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
-        let token_addr = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
-
-        let token_client = token::Client::new(&env, &token_addr);
+        let token_client = token::Client::new(&env, &usdc_token);
         token_client.transfer(&caller, &env.current_contract_address(), &amount);
 
         env.events().publish(
@@ -2808,32 +2810,46 @@ impl CalloraVault {
         Ok(())
     }
 
-    /// Set or update the reserve cap for a token (owner only).
+    /// Set or update the reserve cap for the configured USDC token (owner only).
     ///
-    /// The reserve cap is the maximum total balance the vault may hold for
-    /// `token`.  Any `deposit` call that would push the balance beyond `cap`
-    /// is rejected with [`VaultError::ExceedsReserveCap`].
+    /// The reserve cap is the maximum tracked `DataKey::Balance` for the
+    /// configured USDC token. The boundary is inclusive. An unset cap and
+    /// `i128::MAX` both mean unlimited deposits. Lowering a cap below the
+    /// current balance is allowed, but subsequent positive deposits are
+    /// rejected until withdrawals or deducts reduce the balance or the cap is
+    /// raised; withdrawals and deducts are not restricted by this cap.
     ///
     /// Pass `i128::MAX` to remove the effective cap (restore unlimited deposits).
     ///
     /// # Parameters
     /// - `caller` — must be the vault owner.
-    /// - `token` — token contract address the cap applies to.
+    /// - `token` — must equal the configured USDC token address.
     /// - `cap` — maximum balance in token stroops; must be > 0.
     ///
     /// # Errors
-    /// - [`VaultError::Unauthorized`] — `caller` is not the owner.
-    /// - [`VaultError::AmountNotPositive`] — `cap <= 0`.
+    /// - [`ReserveCapError::Unauthorized`] — `caller` is not the owner.
+    /// - [`ReserveCapError::AmountNotPositive`] — `cap <= 0`.
+    /// - [`ReserveCapError::NotInitialized`] — the configured USDC token is missing.
+    /// - [`ReserveCapError::CapTokenNotUsdc`] — `token` is not the configured USDC token.
     pub fn set_reserve_cap(
         env: Env,
         caller: Address,
         token: Address,
         cap: i128,
-    ) -> Result<(), VaultError> {
+    ) -> Result<(), ReserveCapError> {
         caller.require_auth();
-        Self::require_owner(env.clone(), caller.clone())?;
+        Self::require_owner(env.clone(), caller.clone())
+            .map_err(|_| ReserveCapError::Unauthorized)?;
         if cap <= 0 {
-            return Err(VaultError::AmountNotPositive);
+            return Err(ReserveCapError::AmountNotPositive);
+        }
+        let usdc_token = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::UsdcToken)
+            .ok_or(ReserveCapError::NotInitialized)?;
+        if token != usdc_token {
+            return Err(ReserveCapError::CapTokenNotUsdc);
         }
         let prev = limits::set(&env, &token, cap);
         env.events().publish(
@@ -2967,6 +2983,9 @@ mod test_reentrancy;
 /// address-alias validation.
 #[cfg(test)]
 mod test_init_hardening;
+
+#[cfg(test)]
+mod test_reserve_cap;
 
 #[cfg(test)]
 mod test;
