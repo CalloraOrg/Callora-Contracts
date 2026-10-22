@@ -162,7 +162,6 @@ pub mod token {
     pub use soroban_sdk::token::Client;
 }
 
-#[cfg(target_arch = "wasm32")]
 pub mod settlement {
     use soroban_sdk::{contractclient, Address, Env};
 
@@ -179,37 +178,6 @@ pub mod settlement {
             ledger_seq: u32,
         );
         fn record_deduction(env: Env, amount: i128, request_id: u64);
-    }
-}
-
-/// In native/test mode the settlement contract is registered directly in the
-/// test `Env`. The vault emits USDC transfers; settlement accounting is
-/// verified through its own public interface.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod settlement {
-    use soroban_sdk::{Address, Env};
-    pub struct Client<'a> {
-        _env: &'a Env,
-        _addr: &'a Address,
-    }
-    impl<'a> Client<'a> {
-        pub fn new(env: &'a Env, addr: &'a Address) -> Self {
-            Client {
-                _env: env,
-                _addr: addr,
-            }
-        }
-        pub fn receive_payment(
-            &self,
-            _caller: &Address,
-            _amount: &i128,
-            _to_global_pool: &bool,
-            _developer: &Option<Address>,
-            _token: &Address,
-            _nonce: &u32,
-        ) {
-        }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
     }
 }
 
