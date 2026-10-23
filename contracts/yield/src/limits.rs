@@ -167,7 +167,7 @@ pub enum StorageKey {
     /// storage).
     ///
     /// Deliberately named `WasmVersion` (rather than `Version`) to avoid
-    /// colliding with the `StorageKey::Version` marker written by
+    /// colliding with the validator's `SmVersion` marker written by
     /// [`StorageMigrationValidator`] in the same instance-storage namespace.
     WasmVersion,
 }

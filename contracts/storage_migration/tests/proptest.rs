@@ -145,16 +145,19 @@ fn fingerprint(env: &Env) -> StorageFingerprint {
         authorized: env
             .storage()
             .instance()
-            .get::<_, (u32, BytesN<32>)>(&StorageKey::AuthorizedUpgrade),
-        version: env.storage().instance().get::<_, u32>(&StorageKey::Version),
+            .get::<_, (u32, BytesN<32>)>(&StorageKey::SmAuthorizedUpgrade),
+        version: env
+            .storage()
+            .instance()
+            .get::<_, u32>(&StorageKey::SmVersion),
         schema_hash: env
             .storage()
             .instance()
-            .get::<_, BytesN<32>>(&StorageKey::SchemaLayoutHash),
+            .get::<_, BytesN<32>>(&StorageKey::SmSchemaLayoutHash),
         backup: env
             .storage()
             .instance()
-            .get::<_, bool>(&StorageKey::BackupPresent),
+            .get::<_, bool>(&StorageKey::SmBackupPresent),
     }
 }
 
