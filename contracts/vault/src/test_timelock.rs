@@ -419,7 +419,7 @@ fn cancel_upgrade_removes_proposal() {
 fn propose_sweep_stores_recipient_amount_and_deadline() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -440,7 +440,7 @@ fn execute_sweep_fails_before_window() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
     // Fund vault so the on-ledger transfer would succeed.
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -456,7 +456,7 @@ fn execute_sweep_fails_before_window() {
 fn execute_sweep_succeeds_at_boundary_and_transfers() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -473,7 +473,7 @@ fn execute_sweep_succeeds_at_boundary_and_transfers() {
 fn execute_sweep_succeeds_within_grace_period() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -490,7 +490,7 @@ fn execute_sweep_succeeds_within_grace_period() {
 fn execute_sweep_fails_after_expiry() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -527,7 +527,7 @@ fn propose_sweep_rejects_non_positive_amount() {
 fn cancel_sweep_removes_proposal() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -641,7 +641,7 @@ fn propose_upgrade_rejects_timestamp_overflow() {
 fn propose_sweep_rejects_timestamp_overflow() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -945,7 +945,7 @@ fn legacy_pending_sweep_migrates_and_exposes_expiry() {
 fn legacy_pending_sweep_executes_within_grace_period() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -976,7 +976,7 @@ fn legacy_pending_sweep_executes_within_grace_period() {
 fn legacy_pending_sweep_fails_after_migrated_expiry() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token();
+    let usdc = client.get_usdc_token().unwrap();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 

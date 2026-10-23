@@ -24,6 +24,9 @@
 //! call. The surface is otherwise backward compatible with prior versions: the
 //! existing `RevenuePool` re-exports remain unchanged and no prior storage key
 //! discriminant was reused.
+//! The surface is fully backward compatible with prior versions: the existing
+//! `RevenuePool` re-exports remain unchanged, no prior symbol was renamed,
+//! and no prior storage key was reused.
 
 #![no_std]
 
