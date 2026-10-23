@@ -90,6 +90,7 @@ fn setup(env: &Env, authorized_caller: Option<Address>) -> (CalloraVaultClient<'
     let settlement = create_settlement(env, &owner, &vault_addr);
 
     env.mock_all_auths();
+    usdc_admin.mint(&vault_addr, &TRACKED);
     client.init(
         &owner,
         &usdc,
@@ -100,7 +101,6 @@ fn setup(env: &Env, authorized_caller: Option<Address>) -> (CalloraVaultClient<'
         &Some(MAX_DEDUCT),
         &Some(settlement),
     );
-    usdc_admin.mint(&vault_addr, &TRACKED);
 
     (client, owner)
 }

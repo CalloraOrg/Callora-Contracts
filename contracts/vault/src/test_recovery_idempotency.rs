@@ -301,7 +301,7 @@ fn withdraw_works_after_direct_pause() {
     assert!(client.is_paused());
 
     // Withdraw should still work in recovery mode
-    let remaining = client.withdraw(&200);
+    let remaining = client.withdraw(&200).unwrap();
     assert_eq!(remaining, 800);
     assert_eq!(client.balance(), 800);
     assert_eq!(usdc_client.balance(&owner), 200);

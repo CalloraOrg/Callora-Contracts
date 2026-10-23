@@ -1,5 +1,4 @@
 //! Event topic Symbol constructors and structured emit helpers for the
-//! Event topic Symbol constructors and structured emit helpers for the
 //! Callora Settlement contract.
 //!
 //! # Design
@@ -101,6 +100,20 @@ pub fn emit_supported_token_removed(env: &Env, caller: &Address, token: &Address
 /// Returns the canonical Symbol for the `deduction_recorded` event topic.
 pub fn event_deduction_recorded(env: &Env) -> Symbol {
     Symbol::new(env, "deduction_recorded")
+}
+
+/// Returns the canonical Symbol for the `allocation_recorded` event topic.
+///
+/// **What**: Returns the canonical symbol for allocation recorded events.
+///
+/// **How**: Creates a `Symbol` from `"allocation_recorded"`.
+///
+/// **Why**: Centralizes topic creation to guarantee byte-identity across call sites.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+pub fn event_allocation_recorded(env: &Env) -> Symbol {
+    Symbol::new(env, "allocation_recorded")
 }
 
 /// Emit an accounting-only vault deduction after its replay marker is stored.
@@ -439,6 +452,38 @@ pub fn emit_initialized(env: &Env, admin: &Address, vault: &Address, pool: &Glob
 pub fn emit_payment_received(env: &Env, caller: &Address, payload: PaymentReceivedEvent) {
     env.events()
         .publish((event_payment_received(env), caller.clone()), payload);
+}
+
+/// Emit `"allocation_recorded"` when a payment credit is applied against the
+/// unallocated deducted balance.
+///
+/// **What**: Publishes an allocation recorded event carrying the credited
+/// amount and the running `total_received`, `total_allocated`, and
+/// `unallocated` totals so indexers can reconcile without replaying history.
+///
+/// **How**: Calls `env.events().publish()` with topic `(allocation_recorded,)`
+/// and payload `(amount, total_received, total_allocated, unallocated)`.
+///
+/// **Why**: Makes the settlement accounting model observable and lets
+/// operators detect unattributed funds.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `amount` - Amount credited in this allocation.
+/// * `total_received` - Cumulative deducted total after this allocation.
+/// * `total_allocated` - Cumulative allocated total after this allocation.
+/// * `unallocated` - Remaining unallocated deducted balance after this allocation.
+pub fn emit_allocation_recorded(
+    env: &Env,
+    amount: i128,
+    total_received: i128,
+    total_allocated: i128,
+    unallocated: i128,
+) {
+    env.events().publish(
+        (event_allocation_recorded(env),),
+        (amount, total_received, total_allocated, unallocated),
+    );
 }
 
 /// Emit `"balance_credited"` when a developer's balance is incremented.
@@ -839,6 +884,15 @@ mod tests {
         let events: soroban_sdk::Vec<DeductionRecordedEvent> = soroban_sdk::Vec::new(&env);
         emit_deduction_recorded_batch(&env, &events);
         assert_eq!(env.events().all().len(), 0);
+    }
+
+    #[test]
+    fn test_event_allocation_recorded_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_allocation_recorded(&env),
+            Symbol::new(&env, "allocation_recorded")
+        );
     }
 
     #[test]
