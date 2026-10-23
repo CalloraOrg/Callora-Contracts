@@ -11,12 +11,13 @@
 //! - `batch_deduct` rejects duplicates against storage *and* within the batch,
 //!   atomically (no balance change, no markers written).
 //! - `is_request_processed` reflects processed state.
-//! - `prune_processed_requests` clears a marker so its id can be reused.
+//! - `prune_processed_requests` clears a marker so its id can be reused, and a
+//!   replay after a prune fails with a typed `DuplicateRequestId` (never a trap).
 
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
+use soroban_sdk::{token, Address, Env, Error, InvokeError, Symbol, Vec};
 
 use super::*;
 
@@ -147,6 +148,21 @@ fn deduct_zero_request_id_is_never_deduplicated() {
 
     assert_eq!(client.balance(), 700);
     assert!(!client.is_request_processed(&0u64));
+}
+
+#[test]
+fn deduct_zero_request_id_does_not_mark_settlement() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    // The vault must never mark id `0`, and neither must settlement.
+    client.deduct(&owner, &100i128, &0u64);
+    client.deduct(&owner, &100i128, &0u64);
+
+    let settlement_addr = client.settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    assert_eq!(settlement_client.total_received(), 200);
 }
 
 #[test]
@@ -391,9 +407,14 @@ fn prune_processed_request_allows_reuse_and_emits_event() {
     assert!(!client.is_request_processed(&91u64));
     assert!(client.is_request_processed(&92u64));
 
-    // The id can now be reused.
-    client.deduct(&owner, &10i128, &91u64);
-    assert_eq!(client.balance(), 790);
+    // The id can now be reused. Settlement still holds its own marker, so the
+    // vault must pre-check and surface a typed error rather than trapping.
+    let result = client.try_deduct(&owner, &10i128, &91u64);
+    assert!(
+        is_vault_err(result, VaultError::DuplicateRequestId as u32),
+        "replay after prune must fail with a typed DuplicateRequestId"
+    );
+    assert_eq!(client.balance(), 800, "balance must not change");
 }
 
 #[test]
@@ -418,4 +439,65 @@ fn prune_allowed_during_pause() {
     let ids = soroban_sdk::vec![&env, 93u64];
     client.prune_processed_requests(&owner, &ids);
     assert!(!client.is_request_processed(&93u64));
+}
+
+// ---------------------------------------------------------------------------
+// Cross-contract: settlement sentinel agreement
+// ---------------------------------------------------------------------------
+
+#[test]
+fn settlement_emits_event_for_zero_request_id() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    client.deduct(&owner, &123i128, &0u64);
+
+    let settlement_addr = client.settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    assert_eq!(settlement_client.total_received(), 123);
+
+    // `deduction_recorded` is still emitted for id `0` with `request_id = 0`.
+    let events = env.events().all();
+    let mut found = false;
+    for (addr, topics, data) in events.iter() {
+        if addr != settlement_addr {
+            continue;
+        }
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        if topic0 == Symbol::new(&env, "deduction_recorded") {
+            let (amount, request_id): (i128, u64) = data.into_val(&env);
+            assert_eq!(amount, 123);
+            assert_eq!(request_id, 0);
+            found = true;
+        }
+    }
+    assert!(found, "deduction_recorded must be emitted for id 0");
+}
+
+#[test]
+fn batch_deduct_zero_ids_marks_only_nonzero_in_settlement() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    let batch = items(&env, &[(100, 0), (200, 0), (50, 5)]);
+    client.batch_deduct(&owner, &batch);
+    assert_eq!(client.balance(), 650);
+
+    let settlement_addr = client.settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    assert_eq!(settlement_client.total_received(), 350);
+
+    // Only id `5` is marked on the vault side.
+    assert!(client.is_request_processed(&5u64));
+    assert!(!client.is_request_processed(&0u64));
+
+    // Replaying id `5` is rejected on both sides; id `0` still goes through.
+    assert!(is_vault_err(
+        client.try_deduct(&owner, &10i128, &5u64),
+        VaultError::DuplicateRequestId as u32
+    ));
+    client.deduct(&owner, &10i128, &0u64);
+    assert_eq!(client.balance(), 640);
 }
