@@ -46,6 +46,7 @@ use soroban_sdk::contracterror;
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
 /// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
+/// | 45   | InvalidRecipient               | Withdrawal recipient is the vault address or USDC token  |
 /// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
 /// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
 /// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
@@ -58,6 +59,7 @@ use soroban_sdk::contracterror;
 /// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
 /// | 54   | InvalidTimelockWindow          | Proposed timelock window is outside allowed bounds       |
 /// | 55   | BelowMinTransferAmount         | Amount is below the minimum transfer unit                |
+/// | 59   | SettlementEqualsRevenuePool    | Settlement and revenue pool must be distinct addresses   |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -145,6 +147,10 @@ pub enum VaultError {
     ExceedsReserveCap = 43,
     /// Caller is not in the allowlist and is not the owner (code 44).
     CallerNotInAllowlist = 44,
+    /// Withdrawal recipient is the vault address or the USDC token address (code 45).
+    InvalidRecipient = 45,
+    /// Withdrawal recipient is the zero address (code 46).
+    ZeroAddressRecipient = 46,
     /// A critical admin action is still inside the global cool-off window (code 49).
     AdminCooldownActive = 49,
     /// Admin cool-off window is outside the accepted bounds (code 50).
@@ -169,4 +175,6 @@ pub enum VaultError {
     RecipientCannotBeVault = 59,
     /// Distribute recipient cannot be the USDC token contract (code 60).
     RecipientCannotBeToken = 60,
+    /// Settlement and revenue pool addresses must be distinct (code 61).
+    SettlementEqualsRevenuePool = 61,
 }

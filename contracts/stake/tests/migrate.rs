@@ -7,7 +7,8 @@
 extern crate std;
 
 use callora_stake::migrate::{
-    CalloraStakeMigrate, CalloraStakeMigrateClient, CurrentStake, LegacyStake, StorageKey,
+    CalloraStakeMigrate, CalloraStakeMigrateClient, CurrentStake, LegacyStake, StakeMigrateError,
+    StorageKey,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
@@ -196,6 +197,31 @@ fn migrate_requires_auth_on_caller() {
 }
 
 #[test]
+fn migrate_removes_legacy_entry() {
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 1_000, 42);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+
+    client.migrate(&admin, &1, &2);
+
+    let legacy_present = env.as_contract(&contract, || {
+        env.storage().instance().has(&StorageKey::Legacy)
+    });
+    assert!(!legacy_present, "Legacy entry must be removed after migrate");
+}
+
+#[test]
+fn migrate_twice_returns_already_migrated() {
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+
+    client.migrate(&admin, &1, &2);
+    let result = client.try_migrate(&admin, &2, &3);
+    assert_eq!(result, Err(Ok(StakeMigrateError::AlreadyMigrated)));
+}
+
+#[test]
 fn migrate_fails_when_legacy_state_missing() {
     let env = Env::default();
     env.mock_all_auths();
@@ -219,6 +245,18 @@ fn migrate_fails_when_not_initialised() {
 
     let result = client.try_migrate(&caller, &0, &1);
     assert!(result.is_err());
+}
+
+#[test]
+fn migrate_extends_instance_ttl() {
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+
+    client.migrate(&admin, &1, &2);
+
+    let ttl = env.as_contract(&contract, || env.storage().instance().get_ttl());
+    assert!(ttl > 0, "instance TTL must be extended after migrate");
 }
 
 // ─── Upgrade-guard tests ──────────────────────────────────────────────────────

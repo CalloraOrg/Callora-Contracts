@@ -101,7 +101,7 @@ fn set_settlement_valid_address_persists() {
     let (_, client, _, owner, _) = setup(&env);
     let new_settlement = Address::generate(&env);
     client.set_settlement(&owner, &new_settlement);
-    assert_eq!(client.get_settlement(), new_settlement);
+    assert_eq!(client.get_settlement().unwrap(), new_settlement);
 }
 
 // ---------------------------------------------------------------------------

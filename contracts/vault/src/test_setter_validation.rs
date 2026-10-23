@@ -111,7 +111,7 @@ fn set_settlement_valid_address_succeeds() {
     let (_, client, _, admin) = setup(&env);
     let new_settlement = Address::generate(&env);
     client.set_settlement(&admin, &new_settlement);
-    assert_eq!(client.get_settlement(), new_settlement);
+    assert_eq!(client.get_settlement().unwrap(), new_settlement);
 }
 
 #[test]
