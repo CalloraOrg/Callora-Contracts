@@ -162,7 +162,6 @@ pub mod token {
     pub use soroban_sdk::token::Client;
 }
 
-#[cfg(target_arch = "wasm32")]
 pub mod settlement {
     use soroban_sdk::{contractclient, Address, Env};
 
@@ -179,37 +178,6 @@ pub mod settlement {
             ledger_seq: u32,
         );
         fn record_deduction(env: Env, amount: i128, request_id: u64);
-    }
-}
-
-/// In native/test mode the settlement contract is registered directly in the
-/// test `Env`. The vault emits USDC transfers; settlement accounting is
-/// verified through its own public interface.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod settlement {
-    use soroban_sdk::{Address, Env};
-    pub struct Client<'a> {
-        _env: &'a Env,
-        _addr: &'a Address,
-    }
-    impl<'a> Client<'a> {
-        pub fn new(env: &'a Env, addr: &'a Address) -> Self {
-            Client {
-                _env: env,
-                _addr: addr,
-            }
-        }
-        pub fn receive_payment(
-            &self,
-            _caller: &Address,
-            _amount: &i128,
-            _to_global_pool: &bool,
-            _developer: &Option<Address>,
-            _token: &Address,
-            _nonce: &u32,
-        ) {
-        }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
     }
 }
 
@@ -319,18 +287,34 @@ impl CalloraVault {
     /// # Parameters
     /// - `owner` — vault owner; only this address may call owner-gated functions.
     /// - `usdc_token` — USDC token contract address used for all transfers.
-    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0).
+    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0
+    ///   and, when non-zero, backed by the vault's on-ledger USDC balance).
     /// - `authorized_caller` — address permitted to call [`deduct`] and [`batch_deduct`].
     /// - `min_deposit` — minimum accepted deposit amount in stroops; must be > 0.
     /// - `revenue_pool` — optional revenue pool address; may be `None`.
     /// - `max_deduct` — per-call deduction cap in stroops; must be > 0 and ≥ `min_deposit`.
     /// - `settlement` — settlement contract address that receives deducted funds.
     ///
-    /// # Panics
-    /// - If already initialized.
-    /// - If `min_deposit <= 0`, `max_deduct <= 0`, or `min_deposit > max_deduct`.
+    /// # Authorization
+    /// `owner.require_auth()` is enforced. This prevents a third party from
+    /// front-running the deployment and initializing the vault with an owner
+    /// they control.
     ///
-    /// No auth is required; `init` is a constructor and may only succeed once.
+    /// # Errors
+    /// - [`VaultError::AlreadyInitialized`] — `init` has already succeeded.
+    /// - [`VaultError::MinDepositNotPositive`] — `min_deposit <= 0`.
+    /// - [`VaultError::MaxDeductNotPositive`] — `max_deduct <= 0`.
+    /// - [`VaultError::MinDepositExceedsMaxDeduct`] — `min_deposit > max_deduct`.
+    /// - [`VaultError::AmountNotPositive`] — `initial_balance < 0`.
+    /// - [`VaultError::UsdcTokenCannotBeVault`] — `usdc_token` is the vault address.
+    /// - [`VaultError::RevenuePoolCannotBeVault`] — `revenue_pool` is the vault address.
+    /// - [`VaultError::SettlementCannotBeVault`] — `settlement` is the vault address.
+    /// - [`VaultError::SettlementEqualsRevenuePool`] — `settlement == revenue_pool`.
+    /// - [`VaultError::InsufficientBalance`] — `initial_balance > 0` exceeds the
+    ///   vault's current on-ledger USDC balance.
+    ///
+    /// All validation runs before the first storage write, so a failed `init`
+    /// leaves the contract untouched and can be retried.
     pub fn init(
         env: Env,
         owner: Address,
@@ -345,6 +329,34 @@ impl CalloraVault {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
         }
+
+        // Require the owner's authorization before any state is written so a
+        // front-runner cannot initialize the vault on the owner's behalf.
+        owner.require_auth();
+
+        // Address sanity checks: none of the configured contracts may alias the
+        // vault itself, and settlement proceeds must not be routed to the same
+        // address that receives revenue-pool funds.
+        let contract_address = env.current_contract_address();
+        if usdc_token == contract_address {
+            return Err(VaultError::UsdcTokenCannotBeVault);
+        }
+        if let Some(ref pool) = revenue_pool {
+            if *pool == contract_address {
+                return Err(VaultError::RevenuePoolCannotBeVault);
+            }
+        }
+        if let Some(ref settlement_addr) = settlement {
+            if *settlement_addr == contract_address {
+                return Err(VaultError::SettlementCannotBeVault);
+            }
+            if let Some(ref pool) = revenue_pool {
+                if settlement_addr == pool {
+                    return Err(VaultError::SettlementEqualsRevenuePool);
+                }
+            }
+        }
+
         let min_dep_val = min_deposit.unwrap_or(0);
         if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
@@ -360,6 +372,15 @@ impl CalloraVault {
         let initial_balance_val = initial_balance.unwrap_or(0);
         if initial_balance_val < 0 {
             return Err(VaultError::AmountNotPositive);
+        }
+
+        // Never record unbacked funds. The tracked balance may not exceed the
+        // USDC actually held by the vault at initialization time.
+        if initial_balance_val > 0 {
+            let usdc_client = crate::token::Client::new(&env, &usdc_token);
+            if usdc_client.balance(&contract_address) < initial_balance_val {
+                return Err(VaultError::InsufficientBalance);
+            }
         }
 
         env.storage().instance().set(&DataKey::Owner, &owner);
@@ -941,7 +962,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -998,7 +1019,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1047,18 +1068,18 @@ impl CalloraVault {
     /// # Panics
     /// - `"amount must be positive"` — `amount <= 0`.
     /// - `"insufficient balance"` — vault balance < `amount`.
-    pub fn withdraw(env: Env, amount: i128) -> i128 {
-        let owner = Self::get_owner(env.clone());
+    pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
+        let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
+        Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
 
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).unwrap();
+        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1066,7 +1087,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get(&DataKey::UsdcToken)
-            .expect("vault not initialized");
+            .ok_or(VaultError::NotInitialized)?;
 
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
@@ -1083,7 +1104,7 @@ impl CalloraVault {
             (amount, new_bal),
         );
 
-        new_bal
+        Ok(new_bal)
     }
 
     /// Withdraw USDC from the vault to an arbitrary recipient address (owner only).
@@ -1110,32 +1131,38 @@ impl CalloraVault {
     /// - `"insufficient balance"` — vault balance < `amount`.
     /// - `"cannot withdraw to vault address"` — `to == vault_address`.
     /// - `"cannot withdraw to token address"` — `to == usdc_token`.
-    pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
-        let owner = Self::get_owner(env.clone());
+    pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
+        let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
+        Self::require_positive_amount(amount)?;
+
+        // Zero-address check first.
+        if to == Address::from_contract_id(&BytesN::<32>::from_array(&env, &[0u8; 32])) {
+            return Err(VaultError::ZeroAddressRecipient);
+        }
 
         // Recipient validation
-        assert!(
-            to != env.current_contract_address(),
-            "cannot withdraw to vault address"
-        );
+        if to == env.current_contract_address() {
+            return Err(VaultError::InvalidRecipient);
+        }
 
         let usdc_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::UsdcToken)
-            .expect("vault not initialized");
+            .ok_or(VaultError::NotInitialized)?;
 
-        assert!(to != usdc_addr, "cannot withdraw to token address");
+        if to == usdc_addr {
+            return Err(VaultError::InvalidRecipient);
+        }
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
 
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).unwrap();
+        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1155,7 +1182,7 @@ impl CalloraVault {
             (amount, new_bal),
         );
 
-        new_bal
+        Ok(new_bal)
     }
 
     /// Admin distribute USDC surplus to a recipient (admin only).
@@ -1239,16 +1266,16 @@ impl CalloraVault {
     ///
     /// The owner is set at [`init`] and may be transferred via a two-step
     /// ownership-transfer flow. No auth required; this is a read-only view.
-    pub fn get_owner(env: Env) -> Address {
+    pub fn get_owner(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"))
+            .ok_or(VaultError::NotInitialized)
     }
 
     pub(crate) fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
-        let owner = Self::get_owner(env);
+        let owner = Self::get_owner(env.clone())?;
         if caller != owner {
             return Err(VaultError::Unauthorized);
         }
@@ -1258,12 +1285,12 @@ impl CalloraVault {
     ///
     /// All vault transfers use this token contract. No auth required; this is a
     /// read-only view.
-    pub fn get_usdc_token(env: Env) -> Address {
+    pub fn get_usdc_token(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"))
+            .ok_or(VaultError::NotInitialized)
     }
     /// Return the per-call deduction cap in USDC stroops.
     ///
@@ -1306,7 +1333,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1336,12 +1363,12 @@ impl CalloraVault {
     /// set, which cannot occur after a successful [`init`].
     ///
     /// No auth required; this is a read-only view.
-    pub fn get_settlement(env: Env) -> Address {
+    pub fn get_settlement(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
-            .unwrap_or_else(|| panic!("Settlement not set"))
+            .ok_or(VaultError::NotInitialized)
     }
 
     /// Update the settlement contract address (owner only).
@@ -1375,7 +1402,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1394,7 +1421,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
+            .ok_or(VaultError::NotInitialized)?;
         if settlement == usdc_addr {
             return Err(VaultError::SettlementCannotBeToken);
         }
@@ -2941,6 +2968,11 @@ mod test_views;
 
 #[cfg(test)]
 mod test_reentrancy;
+
+/// Issue #1395 — init owner authorization, backed initial balance, and
+/// address-alias validation.
+#[cfg(test)]
+mod test_init_hardening;
 
 #[cfg(test)]
 mod test;

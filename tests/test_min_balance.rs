@@ -5,6 +5,9 @@
 //! - Min balance is enforced during withdrawal
 //! - Event is emitted on min balance change
 //! - Edge cases: zero min, negative min, boundary values
+//! - `request_id == 0` is a no-idempotency sentinel: repeat deductions with
+//!   id `0` never revert in `settlement.record_deduction`, and id `0` is
+//!   never marked on either side.
 
 use callora_settlement::{CalloraSettlement, CalloraSettlementClient, StorageKey};
 use soroban_sdk::testutils::{Address as _, Events as _};
@@ -159,4 +162,84 @@ fn set_min_balance_for_many_developers() {
     for (i, dev) in devs.iter().enumerate() {
         assert_eq!(client.get_developer_min_balance(dev), (i as i128) * 100);
     }
+}
+
+// ── request_id == 0 sentinel ─────────────────────────────────────────────────
+
+#[test]
+fn record_deduction_zero_id_is_never_deduplicated() {
+    let (env, contract, _admin, vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&vault, &10, &0);
+    client.record_deduction(&vault, &10, &0);
+
+    assert_eq!(client.get_total_received(), 20);
+
+    let marked: bool = env.as_contract(&contract, || {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::DeductionRequest(0))
+    });
+    assert!(!marked, "id 0 must never be marked in settlement storage");
+}
+
+#[test]
+fn record_deduction_nonzero_id_is_deduplicated() {
+    let (env, contract, _admin, vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&vault, &10, &7);
+    let before = client.get_total_received();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.record_deduction(&vault, &10, &7);
+    }));
+    assert!(result.is_err(), "second call with id 7 must revert");
+    assert_eq!(client.get_total_received(), before);
+}
+
+#[test]
+fn record_deduction_zero_id_rejects_non_positive_amount() {
+    let (env, contract, _admin, vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    let zero = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.record_deduction(&vault, &0, &0);
+    }));
+    assert!(zero.is_err());
+
+    let negative = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.record_deduction(&vault, &-1, &0);
+    }));
+    assert!(negative.is_err());
+
+    assert_eq!(client.get_total_received(), 0);
+    let marked: bool = env.as_contract(&contract, || {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::DeductionRequest(0))
+    });
+    assert!(!marked);
+}
+
+#[test]
+fn record_deduction_zero_id_emits_event() {
+    let (env, contract, _admin, vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract);
+
+    client.record_deduction(&vault, &42, &0);
+
+    let events = env.events().all();
+    let matching: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if e.1.is_empty() {
+                return false;
+            }
+            let sym: soroban_sdk::Symbol = e.1.get(0).unwrap().into_val(&env);
+            sym == soroban_sdk::Symbol::new(&env, "deduction_recorded")
+        })
+        .collect();
+    assert_eq!(matching.len(), 1);
 }

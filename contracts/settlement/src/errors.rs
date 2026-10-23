@@ -60,6 +60,7 @@ use soroban_sdk::contracterror;
 /// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
 /// | 51   | FutureLedgerSeq              | `ledger_seq` is greater than the current ledger      |
 /// | 52   | DuplicateDeveloperInBatch    | Batch lists the same developer more than once        |
+/// | 53   | ExceedsUnallocated           | Credit exceeds unallocated deducted funds            |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -131,4 +132,6 @@ pub enum SettlementError {
     FutureLedgerSeq = 51,
     /// Batch settlement lists the same developer more than once.
     DuplicateDeveloperInBatch = 52,
+    /// Credit would exceed the unallocated deducted funds held by settlement.
+    ExceedsUnallocated = 53,
 }

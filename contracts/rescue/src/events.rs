@@ -153,6 +153,10 @@ pub fn event_rescue_capped(env: &Env) -> Symbol {
 }
 
 /// Returns the Symbol for the canonical event version marker used by Callora.
+///
+/// Defined for API parity with other Callora event modules; not yet used by
+/// rescue events (rescue topics do not include the version marker at topic[1]).
+#[allow(dead_code)]
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
 }

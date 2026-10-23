@@ -58,13 +58,21 @@ must not be reassigned once released.
 | 41 | `InvalidColdThreshold` | Vault | Cold threshold must be between 1 and signer count |
 | 42 | `DuplicateColdSigner` | Vault | Duplicate address found in cold signer set |
 | 43 | `ExceedsReserveCap` | Vault | Deposit would exceed the configured per-token reserve cap |
-| 44 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
-| 45 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
-| 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
-| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
-| 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
+| 44 | `CallerNotInAllowlist` | Vault | Caller is not in allowlist and not owner |
+| 45 | `InvalidRecipient` | Vault | Withdrawal recipient is the vault address or USDC token address |
+| 46 | `ZeroAddressRecipient` | Vault | Withdrawal recipient is the zero address |
+| 47 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
+| 48 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
+| 51 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
+| 52 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
+| 53 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
+| 54 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
+| 55 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit |
+| 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
+| 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
+| 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
 
 ## Settlement
 

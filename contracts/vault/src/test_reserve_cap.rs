@@ -307,6 +307,6 @@ fn reserve_cap_does_not_affect_withdrawal() {
 
     // Set a tight cap (lower than current balance — should not block withdrawal)
     client.set_reserve_cap(&owner, &usdc, &100);
-    let new_bal = client.withdraw(&200);
+    let new_bal = client.withdraw(&200).unwrap();
     assert_eq!(new_bal, 300);
 }
