@@ -1079,7 +1079,9 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1162,7 +1164,9 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 

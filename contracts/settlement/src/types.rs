@@ -159,7 +159,7 @@ pub enum Severity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminBroadcast {
     pub severity: Severity,
-    pub message: soroban_sdk:x:String,
+    pub message: soroban_sdk::String,
 }
 
 /// Storage TTL policy entry for a given storage key category.
@@ -337,7 +337,7 @@ pub struct AdminMigrationEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeProposedEvent {
-    pub wasm_hash: soroban_sdk::BytesN32>,
+    pub wasm_hash: soroban_sdk::BytesN32,
     pub proposed_at: u64,
     pub execute_after: u64,
 }
@@ -346,6 +346,6 @@ pub struct UpgradeProposedEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeCancelledEvent {
-    pub wasm_hash: soroban_sdk:BytesN32>,
+    pub wasm_hash: soroban_sdk::BytesN32,
     pub cancelled_at: u64,
 }

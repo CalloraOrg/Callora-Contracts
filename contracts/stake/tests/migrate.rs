@@ -207,7 +207,10 @@ fn migrate_removes_legacy_entry() {
     let legacy_present = env.as_contract(&contract, || {
         env.storage().instance().has(&StorageKey::Legacy)
     });
-    assert!(!legacy_present, "Legacy entry must be removed after migrate");
+    assert!(
+        !legacy_present,
+        "Legacy entry must be removed after migrate"
+    );
 }
 
 #[test]

@@ -1,5 +1,4 @@
 #[cfg(test)]
-
 extern crate std;
 
 use calora_stake::{CalloraStake, CalloraStakeClient, SUPPORTED_CAPABILITIES};
