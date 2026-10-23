@@ -197,6 +197,26 @@ Together with the explicit pre-/post-conditions above, these tests help auditors
 
 ---
 
+## Cross-Contract Value Conservation Invariant
+
+**Invariant**: For every successful `deduct` or `batch_deduct` call, the vault must decrease its tracked balance by exactly the amount it transfers to the settlement contract, and the settlement contract must increase its cumulative `TotalReceived` by the same amount.
+
+- **Contract pair**: `CalloraVault` ↔ `CalloraSettlement`
+- **Fields**:
+  - `vault.balance()`: tracked vault balance in USDC stroops
+  - `usdc.balance(vault_address)`: on-ledger USDC backing held by the vault
+  - `usdc.balance(settlement_address)`: USDC held by the settlement contract
+  - `settlement.get_total_received()`: cumulative total recorded by the settlement contract
+- **Guarantee**:
+  - After any successful deduction, `Δ vault.balance == -amount`.
+  - The vault forwards exactly `amount` USDC to settlement.
+  - `settlement.get_total_received()` increases by exactly `amount` and never by a different value.
+  - The vault-backed invariant remains `usdc.balance(vault) >= vault.balance()` for all reachable states. The settlement side never receives more than the vault deducted, and the vaulted USDC backing remains sufficient to cover the tracked balance.
+
+This is the canonical value-conservation property used by the live cross-contract test suite and must hold for both single and batched deductions.
+
+---
+
 ## Settlement Developer Credit Invariant
 
 **Invariant**: For every reachable state of [`CalloraSettlement`](contracts/settlement/src/lib.rs#L45), every credited developer balance stored under [`DEVELOPER_BALANCES_KEY`](contracts/settlement/src/lib.rs#L42) is always **greater than or equal to 0**.
@@ -835,3 +855,39 @@ The policy is covered by `contracts/settlement/src/test_ttl_bump.rs`
 relation holds, every write entrypoint refreshes the instance, a 100-day idle
 gap still serves `receive_payment` and balance reads, and
 `test_simulate_claim.rs` proves the preview extends nothing.
+## Callora Refund Value Conservation and Solvency Invariants
+
+The `CalloraRefund` contract implements strict Checks-Effects-Interactions (CEI) and per-asset accounting for multi-token refund flows.
+
+### 1. Fee Arithmetic Conservation
+
+For every refund request processed via `process_refund(request_id)`:
+
+$$\text{amount} = \text{net} + \text{fee}$$
+
+- **Fee Calculation**:
+  $$\text{fee} = \lfloor \frac{\text{amount} \times \text{fee\_bps}}{10\,000} \rfloor$$
+  Computed using `checked_mul` and `checked_div`. Rounding truncates towards zero (downward in the protocol's favour, requester receives `amount - fee`).
+- **Net Payout**:
+  $$\text{net} = \text{amount} - \text{fee}$$
+- **Zero Loss / Creation**: The sum of `net` transferred to the requester and `fee` credited to `AccumulatedFees(token)` exactly equals the approved request `amount`. If `net == 0` (e.g. at 100% fee rate), no outbound token transfer occurs and the entire amount is retained as fees.
+
+### 2. Per-Token Solvency and Conservation
+
+For any given token address:
+
+$$\text{balance}(\text{contract}, \text{token}) \ge \sum \text{approved\_not\_processed}(\text{token}) + \text{accumulated\_fees}(\text{token})$$
+
+- **Advisory vs. Strict Enforcement**:
+  - The aggregate formula above is an **advisory** protocol solvency invariant (requiring external treasuries to maintain contract token funding ahead of approvals).
+  - At execution time, **strict CEI enforcement** is guaranteed:
+    1. `process_refund`: Before writing `RefundStatus::Processed` or bumping totals, the contract checks `token_client.balance(contract) >= net`. If balance is insufficient, the call reverts with `RefundError::InsufficientBalance`, leaving the request in `RefundStatus::Approved` and preserving all storage unchanged.
+    2. `withdraw_fees`: Before transferring fee tokens to the recipient, the contract checks both `accumulated_fees(token) >= amount` and `token_client.balance(contract) >= amount`, returning `RefundError::InsufficientBalance` without mutating state.
+
+### 3. Per-Asset Independent Accounting
+
+- Every request carries its own `token: Address`.
+- Processed refund totals are tracked independently per token in `StorageKey::TotalRefunds(token: Address)` via `get_total_refunds_for(token)`.
+- Accumulated fees are tracked independently per token in `StorageKey::AccumulatedFees(token: Address)` via `get_accumulated_fees(token)`.
+- Legacy `get_total_refunds()` reads `StorageKey::TotalRefundsLegacy` and is marked `#[deprecated]` to retain backward compatibility without corrupting per-asset metrics.
+

@@ -39,7 +39,7 @@ pub const PERSISTENT_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 /// The old value, `50_000` ledgers, was ~2.9 days, not the "1 year" the
 /// code comments claimed — developer balances, caps, claim windows and
 /// replay high-water marks could archive after a long weekend of
-/// inactivity. One year (~6.3M ledgers) is above the network's
+/// inactivity. One year (~63M ledgers) is above the network's
 /// `max_entry_ttl` (~180 days on pubnet), so extending that far would be
 /// rejected; ~120 days stays safely under that cap while outliving any
 /// realistic idle period. Every settlement persistent key family —
@@ -98,7 +98,7 @@ pub enum StorageKey {
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
-    WithdrawalToday(Address),
+    WithdrawnToday(Address),
     ContractVersion,
     /// Pending timelock'd developer balance migration record.
     /// Key: source developer address.
@@ -109,9 +109,17 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
+    /// Cumulative total of every amount ever recorded via `record_deduction`
+    /// (the vault's accounting-only call). This is the sum of funds that have
+    /// arrived in settlement but may not yet be attributed to a developer or
+    /// the global pool. See [`StorageKey::TotalAllocated`] for the credited
+    /// counterpart.
+    TotalReceived,
     /// Cumulative total of every amount ever credited via `receive_payment` /
     /// `batch_receive_payment`, regardless of routing (pool or developer).
-    TotalReceived,
+    /// Invariant: `TotalAllocated <= TotalReceived`; the difference is exposed
+    /// via `get_unallocated`.
+    TotalAllocated,
     /// Whether a specific developer's withdrawals are frozen.
     FrozenDeveloper(Address),
     /// Per-admin last write ledger for price registry rate limiting.
@@ -134,6 +142,12 @@ pub enum StorageKey {
 pub struct DeductionRecordedEvent {
     pub amount: i128,
     pub request_id: u64,
+    /// Running total of all deductions recorded (`TotalReceived`).
+    pub total_received: i128,
+    /// Running total of all allocations (`TotalAllocated`).
+    pub total_allocated: i128,
+    /// Running unallocated balance (`TotalReceived - TotalAllocated`).
+    pub unallocated: i128,
 }
 
 /// Read-only preview of a developer claim/withdrawal.
@@ -170,13 +184,13 @@ pub enum Severity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminBroadcast {
     pub severity: Severity,
-    pub message: soroban_sdk::String,
+    pub message: soroban_sdk:x:String,
 }
 
 /// Storage TTL policy entry for a given storage key category.
 ///
 /// Retained for ABI compatibility with the off-chain tooling that consumes the
-/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
+/// settlement contract's TT\ views. Note that the `ttl` field is **not** a live
 /// measurement: contract code cannot observe the remaining TTL of a ledger
 /// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
 /// `liveUntilLedgerSeq` against the current ledger sequence — see
@@ -186,7 +200,7 @@ pub struct AdminBroadcast {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
     pub category: soroban_sdk::String,
-    pub key_desc: soroban_sdk::String,
+    pub token_desc: soroban_sdk::String,
     pub storage_type: soroban_sdk::String,
     pub ttl: u32,
     pub threshold: u32,
@@ -259,6 +273,12 @@ pub struct PaymentReceivedEvent {
     pub to_pool: bool,
     pub developer: Option<Address>,
     pub token: Address,
+    /// Running total of all deductions recorded (`TotalReceived`).
+    pub total_received: i128,
+    /// Running total of all allocations (`TotalAllocated`).
+    pub total_allocated: i128,
+    /// Running unallocated balance (`TotalReceived - TotalAllocated`).
+    pub unallocated: i128,
 }
 
 /// Balance credited event.
@@ -342,7 +362,7 @@ pub struct AdminMigrationEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeProposedEvent {
-    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub wasm_hash: soroban_sdk::BytesN32>,
     pub proposed_at: u64,
     pub execute_after: u64,
 }
@@ -351,6 +371,6 @@ pub struct UpgradeProposedEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeCancelledEvent {
-    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub wasm_hash: soroban_sdk:BytesN32>,
     pub cancelled_at: u64,
 }

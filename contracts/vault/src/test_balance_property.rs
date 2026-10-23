@@ -396,7 +396,7 @@ fn run_property_trace(seed: u64) {
             x if x == OpKind::Withdraw as u8 => {
                 if balance_before > 0 {
                     let amount = rng.gen_range_i128(1, balance_before.min(AMOUNT_CAP));
-                    client.withdraw(&amount);
+                    client.withdraw(&amount).unwrap();
                     trace.push(step, "withdraw", std::format!("amount={amount}"));
                 } else {
                     trace.push(step, "withdraw (skipped)", "balance=0");
@@ -406,7 +406,7 @@ fn run_property_trace(seed: u64) {
             x if x == OpKind::WithdrawTo as u8 => {
                 if balance_before > 0 {
                     let amount = rng.gen_range_i128(1, balance_before.min(AMOUNT_CAP));
-                    client.withdraw_to(&recipient, &amount);
+                    client.withdraw_to(&recipient, &amount).unwrap();
                     trace.push(step, "withdraw_to", std::format!("amount={amount}"));
                 } else {
                     trace.push(step, "withdraw_to (skipped)", "balance=0");
@@ -554,7 +554,7 @@ fn test_balance_property_pause_mid_sequence() {
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 2);
 
     // Withdraw is allowed while paused.
-    client.withdraw(&50);
+    client.withdraw(&50).unwrap();
     assert_balance_in_sync(&client, &usdc_client, &vault_addr, &Trace::new(42), 3);
 
     client.unpause(&owner);
