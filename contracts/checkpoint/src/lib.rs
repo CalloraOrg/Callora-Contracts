@@ -8,7 +8,9 @@ pub mod events;
 
 use callora_storage_migration::StorageMigrationValidator;
 use errors::CheckpointError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Vec,
+};
 
 /// Storage-layout version recorded by [`StorageMigrationValidator`] for this
 /// contract. Bumped whenever the on-ledger schema changes so that the
@@ -790,7 +792,6 @@ impl CalloraCheckpoint {
             &placeholder_layout,
             &new_wasm_hash,
             false,
-            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -799,7 +800,6 @@ impl CalloraCheckpoint {
             STORAGE_MIGRATION_VERSION,
             &placeholder_layout,
             &new_wasm_hash,
-            &Self::critical_probe_keys(&env),
         ) {
             env.panic_with_error(e);
         }
@@ -828,10 +828,10 @@ impl CalloraCheckpoint {
         probes.push_back((
             StorageKey::Admin.into_val(env),
             <Address as soroban_sdk::TryIntoVal<Env, soroban_sdk::Val>>::try_into_val(
-                Address::from_contract_id(&env.current_contract_address()),
+                &env.current_contract_address(),
                 env,
             )
-            .unwrap_or_else(|_| soroban_sdk::Val::VOID),
+            .unwrap_or_else(|_| soroban_sdk::Val::VOID.into()),
         ));
         probes
     }

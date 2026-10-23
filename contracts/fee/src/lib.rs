@@ -74,7 +74,10 @@ impl FeeContract {
         env.storage().instance().set(&DataKey::Token, &token);
 
         env.events().publish(
-            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_initialized")),
+            (
+                Symbol::new(&env, "callora_v1"),
+                Symbol::new(&env, "fee_initialized"),
+            ),
             (admin, token),
         );
 
@@ -110,7 +113,10 @@ impl FeeContract {
         let old_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.events().publish(
-            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_set")),
+            (
+                Symbol::new(&env, "callora_v1"),
+                Symbol::new(&env, "fee_set"),
+            ),
             (old_bps, fee_bps),
         );
         Self::bump_instance_ttl(&env);
@@ -162,7 +168,10 @@ impl FeeContract {
             .instance()
             .set(&DataKey::Accumulated, &new_accumulated);
         env.events().publish(
-            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_deposited")),
+            (
+                Symbol::new(&env, "callora_v1"),
+                Symbol::new(&env, "fee_deposited"),
+            ),
             (caller, amount, new_accumulated),
         );
         Self::bump_instance_ttl(&env);

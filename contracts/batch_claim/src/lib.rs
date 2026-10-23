@@ -400,9 +400,11 @@ impl CalloraBatchClaim {
         if reserved_for.is_none() {
             env.storage().persistent().set(&owner_key, &claimant);
         }
-        env.storage()
-            .persistent()
-            .extend_ttl(&owner_key, CONSUMED_TOMBSTONE_THRESHOLD, CONSUMED_TOMBSTONE_BUMP);
+        env.storage().persistent().extend_ttl(
+            &owner_key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
 
         Self::bump_instance(&env);
         env.events()
