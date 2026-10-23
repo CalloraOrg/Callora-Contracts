@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Symbol};
 
 pub mod errors;
 pub use errors::ContractError;
@@ -27,6 +27,7 @@ pub enum DataKey {
     Admin,
     FeeBps,
     Accumulated,
+    Token,
 }
 
 /// Fee contract configuration stored on-chain.
@@ -56,10 +57,11 @@ impl FeeContract {
     ///
     /// # Arguments
     /// * `admin` - Address that will hold admin privileges.
+    /// * `token` - Address of the token contract backing accumulated fees.
     ///
     /// # Errors
     /// - `AlreadyInitialized` if the contract is already initialised.
-    pub fn init(env: Env, admin: Address) -> Result<(), ContractError> {
+    pub fn init(env: Env, admin: Address, token: Address) -> Result<(), ContractError> {
         admin.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
@@ -69,6 +71,12 @@ impl FeeContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::FeeBps, &0u32);
         env.storage().instance().set(&DataKey::Accumulated, &0i128);
+        env.storage().instance().set(&DataKey::Token, &token);
+
+        env.events().publish(
+            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_initialized")),
+            (admin, token),
+        );
 
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -99,12 +107,21 @@ impl FeeContract {
             return Err(ContractError::FeeTooHigh);
         }
 
+        let old_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.events().publish(
+            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_set")),
+            (old_bps, fee_bps),
+        );
         Self::bump_instance_ttl(&env);
         Ok(())
     }
 
     /// Deposit fees into the accumulated balance.
+    ///
+    /// Pulls `amount` from `caller` into the contract via the stored token
+    /// before crediting the accumulated counter, so `Accumulated` is always
+    /// backed by real tokens.
     ///
     /// # Arguments
     /// * `caller` - The address depositing fees.
@@ -124,6 +141,14 @@ impl FeeContract {
             return Err(ContractError::InvalidAmount);
         }
 
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(ContractError::NotInitialized)?;
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&caller, &env.current_contract_address(), &amount);
+
         let accumulated: i128 = env
             .storage()
             .instance()
@@ -136,6 +161,10 @@ impl FeeContract {
         env.storage()
             .instance()
             .set(&DataKey::Accumulated, &new_accumulated);
+        env.events().publish(
+            (Symbol::new(&env, "callora_v1"), Symbol::new(&env, "fee_deposited")),
+            (caller, amount, new_accumulated),
+        );
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -160,6 +189,9 @@ impl FeeContract {
     }
 
     /// Withdraw accumulated fees to a recipient.
+    ///
+    /// Decrements the accumulated counter before transferring tokens to the
+    /// recipient (checks-effects-interactions).
     ///
     /// # Arguments
     /// * `admin` - The admin address (must match stored admin).
@@ -210,6 +242,14 @@ impl FeeContract {
         env.storage()
             .instance()
             .set(&DataKey::Accumulated, &remaining);
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(ContractError::NotInitialized)?;
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(&env.current_contract_address(), &recipient, &amount);
 
         env.events()
             .publish((Symbol::new(&env, "fee_withdrawn"),), (recipient, amount));
@@ -271,8 +311,9 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         assert_eq!(
             client.try_init(&admin).unwrap_err().unwrap(),
             ContractError::AlreadyInitialized
@@ -287,8 +328,9 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.set_fee(&admin, &250);
 
         let config = client.get_fee_config();
@@ -303,8 +345,9 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         assert_eq!(
             client.try_set_fee(&admin, &10_001).unwrap_err().unwrap(),
             ContractError::FeeTooHigh
@@ -319,10 +362,11 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &1000);
         assert_eq!(client.get_accumulated(), 1000);
 
@@ -338,9 +382,10 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         assert_eq!(
             client.try_deposit(&caller, &0).unwrap_err().unwrap(),
             ContractError::InvalidAmount
@@ -359,10 +404,11 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &100);
         assert_eq!(
             client
@@ -381,10 +427,11 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let fake_admin = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         assert_eq!(
             client.try_set_fee(&fake_admin, &100).unwrap_err().unwrap(),
             ContractError::Unauthorized
@@ -406,6 +453,7 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
 
         assert_eq!(
             client.try_set_fee(&admin, &100).unwrap_err().unwrap(),
@@ -425,8 +473,9 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         assert_eq!(client.get_admin(), admin);
     }
 
@@ -438,9 +487,10 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &i128::MAX);
         assert_eq!(
             client.try_deposit(&caller, &1).unwrap_err().unwrap(),
@@ -455,9 +505,10 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &1000);
 
         assert_eq!(
@@ -478,9 +529,10 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &1000);
 
         let zero = Address::from_str(&env, ZERO_CONTRACT_ADDRESS);
@@ -502,10 +554,11 @@ mod test {
         let contract_id = env.register_contract(None, FeeContract);
         let client = FeeContractClient::new(&env, &contract_id);
         let admin = Address::generate(&env);
+        let token = Address::generate(&env);
         let caller = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        client.init(&admin);
+        client.init(&admin, &token);
         client.deposit(&caller, &1000);
 
         client.withdraw(&admin, &recipient, &400);

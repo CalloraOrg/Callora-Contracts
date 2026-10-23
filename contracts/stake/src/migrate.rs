@@ -246,6 +246,12 @@ impl CalloraStakeMigrate {
             return Err(StakeMigrateError::AlreadyMigrated);
         }
 
+        // Extend the instance TTL so the migration state survives long enough
+        // for the follow-on upgrade to be authorised and deployed.
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+
         let legacy: LegacyStake = env
             .storage()
             .instance()
@@ -266,6 +272,9 @@ impl CalloraStakeMigrate {
         env.storage()
             .instance()
             .set(&StorageKey::Version, &target_version);
+        // The legacy record has been reshaped into `Current`; remove it so a
+        // re-run cannot depend on stale input and the docs stay truthful.
+        env.storage().instance().remove(&StorageKey::Legacy);
 
         env.events()
             .publish((event_stake_migrated(&env),), target_version);
@@ -371,6 +380,12 @@ impl CalloraStakeMigrate {
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/// Ledger threshold below which the instance TTL is extended on migration.
+const INSTANCE_TTL_THRESHOLD: u32 = 100;
+
+/// Ledger count to extend the instance TTL to on migration.
+const INSTANCE_TTL_EXTEND_TO: u32 = 10_000;
 
 /// Verify that `caller` is the stored administrator.
 ///

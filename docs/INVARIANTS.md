@@ -197,6 +197,26 @@ Together with the explicit pre-/post-conditions above, these tests help auditors
 
 ---
 
+## Cross-Contract Value Conservation Invariant
+
+**Invariant**: For every successful `deduct` or `batch_deduct` call, the vault must decrease its tracked balance by exactly the amount it transfers to the settlement contract, and the settlement contract must increase its cumulative `TotalReceived` by the same amount.
+
+- **Contract pair**: `CalloraVault` ↔ `CalloraSettlement`
+- **Fields**:
+  - `vault.balance()`: tracked vault balance in USDC stroops
+  - `usdc.balance(vault_address)`: on-ledger USDC backing held by the vault
+  - `usdc.balance(settlement_address)`: USDC held by the settlement contract
+  - `settlement.get_total_received()`: cumulative total recorded by the settlement contract
+- **Guarantee**:
+  - After any successful deduction, `Δ vault.balance == -amount`.
+  - The vault forwards exactly `amount` USDC to settlement.
+  - `settlement.get_total_received()` increases by exactly `amount` and never by a different value.
+  - The vault-backed invariant remains `usdc.balance(vault) >= vault.balance()` for all reachable states. The settlement side never receives more than the vault deducted, and the vaulted USDC backing remains sufficient to cover the tracked balance.
+
+This is the canonical value-conservation property used by the live cross-contract test suite and must hold for both single and batched deductions.
+
+---
+
 ## Settlement Developer Credit Invariant
 
 **Invariant**: For every reachable state of [`CalloraSettlement`](contracts/settlement/src/lib.rs#L45), every credited developer balance stored under [`DEVELOPER_BALANCES_KEY`](contracts/settlement/src/lib.rs#L42) is always **greater than or equal to 0**.
@@ -779,129 +799,39 @@ This cross-contract value conservation guarantee is the cornerstone of the Callo
 
 ---
 
-## Storage TTL Policy
+## Callora Refund Value Conservation and Solvency Invariants
 
-Soroban ledger entries expire ("archive") once their remaining TTL is exhausted.
-Contracts therefore carry an explicit TTL policy, expressed in ledgers, using the
-workspace-wide cadence of `LEDGERS_PER_DAY = 17_280` (5 s per ledger).
+The `CalloraRefund` contract implements strict Checks-Effects-Interactions (CEI) and per-asset accounting for multi-token refund flows.
 
-The table below lists the policy per contract for the contracts covered by the
-instance-TTL work. **Instance** rows describe the contract instance entry (the
-`Instance` storage tier, which holds per-contract configuration such as the
-admin address). **Persistent** rows describe `Persistent` storage entries and
-are *not* changed by instance-TTL work.
+### 1. Fee Arithmetic Conservation
 
-| Contract | Instance threshold | Instance bump | Persistent TTL behaviour | Other storage TTL |
-|----------|--------------------|---------------|--------------------------|-------------------|
-| `callora-freeze` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | none — the contract has no persistent entries | none — all freeze state is instance storage |
-| `callora-checkpoint` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | unchanged — `Checkpoint(id)` and `SubjectIndex(subject)` are extended to `BUMP_AMOUNT` (3,110,400 ledgers, ~180 days) when their remaining TTL drops below `LIFETIME_THRESHOLD` (17,280 ledgers, ~1 day) | none |
-| `callora-errors` | 30 days (518,400 ledgers) | 60 days (1,036,800 ledgers) | unchanged — `ErrorReg(code)` is extended to 60 days (1,036,800 ledgers) when its remaining TTL drops below 30 days (518,400 ledgers) | `RecentErr(user)` is temporary storage with a fixed 100-ledger lifetime (~8 min 20 s at 5 s/ledger) |
+For every refund request processed via `process_refund(request_id)`:
 
-**Instance-TTL invariant (freeze).** Every entrypoint of `callora-freeze` —
-including the read-only views `get_admin`, `is_frozen`, `get_freeze_status` and
-`get_freeze_operator` — calls the internal `bump_instance` helper before
-touching instance state. The helper extends the instance TTL to
-`INSTANCE_BUMP_AMOUNT` whenever the remaining TTL is at or below
-`INSTANCE_BUMP_THRESHOLD`. Consequently the contract instance cannot archive
-while the contract is in use, and a long idle period (e.g. 90 days) does not
-prevent `freeze()` from succeeding.
+$$\text{amount} = \text{net} + \text{fee}$$
 
-- **Storage tier:** `Instance` (admin, frozen flag, freeze operator, reason, timestamp).
-- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
-  well below the Soroban maximum entry TTL (6,312,000 ledgers), so the
-  extension is always accepted by the host.
-- **Tests:** `contracts/freeze/src/test.rs` — `test_init_sets_instance_ttl_to_bump_amount`,
-  `test_freeze_succeeds_after_90_idle_days`, and the per-entrypoint
-  `*_bumps_instance_ttl` cases.
+- **Fee Calculation**:
+  $$\text{fee} = \lfloor \frac{\text{amount} \times \text{fee\_bps}}{10\,000} \rfloor$$
+  Computed using `checked_mul` and `checked_div`. Rounding truncates towards zero (downward in the protocol's favour, requester receives `amount - fee`).
+- **Net Payout**:
+  $$\text{net} = \text{amount} - \text{fee}$$
+- **Zero Loss / Creation**: The sum of `net` transferred to the requester and `fee` credited to `AccumulatedFees(token)` exactly equals the approved request `amount`. If `net == 0` (e.g. at 100% fee rate), no outbound token transfer occurs and the entire amount is retained as fees.
 
-**Instance-TTL invariant (checkpoint).** Every entrypoint of
-`callora-checkpoint` — including the read-only views `get_admin`,
-`get_pending_admin`, `get_checkpoint`, `get_checkpoints_range`,
-`get_checkpoints_for_subject`, `get_checkpoint_count`, `get_latest_checkpoint_id`
-and `get_latest_checkpoint` — calls the internal `bump_instance` helper before
-touching instance state. The helper extends the instance TTL to
-`INSTANCE_BUMP_AMOUNT` whenever the remaining TTL is at or below
-`INSTANCE_BUMP_THRESHOLD`.
+### 2. Per-Token Solvency and Conservation
 
-- **Storage tier:** `Instance` (admin, pending admin, next checkpoint id, checkpoint count).
-- **Persistent entries are unaffected:** the `Checkpoint(id)` records and the
-  per-subject `SubjectIndex(subject)` keep their pre-existing
-  `LIFETIME_THRESHOLD` / `BUMP_AMOUNT` policy, which is independent of the
-  instance policy and deliberately much longer (~180 days).
-- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
-  well below the Soroban maximum entry TTL (6,312,000 ledgers).
-- **Tests:** `contracts/checkpoint/src/test.rs` —
-  `test_init_sets_instance_ttl_to_bump_amount`, `test_create_checkpoint_bumps_instance_ttl`,
-  and the remaining per-entrypoint `*_bumps_instance_ttl` cases, plus
-  `test_persistent_checkpoint_ttl_unchanged`.
+For any given token address:
 
-**Instance-TTL invariant (errors).** Every entrypoint of `callora-errors` —
-including the read-only views `get_error_description` and `get_recent_error` —
-calls the internal `bump_instance` helper before touching instance state. The
-helper extends the instance TTL to `INSTANCE_BUMP_AMOUNT` whenever the
-remaining TTL is at or below `INSTANCE_BUMP_THRESHOLD`.
+$$\text{balance}(\text{contract}, \text{token}) \ge \sum \text{approved\_not\_processed}(\text{token}) + \text{accumulated\_fees}(\text{token})$$
 
-- **Storage tier:** `Instance` (admin address).
-- **Persistent entries are unaffected:** the `ErrorReg(code)` registry keeps its
-  pre-existing 30-day threshold / 60-day bump policy, applied on both the write
-  path (`register_error`, `update_error`, `log_error`) and the read path
-  (`get_error_description`).
-- **`RecentErr` lifetime is intentional and short.** The most recent code logged
-  by a user is stored in temporary storage with a fixed 100-ledger lifetime
-  (~8 min 20 s at 5 s/ledger, `RECENT_ERR_TTL_LEDGERS`). It exists only for
-  short-term debugging / rate-limiting feedback, is *not* refreshed on reads,
-  and must not be treated as durable state — the persistent `ErrorReg(code)`
-  registry is the durable source of truth. The lifetime is asserted by
-  `contracts/errors/src/test.rs::test_recent_err_lifetime_is_short`.
-- **Maximum error code.** `log_error` performs no arithmetic on the code, so
-  `u32::MAX` is a valid code: `register_error(u32::MAX)` followed by
-  `log_error(u32::MAX)` succeeds. Asserted by
-  `contracts/errors/src/test.rs::test_register_and_log_max_error_code` and
-  `contracts/errors/tests/proptest.rs::overflow_guard_is_robust_at_u32_max`.
-- **Bump amounts respect the network limits:** 60 days (1,036,800 ledgers) is
-  well below the Soroban maximum entry TTL (6,312,000 ledgers).
-- **Tests:** `contracts/errors/src/test.rs` —
-  `test_register_error_bumps_instance_ttl`,
-  `test_update_error_bumps_instance_ttl`,
-  `test_get_error_description_bumps_instance_ttl`,
-  `test_log_error_bumps_instance_ttl`,
-  `test_get_recent_error_bumps_instance_ttl`.
+- **Advisory vs. Strict Enforcement**:
+  - The aggregate formula above is an **advisory** protocol solvency invariant (requiring external treasuries to maintain contract token funding ahead of approvals).
+  - At execution time, **strict CEI enforcement** is guaranteed:
+    1. `process_refund`: Before writing `RefundStatus::Processed` or bumping totals, the contract checks `token_client.balance(contract) >= net`. If balance is insufficient, the call reverts with `RefundError::InsufficientBalance`, leaving the request in `RefundStatus::Approved` and preserving all storage unchanged.
+    2. `withdraw_fees`: Before transferring fee tokens to the recipient, the contract checks both `accumulated_fees(token) >= amount` and `token_client.balance(contract) >= amount`, returning `RefundError::InsufficientBalance` without mutating state.
 
-### CPU impact of the instance-TTL bumps
+### 3. Per-Asset Independent Accounting
 
-**Methodology.** CPU and memory are read from the Soroban test host with
-`env.cost_estimate().resources()` (`instructions` for CPU, `read_bytes +
-write_bytes` for memory) after a single entrypoint invocation — the same
-mechanism used by the repository's gas-snapshot tests
-(`docs/GAS_SNAPSHOT.md`, `contracts/vault/src/test_gas_budget.rs`). The
-"before" column was measured against the pre-change contract code (the base
-revision of `contracts/{freeze,checkpoint,errors}/src/lib.rs`) with the same
-harness, the same host configuration, and `--test-threads=1`; the "after" column
-was measured against the code in this branch. Values are host-side instruction
-counts, not mainnet fee simulations.
+- Every request carries its own `token: Address`.
+- Processed refund totals are tracked independently per token in `StorageKey::TotalRefunds(token: Address)` via `get_total_refunds_for(token)`.
+- Accumulated fees are tracked independently per token in `StorageKey::AccumulatedFees(token: Address)` via `get_accumulated_fees(token)`.
+- Legacy `get_total_refunds()` reads `StorageKey::TotalRefundsLegacy` and is marked `#[deprecated]` to retain backward compatibility without corrupting per-asset metrics.
 
-| Contract | Entrypoint | CPU before | CPU after | Δ CPU | Δ CPU % | Mem before | Mem after |
-|----------|------------|-----------:|----------:|------:|--------:|-----------:|----------:|
-| `callora-freeze` | `init` | 36,469 | 41,876 | +5,407 | +14.8 % | 388 | 440 |
-| `callora-freeze` | `freeze` | 66,145 | 83,832 | +17,687 | +26.7 % | 592 | 644 |
-| `callora-freeze` | `unfreeze` | 74,877 | 100,004 | +25,127 | +33.6 % | 592 | 644 |
-| `callora-freeze` | `get_admin` | 21,594 | 27,746 | +6,152 | +28.5 % | 212 | 264 |
-| `callora-freeze` | `is_frozen` | 20,959 | 27,111 | +6,152 | +29.4 % | 212 | 264 |
-| `callora-freeze` | `get_freeze_status` | 30,237 | 36,389 | +6,152 | +20.3 % | 212 | 264 |
-| `callora-checkpoint` | `init` | 42,370 | 47,777 | +5,407 | +12.8 % | 448 | 500 |
-| `callora-checkpoint` | `create_checkpoint` | 114,370 | 122,002 | +7,632 | +6.7 % | 1,116 | 1,168 |
-| `callora-checkpoint` | `get_checkpoint` | 35,490 | 42,663 | +7,173 | +20.2 % | 620 | 672 |
-| `callora-checkpoint` | `get_checkpoint_count` | 28,718 | 35,876 | +7,158 | +24.9 % | 272 | 324 |
-| `callora-checkpoint` | `get_latest_checkpoint` | 29,875 | 43,619 | +13,744 | +46.0 % | 272 | 324 |
-| `callora-checkpoint` | `get_admin` | 27,584 | 34,742 | +7,158 | +25.9 % | 272 | 324 |
-| `callora-errors` | `init` | 28,786 | 34,193 | +5,407 | +18.8 % | 352 | 404 |
-| `callora-errors` | `register_error` | 50,317 | 55,871 | +5,554 | +11.0 % | 356 | 408 |
-| `callora-errors` | `log_error` | 50,799 | 56,113 | +5,314 | +10.5 % | 492 | 544 |
-| `callora-errors` | `get_error_description` | 24,362 | 29,337 | +4,975 | +20.4 % | 284 | 336 |
-| `callora-errors` | `get_recent_error` | 20,533 | 25,556 | +5,023 | +24.5 % | 312 | 364 |
-
-A single instance `extend_ttl` costs roughly 5,000–7,200 host instructions
-(one instance read + one instance write of the TTL). `callora-freeze::unfreeze`
-and `callora-checkpoint::get_latest_checkpoint` are higher because they perform
-two bumps in one call (the wrapper view bumps the instance and then delegates to
-another entrypoint that bumps it again).

@@ -60,6 +60,16 @@ use soroban_sdk::{contracttype, Bytes, BytesN, Env};
 /// forward, single-step upgrade.
 pub const LEGACY_VERSION: u32 = 0;
 
+/// Version of the validator's own storage-key namespace.
+///
+/// Version `1` used unnamespaced keys (`Version`, `SchemaLayoutHash`,
+/// `AuthorizedUpgrade`, `BackupPresent`), which collided with host contracts
+/// that happened to declare a unit variant with the same name. Version `2`
+/// namespaces every validator key with the `Sm` prefix and lazily reads
+/// through the version-1 keys. The *host* storage-layout version is unchanged;
+/// only the validator's bookkeeping slots moved.
+pub const STORAGE_MIGRATION_VERSION: u32 = 2;
+
 /// All-zero layout hash used as a sentinel meaning "do not enforce a source
 /// layout check". Legacy deployments that never recorded a schema may pass this
 /// to skip the strict source-layout comparison.
@@ -76,13 +86,92 @@ pub fn zero_layout_hash(env: &Env) -> BytesN<32> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {
     /// Current storage-layout version (`u32`). Absence ⇒ [`LEGACY_VERSION`].
-    Version,
+    SmVersion,
     /// Content hash of the deployed storage schema (`BytesN<32>`).
-    SchemaLayoutHash,
+    SmSchemaLayoutHash,
     /// Upgrade authorization guard: `(target_version, wasm_hash)`.
-    AuthorizedUpgrade,
+    SmAuthorizedUpgrade,
     /// Whether a rollback snapshot/backup exists for the current version (`bool`).
+    SmBackupPresent,
+}
+
+/// Pre-v2 validator keys, retained **only** so deployed instances can be read
+/// through once into the namespaced [`StorageKey`] slots.
+///
+/// [`contracttype`] unit variants encode as `Vec[Symbol("VariantName")]`
+/// regardless of the enum they belong to. These names therefore collided with
+/// host keys such as `Version` and `AuthorizedUpgrade`. Never use this enum for
+/// new writes; it exists solely for the lazy read-through in
+/// [`read_through_legacy_keys`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LegacyStorageKey {
+    Version,
+    SchemaLayoutHash,
+    AuthorizedUpgrade,
     BackupPresent,
+}
+
+/// Lazily copy pre-v2 validator markers into their namespaced slots.
+///
+/// The copy happens at most once per key: once the `Sm*` slot exists it is
+/// authoritative and the legacy slot is never consulted again. Legacy keys are
+/// deliberately **not deleted** — in the emergency-migration contract those
+/// same encodings live in the host's own key space, and deleting them would
+/// destroy host business state.
+fn read_through_legacy_keys(env: &Env) {
+    if !env.storage().instance().has(&StorageKey::SmVersion) {
+        if let Some(version) = env
+            .storage()
+            .instance()
+            .get::<_, u32>(&LegacyStorageKey::Version)
+        {
+            env.storage()
+                .instance()
+                .set(&StorageKey::SmVersion, &version);
+        }
+    }
+    if !env
+        .storage()
+        .instance()
+        .has(&StorageKey::SmSchemaLayoutHash)
+    {
+        if let Some(hash) = env
+            .storage()
+            .instance()
+            .get::<_, BytesN<32>>(&LegacyStorageKey::SchemaLayoutHash)
+        {
+            env.storage()
+                .instance()
+                .set(&StorageKey::SmSchemaLayoutHash, &hash);
+        }
+    }
+    if !env
+        .storage()
+        .instance()
+        .has(&StorageKey::SmAuthorizedUpgrade)
+    {
+        if let Some(auth) = env
+            .storage()
+            .instance()
+            .get::<_, (u32, BytesN<32>)>(&LegacyStorageKey::AuthorizedUpgrade)
+        {
+            env.storage()
+                .instance()
+                .set(&StorageKey::SmAuthorizedUpgrade, &auth);
+        }
+    }
+    if !env.storage().instance().has(&StorageKey::SmBackupPresent) {
+        if let Some(present) = env
+            .storage()
+            .instance()
+            .get::<_, bool>(&LegacyStorageKey::BackupPresent)
+        {
+            env.storage()
+                .instance()
+                .set(&StorageKey::SmBackupPresent, &present);
+        }
+    }
 }
 
 /// Result of a successful validation. Purely descriptive — no storage mutation
@@ -137,9 +226,12 @@ impl StorageMigrationValidator {
         version: u32,
         schema_hash: &BytesN<32>,
     ) -> Result<(), StorageMigrationError> {
-        let existing: Option<u32> = env.storage().instance().get(&StorageKey::Version);
-        let existing_hash: Option<BytesN<32>> =
-            env.storage().instance().get(&StorageKey::SchemaLayoutHash);
+        read_through_legacy_keys(env);
+        let existing: Option<u32> = env.storage().instance().get(&StorageKey::SmVersion);
+        let existing_hash: Option<BytesN<32>> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::SmSchemaLayoutHash);
 
         match (existing, existing_hash) {
             (Some(v), Some(h)) if v == version && h == *schema_hash => {
@@ -152,10 +244,12 @@ impl StorageMigrationValidator {
             _ => {}
         }
 
-        env.storage().instance().set(&StorageKey::Version, &version);
         env.storage()
             .instance()
-            .set(&StorageKey::SchemaLayoutHash, schema_hash);
+            .set(&StorageKey::SmVersion, &version);
+        env.storage()
+            .instance()
+            .set(&StorageKey::SmSchemaLayoutHash, schema_hash);
         Ok(())
     }
 
@@ -163,9 +257,10 @@ impl StorageMigrationValidator {
 
     /// Current storage-layout version, or [`LEGACY_VERSION`] when absent.
     pub fn current_version(env: &Env) -> u32 {
+        read_through_legacy_keys(env);
         env.storage()
             .instance()
-            .get(&StorageKey::Version)
+            .get(&StorageKey::SmVersion)
             .unwrap_or(LEGACY_VERSION)
     }
 
@@ -174,8 +269,11 @@ impl StorageMigrationValidator {
     /// Consumed out-of-band by the deployment tooling before it performs the
     /// platform-level `update_current_contract_wasm` call.
     pub fn is_upgrade_authorized(env: &Env, target_version: u32, wasm_hash: &BytesN<32>) -> bool {
-        let auth: Option<(u32, BytesN<32>)> =
-            env.storage().instance().get(&StorageKey::AuthorizedUpgrade);
+        read_through_legacy_keys(env);
+        let auth: Option<(u32, BytesN<32>)> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::SmAuthorizedUpgrade);
         match auth {
             Some((v, h)) => v == target_version && h == *wasm_hash,
             None => false,
@@ -226,14 +324,20 @@ impl StorageMigrationValidator {
         }
 
         let current = Self::current_version(env);
-        let recorded_layout: Option<BytesN<32>> =
-            env.storage().instance().get(&StorageKey::SchemaLayoutHash);
+        let recorded_layout: Option<BytesN<32>> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::SmSchemaLayoutHash);
 
         // Readability probe: the validator's own version marker must deserialize
         // to a `u32` and agree with what `current_version` reported. Absence
         // (legacy) is consistent with `current == LEGACY_VERSION`. A mismatch
         // would indicate storage corruption and is surfaced as a failed probe.
-        let readability_ok = match env.storage().instance().get::<_, u32>(&StorageKey::Version) {
+        let readability_ok = match env
+            .storage()
+            .instance()
+            .get::<_, u32>(&StorageKey::SmVersion)
+        {
             Some(v) => v == current,
             None => current == LEGACY_VERSION,
         };
@@ -246,7 +350,7 @@ impl StorageMigrationValidator {
             let backup: bool = env
                 .storage()
                 .instance()
-                .get(&StorageKey::BackupPresent)
+                .get(&StorageKey::SmBackupPresent)
                 .unwrap_or(false);
             if !backup {
                 return Err(StorageMigrationError::BackupMissing);
@@ -289,7 +393,7 @@ impl StorageMigrationValidator {
 
         // Record the upgrade authorization for the deployer tool to verify.
         env.storage().instance().set(
-            &StorageKey::AuthorizedUpgrade,
+            &StorageKey::SmAuthorizedUpgrade,
             &(target_version, wasm_hash.clone()),
         );
 
@@ -339,17 +443,17 @@ impl StorageMigrationValidator {
         let readable = env
             .storage()
             .instance()
-            .get::<_, u32>(&StorageKey::Version)
+            .get::<_, u32>(&StorageKey::SmVersion)
             .is_some()
             || env
                 .storage()
                 .instance()
-                .get::<_, BytesN<32>>(&StorageKey::SchemaLayoutHash)
+                .get::<_, BytesN<32>>(&StorageKey::SmSchemaLayoutHash)
                 .is_some()
             || env
                 .storage()
                 .instance()
-                .get::<_, (u32, BytesN<32>)>(&StorageKey::AuthorizedUpgrade)
+                .get::<_, (u32, BytesN<32>)>(&StorageKey::SmAuthorizedUpgrade)
                 .is_some();
         if !readable {
             return Err(StorageMigrationError::StorageUnreadable);
@@ -357,10 +461,10 @@ impl StorageMigrationValidator {
 
         env.storage()
             .instance()
-            .set(&StorageKey::Version, &target_version);
+            .set(&StorageKey::SmVersion, &target_version);
         env.storage()
             .instance()
-            .set(&StorageKey::SchemaLayoutHash, new_layout_hash);
+            .set(&StorageKey::SmSchemaLayoutHash, new_layout_hash);
 
         Ok(ValidationReport {
             current_version: target_version,
@@ -378,12 +482,15 @@ impl StorageMigrationValidator {
     pub fn set_backup_present(env: &Env, present: bool) {
         env.storage()
             .instance()
-            .set(&StorageKey::BackupPresent, &present);
+            .set(&StorageKey::SmBackupPresent, &present);
     }
 
     /// Read the recorded authorization guard, if any.
     pub fn authorized_upgrade(env: &Env) -> Option<(u32, BytesN<32>)> {
-        env.storage().instance().get(&StorageKey::AuthorizedUpgrade)
+        read_through_legacy_keys(env);
+        env.storage()
+            .instance()
+            .get(&StorageKey::SmAuthorizedUpgrade)
     }
 }
 
@@ -428,7 +535,7 @@ mod tests {
             let stored: BytesN<32> = env
                 .storage()
                 .instance()
-                .get(&StorageKey::SchemaLayoutHash)
+                .get(&StorageKey::SmSchemaLayoutHash)
                 .unwrap();
             assert_eq!(stored, h(&env, 1));
         });
@@ -461,6 +568,83 @@ mod tests {
             StorageMigrationValidator::record_deployed_schema(&env, 1, &h(&env, 1)).unwrap();
             let res = StorageMigrationValidator::record_deployed_schema(&env, 1, &h(&env, 2));
             assert_eq!(res, Err(StorageMigrationError::AlreadyInitialized));
+        });
+    }
+
+    // ── Legacy (pre-v2) key read-through ──────────────────────────────────
+
+    #[test]
+    fn legacy_version_and_schema_keys_are_migrated_to_namespaced_slots() {
+        let env = Env::default();
+        in_contract(&env, || {
+            env.storage()
+                .instance()
+                .set(&LegacyStorageKey::Version, &4u32);
+            env.storage()
+                .instance()
+                .set(&LegacyStorageKey::SchemaLayoutHash, &h(&env, 9));
+
+            // The old deployment's version is honoured...
+            assert_eq!(StorageMigrationValidator::current_version(&env), 4);
+
+            // ...and copied once into the namespaced slots.
+            let migrated_version: u32 = env
+                .storage()
+                .instance()
+                .get(&StorageKey::SmVersion)
+                .unwrap();
+            assert_eq!(migrated_version, 4);
+            let migrated_hash: BytesN<32> = env
+                .storage()
+                .instance()
+                .get(&StorageKey::SmSchemaLayoutHash)
+                .unwrap();
+            assert_eq!(migrated_hash, h(&env, 9));
+        });
+    }
+
+    #[test]
+    fn legacy_authorization_and_backup_keys_are_migrated() {
+        let env = Env::default();
+        in_contract(&env, || {
+            env.storage()
+                .instance()
+                .set(&LegacyStorageKey::AuthorizedUpgrade, &(3u32, h(&env, 0xAB)));
+            env.storage()
+                .instance()
+                .set(&LegacyStorageKey::BackupPresent, &true);
+
+            assert!(StorageMigrationValidator::is_upgrade_authorized(
+                &env,
+                3,
+                &h(&env, 0xAB)
+            ));
+            let migrated_auth: (u32, BytesN<32>) = env
+                .storage()
+                .instance()
+                .get(&StorageKey::SmAuthorizedUpgrade)
+                .unwrap();
+            assert_eq!(migrated_auth, (3u32, h(&env, 0xAB)));
+            assert_eq!(
+                env.storage()
+                    .instance()
+                    .get::<_, bool>(&StorageKey::SmBackupPresent),
+                Some(true)
+            );
+        });
+    }
+
+    #[test]
+    fn namespaced_keys_are_authoritative_over_legacy_keys() {
+        let env = Env::default();
+        in_contract(&env, || {
+            env.storage()
+                .instance()
+                .set(&LegacyStorageKey::Version, &1u32);
+            env.storage().instance().set(&StorageKey::SmVersion, &7u32);
+
+            // New slot wins; the legacy value is never copied over it.
+            assert_eq!(StorageMigrationValidator::current_version(&env), 7);
         });
     }
 
@@ -561,7 +745,7 @@ mod tests {
             let stored: BytesN<32> = env
                 .storage()
                 .instance()
-                .get(&StorageKey::SchemaLayoutHash)
+                .get(&StorageKey::SmSchemaLayoutHash)
                 .unwrap();
             assert_eq!(stored, h(&env, 2));
         });
@@ -731,13 +915,13 @@ mod tests {
             assert!(env
                 .storage()
                 .instance()
-                .get::<_, bool>(&StorageKey::BackupPresent)
+                .get::<_, bool>(&StorageKey::SmBackupPresent)
                 .is_none());
             StorageMigrationValidator::set_backup_present(&env, true);
             assert_eq!(
                 env.storage()
                     .instance()
-                    .get::<_, bool>(&StorageKey::BackupPresent),
+                    .get::<_, bool>(&StorageKey::SmBackupPresent),
                 Some(true)
             );
         });
@@ -779,6 +963,7 @@ mod tests {
         assert_eq!(StorageMigrationError::SilentLayoutChange as u32, 8);
         assert_eq!(StorageMigrationError::UnauthorizedUpgradeState as u32, 9);
         assert_eq!(StorageMigrationError::StorageUnreadable as u32, 10);
+        assert_eq!(StorageMigrationError::Unauthorized as u32, 11);
     }
 
     // ── Existing deployed data stays readable (no implicit transform) ──────
