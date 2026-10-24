@@ -144,22 +144,20 @@ impl CalloraRegistry {
 
     /// Shared registration core used by both public entrypoints.
     ///
-    /// Validates inputs, checks for duplicates, publishes to the catalog, then
-    /// atomically writes the offering record, increments the registered count,
-    /// emits the registration event, and records the developer cooldown timestamp.
+    /// Checks for duplicates, publishes to the catalog, then atomically writes
+    /// the offering record, increments the registered count, emits the
+    /// registration event, and records the developer cooldown timestamp.
     ///
-    /// Callers are responsible for authentication, admin-equality checks, the
-    /// cooldown gate, and any pre-conditions specific to their variant (e.g.
-    /// the developer balance gate in `register_offering_with_gate`).
+    /// Callers are responsible for authentication, admin-equality checks, input
+    /// validation, the cooldown gate, and any pre-conditions specific to their
+    /// variant (e.g. the developer balance gate in
+    /// `register_offering_with_gate`).
     fn do_register(
         env: &Env,
         developer: Address,
         offering_id: String,
         metadata: String,
     ) -> Result<(), RegistryError> {
-        Self::validate_offering_id(&offering_id)?;
-        Self::validate_metadata(&metadata)?;
-
         let key = StorageKey::Offering(offering_id.clone());
         if env.storage().persistent().has(&key) {
             return Err(RegistryError::OfferingAlreadyRegistered);
@@ -202,6 +200,11 @@ impl CalloraRegistry {
     ///
     /// Cross-contract interactions happen before any registry persistent write,
     /// so a reverting or panicking catalog leaves registry storage unchanged.
+    ///
+    /// Error precedence: authentication, then admin equality, then input
+    /// validation (`offering_id` and `metadata`), then the per-developer
+    /// cooldown, then the duplicate check. No state is written on any failure
+    /// path.
     pub fn register_offering(
         env: Env,
         caller: Address,
@@ -215,6 +218,8 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        Self::validate_offering_id(&offering_id)?;
+        Self::validate_metadata(&metadata)?;
         admin::require_cooldown(&env, &developer)?;
         Self::do_register(&env, developer, offering_id, metadata)
     }
@@ -224,6 +229,11 @@ impl CalloraRegistry {
     ///
     /// The balance gate runs before the shared registration logic so that an
     /// insufficient balance is rejected before any catalog call or state write.
+    ///
+    /// Error precedence: authentication, then admin equality, then input
+    /// validation (`offering_id` and `metadata`), then the per-developer
+    /// cooldown, then the balance gate, then the duplicate check. No state is
+    /// written on any failure path.
     pub fn register_offering_with_gate(
         env: Env,
         caller: Address,
@@ -239,6 +249,8 @@ impl CalloraRegistry {
         if caller != admin {
             return Err(RegistryError::Unauthorized);
         }
+        Self::validate_offering_id(&offering_id)?;
+        Self::validate_metadata(&metadata)?;
         admin::require_cooldown(&env, &developer)?;
 
         // Balance gate: reject before any catalog interaction or state write.
@@ -252,9 +264,15 @@ impl CalloraRegistry {
     }
 
     /// Return whether `offering_id` has been registered.
+    ///
+    /// This is a total predicate: a malformed `offering_id` can never be
+    /// registered, so it returns `Ok(false)` rather than an error. Use
+    /// [`Self::get_offering`] when the caller needs `InvalidOfferingId`.
     pub fn is_offering_registered(env: Env, offering_id: String) -> Result<bool, RegistryError> {
         Self::extend_instance_ttl(&env);
-        Self::validate_offering_id(&offering_id)?;
+        if Self::validate_offering_id(&offering_id).is_err() {
+            return Ok(false);
+        }
         if Self::admin(&env).is_err() {
             return Err(RegistryError::NotInitialized);
         }

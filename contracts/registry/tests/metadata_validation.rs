@@ -458,7 +458,6 @@ fn rejected_metadata_leaves_no_partial_state_gated() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_control_character_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -476,7 +475,6 @@ fn rejects_control_character_in_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_line_break_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -489,7 +487,6 @@ fn rejects_line_break_in_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_non_ascii_multibyte_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -502,7 +499,6 @@ fn rejects_non_ascii_multibyte_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_leading_whitespace_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -515,7 +511,6 @@ fn rejects_leading_whitespace_in_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_trailing_whitespace_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -528,7 +523,6 @@ fn rejects_trailing_whitespace_in_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_whitespace_only_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -541,7 +535,6 @@ fn rejects_whitespace_only_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_empty_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -554,7 +547,6 @@ fn rejects_empty_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_over_length_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -568,7 +560,6 @@ fn rejects_over_length_offering_id() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_invalid_offering_id_in_with_gate_variant() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
