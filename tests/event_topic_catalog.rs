@@ -16,7 +16,7 @@ use soroban_sdk::{Env, Symbol, Vec as SorobanVec};
 // Vault contract topics
 // ---------------------------------------------------------------------------
 
-/// All 36 vault event topics and their expected string representations.
+/// All 42 vault event topics and their expected string representations.
 /// Kept as a single constant array so the count is enforced at compile time.
 const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("init", |e| callora_vault::events::event_init(e)),
@@ -115,6 +115,18 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_vault::events::event_rescue_funds(e)
     }),
     ("swept", |e| callora_vault::events::event_swept(e)),
+    ("pause_replaced", |e| {
+        callora_vault::events::event_pause_replaced(e)
+    }),
+    ("upgrade_replaced", |e| {
+        callora_vault::events::event_upgrade_replaced(e)
+    }),
+    ("sweep_replaced", |e| {
+        callora_vault::events::event_sweep_replaced(e)
+    }),
+    ("proposal_expired", |e| {
+        callora_vault::events::event_proposal_expired(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -363,7 +375,7 @@ fn topic_counts_match_catalog_documentation() {
     // If you added a new event, update both this test AND the catalog.
     assert_eq!(
         VAULT_TOPICS.len(),
-        38,
+        42,
         "vault topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
@@ -386,7 +398,7 @@ fn topic_counts_match_catalog_documentation() {
             + SETTLEMENT_TOPICS.len()
             + REVENUE_POOL_TOPICS.len()
             + DISTRIBUTE_TOPICS.len(),
-        91,
+        95,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }

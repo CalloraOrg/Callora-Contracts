@@ -524,6 +524,61 @@ Default at deployment: `DEFAULT_TIMELOCK_SECONDS` = 172 800 s (48 h).
 
 ---
 
+### Timelock proposal events
+
+All vault timelock events use the standard shape: `topic[0]` is the event
+name, `topic[1]` is the `"callora_v1"` version marker, and `topic[2]` is the
+admin `caller`.
+
+| Event | Trigger | Data |
+|-------|---------|------|
+| `pause_proposed` | `propose_pause` | `(proposed_at, execute_after)` |
+| `upgrade_proposed` | `propose_upgrade` | `(wasm_hash, proposed_at, execute_after)` |
+| `sweep_proposed` | `propose_sweep` | `(to, amount, proposed_at, execute_after)` |
+| `pause_replaced` | `propose_pause` over a live proposal | `((old_proposed_at, old_execute_after), (proposed_at, execute_after))` |
+| `upgrade_replaced` | `propose_upgrade` over a live proposal | `((old_wasm_hash, old_proposed_at, old_execute_after), (wasm_hash, proposed_at, execute_after))` |
+| `sweep_replaced` | `propose_sweep` over a live proposal | `((old_to, old_amount, old_proposed_at, old_execute_after), (to, amount, proposed_at, execute_after))` |
+| `pause_executed` | `execute_pause` | executed-at ledger timestamp |
+| `upgrade_executed` | `execute_upgrade` | executed-at ledger timestamp |
+| `sweep_executed` | `execute_sweep` | `(to, amount, executed_at)` |
+| `pause_cancelled` | `cancel_pause` | `bool` (whether a proposal existed) |
+| `upgrade_cancelled` | `cancel_upgrade` | `bool` (whether a proposal existed) |
+| `sweep_cancelled` | `cancel_sweep` | `bool` (whether a proposal existed) |
+| `proposal_expired` | `prune_expired_proposals` | `(kind, proposed_at, execute_after, expires_at)` |
+
+Replacement semantics: a proposal whose `expires_at` has not yet passed is
+"live". Proposing over a live proposal replaces it and restarts the timelock;
+an expired proposal is treated as absent and is silently overwritten. This
+choice is also documented in `docs/UPGRADE.md`.
+
+### `proposal_expired`
+
+Emitted once per expired proposal cleared by `prune_expired_proposals`. The
+`kind` field is one of `"pause"`, `"upgrade"`, or `"sweep"`.
+
+| Index   | Location | Type                                                       | Description |
+|---------|----------|------------------------------------------------------------|-------------|
+| topic 0 | topics   | Symbol                                                     | `"proposal_expired"` |
+| topic 1 | topics   | Symbol                                                     | `"callora_v1"` (version marker) |
+| topic 2 | topics   | Address                                                    | `caller` — admin who pruned |
+| data[0] | data     | Symbol                                                     | proposal kind: `"pause"` / `"upgrade"` / `"sweep"` |
+| data[1] | data     | u64                                                        | `proposed_at` |
+| data[2] | data     | u64                                                        | `execute_after` |
+| data[3] | data     | u64                                                        | `expires_at` |
+
+```json
+{
+  "topics": ["proposal_expired", "callora_v1", "GADMIN..."],
+  "data": ["pause", 1700000000, 1700172800, 1700777600]
+}
+```
+
+Expired proposals remain in storage until pruned, but the `get_pending_*`
+views return `null` and the `execute_*` functions return
+`ProposalExpired (58)` without attempting a storage write.
+
+---
+
 ---
 
 ### `admin_nominated`
@@ -2272,6 +2327,10 @@ Emitted by `release()` when funds are paid out to the recipient and the record i
 | `set_max_deduct`         | vault           | `set_max_deduct()`                       |
 | `set_authorized_caller` | vault           | `set_authorized_caller()`                |
 | `tl_window_changed`     | vault           | `set_timelock_window()`                  |
+| `pause_replaced`        | vault           | `propose_pause()` over a live proposal   |
+| `upgrade_replaced`      | vault           | `propose_upgrade()` over a live proposal |
+| `sweep_replaced`        | vault           | `propose_sweep()` over a live proposal   |
+| `proposal_expired`      | vault           | `prune_expired_proposals()`              |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |

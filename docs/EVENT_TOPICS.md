@@ -107,8 +107,12 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 45 | `sweep_cancelled`         | `event_sweep_cancelled`        | Admin cancels a pending sweep                 |
 | 46 | `tl_window_changed`       | `event_timelock_window_changed`| Admin updates timelock window                 |
 | 47 | `allowlist_remove`        | `event_allowlist_remove`       | Single address removed from deposit allowlist |
+| 48 | `pause_replaced`          | `event_pause_replaced`         | Live pause proposal replaced by a newer one   |
+| 49 | `upgrade_replaced`        | `event_upgrade_replaced`       | Live upgrade proposal replaced by a newer one |
+| 50 | `sweep_replaced`          | `event_sweep_replaced`         | Live sweep proposal replaced by a newer one   |
+| 51 | `proposal_expired`        | `event_proposal_expired`       | Expired timelock proposal pruned              |
 
-**Total: 47 topics**
+**Total: 51 topics**
 
 ---
 
@@ -232,7 +236,8 @@ Distribute:   GCONTRACT_DISTRIBUTE...
 `rescue_funds`, `swept`, `pause_proposed`, `pause_executed`,
 `pause_cancelled`, `upgrade_proposed`, `upgrade_executed`,
 `upgrade_cancelled`, `sweep_proposed`, `sweep_executed`,
-`sweep_cancelled`, `tl_window_changed`
+`sweep_cancelled`, `tl_window_changed`, `pause_replaced`,
+`upgrade_replaced`, `sweep_replaced`, `proposal_expired`
 
 **Settlement-specific** (not shared with other contracts):
 `payment_received`, `balance_credited`, `developer_withdraw`,

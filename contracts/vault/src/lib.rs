@@ -1542,50 +1542,71 @@ impl CalloraVault {
 
     /// Return the outstanding timelocked pause proposal, if any.
     ///
-    /// Returns `None` when no pause proposal is currently staged.  A `Some`
-    /// value means a pause was proposed and can be executed once the ledger
-    /// clock reaches `proposal.execute_after` (via [`execute_pause`]).
+    /// Returns `None` when no pause proposal is currently staged, or when the
+    /// staged proposal has passed its `expires_at` grace deadline. Expired
+    /// proposals are treated as absent until an admin prunes them; this view
+    /// does not clear or mutate an expired entry.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_pause(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+        match timelock::get_pending_pause(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the outstanding timelocked upgrade proposal, if any.
     ///
-    /// Returns `None` when no upgrade proposal is staged.  A `Some` value
-    /// includes the target `wasm_hash` and the `execute_after` deadline (see
-    /// [`execute_upgrade`]).
+    /// Returns `None` when no upgrade proposal is staged, or when the staged
+    /// proposal has passed its `expires_at` grace deadline. Expired proposals
+    /// are treated as absent until an admin prunes them; this view never
+    /// writes or clears storage.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_upgrade(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+        match timelock::get_pending_upgrade(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the outstanding timelocked sweep proposal, if any.
     ///
-    /// Returns `None` when no sweep proposal is staged.  A `Some` value
-    /// includes the recipient address, the amount, and the `execute_after`
-    /// deadline (see [`execute_sweep`]).
+    /// Returns `None` when no sweep proposal is staged, or when the staged
+    /// proposal has passed its `expires_at` grace deadline. Expired proposals
+    /// are treated as absent until an admin prunes them; this view never
+    /// writes or clears storage.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_sweep(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+        match timelock::get_pending_sweep(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the recorded WASM hash after a successful upgrade, if any.
@@ -1849,7 +1870,11 @@ impl CalloraVault {
     ///
     /// After the configured timelock window elapses, the pause may be
     /// executed via [`execute_pause`].  Only one pause proposal may be
-    /// active at a time; proposing again replaces the existing proposal.
+    /// active at a time. Proposing again over a live (unexpired) proposal
+    /// replaces it and restarts the timelock; this emits
+    /// `pause_replaced` with the old and new `(proposed_at, execute_after)`
+    /// snapshots in addition to `pause_proposed`. An expired proposal is
+    /// treated as absent and is silently overwritten.
     ///
     /// ### Authorization
     /// `caller.require_auth()` is enforced via [`require_admin`].
@@ -1868,7 +1893,9 @@ impl CalloraVault {
     ///
     /// ### Events
     /// Emits `pause_proposed` with `caller` as topic and
-    /// `(proposed_at, execute_after)` as data.
+    /// `(proposed_at, execute_after)` as data. When a live proposal was
+    /// replaced, also emits `pause_replaced` with
+    /// `((old_proposed_at, old_execute_after), (proposed_at, execute_after))`.
     pub fn propose_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposed_at = env.ledger().timestamp();
@@ -1878,6 +1905,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_pause(&env);
         timelock::set_pending_pause(
             &env,
             &timelock::PendingPause {
@@ -1890,10 +1918,25 @@ impl CalloraVault {
             (
                 events::event_pause_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
             (proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_pause_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.proposed_at, old.execute_after),
+                        (proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1918,6 +1961,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending pause proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     ///
     /// ### Events
     /// Emits `pause_executed` with `caller` as topic, then `vault_paused`.
@@ -1929,8 +1973,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_pause(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
 
@@ -2016,7 +2058,11 @@ impl CalloraVault {
     /// Stage a timelocked contract upgrade proposal (admin only).
     ///
     /// After the timelock window elapses the upgrade may be executed via
-    /// [`execute_upgrade`].  Proposing again replaces the existing proposal.
+    /// [`execute_upgrade`].  Proposing again over a live (unexpired)
+    /// proposal replaces it and restarts the timelock; this emits
+    /// `upgrade_replaced` with the old and new
+    /// `(wasm_hash, proposed_at, execute_after)` snapshots. An expired
+    /// proposal is treated as absent and is silently overwritten.
     ///
     /// ### Authorization
     /// `caller.require_auth()` is enforced via [`require_admin`].
@@ -2035,7 +2081,9 @@ impl CalloraVault {
     ///
     /// ### Events
     /// Emits `upgrade_proposed` with `caller` as topic and
-    /// `(wasm_hash, proposed_at, execute_after)` as data.
+    /// `(wasm_hash, proposed_at, execute_after)` as data. When a live
+    /// proposal was replaced, also emits `upgrade_replaced` with the old and
+    /// new `(wasm_hash, proposed_at, execute_after)` snapshots.
     pub fn propose_upgrade(
         env: Env,
         caller: Address,
@@ -2049,6 +2097,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_upgrade(&env);
         timelock::set_pending_upgrade(
             &env,
             &timelock::PendingUpgrade {
@@ -2062,10 +2111,25 @@ impl CalloraVault {
             (
                 events::event_upgrade_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
-            (new_wasm_hash, proposed_at, execute_after),
+            (new_wasm_hash.clone(), proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_upgrade_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.wasm_hash, old.proposed_at, old.execute_after),
+                        (new_wasm_hash, proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -2090,6 +2154,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending upgrade proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     ///
     /// ### Events
     /// Emits `upgrade_executed` with `caller` as topic, then `upgraded`.
@@ -2100,8 +2165,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_upgrade(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
         admin::guard(&env, Symbol::new(&env, "upgrade"))?;
@@ -2169,6 +2232,11 @@ impl CalloraVault {
     }
 
     /// Propose sweeping (distributing) on-ledger USDC surplus to a recipient (admin only, timelocked).
+    ///
+    /// Proposing again over a live (unexpired) sweep proposal replaces it and
+    /// restarts the timelock, emitting `sweep_replaced` with the old and new
+    /// `(to, amount, proposed_at, execute_after)` snapshots. An expired
+    /// proposal is treated as absent and is silently overwritten.
     pub fn propose_sweep(
         env: Env,
         caller: Address,
@@ -2210,6 +2278,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_sweep(&env);
         timelock::set_pending_sweep(
             &env,
             &timelock::PendingSweep {
@@ -2224,10 +2293,25 @@ impl CalloraVault {
             (
                 events::event_sweep_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
-            (to, amount, proposed_at, execute_after),
+            (to.clone(), amount, proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_sweep_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.to, old.amount, old.proposed_at, old.execute_after),
+                        (to, amount, proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -2252,6 +2336,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending sweep proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     /// - [`VaultError::InsufficientBalance`] — surplus < amount.
     ///
     /// ### Events
@@ -2263,8 +2348,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_sweep(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
         let usdc_addr: Address = env
@@ -2345,6 +2428,96 @@ impl CalloraVault {
         );
         Self::bump_instance_ttl(&env);
         Ok(())
+    }
+
+    /// Remove all expired timelock proposals from persistent storage.
+    ///
+    /// A proposal is expired once the ledger timestamp is strictly greater
+    /// than its `expires_at` grace deadline. Expired proposals are already
+    /// treated as absent by the `get_pending_*` views and rejected by the
+    /// `execute_*` functions; pruning simply reclaims their storage and emits
+    /// an audit event for each removed entry.
+    ///
+    /// ### Authorization
+    /// Admin-only. Pruning mutates persistent contract state, so it is kept
+    /// behind the same [`require_admin`] check as every other timelock
+    /// lifecycle operation. This also prevents arbitrary callers from
+    /// rewriting the proposal audit trail.
+    ///
+    /// ### Returns
+    /// The number of proposals cleared (`0..=3`).
+    ///
+    /// ### Events
+    /// Emits one `proposal_expired` event per cleared entry, with `caller` as
+    /// the third topic and `(kind, proposed_at, execute_after, expires_at)`
+    /// as data. `kind` is `"pause"`, `"upgrade"`, or `"sweep"`.
+    pub fn prune_expired_proposals(env: Env, caller: Address) -> Result<u32, VaultError> {
+        Self::require_admin(&env, &caller)?;
+        let now = env.ledger().timestamp();
+        let mut cleared: u32 = 0;
+
+        if let Some(proposal) = timelock::get_pending_pause(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_pause(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "pause"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        if let Some(proposal) = timelock::get_pending_upgrade(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_upgrade(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "upgrade"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        if let Some(proposal) = timelock::get_pending_sweep(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_sweep(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "sweep"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        Self::bump_instance_ttl(&env);
+        Ok(cleared)
     }
 
     // -----------------------------------------------------------------------
