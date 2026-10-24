@@ -179,3 +179,22 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+## Admin
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Admin | Contract has not been initialized yet |
+| 2 | `Unauthorized` | Admin | Caller is not authorized for the requested operation |
+| 3 | `InvalidLimit` | Admin | One or more per-account caps exceeds maximum allowed cap |
+| 4 | `BetsAtCap` | Admin | Account's open bet count is already at the configured cap |
+| 5 | `PositionsAtCap` | Admin | Account's open position count is already at the configured cap |
+| 6 | `SubscriptionsAtCap` | Admin | Account's active subscription count is at the configured cap |
+| 7 | `CounterUnderflow` | Admin | Counter is already zero on release |
+| 8 | `Overflow` | Admin | Arithmetic overflow detected on counter increment |
+| 9 | `AlreadyInitialized` | Admin | `init` was called more than once |
+| 10 | `SameAdmin` | Admin | Proposed nominee matches the current admin |
+| 11 | `NoPendingAdmin` | Admin | No admin nomination is pending |
+| 12 | `UnauthorizedPending` | Admin | Caller is not the pending nominated admin |
+| 13 | `NominationExpired` | Admin | Nomination grace period has expired |
+| 14 | `TimelockNotElapsed` | Admin | Acceptance attempted before the rotation delay elapsed |

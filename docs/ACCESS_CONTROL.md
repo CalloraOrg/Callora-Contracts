@@ -287,6 +287,40 @@ TTL is refreshed on every write and on every authorized read by a mutation.
 
 ---
 
+## 5. Callora Admin Access Control
+
+### Overview
+`callora-admin` provides a standardized two-step admin transfer pattern with timelock protection and typed error codes (`AdminError`).
+
+### Roles
+- **Admin**: The active administrator address. Can nominate a new admin or cancel an active nomination.
+- **Pending Admin**: Nominated successor awaiting role acceptance within the timelock grace window.
+
+### Authorization Matrix
+
+| Function | `require_auth` on | Current Admin | Pending Admin | Others |
+|----------|-------------------|---------------|---------------|--------|
+| `init` | `admin` | ✅ (first call only) | ❌ | ❌ |
+| `set_admin` | `caller` | ✅ | ❌ | ❌ |
+| `accept_admin` | `caller` | ❌ | ✅ (inside timelock window) | ❌ |
+| `cancel_admin_transfer` | `caller` | ✅ | ❌ | ❌ |
+
+**Read-only entrypoints** (`get_admin`, `get_pending_admin`, `get_pending_rotation`, `get_rotation_id`) do **not** require auth.
+
+### Security Guarantees and Invariants
+
+1. **Authenticated Initialization**: `init` calls `admin.require_auth()` before inspecting or writing storage, preventing front-running on fresh deployments. Re-initialization returns `AdminError::AlreadyInitialized`.
+2. **Self-Nomination Rejection**: `set_admin` rejects nominating the current admin with `AdminError::SameAdmin`.
+3. **Timelock Delay & Grace Window**: Nominations enforce a mandatory delay (`ROTATION_DELAY_SECS` = 48 hours) and an expiry window (`ROTATION_GRACE_SECS` = 7 days). Re-nominating restarts the timelock clock.
+4. **Strict Error Precedence on `accept_admin`**: Preconditions are evaluated in strict order:
+   1. Pending nomination exists (`AdminError::NoPendingAdmin`)
+   2. Caller authentication (`caller.require_auth()`)
+   3. Caller identity matches nominee (`AdminError::UnauthorizedPending`)
+   4. Nomination not expired (`AdminError::NominationExpired`)
+   5. Timelock delay elapsed (`AdminError::TimelockNotElapsed`)
+
+---
+
 ## Test Coverage
 The implementation includes comprehensive tests covering:
 - ✅ **Issue #730 — Revenue Pool auth audit (FWC26 Stellar Wave)**: every state-changing

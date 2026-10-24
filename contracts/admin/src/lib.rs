@@ -6,16 +6,15 @@
 //!
 //! | Module | Purpose | Status |
 //! |--------|---------|--------|
-//! | [`admin`] | Two-step admin transfer with a timelock/grace window | Library-only; not yet consumed |
+//! | [`admin`] | Two-step admin transfer with a timelock/grace window | Production-ready library |
 //! | [`limits`] | Per-account caps for *bets* / *positions* / *subscriptions* | **Experimental** — see below |
-//! | [`errors`] / [`events`] | Error and event vocabulary shared by the above | — |
+//! | [`errors`] / [`events`] | Error and event vocabulary shared by the above | Production-ready |
 //!
 //! # Consumers
 //!
 //! No contract in this workspace currently depends on `callora-admin`: it is a
 //! library of free functions with no `#[contract]` entrypoints, so it can be
-//! linked but is inert until a contract imports it. Treat the whole crate as
-//! scaffolding until a consumer is added.
+//! linked but is inert until a contract imports it.
 //!
 //! # Relationship to `contracts/yield`
 //!
