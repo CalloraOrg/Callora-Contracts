@@ -26,4 +26,6 @@ pub enum RefundError {
     InsufficientBalance = 10,
     /// Recipient address is invalid (e.g. self or token address).
     InvalidRecipient = 11,
+    /// Requester has reached the maximum number of open refund requests.
+    TooManyOpenRequests = 12,
 }
