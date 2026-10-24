@@ -3,6 +3,13 @@
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
 
+## Change Note (2026-10) — Issue #1406: escrow backed creation and settling release
+
+`contracts/escrow`:
+- `create_escrow` transfers `amount` of `payment_asset` from funder into the escrow contract before storing `EscrowRecord`.
+- `release` signature updated to `(caller, payment_asset, recipient)`. It verifies the record exists, deletes it before transfer (CEI), transfers tokens to `recipient`, and emits `escrow_released`.
+- `release` no longer overwrites `StorageKey::Signer`, ensuring `rotate_signer` maintains exclusive control over contract signing.
+
 ## Change Note (2026-10) — Issue #1411: fee contract real token transfers
 
 `contracts/fee`: `init` now takes a `token: Address` argument (stored under
@@ -2115,6 +2122,136 @@ Emitted when the admin updates the refund configuration.
 
 ---
 
+## Contract: `callora-escrow` (v0.1.0)
+
+Events emitted by the escrow contract managing token-backed escrows, rate-limited admin critical actions, and key rotations.
+
+### `init`
+
+Emitted once by `init()`.
+
+| Index   | Location | Type    | Description                               |
+|---------|----------|---------|-------------------------------------------|
+| topic 0 | topics   | Symbol  | `"init"`                                  |
+| topic 1 | topics   | Address | `admin` — initial admin address           |
+| data    | data     | u64     | `cooldown_secs` — cool-off window seconds |
+
+```json
+{
+  "topics": ["init", "GADMIN..."],
+  "data": 3600
+}
+```
+
+---
+
+### `cooldown_set`
+
+Emitted by `set_cooldown()` when the admin adjusts the cool-off window.
+
+| Index   | Location | Type    | Description                   |
+|---------|----------|---------|-------------------------------|
+| topic 0 | topics   | Symbol  | `"cooldown_set"`              |
+| topic 1 | topics   | Address | `caller` — admin address      |
+| data    | data     | u64     | `secs` — new cooldown seconds |
+
+---
+
+### `action`
+
+Emitted when a guarded critical action without a dedicated payload executes (e.g. `pause`, `unpause`).
+
+| Index   | Location | Type    | Description                         |
+|---------|----------|---------|-------------------------------------|
+| topic 0 | topics   | Symbol  | `"action"`                          |
+| topic 1 | topics   | Address | `caller` — admin address            |
+| data    | data     | Symbol  | action tag (`"pause"`, `"unpause"`) |
+
+---
+
+### `signer_rotated`
+
+Emitted by `rotate_signer()` when the active contract signer is updated.
+
+| Index        | Location | Type    | Description                  |
+|--------------|----------|---------|------------------------------|
+| topic 0      | topics   | Symbol  | `"signer_rotated"`           |
+| topic 1      | topics   | Address | `caller` — admin address     |
+| `old_signer` | data[0]  | Address | previously authorized signer |
+| `new_signer` | data[1]  | Address | newly authorized signer      |
+
+---
+
+### `admin_nominated` / `admin_accepted` / `admin_cancelled`
+
+Two-step admin transfer events following standard Callora governance lifecycle.
+
+---
+
+### `asset_approved` / `asset_removed`
+
+Emitted when payment assets are approved or revoked by the admin.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"asset_approved"` / `"asset_removed"`|
+| topic 1 | topics   | Address | `caller` — admin address              |
+| data    | data     | Address | `asset` — token contract address      |
+
+---
+
+### `escrow_created`
+
+Emitted by `create_escrow()` after tokens are successfully transferred into the contract.
+
+| Index           | Location | Type    | Description                         |
+|-----------------|----------|---------|-------------------------------------|
+| topic 0         | topics   | Symbol  | `"escrow_created"`                  |
+| topic 1         | topics   | Address | `caller` — admin funder address     |
+| `payment_asset` | data     | Address | token contract address              |
+| `recipient`     | data     | Address | designated payout recipient         |
+| `amount`        | data     | i128    | funded amount in token micro-units  |
+| `created_at`    | data     | u64     | creation ledger timestamp           |
+
+```json
+{
+  "topics": ["escrow_created", "GADMIN..."],
+  "data": {
+    "payment_asset": "GASSET...",
+    "recipient": "GRECIPIENT...",
+    "amount": 1000000,
+    "created_at": 1700000000
+  }
+}
+```
+
+---
+
+### `escrow_released`
+
+Emitted by `release()` when funds are paid out to the recipient and the record is settled.
+
+| Index           | Location | Type    | Description                         |
+|-----------------|----------|---------|-------------------------------------|
+| topic 0         | topics   | Symbol  | `"escrow_released"`                 |
+| topic 1         | topics   | Address | `caller` — admin address            |
+| `payment_asset` | data     | Address | token contract address              |
+| `recipient`     | data     | Address | designated payout recipient         |
+| `amount`        | data     | i128    | released amount in token micro-units|
+
+```json
+{
+  "topics": ["escrow_released", "GADMIN..."],
+  "data": {
+    "payment_asset": "GASSET...",
+    "recipient": "GRECIPIENT...",
+    "amount": 1000000
+  }
+}
+```
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -2189,6 +2326,17 @@ Emitted when the admin updates the refund configuration.
 | `refund_processed`       | refund          | `approve_refund()`, `reject_refund()`, `process_refund()` |
 | `fees_withdrawn`         | refund          | `withdraw_fees()`                        |
 | `config_updated`         | refund          | `update_config()`                        |
+| `init`                   | escrow          | `init()`                                 |
+| `cooldown_set`           | escrow          | `set_cooldown()`                         |
+| `action`                 | escrow          | `pause()` / `unpause()`                  |
+| `signer_rotated`         | escrow          | `rotate_signer()`                        |
+| `admin_nominated`        | escrow          | `set_admin()`                            |
+| `admin_accepted`         | escrow          | `accept_admin()`                         |
+| `admin_cancelled`        | escrow          | `cancel_admin_transfer()`                |
+| `asset_approved`         | escrow          | `add_approved_asset()`                   |
+| `asset_removed`          | escrow          | `remove_approved_asset()`                |
+| `escrow_created`         | escrow          | `create_escrow()`                        |
+| `escrow_released`        | escrow          | `release()`                              |
 
 ---
 
@@ -2215,4 +2363,4 @@ Emitted when the admin updates the refund configuration.
 | 0.3.0   | revenue-pool  | Moved `admin_changed` from `set_admin()` to `accept_admin()` so nomination no longer announces a change (Issue #1163) |
 | 0.1.0   | recipient     | Registry TTL management and audit trail: `recipient_updated` emits `RecipientUpdatedEvent { name, old_address, new_address }` (Issue #1411) |
 | 0.1.0   | refund        | Extended `refund_processed` event with `token`, `fee`, and `net`; added `fees_withdrawn` event on `withdraw_fees()` |
-
+| 0.1.0   | escrow        | Settle escrow records on release, pull backed tokens on create_escrow, preserve signer across releases, emit `escrow_released` (Issue #1406) |

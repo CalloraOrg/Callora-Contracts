@@ -891,3 +891,14 @@ $$\text{balance}(\text{contract}, \text{token}) \ge \sum \text{approved\_not\_pr
 - Accumulated fees are tracked independently per token in `StorageKey::AccumulatedFees(token: Address)` via `get_accumulated_fees(token)`.
 - Legacy `get_total_refunds()` reads `StorageKey::TotalRefundsLegacy` and is marked `#[deprecated]` to retain backward compatibility without corrupting per-asset metrics.
 
+---
+
+## Escrow Balance and Conservation Invariant
+
+**Invariant**: For every payment asset approved and held by `CalloraEscrow`, the on-ledger token balance of the escrow contract is always greater than or equal to the sum of all active, open escrow records for that asset:
+$$\text{token.balance}(\text{escrow}) \ge \sum \text{open EscrowRecord.amount for each asset}$$
+
+- **Escrow Creation**: `create_escrow` transfers `amount` of `payment_asset` from the admin/funder into `env.current_contract_address()` before writing the persistent `EscrowRecord`. If the transfer fails (e.g., due to insufficient balance), no record is stored.
+- **Escrow Release**: `release` loads the `EscrowRecord`, deletes it from storage before the outbound token transfer (following Checks-Effects-Interactions), and transfers `record.amount` from `env.current_contract_address()` to `recipient`.
+- **Replay Protection**: Because the `(payment_asset, recipient)` storage key is deleted upon release, the same escrow cannot be released twice.
+- **Signer Isolation**: Releasing funds never modifies `StorageKey::Signer`, preserving the configured signer across arbitrary releases.
