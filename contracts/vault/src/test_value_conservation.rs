@@ -184,6 +184,8 @@ fn settlement_client_records_deduction_on_native_target() {
     let (vault_addr, vault_client) = create_vault(&env);
     let (usdc_addr, _, usdc_admin) = create_usdc(&env, &owner);
     let settlement_addr = create_settlement(&env, &owner, &vault_addr);
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
     let settlement_client = callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
 
     env.mock_all_auths();

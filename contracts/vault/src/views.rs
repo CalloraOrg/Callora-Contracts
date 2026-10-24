@@ -83,21 +83,17 @@ impl CalloraVault {
         amount: i128,
         request_id: u64,
     ) -> Result<i128, VaultError> {
-        CalloraVault::validate_deduct(&env, &caller, amount)?;
+        let mut items = soroban_sdk::Vec::new(&env);
+        items.push_back((amount, request_id));
+        CalloraVault::validate_deduct_batch(&env, &caller, &items)
+    }
 
-        // Idempotency: `deduct` rejects a replayed non-zero request id with
-        // `DuplicateRequestId`; `request_id == 0` means "no idempotency".
-        if request_id != 0 {
-            CalloraVault::require_not_duplicate(&env, &request_id)?;
-        }
-
-        // Projected new balance — same shape as `deduct`'s `Ok(..)` payload.
-        let balance: i128 = env
-            .storage()
-            .instance()
-            .get(&crate::DataKey::Balance)
-            .unwrap_or(0);
-        let new_balance = balance.checked_sub(amount).ok_or(VaultError::Overflow)?;
-        Ok(new_balance)
+    /// Read-only pre-flight of `batch_deduct`.
+    pub fn simulate_batch_deduct(
+        env: Env,
+        caller: Address,
+        items: soroban_sdk::Vec<(i128, u64)>,
+    ) -> Result<i128, VaultError> {
+        CalloraVault::validate_deduct_batch(&env, &caller, &items)
     }
 }

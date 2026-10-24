@@ -102,6 +102,7 @@ pub enum DataKey {
 pub enum StorageKey {
     UsdcToken,
     ProcessedRequest(u64),
+    ReentrancyGuard,
     ReserveCap(Address),
     DeveloperConfig(Address),
     DeveloperState(Address),
@@ -178,6 +179,7 @@ pub mod settlement {
             ledger_seq: u32,
         );
         fn record_deduction(env: Env, amount: i128, request_id: u64);
+        fn clear_deduction_request(env: Env, request_id: u64);
     }
 }
 
@@ -238,11 +240,19 @@ impl CalloraVault {
         caller: &Address,
         amount: i128,
     ) -> Result<(), VaultError> {
-        // 1. Owner-or-authorized-caller check (issue #1107: the owner may
-        //    always deduct; a configured authorized caller may deduct too).
+        let mut items = Vec::new(env);
+        items.push_back((amount, 0_u64));
+        Self::validate_deduct_batch(env, caller, &items)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_deduct_batch(
+        env: &Env,
+        caller: &Address,
+        items: &Vec<(i128, u64)>,
+    ) -> Result<i128, VaultError> {
         Self::require_authorized_deduct_caller(env.clone(), caller)?;
 
-        // 2. Pause guard.
         if env
             .storage()
             .instance()
@@ -252,30 +262,63 @@ impl CalloraVault {
             return Err(VaultError::Paused);
         }
 
-        // 3-5. Amount bounds (positive, min_deposit, max_deduct).
+        if items.is_empty() {
+            return Err(VaultError::BatchEmpty);
+        }
+        if items.len() > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+
         let min_dep = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
+            .ok_or(VaultError::NotInitialized)?;
         let max_deduct = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+            .ok_or(VaultError::NotInitialized)?;
 
-        // 6. Balance check.
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        if current_bal < amount {
+
+        let mut total_amount: i128 = 0;
+        let mut seen_ids: Vec<u64> = Vec::new(env);
+
+        for item in items.iter() {
+            let (amount, request_id) = item;
+            if amount <= 0 {
+                return Err(VaultError::AmountNotPositive);
+            }
+            if amount < min_dep {
+                return Err(VaultError::BelowMinDeposit);
+            }
+            if amount > max_deduct {
+                return Err(VaultError::ExceedsMaxDeduct);
+            }
+            if request_id != 0 {
+                Self::require_not_duplicate(env, &request_id)?;
+                if seen_ids.contains(&request_id) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_ids.push_back(request_id);
+            }
+            total_amount = total_amount
+                .checked_add(amount)
+                .ok_or(VaultError::Overflow)?;
+        }
+
+        if total_amount > current_bal {
             return Err(VaultError::InsufficientBalance);
         }
 
-        Ok(())
+        current_bal
+            .checked_sub(total_amount)
+            .ok_or(VaultError::Overflow)
     }
 
     /// Initialize the Callora Vault contract (one-time setup).
@@ -571,9 +614,12 @@ impl CalloraVault {
             Self::require_not_duplicate(&env, &request_id)?;
         }
 
+        Self::require_not_reentrant(&env)?;
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+
         let new_bal = current_bal
             .checked_sub(amount)
-            .unwrap_or_else(|| panic!("Math underflow"));
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
         env.events().publish(
@@ -589,7 +635,9 @@ impl CalloraVault {
         usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-        settlement_client.record_deduction(&amount, &request_id);
+        if request_id != 0 {
+            settlement_client.record_deduction(&amount, &request_id);
+        }
 
         // Record the idempotency marker only after every state mutation and
         // external call has succeeded. Any earlier failure reverts the whole
@@ -597,6 +645,7 @@ impl CalloraVault {
         if request_id != 0 {
             Self::mark_request_processed(&env, &request_id);
         }
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -653,20 +702,8 @@ impl CalloraVault {
         items: Vec<(i128, u64)>,
     ) -> Result<(), VaultError> {
         caller.require_auth();
+        Self::validate_deduct_batch(&env, &caller, &items)?;
 
-        // Authorization and lifecycle preconditions — checked before mutation.
-        // Same owner-or-caller rule as `deduct`; without this a cleared
-        // authorized caller panicked instead of falling back to the owner.
-        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
-
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::Paused);
-        }
         let settlement_addr = Self::require_settlement(&env)?;
         let usdc_addr = env
             .storage()
@@ -674,71 +711,21 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // Boundary / batch-limit preconditions — checked before mutation.
-        if items.is_empty() {
-            return Err(VaultError::BatchEmpty);
-        }
-        if items.len() > MAX_BATCH_SIZE {
-            return Err(VaultError::BatchTooLarge);
-        }
-
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap_or_else(|| panic!("Min deposit not set"));
-
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
 
-        // Validate every item and accumulate the total with checked arithmetic,
-        // before any transfer or mutation. An overflowing total, an out-of-range
-        // item, or a total that exceeds the tracked balance fails the whole call
-        // atomically (mirrors `deduct`'s explicit pre-transfer checks).
-        let mut total_amount: i128 = 0i128;
-        let mut seen_ids: Vec<u64> = Vec::new(&env);
-        for item in items.iter() {
-            let (amount, request_id) = item;
-            if amount <= 0 {
-                return Err(VaultError::AmountNotPositive);
-            }
-            if amount < min_dep {
-                return Err(VaultError::BelowMinDeposit);
-            }
-            if amount > max_deduct {
-                return Err(VaultError::ExceedsMaxDeduct);
-            }
-            // Idempotency: reject an id already recorded in storage as well as
-            // an id repeated within this same batch. Both checks run before any
-            // mutation so a duplicate fails the whole batch atomically.
-            // `request_id == 0` means "no idempotency" and is never recorded.
-            if request_id != 0 {
-                Self::require_not_duplicate(&env, &request_id)?;
-                if seen_ids.contains(&request_id) {
-                    return Err(VaultError::DuplicateRequestId);
-                }
-                seen_ids.push_back(request_id);
-            }
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-        if total_amount > current_bal {
-            return Err(VaultError::InsufficientBalance);
-        }
+        let total_amount = items.iter().try_fold(0_i128, |acc, (amount, _)| {
+            acc.checked_add(amount).ok_or(VaultError::Overflow)
+        })?;
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-
         let usdc_client = token::Client::new(&env, &usdc_addr);
+
+        Self::require_not_reentrant(&env)?;
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
 
         // All preconditions passed. Now the value-conserving mutation pair is
         // performed atomically: forward exactly `total_amount` to settlement
@@ -751,10 +738,12 @@ impl CalloraVault {
             &total_amount,
         );
 
-        let mut new_bal = current_bal;
+        let mut running_bal = current_bal;
         for item in items.iter() {
             let (amount, request_id) = item;
-            new_bal = new_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+            running_bal = running_bal
+                .checked_sub(amount)
+                .ok_or(VaultError::Overflow)?;
 
             env.events().publish(
                 (
@@ -762,10 +751,12 @@ impl CalloraVault {
                     events::event_version_v1(&env),
                     caller.clone(),
                 ),
-                (amount, new_bal),
+                (amount, running_bal),
             );
 
-            settlement_client.record_deduction(&amount, &request_id);
+            if request_id != 0 {
+                settlement_client.record_deduction(&amount, &request_id);
+            }
 
             // Persist the idempotency marker only after this item's transfer
             // and settlement call succeed; a later failure reverts the batch.
@@ -773,7 +764,10 @@ impl CalloraVault {
                 Self::mark_request_processed(&env, &request_id);
             }
         }
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -1071,6 +1065,8 @@ impl CalloraVault {
     pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
+        Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
         Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
@@ -1089,11 +1085,13 @@ impl CalloraVault {
             .get(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &owner,
             &amount,
         );
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1134,6 +1132,8 @@ impl CalloraVault {
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
+        Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
         Self::require_positive_amount(amount)?;
 
         // Zero-address check first.
@@ -1166,11 +1166,13 @@ impl CalloraVault {
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &to,
             &amount,
         );
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1202,6 +1204,7 @@ impl CalloraVault {
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         Self::require_admin(&env, &caller).unwrap();
         Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
 
         if amount <= 0 {
             panic!("amount must be positive");
@@ -1220,7 +1223,9 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -2426,6 +2431,18 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Reject a nested call that re-enters the vault while a token transfer is
+    /// still in flight. This prevents call-back reentry through malicious token
+    /// contracts (e.g. the transfer hook) from executing a second deduct or
+    /// withdraw within the same transaction.
+    pub(crate) fn require_not_reentrant(env: &Env) -> Result<(), VaultError> {
+        let key = StorageKey::ReentrancyGuard;
+        if env.storage().temporary().get::<_, bool>(&key).unwrap_or(false) {
+            return Err(VaultError::Unauthorized);
+        }
+        Ok(())
+    }
+
     /// Persist a processed-request marker in persistent storage and set its TTL.
     fn mark_request_processed(env: &Env, request_id: &u64) {
         let key = StorageKey::ProcessedRequest(*request_id);
@@ -2467,6 +2484,12 @@ impl CalloraVault {
             }
             if removed_temporary {
                 env.storage().temporary().remove(&key);
+            }
+            if env.storage().instance().has(&DataKey::Settlement) {
+                let settlement_addr = Self::require_settlement(&env).ok();
+                if let Some(addr) = settlement_addr {
+                    let _ = settlement::Client::new(&env, &addr).try_clear_deduction_request(&id);
+                }
             }
             if removed_persistent || removed_temporary {
                 env.events().publish(
@@ -2965,6 +2988,9 @@ mod test_allowlist_remove;
 
 #[cfg(test)]
 mod test_views;
+
+#[cfg(test)]
+mod test_simulate_parity;
 
 #[cfg(test)]
 mod test_reentrancy;
