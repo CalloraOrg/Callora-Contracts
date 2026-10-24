@@ -1,5 +1,5 @@
-#no_std
-`pubmod migrate;
+#![no_std]
+pub mod migrate;
 mod views;
 
 pub use views::{

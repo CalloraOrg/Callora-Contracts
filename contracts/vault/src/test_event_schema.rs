@@ -465,12 +465,7 @@ fn batch_deduct_emits_ordered_events_with_running_balances() {
     env.events().all();
 
     let before = client.get_balance();
-    let items = soroban_sdk::vec![
-        &env,
-        (100i128, 5u64),
-        (200i128, 0u64),
-        (300i128, 9u64),
-    ];
+    let items = soroban_sdk::vec![&env, (100i128, 5u64), (200i128, 0u64), (300i128, 9u64),];
     client.batch_deduct(&owner, &items);
 
     let evts = vault_events(&env, &vault);
