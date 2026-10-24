@@ -826,7 +826,7 @@ fn withdraw_reduces_balance() {
         &None,
     );
 
-    let remaining = client.withdraw(&200).unwrap();
+    let remaining = client.withdraw(&200);
     assert_eq!(remaining, 300);
     assert_eq!(client.balance(), 300);
 }
@@ -851,7 +851,7 @@ fn withdraw_full_balance_succeeds() {
         &None,
     );
 
-    let remaining = client.withdraw(&1000).unwrap();
+    let remaining = client.withdraw(&1000);
     assert_eq!(remaining, 0);
     assert_eq!(client.balance(), 0);
 }
@@ -925,7 +925,7 @@ fn withdraw_to_reduces_balance() {
         &None,
     );
 
-    let remaining = client.withdraw_to(&recipient, &150).unwrap();
+    let remaining = client.withdraw_to(&recipient, &150);
     assert_eq!(remaining, 350);
     assert_eq!(client.balance(), 350);
     assert_eq!(usdc_client.balance(&recipient), 150);
@@ -1067,7 +1067,7 @@ fn withdraw_to_while_paused_succeeds() {
     assert!(client.is_paused());
 
     // Withdraw should still work while paused (emergency recovery)
-    let remaining = client.withdraw_to(&recipient, &300).unwrap();
+    let remaining = client.withdraw_to(&recipient, &300);
     assert_eq!(remaining, 700);
     assert_eq!(client.balance(), 700);
     assert_eq!(usdc_client.balance(&recipient), 300);
@@ -1098,7 +1098,7 @@ fn withdraw_while_paused_succeeds() {
     assert!(client.is_paused());
 
     // Withdraw should still work while paused (emergency recovery)
-    let remaining = client.withdraw(&200).unwrap();
+    let remaining = client.withdraw(&200);
     assert_eq!(remaining, 800);
     assert_eq!(client.balance(), 800);
     assert_eq!(usdc_client.balance(&owner), 200);
@@ -1625,7 +1625,7 @@ fn set_settlement_stores_and_get_returns_address() {
     );
 
     client.set_settlement(&owner, &settlement);
-    assert_eq!(client.get_settlement().unwrap(), settlement);
+    assert_eq!(client.get_settlement(), settlement);
 }
 
 #[test]
@@ -1701,12 +1701,12 @@ fn get_settlement_returns_correct_after_update() {
     // Set first settlement address
     client.set_settlement(&owner, &settlement1);
 
-    assert_eq!(client.get_settlement().unwrap(), settlement1);
+    assert_eq!(client.get_settlement(), settlement1);
 
     // Update to second settlement address
     client.set_settlement(&owner, &settlement2);
 
-    assert_eq!(client.get_settlement().unwrap(), settlement2);
+    assert_eq!(client.get_settlement(), settlement2);
 }
 
 #[test]
@@ -1734,14 +1734,14 @@ fn get_settlement_consistent_after_deduct_operations() {
     client.set_settlement(&owner, &settlement);
 
     // Query settlement before deduct
-    let before = client.get_settlement().unwrap();
+    let before = client.get_settlement();
     assert_eq!(before, settlement);
 
     // Perform deduct operation
     client.deduct(&caller, &200, &15u64);
 
     // Query settlement after deduct - should be unchanged
-    let after = client.get_settlement().unwrap();
+    let after = client.get_settlement();
     assert_eq!(after, settlement);
     assert_eq!(before, after);
 
@@ -1775,7 +1775,7 @@ fn get_settlement_no_mutation_on_multiple_calls() {
 
     // Call get_settlement multiple times
     for _ in 0..10 {
-        let result = client.get_settlement().unwrap();
+        let result = client.get_settlement();
         assert_eq!(result, settlement);
     }
 
@@ -1915,7 +1915,7 @@ fn withdraw_to_zero_succeeds() {
         &None,
     );
 
-    assert_eq!(client.withdraw(&300).unwrap(), 0);
+    assert_eq!(client.withdraw(&300), 0);
 }
 
 #[test]
@@ -1939,7 +1939,7 @@ fn withdraw_near_i128_max_succeeds() {
         &None,
     );
 
-    let remaining = client.withdraw(&(initial - 1)).unwrap();
+    let remaining = client.withdraw(&(initial - 1));
     assert_eq!(remaining, 1);
 }
 
@@ -2260,7 +2260,7 @@ fn withdraw_emits_event() {
         &None,
         &None,
     );
-    client.withdraw(&100).unwrap();
+    client.withdraw(&100);
     let events = env.events().all();
     let ev = events
         .iter()
@@ -2295,7 +2295,7 @@ fn withdraw_to_emits_event() {
         &None,
         &None,
     );
-    client.withdraw_to(&recipient, &150).unwrap();
+    client.withdraw_to(&recipient, &150);
     let events = env.events().all();
     let ev = events
         .iter()
@@ -2533,7 +2533,7 @@ fn instance_ttl_extended_on_mutating_entrypoints() {
     );
 
     // withdraw — bumps TTL
-    client.withdraw(&100).unwrap();
+    client.withdraw(&100);
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);
@@ -2544,7 +2544,7 @@ fn instance_ttl_extended_on_mutating_entrypoints() {
     );
 
     // withdraw_to — bumps TTL
-    client.withdraw_to(&recipient, &50).unwrap();
+    client.withdraw_to(&recipient, &50);
     let seq = env.ledger().sequence();
     env.ledger()
         .set_sequence_number(seq + INSTANCE_BUMP_THRESHOLD - 1);

@@ -19,7 +19,6 @@
 pub mod errors;
 pub mod events;
 pub mod limits;
-pub mod pause;
 
 use crate::errors::DistributeError;
 
@@ -452,12 +451,9 @@ impl Distribute {
     /// * `DistributeError::InsufficientBalance` â€” contract holds less than `amount`.
     ///
     /// # Events
-    /// Emits `distribute_started` with `to` as topic and a
-    /// `DistributionLifecycleEvent` payload (`mode: Single`, leg index 0, leg
-    /// count 1) as data.
+    /// Emits `distribute_started` with `to` as topic and `amount` as data.
     /// Emits `distribute` with `to` as topic and `amount` as data (legacy).
-    /// Emits `distribute_completed` with `to` as topic and the same
-    /// `DistributionLifecycleEvent` payload as data.
+    /// Emits `distribute_completed` with `to` as topic and `amount` as data.
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
         Self::require_not_paused(&env);
@@ -483,14 +479,14 @@ impl Distribute {
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        let lifecycle = events::DistributionLifecycleEvent::new(
-            &env,
+        env.events().publish(
+            (
+                events::event_distribute_started(&env),
+                events::event_version_v1(&env),
+                to.clone(),
+            ),
             amount,
-            events::DistributionMode::Single,
-            0,
-            1,
         );
-        events::emit_distribute_started(&env, &to, &lifecycle);
         usdc.transfer(&contract_address, &to, &amount);
         env.events().publish(
             (
@@ -500,7 +496,14 @@ impl Distribute {
             ),
             amount,
         );
-        events::emit_distribute_completed(&env, &to, &lifecycle);
+        env.events().publish(
+            (
+                events::event_distribute_completed(&env),
+                events::event_version_v1(&env),
+                to,
+            ),
+            amount,
+        );
     }
 
     /// Distribute USDC from this contract to multiple recipients in a single

@@ -159,6 +159,9 @@ pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 /// forced past `i128::MAX` in a single invocation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Strkey of the all-zero contract address, rejected as a `withdraw_to` recipient.
+const ZERO_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 pub mod token {
     pub use soroban_sdk::token::Client;
 }
@@ -615,7 +618,9 @@ impl CalloraVault {
         }
 
         Self::require_not_reentrant(&env)?;
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
 
         let new_bal = current_bal
             .checked_sub(amount)
@@ -645,7 +650,9 @@ impl CalloraVault {
         if request_id != 0 {
             Self::mark_request_processed(&env, &request_id);
         }
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -725,7 +732,9 @@ impl CalloraVault {
         let usdc_client = token::Client::new(&env, &usdc_addr);
 
         Self::require_not_reentrant(&env)?;
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
 
         // All preconditions passed. Now the value-conserving mutation pair is
         // performed atomically: forward exactly `total_amount` to settlement
@@ -767,7 +776,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::Balance, &running_bal);
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -1065,8 +1076,7 @@ impl CalloraVault {
     pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
-        Self::require_not_reentrant(&env).unwrap();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
@@ -1075,7 +1085,9 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1085,13 +1097,17 @@ impl CalloraVault {
             .get(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &owner,
             &amount,
         );
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1132,12 +1148,11 @@ impl CalloraVault {
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
-        Self::require_not_reentrant(&env).unwrap();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         // Zero-address check first.
-        if to == Address::from_contract_id(&BytesN::<32>::from_array(&env, &[0u8; 32])) {
+        if to == Address::from_str(&env, ZERO_CONTRACT_ADDRESS) {
             return Err(VaultError::ZeroAddressRecipient);
         }
 
@@ -1162,17 +1177,23 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &to,
             &amount,
         );
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1223,9 +1244,13 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -2575,7 +2600,7 @@ impl CalloraVault {
     /// [`CalloraVault::batch_deduct`]. The owner may always deduct; when an
     /// authorized caller is configured it may deduct too.
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller == owner {
             return Ok(());
         }
@@ -2610,7 +2635,12 @@ impl CalloraVault {
     /// withdraw within the same transaction.
     pub(crate) fn require_not_reentrant(env: &Env) -> Result<(), VaultError> {
         let key = StorageKey::ReentrancyGuard;
-        if env.storage().temporary().get::<_, bool>(&key).unwrap_or(false) {
+        if env
+            .storage()
+            .temporary()
+            .get::<_, bool>(&key)
+            .unwrap_or(false)
+        {
             return Err(VaultError::Unauthorized);
         }
         Ok(())
@@ -2706,7 +2736,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VaultError::NotInitialized)?;
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller != admin && *caller != owner {
             return Err(VaultError::Unauthorized);
         }

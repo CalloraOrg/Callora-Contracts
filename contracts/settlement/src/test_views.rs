@@ -105,6 +105,7 @@ fn test_get_all_developer_balances_returns_too_many_results_above_cap() {
     let client = CalloraSettlementClient::new(&env, &addr);
     client.init(&admin, &vault);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     for sequence in 0..=crate::MAX_DEVELOPER_BALANCES_PAGE_SIZE {
         let developer = Address::generate(&env);
