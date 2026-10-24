@@ -31,9 +31,9 @@ use soroban_sdk::contracterror;
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
 /// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
-/// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
-/// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
-/// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
+/// | 24   | InvalidClaimWindow           | Claim window parameters are invalid                   |
+/// | 25   | ClaimWindowClosed            | Developer claim window is not currently open          |
+/// | 26   | MinBalanceViolation          | Withdrawal would leave balance below the minimum      |
 /// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
 /// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
 /// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
@@ -57,8 +57,10 @@ use soroban_sdk::contracterror;
 /// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
-/// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
-/// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
+/// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
+/// | 51   | FutureLedgerSeq              | `ledger_seq` is greater than the current ledger      |
+/// | 52   | DuplicateDeveloperInBatch    | Batch lists the same developer more than once        |
+/// | 53   | ExceedsUnallocated           | Credit exceeds unallocated deducted funds            |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -127,7 +129,10 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
-    /// `get_all_developer_balances` index exceeds
-    /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
-    TooManyResults = 51,
+    /// `ledger_seq` exceeds `env.ledger().sequence()`.
+    FutureLedgerSeq = 51,
+    /// Batch settlement lists the same developer more than once.
+    DuplicateDeveloperInBatch = 52,
+    /// Credit would exceed the unallocated deducted funds held by settlement.
+    ExceedsUnallocated = 53,
 }

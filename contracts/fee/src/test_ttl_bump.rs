@@ -1,5 +1,4 @@
-#![cfg(test)]
-
+#[cfg(test)]
 use crate::{
     ContractError, FeeContract, FeeContractClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
     LEDGERS_PER_DAY,
@@ -8,29 +7,59 @@ use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env};
 
-fn setup() -> (Env, Address, FeeContractClient<'static>) {
+fn setup() -> (Env, Address, Address, FeeContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let token = env.register_stellar_asset(None, &Address::generate(&env));
     let contract_id = env.register_contract(None, FeeContract);
     let client = FeeContractClient::new(&env, &contract_id);
-    (env, admin, client)
+    (env, admin, token, client)
+}
+
+fn read_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[derive(Clone, Copy)]
+struct TtlSetup {
+    env: Env,
+    admin: Address,
+    token: Address,
+    contract_id: Address,
+}
+
+fn setup_ttl() -> (TtlSetup, FeeContractClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let token = env.register_stellar_asset(None, &Address::generate(&env));
+    let contract_id = env.register_contract(None, FeeContract);
+    let client = FeeContractClient::new(&env, &contract_id);
+    (
+        TtlSetup {
+            env,
+            admin,
+            token,
+            contract_id,
+        },
+        client,
+    )
 }
 
 #[test]
 #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_init_bumps_instance_ttl() {
-    let (env, admin, client) = setup();
-
-    client.init(&admin);
-    let ttl = env.storage().instance().get_ttl();
+    let (s, client) = setup_ttl();
+    client.init(&s.admin, &s.token, &0u32);
+    let ttl = read_ttl(&s.env, &s.contract_id);
     assert_eq!(ttl, INSTANCE_BUMP_AMOUNT);
 }
 
 #[test]
 #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_set_fee_bumps_instance_ttl() {
-    let (env, admin, client) = setup();
+    let (env, admin, _token, client) = setup();
     client.init(&admin);
 
     // Advance sequence number to reduce instance TTL below threshold.
@@ -50,7 +79,7 @@ fn test_set_fee_bumps_instance_ttl() {
 #[test]
 #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_deposit_and_withdraw_bump_instance_ttl() {
-    let (env, admin, client) = setup();
+    let (env, admin, _token, client) = setup();
     client.init(&admin);
     let caller = Address::generate(&env);
     let recipient = Address::generate(&env);
@@ -82,7 +111,7 @@ fn test_deposit_and_withdraw_bump_instance_ttl() {
 #[test]
 #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_read_paths_bump_instance_ttl() {
-    let (env, admin, client) = setup();
+    let (env, admin, _token, client) = setup();
     client.init(&admin);
     let caller = Address::generate(&env);
     client.deposit(&caller, &1_000);
