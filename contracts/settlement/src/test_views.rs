@@ -12,6 +12,16 @@ fn is_not_initialized<V, CE: Into<Error>, E: Into<Error>>(
     }
 }
 
+fn is_settlement_error<V, CE: Into<Error>, E: Into<Error>>(
+    result: Result<Result<V, CE>, Result<E, InvokeError>>,
+    expected: SettlementError,
+) -> bool {
+    match result {
+        Err(Ok(error)) => error.into().get_code() == expected as u32,
+        _ => false,
+    }
+}
+
 #[test]
 fn test_get_admin_uninitialized() {
     let env = Env::default();
@@ -85,6 +95,34 @@ fn test_get_developer_balance_returns_zero_when_not_stored() {
     assert_eq!(balance, 0);
 }
 
+#[test]
+fn test_get_all_developer_balances_returns_too_many_results_above_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let vault = Address::generate(&env);
+    let addr = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &addr);
+    client.init(&admin, &vault);
+    let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
+
+    for sequence in 0..=crate::MAX_DEVELOPER_BALANCES_PAGE_SIZE {
+        let developer = Address::generate(&env);
+        client.receive_payment(
+            &vault,
+            &1i128,
+            &false,
+            &Some(developer),
+            &token,
+            &(sequence + 1),
+        );
+    }
+
+    let result = client.try_get_all_developer_balances(&admin, &token);
+    assert!(is_settlement_error(result, SettlementError::TooManyResults));
+}
+
 /// `get_developer_balances_cursor` called before `init` must return
 /// `NotInitialized` (it calls `get_admin` internally).
 #[test]
@@ -150,13 +188,10 @@ fn test_pagination_exactly_limit() {
     // limit 10
     let (page, next_cursor) = client.get_developer_balances_cursor(&admin, &None, &10u32, &token);
     assert_eq!(page.len(), 10);
-    assert!(next_cursor.is_some());
+    assert!(next_cursor.is_none());
 
-    // Page 2 using next_cursor
-    let (page2, next_cursor2) =
-        client.get_developer_balances_cursor(&admin, &next_cursor, &10u32, &token);
-    assert_eq!(page2.len(), 0);
-    assert!(next_cursor2.is_none());
+    let result = client.try_get_developer_balances_cursor(&admin, &Some(11u32), &10u32, &token);
+    assert!(is_settlement_error(result, SettlementError::InvalidCursor));
 }
 
 #[test]
@@ -257,11 +292,9 @@ fn test_pagination_invalid_cursor() {
         client.receive_payment(&admin, &1000i128, &false, &Some(dev), &token, &1u32);
     }
 
-    let invalid_cursor = Some(Address::generate(&env));
-    let (page, next_cursor) =
-        client.get_developer_balances_cursor(&admin, &invalid_cursor, &10u32, &token);
-    assert_eq!(page.len(), 0);
-    assert!(next_cursor.is_none());
+    let invalid_cursor = Some(6u32);
+    let result = client.try_get_developer_balances_cursor(&admin, &invalid_cursor, &10u32, &token);
+    assert!(is_settlement_error(result, SettlementError::InvalidCursor));
 }
 
 #[test]

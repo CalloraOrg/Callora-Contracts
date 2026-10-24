@@ -400,9 +400,11 @@ impl CalloraBatchClaim {
         if reserved_for.is_none() {
             env.storage().persistent().set(&owner_key, &claimant);
         }
-        env.storage()
-            .persistent()
-            .extend_ttl(&owner_key, CONSUMED_TOMBSTONE_THRESHOLD, CONSUMED_TOMBSTONE_BUMP);
+        env.storage().persistent().extend_ttl(
+            &owner_key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
 
         Self::bump_instance(&env);
         env.events()
@@ -1702,9 +1704,16 @@ mod tests {
         batch.push_back((claimant.clone(), id.clone()));
         client.batch_claim(&batch);
 
-        // Advance well past a single PERSISTENT_BUMP window without ever
-        // reading/writing this claim_id's record or tombstone directly.
-        advance_ledger_keeping_instance_alive(&env, &admin, &client, 2 * PERSISTENT_BUMP);
+        // Advance past a full PERSISTENT_BUMP window (the claim record's
+        // archival horizon) without ever reading/writing this claim_id's
+        // record or tombstone directly, while staying inside the tombstone's
+        // CONSUMED_TOMBSTONE_BUMP lifetime.
+        advance_ledger_keeping_instance_alive(
+            &env,
+            &admin,
+            &client,
+            PERSISTENT_BUMP + LEDGERS_PER_DAY,
+        );
 
         let remaining = consumed_ttl(&env, &client.address, &id);
         assert!(

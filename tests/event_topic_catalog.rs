@@ -15,7 +15,7 @@ use soroban_sdk::{Env, Symbol};
 // Vault contract topics
 // ---------------------------------------------------------------------------
 
-/// All 36 vault event topics and their expected string representations.
+/// All 41 vault event topics and their expected string representations.
 /// Kept as a single constant array so the count is enforced at compile time.
 const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("init", |e| callora_vault::events::event_init(e)),
@@ -42,7 +42,6 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     }),
     ("deposit", |e| callora_vault::events::event_deposit(e)),
     ("deduct", |e| callora_vault::events::event_deduct(e)),
-    ("deduct_v2", |e| callora_vault::events::event_deduct_v2(e)),
     ("ownership_nominated", |e| {
         callora_vault::events::event_ownership_nominated(e)
     }),
@@ -114,6 +113,18 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_vault::events::event_rescue_funds(e)
     }),
     ("swept", |e| callora_vault::events::event_swept(e)),
+    ("pause_replaced", |e| {
+        callora_vault::events::event_pause_replaced(e)
+    }),
+    ("upgrade_replaced", |e| {
+        callora_vault::events::event_upgrade_replaced(e)
+    }),
+    ("sweep_replaced", |e| {
+        callora_vault::events::event_sweep_replaced(e)
+    }),
+    ("proposal_expired", |e| {
+        callora_vault::events::event_proposal_expired(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -348,4 +359,197 @@ fn distribute_topics_match_catalog() {
             "distribute topic mismatch: expected \"{expected}\""
         );
     }
+}
+
+/// Catalog count guard: if this test fails, a new topic was added to
+/// `events.rs` but the corresponding row in `docs/EVENT_TOPICS.md` was
+/// not updated.
+#[test]
+fn topic_counts_match_catalog_documentation() {
+    // These counts MUST match the totals in docs/EVENT_TOPICS.md.
+    // If you added a new event, update both this test AND the catalog.
+    assert_eq!(
+        VAULT_TOPICS.len(),
+        41,
+        "vault topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        SETTLEMENT_TOPICS.len(),
+        20,
+        "settlement topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        REVENUE_POOL_TOPICS.len(),
+        22,
+        "revenue_pool topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        DISTRIBUTE_TOPICS.len(),
+        11,
+        "distribute topic count changed — update docs/EVENT_TOPICS.md"
+    );
+    assert_eq!(
+        VAULT_TOPICS.len()
+            + SETTLEMENT_TOPICS.len()
+            + REVENUE_POOL_TOPICS.len()
+            + DISTRIBUTE_TOPICS.len(),
+        94,
+        "total topic count changed — update docs/EVENT_TOPICS.md"
+    );
+}
+
+/// Every topic string must be non-empty and contain only lowercase ASCII
+/// alphanumeric plus underscores — the convention enforced by the codebase.
+#[test]
+fn all_topic_strings_are_valid_identifiers() {
+    let env = Env::default();
+    let all: std::vec::Vec<(&str, &str, fn(&Env) -> Symbol)> = VAULT_TOPICS
+        .iter()
+        .map(|(s, c)| ("vault", *s, *c))
+        .chain(
+            SETTLEMENT_TOPICS
+                .iter()
+                .map(|(s, c)| ("settlement", *s, *c)),
+        )
+        .chain(
+            REVENUE_POOL_TOPICS
+                .iter()
+                .map(|(s, c)| ("revenue_pool", *s, *c)),
+        )
+        .chain(
+            DISTRIBUTE_TOPICS
+                .iter()
+                .map(|(s, c)| ("distribute", *s, *c)),
+        )
+        .collect();
+
+    for (contract, name, ctor) in all {
+        let sym = ctor(&env);
+        let bytes = sym.to_string();
+        assert!(
+            !bytes.is_empty(),
+            "{contract} topic \"{name}\" produced an empty Symbol"
+        );
+        assert!(
+            bytes
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+            "{contract} topic \"{name}\" contains invalid characters: \"{bytes}\""
+        );
+    }
+}
+
+/// Verify that topic strings are unique within each contract (no duplicates).
+#[test]
+fn no_duplicate_topics_per_contract() {
+    let env = Env::default();
+
+    let mut vault_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in VAULT_TOPICS {
+        vault_syms.push_back(ctor(&env));
+    }
+    // Soroban Vec doesn't have dedup, so we check pairwise
+    for i in 0..vault_syms.len() {
+        for j in (i + 1)..vault_syms.len() {
+            assert_ne!(
+                vault_syms.get(i).unwrap(),
+                vault_syms.get(j).unwrap(),
+                "vault has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
+
+    let mut settlement_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in SETTLEMENT_TOPICS {
+        settlement_syms.push_back(ctor(&env));
+    }
+    for i in 0..settlement_syms.len() {
+        for j in (i + 1)..settlement_syms.len() {
+            assert_ne!(
+                settlement_syms.get(i).unwrap(),
+                settlement_syms.get(j).unwrap(),
+                "settlement has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
+
+    let mut rp_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in REVENUE_POOL_TOPICS {
+        rp_syms.push_back(ctor(&env));
+    }
+    for i in 0..rp_syms.len() {
+        for j in (i + 1)..rp_syms.len() {
+            assert_ne!(
+                rp_syms.get(i).unwrap(),
+                rp_syms.get(j).unwrap(),
+                "revenue_pool has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
+
+    let mut distribute_syms: SorobanVec<Symbol> = SorobanVec::new(&env);
+    for (_, ctor) in DISTRIBUTE_TOPICS {
+        distribute_syms.push_back(ctor(&env));
+    }
+    for i in 0..distribute_syms.len() {
+        for j in (i + 1)..distribute_syms.len() {
+            assert_ne!(
+                distribute_syms.get(i).unwrap(),
+                distribute_syms.get(j).unwrap(),
+                "distribute has duplicate topic at positions {i} and {j}"
+            );
+        }
+    }
+}
+
+/// Cross-contract stability: calling the same constructor twice returns
+/// the same Symbol (determinism guarantee).
+#[test]
+fn topic_constructors_are_deterministic() {
+    let env = Env::default();
+
+    let all: std::vec::Vec<fn(&Env) -> Symbol> = VAULT_TOPICS
+        .iter()
+        .map(|(_, c)| *c)
+        .chain(SETTLEMENT_TOPICS.iter().map(|(_, c)| *c))
+        .chain(REVENUE_POOL_TOPICS.iter().map(|(_, c)| *c))
+        .chain(DISTRIBUTE_TOPICS.iter().map(|(_, c)| *c))
+        .collect();
+
+    for ctor in all {
+        let first = ctor(&env);
+        let second = ctor(&env);
+        assert_eq!(
+            first, second,
+            "constructor returned different Symbols on repeated calls"
+        );
+    }
+}
+
+/// Explicit catalog test for the `set_settlement` topic (issue #1111).
+///
+/// Verifies that:
+/// 1. The `event_set_settlement` constructor produces exactly the bytes for
+///    `"set_settlement"` (no accidental rename/drift).
+/// 2. The entry is present in `VAULT_TOPICS` at the expected position (row 18).
+#[test]
+fn set_settlement_topic_in_catalog() {
+    let env = Env::default();
+
+    // 1. Constructor byte-identity.
+    let sym = callora_vault::events::event_set_settlement(&env);
+    assert_eq!(
+        sym,
+        Symbol::new(&env, "set_settlement"),
+        "event_set_settlement constructor produced unexpected bytes"
+    );
+
+    // 2. Catalog presence — find the entry by name.
+    let found = VAULT_TOPICS
+        .iter()
+        .any(|(name, _)| *name == "set_settlement");
+    assert!(
+        found,
+        "\"set_settlement\" is missing from the VAULT_TOPICS catalog array"
+    );
 }

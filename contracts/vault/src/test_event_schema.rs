@@ -1,4 +1,3 @@
-
 //! Holistic audit: every `env.events().publish(...)` call site in this crate
 //! must (a) actually fire when its owning function is invoked through a real
 //! contract client, and (b) match the shape documented in `EVENT_SCHEMA.md`.
@@ -85,12 +84,6 @@ fn vault_events(
         .iter()
         .filter(|(addr, _, _)| addr == vault_addr)
         .collect()
-}
-
-/// Decode the `deduct` event data as `(amount, new_balance, request_id)`.
-fn decode_deduct_data(env: &Env, data: &soroban_sdk::Val) -> (i128, i128, u64) {
-    let tuple: (i128, i128, u64) = data.clone().into_val(env);
-    tuple
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +203,7 @@ fn event_version_shape_withdraw() {
     client.deposit(&owner, &1_000);
     env.events().all();
 
-    client.withdraw(&1_000).unwrap();
+    client.withdraw(&1_000);
 
     let evts = vault_events(&env, &vault);
     assert_eq!(evts.len(), 1);
@@ -230,7 +223,7 @@ fn event_version_shape_withdraw_to() {
     env.events().all();
 
     let recipient = Address::generate(&env);
-    client.withdraw_to(&recipient, &1_000).unwrap();
+    client.withdraw_to(&recipient, &1_000);
 
     let evts = vault_events(&env, &vault);
     assert_eq!(evts.len(), 1);
@@ -338,12 +331,12 @@ fn lifecycle_all_events_carry_version_topic() {
     assert_vault_events_versioned!(env, vault, "deposit");
 
     // withdraw
-    client.withdraw(&10_000).unwrap();
+    client.withdraw(&10_000);
     assert_vault_events_versioned!(env, vault, "withdraw");
 
     // withdraw_to
     let recipient = Address::generate(&env);
-    client.withdraw_to(&recipient, &10_000).unwrap();
+    client.withdraw_to(&recipient, &10_000);
     assert_vault_events_versioned!(env, vault, "withdraw_to");
 
     // set_max_deduct

@@ -11,7 +11,7 @@ use callora_stake::migrate::{
     StorageKey,
 };
 use soroban_sdk::{
-    testutils::{Address as _, Events as _},
+    testutils::{storage::Instance as _, Address as _, Events as _},
     Address, BytesN, Env, Symbol,
 };
 

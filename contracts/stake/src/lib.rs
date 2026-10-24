@@ -1,4 +1,5 @@
 #![no_std]
+
 pub mod migrate;
 mod views;
 
