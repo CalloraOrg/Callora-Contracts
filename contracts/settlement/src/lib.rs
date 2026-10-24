@@ -1110,9 +1110,13 @@ impl CalloraSettlement {
 
     /// Get all developer balances for a specific token (admin only).
     ///
-    /// Iterates the full paged developer index. For deployments with many
-    /// developers, prefer `get_developer_balances_cursor` for bounded,
-    /// paginated access. Bumps instance and persistent TTL for retrieved entries.
+    /// Returns at most [`MAX_DEVELOPER_BALANCES_PAGE_SIZE`] balances. For larger
+    /// indexes, use `get_developer_balances_page` or
+    /// `get_developer_balances_cursor`. Bumps instance and persistent TTL for
+    /// retrieved entries.
+    ///
+    /// # Panics
+    /// * `TooManyResults` if the index contains more than the page-size cap.
     pub fn get_all_developer_balances(
         env: Env,
         caller: Address,
@@ -1127,24 +1131,11 @@ impl CalloraSettlement {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
-        let mut result = Vec::new(&env);
-        Self::iter_index(&env, |address| {
-            let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
-            if env.storage().persistent().has(&key) {
-                env.storage().persistent().extend_ttl(
-                    &key,
-                    PERSISTENT_BUMP_THRESHOLD,
-                    PERSISTENT_BUMP_AMOUNT,
-                );
-            }
-            let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address,
-                token: token.clone(),
-                balance,
-            });
-        });
-        result
+        let index_len = Self::index_len(&env);
+        if index_len > MAX_DEVELOPER_BALANCES_PAGE_SIZE {
+            env.panic_with_error(SettlementError::TooManyResults);
+        }
+        Self::get_index_slice(&env, 0, index_len, &token)
     }
 
     /// Get a start/limit-paginated slice of developer balances for a token
@@ -1173,51 +1164,24 @@ impl CalloraSettlement {
         }
         let effective_limit = limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE);
 
-        let mut result = Vec::new(&env);
-        let mut global_cursor: u32 = 0;
-        let end = start.saturating_add(effective_limit);
-
-        Self::iter_index(&env, |address| {
-            if result.len() >= effective_limit {
-                return;
-            }
-            if global_cursor >= end {
-                global_cursor = global_cursor.saturating_add(1);
-                return;
-            }
-            if global_cursor >= start {
-                let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
-                if env.storage().persistent().has(&key) {
-                    env.storage().persistent().extend_ttl(
-                        &key,
-                        PERSISTENT_BUMP_THRESHOLD,
-                        PERSISTENT_BUMP_AMOUNT,
-                    );
-                }
-                let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-                result.push_back(DeveloperBalance {
-                    address,
-                    token: token.clone(),
-                    balance,
-                });
-            }
-            global_cursor = global_cursor.saturating_add(1);
-        });
-        result
+        Self::get_index_slice(&env, start, effective_limit, &token)
     }
 
     /// Cursor-based paginated developer balances for a specific token (admin only).
     ///
-    /// Returns up to `limit` developer balance records starting **after** the
-    /// supplied `cursor` address (exclusive), or from the beginning of the
-    /// paged index when `cursor` is `None`.
+    /// Returns up to `limit` developer balance records starting at the supplied
+    /// global index, or from the beginning when `cursor` is `None`. The returned
+    /// cursor is the global index at which the next page begins.
+    ///
+    /// This replaces the former address cursor and is an ABI change. A cursor
+    /// greater than the current index length fails with `InvalidCursor`.
     pub fn get_developer_balances_cursor(
         env: Env,
         caller: Address,
-        cursor: Option<Address>,
+        cursor: Option<u32>,
         limit: u32,
         token: Address,
-    ) -> (Vec<DeveloperBalance>, Option<Address>) {
+    ) -> (Vec<DeveloperBalance>, Option<u32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
@@ -1847,27 +1811,81 @@ impl CalloraSettlement {
         }
     }
 
-    /// Iterate all paged index entries, calling `f` with each `Address`.
-    ///
-    /// Reads only the persistent pages that actually exist; instance storage
-    /// is touched only for the single `IndexPageCount` read.
-    pub(crate) fn iter_index<F: FnMut(Address)>(env: &Env, mut f: F) {
+    pub(crate) fn index_len(env: &Env) -> u32 {
         let page_count: u32 = env
             .storage()
             .instance()
             .get(&StorageKey::IndexPageCount)
             .unwrap_or(0u32);
-        for p in 0..page_count {
-            let key = StorageKey::IndexPage(p);
+        if page_count == 0 {
+            return 0;
+        }
+
+        let last_page: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::IndexPage(page_count - 1))
+            .unwrap_or_else(|| Vec::new(env));
+        (page_count - 1)
+            .saturating_mul(INDEX_PAGE_SIZE)
+            .saturating_add(last_page.len())
+    }
+
+    pub(crate) fn get_index_slice(
+        env: &Env,
+        start: u32,
+        limit: u32,
+        token: &Address,
+    ) -> Vec<DeveloperBalance> {
+        let mut result = Vec::new(env);
+        if limit == 0 {
+            return result;
+        }
+
+        let page_count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::IndexPageCount)
+            .unwrap_or(0u32);
+        let mut page_index = start / INDEX_PAGE_SIZE;
+        let first_offset = start % INDEX_PAGE_SIZE;
+
+        while page_index < page_count && result.len() < limit {
             let page: Vec<Address> = env
                 .storage()
                 .persistent()
-                .get(&key)
+                .get(&StorageKey::IndexPage(page_index))
                 .unwrap_or_else(|| Vec::new(env));
-            for addr in page.iter() {
-                f(addr);
+            let offset = if page_index == start / INDEX_PAGE_SIZE {
+                first_offset
+            } else {
+                0
+            };
+            for index in offset..page.len() {
+                if result.len() >= limit {
+                    break;
+                }
+                let address = page.get(index).unwrap();
+                let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
+                let balance = if let Some(balance) = env.storage().persistent().get(&key) {
+                    env.storage().persistent().extend_ttl(
+                        &key,
+                        PERSISTENT_BUMP_THRESHOLD,
+                        PERSISTENT_BUMP_AMOUNT,
+                    );
+                    balance
+                } else {
+                    0
+                };
+                result.push_back(DeveloperBalance {
+                    address,
+                    token: token.clone(),
+                    balance,
+                });
             }
+            page_index += 1;
         }
+        result
     }
 }
 #[cfg(test)]
