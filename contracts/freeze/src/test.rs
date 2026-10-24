@@ -2,8 +2,12 @@ extern crate std;
 
 use crate::errors::FreezeError;
 use crate::events::{FreezeOperatorSetEvent, FreezeSetEvent};
-use crate::{CalloraFreeze, CalloraFreezeClient};
-use soroban_sdk::testutils::{Address as _, Events as _};
+use crate::{
+    CalloraFreeze, CalloraFreezeClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
+    LEDGERS_PER_DAY,
+};
+use soroban_sdk::testutils::storage::Instance as _;
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, Symbol, TryFromVal};
 use std::collections::BTreeSet;
 
@@ -495,4 +499,137 @@ fn test_each_entrypoint_emits_exactly_one_event() {
             "unfreeze must emit freeze_cleared"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Instance TTL policy (#1420)
+// ---------------------------------------------------------------------------
+
+/// After `init`, the instance TTL must be at least `INSTANCE_BUMP_AMOUNT - 1`,
+/// measured inside `as_contract` (this is the actual on-ledger TTL).
+#[test]
+fn test_init_sets_instance_ttl_to_bump_amount() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let ttl = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        ttl >= INSTANCE_BUMP_AMOUNT - 1,
+        "instance TTL {ttl} must be >= {} after init",
+        INSTANCE_BUMP_AMOUNT - 1
+    );
+}
+
+/// Age the instance below the bump threshold while keeping it live, run `call`,
+/// then assert the instance TTL was refreshed to `INSTANCE_BUMP_AMOUNT`.
+fn assert_instance_refreshed<F: FnOnce()>(env: &Env, client: &CalloraFreezeClient, call: F) {
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        before < INSTANCE_BUMP_THRESHOLD,
+        "precondition: instance TTL {before} must be below {INSTANCE_BUMP_THRESHOLD}"
+    );
+
+    call();
+
+    let after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(
+        after, INSTANCE_BUMP_AMOUNT,
+        "entrypoint must refresh the instance TTL to INSTANCE_BUMP_AMOUNT"
+    );
+}
+
+#[test]
+fn test_get_admin_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_admin();
+    });
+}
+
+#[test]
+fn test_is_frozen_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.is_frozen();
+    });
+}
+
+#[test]
+fn test_get_freeze_status_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_freeze_status();
+    });
+}
+
+#[test]
+fn test_get_freeze_operator_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_freeze_operator();
+    });
+}
+
+#[test]
+fn test_freeze_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let reason = Symbol::new(&env, "ttl");
+    assert_instance_refreshed(&env, &client, || {
+        client.freeze(&admin, &reason);
+    });
+}
+
+#[test]
+fn test_unfreeze_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    client.freeze(&admin, &Symbol::new(&env, "ttl"));
+    assert_instance_refreshed(&env, &client, || {
+        client.unfreeze(&admin);
+    });
+}
+
+#[test]
+fn test_set_freeze_operator_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let operator = Address::generate(&env);
+    assert_instance_refreshed(&env, &client, || {
+        client.set_freeze_operator(&admin, &Some(operator));
+    });
+}
+
+/// With the 60-day instance bump, an instance kept live at day 45 still accepts
+/// a `freeze()` at day 90 (a call after a long idle period succeeds and
+/// re-extends the instance).
+#[test]
+fn test_freeze_succeeds_after_90_idle_days() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    // Keep the instance alive at day 45 (within the 60-day instance window).
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + LEDGERS_PER_DAY * 45);
+    let _ = client.get_admin();
+
+    // Advance to day 90 — 45 more idle days, still within the refreshed window.
+    env.ledger().set_sequence_number(seq + LEDGERS_PER_DAY * 90);
+
+    let reason = Symbol::new(&env, "after_idle");
+    client.freeze(&admin, &reason);
+    assert!(client.is_frozen());
 }

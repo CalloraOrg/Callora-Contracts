@@ -1,7 +1,8 @@
 use crate::{
-    CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, LIFETIME_THRESHOLD,
-    MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+    CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT,
+    INSTANCE_BUMP_THRESHOLD, LIFETIME_THRESHOLD, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
+use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
@@ -1439,5 +1440,196 @@ fn test_get_checkpoints_for_subject_full_pagination_no_gaps() {
         "pages must not overlap: last={} first_next={}",
         last_page1,
         first_page2
+    );
+}
+
+// ===========================================================================
+// Instance TTL policy (#1420)
+// ===========================================================================
+
+/// Remaining instance TTL (in ledgers), read inside the contract frame.
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+/// Age the instance below the bump threshold while keeping it live, run `call`,
+/// then assert the instance TTL was refreshed to `INSTANCE_BUMP_AMOUNT`.
+fn assert_instance_refreshed<F: FnOnce()>(env: &Env, client: &CalloraCheckpointClient, call: F) {
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let before = instance_ttl(env, &client.address);
+    assert!(
+        before < INSTANCE_BUMP_THRESHOLD,
+        "precondition: instance TTL {before} must be below {INSTANCE_BUMP_THRESHOLD}"
+    );
+
+    call();
+
+    assert_eq!(
+        instance_ttl(env, &client.address),
+        INSTANCE_BUMP_AMOUNT,
+        "entrypoint must refresh the instance TTL to INSTANCE_BUMP_AMOUNT"
+    );
+}
+
+/// After `init`, the instance TTL is at least `INSTANCE_BUMP_AMOUNT - 1`.
+#[test]
+fn test_init_sets_instance_ttl_to_bump_amount() {
+    let (env, admin, client) = setup();
+    let _ = admin;
+    let ttl = instance_ttl(&env, &client.address);
+    assert!(
+        ttl >= INSTANCE_BUMP_AMOUNT - 1,
+        "instance TTL {ttl} must be >= {} after init",
+        INSTANCE_BUMP_AMOUNT - 1
+    );
+}
+
+/// `create_checkpoint` (write path) refreshes instance TTL.
+#[test]
+fn test_create_checkpoint_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "ttl");
+    assert_instance_refreshed(&env, &client, || {
+        client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    });
+}
+
+/// `batch_create_checkpoints` (write path) refreshes instance TTL.
+#[test]
+fn test_batch_create_checkpoints_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "ttl");
+    let items = Vec::from_array(&env, [(subject, token, 100i128, meta)]);
+    assert_instance_refreshed(&env, &client, || {
+        client.batch_create_checkpoints(&admin, &items);
+    });
+}
+
+/// `update`-adjacent admin write (`set_admin`) refreshes instance TTL.
+#[test]
+fn test_set_admin_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    assert_instance_refreshed(&env, &client, || {
+        client.set_admin(&admin, &new_admin);
+    });
+}
+
+/// `accept_admin` refreshes instance TTL.
+#[test]
+fn test_accept_admin_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let new_admin = Address::generate(&env);
+    client.set_admin(&admin, &new_admin);
+    assert_instance_refreshed(&env, &client, || {
+        client.accept_admin(&new_admin);
+    });
+}
+
+/// `get_admin` (view) refreshes instance TTL.
+#[test]
+fn test_get_admin_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let _ = admin;
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_admin();
+    });
+}
+
+/// `get_pending_admin` (view) refreshes instance TTL.
+#[test]
+fn test_get_pending_admin_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_pending_admin();
+    });
+}
+
+/// `get_checkpoint_count` (view) refreshes instance TTL.
+#[test]
+fn test_get_checkpoint_count_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_checkpoint_count();
+    });
+}
+
+/// `get_latest_checkpoint_id` (view) refreshes instance TTL.
+#[test]
+fn test_get_latest_checkpoint_id_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_latest_checkpoint_id();
+    });
+}
+
+/// `get_checkpoint` (view) refreshes instance TTL.
+#[test]
+fn test_get_checkpoint_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "ttl");
+    let id = client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_checkpoint(&id);
+    });
+}
+
+/// `get_checkpoints_range` (view) refreshes instance TTL.
+#[test]
+fn test_get_checkpoints_range_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_checkpoints_range(&1u64, &10u32);
+    });
+}
+
+/// `get_checkpoints_for_subject` (view) refreshes instance TTL.
+#[test]
+fn test_get_checkpoints_for_subject_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    let subject = Address::generate(&env);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_checkpoints_for_subject(&subject, &0u32, &10u32);
+    });
+}
+
+/// `get_latest_checkpoint` (view) refreshes instance TTL.
+#[test]
+fn test_get_latest_checkpoint_bumps_instance_ttl() {
+    let (env, _admin, client) = setup();
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_latest_checkpoint();
+    });
+}
+
+/// The persistent checkpoint record TTL policy remains unchanged: a write
+/// extends the record to `BUMP_AMOUNT`, independent of the instance policy.
+#[test]
+fn test_persistent_checkpoint_ttl_unchanged() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "persist");
+    let id = client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let key = StorageKey::Checkpoint(id);
+    let ttl = env.as_contract(&client.address, || env.storage().persistent().get_ttl(&key));
+    assert_eq!(
+        ttl, BUMP_AMOUNT,
+        "persistent record TTL policy must remain unchanged"
     );
 }
