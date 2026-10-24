@@ -316,6 +316,7 @@ fn get_developer_balances_page_full_page_within_budget() {
     let env = Env::default();
     let (admin, vault, client) = setup(&env);
     let token = Address::generate(&env);
+    client.add_supported_token(&admin, &token);
 
     for index in 0..100 {
         let developer = Address::generate(&env);
