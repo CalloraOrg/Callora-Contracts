@@ -63,19 +63,19 @@ fn test_nominate_then_accept_transfers_ownership_and_clears_pending() {
     let (owner, _vault, client) = setup(&env);
     let nominee = Address::generate(&env);
 
-    assert_eq!(client.get_owner().unwrap(), owner);
+    assert_eq!(client.get_owner(), owner);
 
     // 1. Owner nominates nominee
     client.transfer_ownership(&owner, &nominee);
 
     // Owner is still the original owner until accepted
-    assert_eq!(client.get_owner().unwrap(), owner);
+    assert_eq!(client.get_owner(), owner);
 
     // 2. Nominee accepts ownership
     client.accept_ownership();
 
     // 3. get_owner returns nominee
-    assert_eq!(client.get_owner().unwrap(), nominee);
+    assert_eq!(client.get_owner(), nominee);
 
     // 4. Pending owner is cleared: second accept_ownership must fail
     let second_accept = client.try_accept_ownership();
@@ -147,7 +147,7 @@ fn test_accept_ownership_auth_enforcement() {
         },
     }]);
     client.accept_ownership();
-    assert_eq!(client.get_owner().unwrap(), nominee);
+    assert_eq!(client.get_owner(), nominee);
 }
 
 /// Case 4: Event assertions.
