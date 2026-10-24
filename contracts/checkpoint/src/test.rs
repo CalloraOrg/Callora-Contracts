@@ -3,7 +3,7 @@ use crate::{
     INSTANCE_BUMP_THRESHOLD, LIFETIME_THRESHOLD, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
 };
 use callora_storage_migration::{
-    layout_hash, StorageMigrationValidator, StorageKey as MigrationStorageKey,
+    layout_hash, StorageKey as MigrationStorageKey, StorageMigrationValidator,
 };
 use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::storage::Persistent;
@@ -50,10 +50,7 @@ fn test_init_succeeds() {
             .get(&MigrationStorageKey::SmSchemaLayoutHash)
             .unwrap();
         assert_ne!(stored_hash, BytesN::from_array(&env, &[0u8; 32]));
-        assert_eq!(
-            stored_hash,
-            CalloraCheckpoint::storage_layout_hash(&env)
-        );
+        assert_eq!(stored_hash, CalloraCheckpoint::storage_layout_hash(&env));
     });
 }
 
@@ -776,12 +773,7 @@ fn test_business_calls_are_blocked_until_migration_is_finalized() {
 
     env.as_contract(&client.address, || {
         StorageMigrationValidator::validate_before_upgrade(
-            &env,
-            2,
-            &layout,
-            &layout,
-            &wasm_hash,
-            false,
+            &env, 2, &layout, &layout, &wasm_hash, false,
         )
         .unwrap();
     });
@@ -800,10 +792,7 @@ fn test_business_calls_are_blocked_until_migration_is_finalized() {
 
     env.as_contract(&client.address, || {
         assert_eq!(StorageMigrationValidator::current_version(&env), 2);
-        assert_eq!(
-            StorageMigrationValidator::authorized_upgrade(&env),
-            None
-        );
+        assert_eq!(StorageMigrationValidator::authorized_upgrade(&env), None);
     });
 }
 

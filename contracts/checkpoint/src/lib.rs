@@ -923,9 +923,8 @@ impl CalloraCheckpoint {
             return Err(CheckpointError::SchemaMismatch);
         }
 
-        let (authorized_version, wasm_hash) =
-            StorageMigrationValidator::authorized_upgrade(&env)
-                .ok_or(CheckpointError::UnauthorizedUpgradeState)?;
+        let (authorized_version, wasm_hash) = StorageMigrationValidator::authorized_upgrade(&env)
+            .ok_or(CheckpointError::UnauthorizedUpgradeState)?;
         if authorized_version != target_version {
             return Err(CheckpointError::UnauthorizedUpgradeState);
         }

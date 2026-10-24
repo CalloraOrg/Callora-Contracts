@@ -615,7 +615,9 @@ impl CalloraVault {
         }
 
         Self::require_not_reentrant(&env)?;
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
 
         let new_bal = current_bal
             .checked_sub(amount)
@@ -645,7 +647,9 @@ impl CalloraVault {
         if request_id != 0 {
             Self::mark_request_processed(&env, &request_id);
         }
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -725,7 +729,9 @@ impl CalloraVault {
         let usdc_client = token::Client::new(&env, &usdc_addr);
 
         Self::require_not_reentrant(&env)?;
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
 
         // All preconditions passed. Now the value-conserving mutation pair is
         // performed atomically: forward exactly `total_amount` to settlement
@@ -767,7 +773,9 @@ impl CalloraVault {
         env.storage()
             .instance()
             .set(&DataKey::Balance, &running_bal);
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -1075,7 +1083,9 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1085,13 +1095,17 @@ impl CalloraVault {
             .get(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &owner,
             &amount,
         );
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1162,17 +1176,23 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &to,
             &amount,
         );
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1223,9 +1243,13 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
 
-        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
-        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -2610,7 +2634,12 @@ impl CalloraVault {
     /// withdraw within the same transaction.
     pub(crate) fn require_not_reentrant(env: &Env) -> Result<(), VaultError> {
         let key = StorageKey::ReentrancyGuard;
-        if env.storage().temporary().get::<_, bool>(&key).unwrap_or(false) {
+        if env
+            .storage()
+            .temporary()
+            .get::<_, bool>(&key)
+            .unwrap_or(false)
+        {
             return Err(VaultError::Unauthorized);
         }
         Ok(())
