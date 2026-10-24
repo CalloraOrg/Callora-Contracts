@@ -799,6 +799,62 @@ This cross-contract value conservation guarantee is the cornerstone of the Callo
 
 ---
 
+## Settlement Instance TTL Policy (#1405)
+
+**Invariant**: the settlement contract's instance entry must never archive while
+a developer balance it is needed to read is still live. An archived instance
+blocks **every** entrypoint — including read-only views and typed-error paths —
+until somebody submits a restore operation, so a shorter instance lifetime than
+the persistent lifetime turns a healthy deployment into a bricked one.
+
+The instance entry holds `Admin`, `Vault`, `GlobalPool`, `TotalReceived`, the
+USDC pointer and the index bookkeeping; developer balances, caps, claim windows
+and migration proposals live in persistent storage.
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `INSTANCE_BUMP_THRESHOLD` | `LEDGERS_PER_DAY * 30` (~30 days) | Extend the instance only once its remaining TTL drops below this. |
+| `INSTANCE_BUMP_AMOUNT` | `LEDGERS_PER_DAY * 120` (~120 days) | Life applied on every extension; also the lifetime `init` installs. |
+| `PERSISTENT_BUMP_THRESHOLD` | `LEDGERS_PER_DAY * 30` (~30 days) | Same policy for persistent entries (#1131). |
+| `PERSISTENT_BUMP_AMOUNT` | `LEDGERS_PER_DAY * 120` (~120 days) | Same lifetime for persistent entries (#1131). |
+
+Compile-time assertions in `contracts/settlement/src/types.rs` enforce
+`INSTANCE_BUMP_AMOUNT >= PERSISTENT_BUMP_AMOUNT` and
+`*_BUMP_THRESHOLD < *_BUMP_AMOUNT`. ~120 days is used rather than the network
+`max_entry_ttl` (~180 days on pubnet) so every extension is accepted.
+
+### Who extends the instance TTL
+
+Every state-changing entrypoint calls `CalloraSettlement::bump_instance`, which
+extends the instance to `INSTANCE_BUMP_AMOUNT` when it is below the threshold.
+Nothing relies on a getter's side effect any more.
+
+| Group | Entrypoints |
+|---|---|
+| Setup | `init` (installs the full lifetime immediately) |
+| Core accounting | `receive_payment`, `batch_receive_payment`, `record_deduction`, `force_credit_developer` |
+| Withdrawals | `withdraw_developer_balance`, `batch_withdraw_balance_cursor`, `batch_settle` |
+| Per-developer config | `set_daily_withdraw_cap`, `set_developer_min_balance`, `set_developer_claim_window`, `clear_developer_claim_window` |
+| Token config | `set_usdc_token`, `add_supported_token`, `remove_supported_token` |
+| Admin / vault | `set_admin`, `accept_admin`, `cancel_admin_transfer`, `propose_vault`, `accept_vault`, `broadcast` |
+| Migration | `propose_balance_migration`, `execute_balance_migration`, `migrate_developer_balance` (`migrate_single_dev_v2`), `migrate_v1_to_v2`, `migrate_v1_to_v2_page`, `migrate_index_to_pages` |
+| Freeze / prices | `freeze_developer`, `unfreeze_developer`, `set_price`, `remove_price` |
+| Upgrade | `propose_upgrade`, `execute_upgrade`, `cancel_upgrade`, `upgrade` |
+
+Read-only views keep their existing behaviour: they extend the instance TTL
+because a view that cannot be served is just as fatal, and `extend_ttl` is a
+cheap no-op while the entry is above the threshold. `simulate_claim` is the one
+documented exception — it is a **pure** preview and must not extend the
+instance or any persistent entry, which
+`test_simulate_claim::simulate_claim_does_not_extend_*_ttls` pins.
+
+### Tests
+
+The policy is covered by `contracts/settlement/src/test_ttl_bump.rs`
+(`instance_lifetime` module): `init` installs the full lifetime, the constant
+relation holds, every write entrypoint refreshes the instance, a 100-day idle
+gap still serves `receive_payment` and balance reads, and
+`test_simulate_claim.rs` proves the preview extends nothing.
 ## Callora Refund Value Conservation and Solvency Invariants
 
 The `CalloraRefund` contract implements strict Checks-Effects-Interactions (CEI) and per-asset accounting for multi-token refund flows.

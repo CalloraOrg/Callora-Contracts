@@ -1,13 +1,29 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
-
-/// Number of ledgers to extend instance storage TTL by (~60 days).
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
-
 /// Ledgers per day at the ~5 s target close time.
 pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Minimum remaining instance-storage TTL (~30 days) before it is extended.
+///
+/// Kept below [`INSTANCE_BUMP_AMOUNT`] so that a burst of calls above the
+/// threshold does not pay for a TTL extension on every invocation.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Instance-storage lifetime (~120 days) applied on every extension.
+///
+/// The instance entry holds `Admin`, `Vault`, `GlobalPool`, `TotalReceived`, the
+/// USDC pointer and the index bookkeeping. If it archives, **every** entrypoint
+/// fails — including reads of developer balances that are still live in
+/// persistent storage — until someone submits a restore operation. The instance
+/// lifetime must therefore be at least as long as [`PERSISTENT_BUMP_AMOUNT`],
+/// which the compile-time assertions below enforce (#1405).
+///
+/// The previous value was ~60 days, half the persistent lifetime: an idle
+/// deployment archived its instance while developer balances were still
+/// payable. ~120 days is the same lifetime as the persistent entries and stays
+/// below the network's `max_entry_ttl` (~180 days on pubnet), so every extension
+/// is accepted.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
 
 /// Remaining-TTL threshold (~30 days) below which a persistent entry is
 /// re-extended on access/write (#1131).
@@ -30,6 +46,15 @@ pub const PERSISTENT_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 /// balances, HWM, caps, claim windows, minimum balances, pending
 /// migrations, price-registry write ledgers — uses this pair.
 pub const PERSISTENT_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
+
+/// The instance must outlive every persistent entry it is needed to read
+/// (#1405): an archived instance blocks all entrypoints, so a shorter instance
+/// lifetime would archive hot accounting state while balances are still live.
+const _: () = assert!(INSTANCE_BUMP_AMOUNT >= PERSISTENT_BUMP_AMOUNT);
+
+/// A threshold at or above the extension target would re-extend on every call.
+const _: () = assert!(INSTANCE_BUMP_THRESHOLD < INSTANCE_BUMP_AMOUNT);
+const _: () = assert!(PERSISTENT_BUMP_THRESHOLD < PERSISTENT_BUMP_AMOUNT);
 
 /// Persistent storage keys for settlement contract.
 ///
