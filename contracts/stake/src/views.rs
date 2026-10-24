@@ -63,16 +63,16 @@ pub fn capabilities(_env: &Env) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super:*;
+    use super::*;
     use soroban_sdk::Env;
 
-    [test]
+    #[test]
     fn capabilities_reports_only_implemented() {
         let env = Env::default();
         assert_eq!(capabilities(&env), 0);
     }
 
-    [test]
+    #[test]
     fn capabilities_subset_of_reserved_mask() {
         let env = Env::default();
         let caps = capabilities(&env);
