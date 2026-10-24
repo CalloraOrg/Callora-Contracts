@@ -1,4 +1,3 @@
-
 //! Deterministic event topic catalog tests.
 //!
 //! Verifies that every event topic across all three contracts (`vault`,
