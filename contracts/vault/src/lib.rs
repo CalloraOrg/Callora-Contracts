@@ -2601,7 +2601,7 @@ impl CalloraVault {
     /// [`CalloraVault::batch_deduct`]. The owner may always deduct; when an
     /// authorized caller is configured it may deduct too.
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller == owner {
             return Ok(());
         }
@@ -2737,7 +2737,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VaultError::NotInitialized)?;
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller != admin && *caller != owner {
             return Err(VaultError::Unauthorized);
         }
