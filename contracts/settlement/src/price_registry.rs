@@ -55,6 +55,7 @@ pub const MIN_WRITE_INTERVAL: u32 = 10;
 /// * [`SettlementError::WriteRateLimitExceeded`] — write interval not elapsed.
 pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String) {
     caller.require_auth();
+    CalloraSettlement::bump_instance(env);
     let admin =
         CalloraSettlement::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
     if caller != admin {
@@ -88,6 +89,7 @@ pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String)
 /// * [`SettlementError::WriteRateLimitExceeded`] — write interval not elapsed.
 pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
     caller.require_auth();
+    CalloraSettlement::bump_instance(env);
     let admin =
         CalloraSettlement::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
     if caller != admin {

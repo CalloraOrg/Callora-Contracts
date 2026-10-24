@@ -22,7 +22,7 @@ use soroban_sdk::contracterror;
 /// | 12   | InsufficientContractBalance  | Contract USDC balance is lower than requested amount |
 /// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
 /// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
-/// | 15   | ReasonTooLong                | Reason `Symbol` exceeds the allowed length           |
+/// | 15   | _reserved_ (was ReasonTooLong) | Retired; never returned                            |
 /// | 16   | MigrationSameAddress         | Migration source and target are identical            |
 /// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
 /// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
@@ -79,7 +79,8 @@ pub enum SettlementError {
     InsufficientContractBalance = 12,
     DailyWithdrawCapExceeded = 13,
     GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
+    // code 15 reserved (was ReasonTooLong; never returned). Retired so the
+    // enum stays within Soroban's 50-case limit for contract error specs.
     MigrationSameAddress = 16,
     InvalidMigrationTarget = 17,
     NoDeveloperBalance = 18,

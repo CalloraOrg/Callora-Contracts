@@ -99,6 +99,7 @@ pub fn storage_version(env: &Env) -> u32 {
 /// Returns immediately without state changes when `StorageVersion == 2`.
 pub fn migrate_v1_to_v2(env: &Env, caller: &Address) {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     require_admin(env, caller);
     register_configured_usdc(env, caller);
 
@@ -168,6 +169,7 @@ pub fn migrate_v1_to_v2_page(
     batch_size: u32,
 ) -> (u32, bool) {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     require_admin(env, caller);
     register_configured_usdc(env, caller);
 
@@ -281,6 +283,7 @@ pub fn migrate_single_developer(
     developer: &Address,
 ) -> Result<(), crate::SettlementError> {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     require_admin(env, caller);
     let inst = env.storage().instance();
     let usdc_token: Address = inst
@@ -341,6 +344,7 @@ pub fn migrate_index_to_pages(
     batch_size: u32,
 ) -> (u32, bool) {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     require_admin(env, caller);
 
     let inst = env.storage().instance();

@@ -20,7 +20,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (12, SettlementError::InsufficientContractBalance),
         (13, SettlementError::DailyWithdrawCapExceeded),
         (14, SettlementError::GasExhaustionRisk),
-        (15, SettlementError::ReasonTooLong),
+        // code 15 retired (was ReasonTooLong)
         (16, SettlementError::MigrationSameAddress),
         (17, SettlementError::InvalidMigrationTarget),
         (18, SettlementError::NoDeveloperBalance),
@@ -56,6 +56,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (48, SettlementError::DuplicateRequestId),
         (49, SettlementError::LengthMismatch),
         (50, SettlementError::InvalidCursor),
+        (51, SettlementError::TooManyResults),
     ];
 
     let mut seen = BTreeSet::new();
@@ -80,15 +81,15 @@ fn error_code_docs_list_every_settlement_code() {
         "| 4 | `AmountNotPositive` | Settlement | Amount must be greater than zero |",
         "| 5 | `DeveloperRequired` | Settlement | `to_pool=false` requires a developer address |",
         "| 6 | `DeveloperMustBeNone` | Settlement | `to_pool=true` forbids a developer address |",
-        "| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `ii28` |",
-        "| 8 | `DeveloperOverflow` | Settlement | Developer balance credit would overflow `ii128` |",
+        "| 7 | `PoolOverflow` | Settlement | Global pool credit would overflow `i128` |",
+        "| 8 | `DeveloperOverflow` | Settlement | Developer balance credit would overflow `i128` |",
         "| 9 | `UsdcTokenNotConfigured` | Settlement | USDC token address is not configured |",
         "| 10 | `InsufficientDeveloperBalance` | Settlement | Developer balance is lower than the withdrawal |",
         "| 11 | `DeveloperBalanceUnderflow` | Settlement | Developer balance debit would underflow |",
         "| 12 | `InsufficientContractBalance` | Settlement | Contract USDC balance is lower than requested amount |",
         "| 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |",
         "| 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |",
-        "| 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |",
+        "| 15 | _reserved_ (was `ReasonTooLong`) | Settlement | Retired: never returned |",
         "| 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |",
         "| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |",
         "| 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |",
@@ -120,7 +121,8 @@ fn error_code_docs_list_every_settlement_code() {
         "| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |",
         "| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |",
         "| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |",
-        "| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |",
+        "| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |",
+        "| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |",
     ];
 
     for line in expected_lines {

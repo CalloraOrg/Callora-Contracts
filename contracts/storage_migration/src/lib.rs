@@ -963,7 +963,8 @@ mod tests {
         assert_eq!(StorageMigrationError::SilentLayoutChange as u32, 8);
         assert_eq!(StorageMigrationError::UnauthorizedUpgradeState as u32, 9);
         assert_eq!(StorageMigrationError::StorageUnreadable as u32, 10);
-        assert_eq!(StorageMigrationError::Unauthorized as u32, 11);
+        assert_eq!(StorageMigrationError::TooManyProbeKeys as u32, 11);
+        assert_eq!(StorageMigrationError::Unauthorized as u32, 12);
     }
 
     // ── Existing deployed data stays readable (no implicit transform) ──────

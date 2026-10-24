@@ -397,11 +397,11 @@ fn every_set_capability_maps_to_callable_vault_entrypoint() {
 
     // 8. CAP_TWO_STEP_OWNERSHIP (bit 9) -> transfer_ownership, accept_ownership, get_owner
     assert_ne!(caps & CAP_TWO_STEP_OWNERSHIP, 0);
-    assert_eq!(client.get_owner().unwrap(), owner);
+    assert_eq!(client.get_owner(), owner);
     let new_owner = Address::generate(&env);
     client.transfer_ownership(&owner, &new_owner);
     client.accept_ownership();
-    assert_eq!(client.get_owner().unwrap(), new_owner);
+    assert_eq!(client.get_owner(), new_owner);
 
     // 9. CAP_TWO_STEP_ADMIN (bit 10) -> set_admin, accept_admin, get_admin
     // The vault was initialized with `owner` as admin; after ownership transfer
@@ -417,7 +417,7 @@ fn every_set_capability_maps_to_callable_vault_entrypoint() {
     assert_ne!(caps & CAP_SETTLEMENT, 0);
     let settlement = Address::generate(&env);
     client.set_settlement(&new_owner, &settlement);
-    assert_eq!(client.get_settlement().unwrap(), settlement);
+    assert_eq!(client.get_settlement(), settlement);
 
     // 11. CAP_DEPOSITOR_ALLOWLIST (bit 15) -> add_address, clear_all, get_allowlist, is_authorized_depositor
     // NOTE: add_address / get_allowlist / clear_all store a Vec<Address> under

@@ -1,13 +1,29 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
-/// Minimum threshold of remaining ledgers before instance storage TTL is extended (~30 days).
-pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
-
-/// Number of ledgers to extend instance storage TTL by (~60 days).
-pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
-
 /// Ledgers per day at the ~5 s target close time.
 pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Minimum remaining instance-storage TTL (~30 days) before it is extended.
+///
+/// Kept below [`INSTANCE_BUMP_AMOUNT`] so that a burst of calls above the
+/// threshold does not pay for a TTL extension on every invocation.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Instance-storage lifetime (~120 days) applied on every extension.
+///
+/// The instance entry holds `Admin`, `Vault`, `GlobalPool`, `TotalReceived`, the
+/// USDC pointer and the index bookkeeping. If it archives, **every** entrypoint
+/// fails — including reads of developer balances that are still live in
+/// persistent storage — until someone submits a restore operation. The instance
+/// lifetime must therefore be at least as long as [`PERSISTENT_BUMP_AMOUNT`],
+/// which the compile-time assertions below enforce (#1405).
+///
+/// The previous value was ~60 days, half the persistent lifetime: an idle
+/// deployment archived its instance while developer balances were still
+/// payable. ~120 days is the same lifetime as the persistent entries and stays
+/// below the network's `max_entry_ttl` (~180 days on pubnet), so every extension
+/// is accepted.
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
 
 /// Remaining-TTL threshold (~30 days) below which a persistent entry is
 /// re-extended on access/write (#1131).
@@ -23,13 +39,22 @@ pub const PERSISTENT_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 /// The old value, `50_000` ledgers, was ~2.9 days, not the "1 year" the
 /// code comments claimed — developer balances, caps, claim windows and
 /// replay high-water marks could archive after a long weekend of
-/// inactivity. One year (~63M ledgers) is above the network's
+/// inactivity. One year (~6.3M ledgers) is above the network's
 /// `max_entry_ttl` (~180 days on pubnet), so extending that far would be
 /// rejected; ~120 days stays safely under that cap while outliving any
 /// realistic idle period. Every settlement persistent key family —
 /// balances, HWM, caps, claim windows, minimum balances, pending
 /// migrations, price-registry write ledgers — uses this pair.
 pub const PERSISTENT_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
+
+/// The instance must outlive every persistent entry it is needed to read
+/// (#1405): an archived instance blocks all entrypoints, so a shorter instance
+/// lifetime would archive hot accounting state while balances are still live.
+const _: () = assert!(INSTANCE_BUMP_AMOUNT >= PERSISTENT_BUMP_AMOUNT);
+
+/// A threshold at or above the extension target would re-extend on every call.
+const _: () = assert!(INSTANCE_BUMP_THRESHOLD < INSTANCE_BUMP_AMOUNT);
+const _: () = assert!(PERSISTENT_BUMP_THRESHOLD < PERSISTENT_BUMP_AMOUNT);
 
 /// Persistent storage keys for settlement contract.
 ///
@@ -57,8 +82,8 @@ pub enum StorageKey {
     DeveloperMember(Address),
     /// One page of the developer index stored in **persistent** storage.
     ///
-    /// Key: zero-based page number.  Each page holds up to
-    /// [`INDEX_PAGE_SIZE`] addresses in ascending order by address bytes.
+    /// Key: zero-based page number. Each page holds up to
+    /// [`INDEX_PAGE_SIZE`] addresses in insertion order.
     IndexPage(u32),
     /// Total number of allocated index pages (stored in instance storage as
     /// a single `u32`).  Replaces the unbounded `DeveloperIndex` vector.
@@ -73,7 +98,7 @@ pub enum StorageKey {
     GlobalPool,
     Usdc,
     DailyWithdrawCap(Address),
-    WithdrawnToday(Address),
+    WithdrawalToday(Address),
     ContractVersion,
     /// Pending timelock'd developer balance migration record.
     /// Key: source developer address.
@@ -84,17 +109,9 @@ pub enum StorageKey {
     StorageVersion,
     /// Claim window configuration per developer.
     DeveloperClaimWindow(Address),
-    /// Cumulative total of every amount ever recorded via `record_deduction`
-    /// (the vault's accounting-only call). This is the sum of funds that have
-    /// arrived in settlement but may not yet be attributed to a developer or
-    /// the global pool. See [`StorageKey::TotalAllocated`] for the credited
-    /// counterpart.
-    TotalReceived,
     /// Cumulative total of every amount ever credited via `receive_payment` /
     /// `batch_receive_payment`, regardless of routing (pool or developer).
-    /// Invariant: `TotalAllocated <= TotalReceived`; the difference is exposed
-    /// via `get_unallocated`.
-    TotalAllocated,
+    TotalReceived,
     /// Whether a specific developer's withdrawals are frozen.
     FrozenDeveloper(Address),
     /// Per-admin last write ledger for price registry rate limiting.
@@ -117,12 +134,6 @@ pub enum StorageKey {
 pub struct DeductionRecordedEvent {
     pub amount: i128,
     pub request_id: u64,
-    /// Running total of all deductions recorded (`TotalReceived`).
-    pub total_received: i128,
-    /// Running total of all allocations (`TotalAllocated`).
-    pub total_allocated: i128,
-    /// Running unallocated balance (`TotalReceived - TotalAllocated`).
-    pub unallocated: i128,
 }
 
 /// Read-only preview of a developer claim/withdrawal.
@@ -175,7 +186,7 @@ pub struct AdminBroadcast {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
     pub category: soroban_sdk::String,
-    pub token_desc: soroban_sdk::String,
+    pub key_desc: soroban_sdk::String,
     pub storage_type: soroban_sdk::String,
     pub ttl: u32,
     pub threshold: u32,
@@ -248,12 +259,6 @@ pub struct PaymentReceivedEvent {
     pub to_pool: bool,
     pub developer: Option<Address>,
     pub token: Address,
-    /// Running total of all deductions recorded (`TotalReceived`).
-    pub total_received: i128,
-    /// Running total of all allocations (`TotalAllocated`).
-    pub total_allocated: i128,
-    /// Running unallocated balance (`TotalReceived - TotalAllocated`).
-    pub unallocated: i128,
 }
 
 /// Balance credited event.
@@ -339,4 +344,13 @@ pub struct AdminMigrationEvent {
 pub struct UpgradeProposedEvent {
     pub wasm_hash: soroban_sdk::BytesN<32>,
     pub proposed_at: u64,
-    pub execute_
+    pub execute_after: u64,
+}
+
+/// Emitted when a pending WASM upgrade is cancelled by the admin.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeCancelledEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub cancelled_at: u64,
+}

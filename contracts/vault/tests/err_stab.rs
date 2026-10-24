@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Every variant is paired with its **stable numeric discriminant**.  If a
 /// discriminant changes (accidentally or intentionally), this test fails
 /// with a diff-friendly message identifying the regressed variant.
-const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 49] = [
+const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
     (1, VaultError::NotInitialized),
     (2, VaultError::AlreadyInitialized),
     (3, VaultError::Unauthorized),
@@ -52,9 +52,7 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 49] = [
     (37, VaultError::PausedState),
     (38, VaultError::InvalidHotBps),
     (39, VaultError::InvalidRebalanceThreshold),
-    (40, VaultError::ColdSignersEmpty),
-    (41, VaultError::InvalidColdThreshold),
-    (42, VaultError::DuplicateColdSigner),
+    // codes 40-42 retired (were ColdSignersEmpty..DuplicateColdSigner)
     (43, VaultError::ExceedsReserveCap),
     (44, VaultError::CallerNotInAllowlist),
     // codes 45-48 reserved (formerly ProposalNotFound..BelowMinTransferAmount)
@@ -298,24 +296,6 @@ fn test_invalid_hot_bps_is_code_38() {
 #[test]
 fn test_invalid_rebalance_threshold_is_code_39() {
     assert_eq!(VaultError::InvalidRebalanceThreshold as u32, 39);
-}
-
-/// Verify `ColdSignersEmpty` still has discriminant 40.
-#[test]
-fn test_cold_signers_empty_is_code_40() {
-    assert_eq!(VaultError::ColdSignersEmpty as u32, 40);
-}
-
-/// Verify `InvalidColdThreshold` still has discriminant 41.
-#[test]
-fn test_invalid_cold_threshold_is_code_41() {
-    assert_eq!(VaultError::InvalidColdThreshold as u32, 41);
-}
-
-/// Verify `DuplicateColdSigner` still has discriminant 42.
-#[test]
-fn test_duplicate_cold_signer_is_code_42() {
-    assert_eq!(VaultError::DuplicateColdSigner as u32, 42);
 }
 
 /// Verify `ExceedsReserveCap` still has discriminant 43.
