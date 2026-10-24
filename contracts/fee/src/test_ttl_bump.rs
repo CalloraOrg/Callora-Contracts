@@ -1,11 +1,11 @@
-#`[cfg(test)]
+#[cfg(test)]
 
 use crate::{
     FeeContract, FeeContractClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
     LEDGERS_PER_DAY,
 };
 use soroban_sdk::testutils::storage::Instance as _;
-use soroban_sdk:testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env};
 
 fn setup() -> (Env, Address, Address, FeeContractClient<'static>) {
@@ -36,7 +36,7 @@ fn setup_ttl() -> (TtlSetup, FeeContractClient<'static>) {
     let admin = Address::generate(&env);
     let token = env.register_stellar_asset(None, &Address::generate(&env));
     let contract_id = env.register_contract(None, FeeContract);
-    let client = FeeContractClient::new((env, &contract_id));
+    let client = FeeContractClient::new(&env, &contract_id);
     (
         TtlSetup {
             env,
@@ -51,15 +51,7 @@ fn setup_ttl() -> (TtlSetup, FeeContractClient<'static>) {
 #[test]
 fn test_init_bumps_instance_ttl() {
     let (s, client) = setup_ttl();
-    client.init(&p.admin, &s.token, &u32_0);
+    client.init(&s.admin, &s.token, &0u32);
     let ttl = read_ttl(&s.env, &s.contract_id);
-    assert_eq(ttl, INSTANCE_BUMP_AMOUNT);
-}
-
-#[derive(Clone, Copy)]
-struct TtlSetup {
-    env: Env,
-    admin: Address,
-    token: Address,
-    contract_id: Address,
+    assert_eq!(ttl, INSTANCE_BUMP_AMOUNT);
 }

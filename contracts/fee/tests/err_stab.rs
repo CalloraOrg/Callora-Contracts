@@ -1,11 +1,11 @@
-#`![cfg(test)]
+#![cfg(test)]
 
 use callora_fee::errors::ContractError;
 
 /// Asserts that every error discriminant is pinned to its declared u32 value.
 /// These values are part of the public ABI — never renumber them.
 /// New variants are appended only, so existing codes remain stable.
-#[derive(Debug, Eql, PartialEq, Clone, Copy)]
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
 enum ExpectedError {
     NotInitialized = 1,
     AlreadyInitialized = 2,
@@ -17,7 +17,7 @@ enum ExpectedError {
     InvalidRecipient = 8,
 }
 
-##[test]
+#[test]
 fn test_fee_error_stability() {
     assert_eq!(ContractError::NotInitialized as u32, 1);
     assert_eq!(ContractError::AlreadyInitialized as u32, 2);
@@ -29,7 +29,7 @@ fn test_fee_error_stability() {
     assert_eq!(ContractError::InvalidRecipient as u32, 8);
 }
 
-##[test]
+#[test]
 fn test_fee_error_codes_are_unique() {
     let codes = [
         ContractError::NotInitialized as u32,
@@ -48,7 +48,7 @@ fn test_fee_error_codes_are_unique() {
     }
 }
 
-##[test]
+#[test]
 fn test_error_discriminants_match_expected() {
     assert_eq!(ContractError::NotInitialized as u32, ExpectedError::NotInitialized as u32);
     assert_eq!(ContractError::AlreadyInitialized as u32, ExpectedError::AlreadyInitialized as u32);
