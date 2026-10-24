@@ -511,8 +511,8 @@ fn batch_deduct_zero_ids_marks_only_nonzero_in_settlement() {
     let settlement_addr = client.get_settlement();
     let settlement_client =
         callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
-    // The stubbed settlement contract is never called from a native build.
-    assert_eq!(settlement_client.get_total_received(), 0);
+    // Only the non-zero request id (`5`, amount 50) is forwarded to settlement.
+    assert_eq!(settlement_client.get_total_received(), 50);
 
     // Only id `5` is marked on the vault side.
     assert!(client.is_request_processed(&5u64));

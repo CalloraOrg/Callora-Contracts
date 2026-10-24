@@ -1148,8 +1148,7 @@ impl CalloraVault {
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
-        Self::require_not_reentrant(&env).unwrap();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         // Zero-address check first.
