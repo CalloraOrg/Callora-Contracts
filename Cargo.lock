@@ -317,6 +317,7 @@ dependencies = [
 name = "callora-escrow"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
@@ -424,6 +425,10 @@ dependencies = [
 name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
+ "callora-checkpoint",
+ "callora-migrate",
+ "callora-revenue-pool",
+ "callora-yield",
  "proptest",
  "soroban-sdk",
 ]

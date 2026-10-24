@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use callora_rescue::{CalloraRescue, CalloraRescueClient, RescueError};
+use callora_rescue::{CalloraRescue, CalloraRescueClient};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env};
 
@@ -55,6 +55,18 @@ fn rescue_capped_requires_auth() {
 }
 
 #[test]
+fn total_rescued_for_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+    let token = Address::generate(&env);
+
+    env.set_auths(&[]);
+    let total = client.total_rescued_for(&token);
+    assert_eq!(total, 0);
+}
+
+/// Deprecated total_rescued() is also auth-free.
+#[test]
 fn total_rescued_does_not_require_auth() {
     let env = Env::default();
     let (_admin, client) = setup(&env);
@@ -83,9 +95,10 @@ fn admin_with_auth_can_call_all_entrypoints() {
     client.init(&admin);
 
     assert_eq!(client.get_admin(), admin);
-    assert_eq!(client.total_rescued(), 0);
 
     let token = Address::generate(&env);
+    assert_eq!(client.total_rescued_for(&token), 0);
+
     let to = Address::generate(&env);
     let _ = client.try_rescue(&admin, &token, &to, &100_i128);
     let _ = client.try_rescue_capped(&admin, &token, &to, &50_i128, &1000_i128);

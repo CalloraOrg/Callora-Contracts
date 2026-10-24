@@ -15,6 +15,23 @@ entrypoint regresses by more than the configured threshold (default **5%**).
 | `callora-limits` | `contracts/limits/tests/gas_snap.rs` | `set_developer_min_balance`, `set_minimum_balance`, `set_daily_withdraw_cap`, `get_developer_min_balance`, `get_minimum_balance`, `get_daily_withdraw_cap`, `get_withdrawal_today`, `set_max_distribute`, `get_max_distribute` |
 | `callora-cold` | `contracts/cold/tests/gas_snap.rs` | `capabilities` |
 
+## Settlement developer-balance pagination
+
+The pagination regression fixture seeds 5,000 developers across 100 persistent
+index pages, then requests the 50 entries starting at index 4,900. Persistent
+index-page reads are independent of total index size:
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| `start=100`, `limit=50`, 120 developers: index pages read | 3 | 1 |
+| `start=4900`, `limit=50`, 5,000 developers: index pages read | 100 | 1 |
+| `start=100`, `limit=50`, 120 developers: balance entries read | 20 | 20 |
+| `start=4900`, `limit=50`, 5,000 developers: balance entries read | 50 | 50 |
+
+The automated regression test enforces CPU and memory ceilings for the
+5,000-developer fixture and asserts that the page reads no more than 60 ledger
+entries (one index page, 50 balances, and bounded call overhead).
+
 ## How It Works
 
 1. Each test exercises one entrypoint, then reads host resource counters via

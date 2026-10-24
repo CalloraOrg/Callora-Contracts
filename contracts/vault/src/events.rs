@@ -9,7 +9,10 @@ use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
 ///
-/// Emitted when the vault contract is first initialized with an owner and initial balance.
+/// Emitted exactly once, after the owner has authorized initialization and all
+/// configuration (including a fully backed `initial_balance`) has validated.
+/// Topics are `(init, callora_v1, owner)`; the data payload is the recorded
+/// initial balance.
 pub fn event_init(env: &Env) -> Symbol {
     Symbol::new(env, "init")
 }

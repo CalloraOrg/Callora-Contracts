@@ -224,6 +224,69 @@ The current admin can call `set_pause_guardian` to delegate emergency pause auth
 
 ---
 
+## 4. Yield Limits Access Control
+
+### Overview
+The `CalloraYieldLimits` contract caps how many open bets, open positions and
+active subscriptions one account may hold. It has no fund custody: the only
+things at stake are the counters, the configured caps and the WASM version.
+
+### Roles
+- **Admin**: installs itself through `init`, sets defaults and per-account caps, manages the operator registry and upgrades the contract.
+- **Pending Admin**: a nominated account that must `accept_admin` before it gains authority.
+- **Operator**: a backend address registered by the admin that reports real bets, positions and subscriptions by mutating per-account counters.
+- **Account**: the address whose counters are mutated. It needs no auth of its own; the cap is enforced on it.
+
+### Authorization Matrix
+
+| Function | `require_auth` on | Admin | Operator | Others |
+|----------|-------------------|-------|----------|--------|
+| `init` | `admin` | ✅ (first call only) | ❌ | ❌ |
+| `set_admin` | `caller` | ✅ | ❌ | ❌ |
+| `accept_admin` | `caller` | ❌ (pending admin) | ❌ | ❌ |
+| `cancel_admin_transfer` | `caller` | ✅ | ❌ | ❌ |
+| `upgrade` | `caller` | ✅ | ❌ | ❌ |
+| `set_default_limits` | `caller` | ✅ | ❌ | ❌ |
+| `set_account_limits` | `caller` | ✅ | ❌ | ❌ |
+| `clear_account_limits` | `caller` | ✅ | ❌ | ❌ |
+| `set_operator` | `caller` | ✅ | ❌ | ❌ |
+| `remove_operator` | `caller` | ✅ | ❌ | ❌ |
+| `place_bet` / `clear_bet` | `operator` | ✅ (if registered) | ✅ (if registered) | ❌ |
+| `open_position` / `close_position` | `operator` | ✅ (if registered) | ✅ (if registered) | ❌ |
+| `subscribe` / `unsubscribe` | `operator` | ✅ (if registered) | ✅ (if registered) | ❌ |
+
+**Read-only entrypoints** (`get_admin`, `get_default_limits`,
+`get_account_limits`, `get_account_state`, `get_operator`, `get_version`,
+`can_place_bet`, `can_open_position`, `can_subscribe`) do **not** require auth.
+
+### Threat Model
+
+1. **Init front-running.** `init` calls `admin.require_auth()` before it reads or
+   writes storage, so nobody can claim an uninitialized deployment by calling
+   `init` with their own address. An unsigned `init` fails with an auth error and
+   stores nothing, so the legitimate admin can still initialize afterwards.
+2. **Self-reset of caps.** A capped account used to call `clear_bet` (its own
+   counter) and then `place_bet` again to bypass the cap indefinitely. Counter
+   mutations now name the account but only a registered operator may sign, so
+   the account cannot touch its own counters. `clear_*` only decrements, so it
+   cannot be used to manufacture headroom either.
+3. **Error precedence.** A counter mutation checks the operator's signature,
+   then its registration (`Unauthorized`), then the cap
+   (`BetsAtCap` / `PositionsAtCap` / `SubscriptionsAtCap`), then underflow. An
+   unregistered caller therefore never learns an account's remaining headroom.
+
+### Operator Lifecycle
+
+`set_operator(caller, operator)` (admin only) writes
+`StorageKey::Operator(operator) = true` in persistent storage and emits
+`operator_set`. `remove_operator` clears the flag and emits `operator_removed`;
+removing an unknown address is a no-op. Registered operators can be revoked at
+any time — the next counter mutation from that address fails with
+`Unauthorized`, while the counters it already wrote stay untouched. The flag's
+TTL is refreshed on every write and on every authorized read by a mutation.
+
+---
+
 ## Test Coverage
 The implementation includes comprehensive tests covering:
 - ✅ **Issue #730 — Revenue Pool auth audit (FWC26 Stellar Wave)**: every state-changing

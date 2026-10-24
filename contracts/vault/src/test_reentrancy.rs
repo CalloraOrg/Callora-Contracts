@@ -106,10 +106,12 @@ fn setup_reentrancy_test(
 
     let token_addr = env.register(MaliciousToken, ());
     // The settlement client is a no-op stub in native builds, so any address works.
-    let settlement_addr = Address::generate(env);
+    let settlement_addr = env.register(callora_settlement::CalloraSettlement, ());
+    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
     let authorized_caller = authorized.unwrap_or_else(|| owner.clone());
 
     env.mock_all_auths();
+    settlement_client.init(&owner, &vault_addr);
 
     // Init the vault with the malicious token as its USDC token.
     vault_client.init(

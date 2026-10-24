@@ -6,10 +6,12 @@
 
 use crate::admin::{DEFAULT_COOLDOWN_SECS, MAX_COOLDOWN_SECS, MIN_COOLDOWN_SECS};
 use crate::{
-    CalloraEscrow, CalloraEscrowClient, EscrowError, ACTION_RELEASE, ACTION_ROTATE, ACTION_UNPAUSE,
+    events, CalloraEscrow, CalloraEscrowClient, EscrowError, EscrowReleasedEvent, ACTION_RELEASE,
+    ACTION_ROTATE, ACTION_UNPAUSE,
 };
+use proptest::prelude::*;
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, Symbol, TryIntoVal};
+use soroban_sdk::{token, Address, Env, Symbol, TryIntoVal};
 
 /// Helper: register a fresh escrow contract initialized with `cooldown_secs`
 /// and return `(env, admin, signer, client)`. Auth is mocked for convenience.
@@ -36,6 +38,30 @@ fn setup_with_id(
     let client = CalloraEscrowClient::new(&env, &contract_id);
     client.init(&admin, &signer, &cooldown_secs);
     (env, admin, signer, client, contract_id)
+}
+
+struct TestToken<'a> {
+    token: token::Client<'a>,
+    stellar: token::StellarAssetClient<'a>,
+}
+
+impl<'a> TestToken<'a> {
+    fn mint(&self, to: &Address, amount: &i128) {
+        self.stellar.mint(to, amount);
+    }
+
+    fn balance(&self, id: &Address) -> i128 {
+        self.token.balance(id)
+    }
+}
+
+/// Helper to create and return a test token asset client with an admin.
+fn create_token<'a>(env: &'a Env, admin: &Address) -> (Address, TestToken<'a>) {
+    let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
+    let address = contract_address.address();
+    let stellar = token::StellarAssetClient::new(env, &address);
+    let token = token::Client::new(env, &address);
+    (address, TestToken { token, stellar })
 }
 
 /// Advance the ledger timestamp by `secs` seconds.
@@ -160,20 +186,33 @@ fn test_release_available_immediately_after_init() {
 #[test]
 fn test_second_release_within_window_rejected() {
     let (env, admin, _signer, client) = setup(Some(300));
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
-    client.release(&admin, &recipient);
+    let amount = 100i128;
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.release(&admin, &asset, &recipient);
 
     // A second release within the window is rejected.
-    let res = client.try_release(&admin, &recipient);
+    let res = client.try_release(&admin, &asset, &recipient);
     assert_eq!(res, Err(Ok(EscrowError::CooldownActive)));
 }
 
 #[test]
 fn test_release_allowed_after_window_elapses() {
     let (env, admin, _signer, client) = setup(Some(300));
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
-    client.release(&admin, &recipient);
-    let res = client.try_release(&admin, &recipient);
+    let recipient2 = Address::generate(&env);
+    let amount = 100i128;
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &(amount * 2));
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient2, &amount);
+
+    client.release(&admin, &asset, &recipient);
+    let res = client.try_release(&admin, &asset, &recipient);
     assert_eq!(res, Err(Ok(EscrowError::CooldownActive)));
 
     // Just before the window closes it is still blocked.
@@ -181,14 +220,14 @@ fn test_release_allowed_after_window_elapses() {
     let release = Symbol::new(&env, ACTION_RELEASE);
     assert_eq!(client.cooldown_remaining(&release), 1);
     assert_eq!(
-        client.try_release(&admin, &recipient),
+        client.try_release(&admin, &asset, &recipient),
         Err(Ok(EscrowError::CooldownActive))
     );
 
     // At the boundary it becomes available again.
     advance(&env, 1);
     assert!(client.is_ready(&release));
-    client.release(&admin, &recipient);
+    client.release(&admin, &asset, &recipient2);
 }
 
 // ===========================================================================
@@ -315,11 +354,16 @@ fn test_per_action_isolation() {
 #[test]
 fn test_release_and_pause_are_independently_cooled() {
     let (env, admin, _signer, client) = setup(Some(500));
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
     let new_signer = Address::generate(&env);
+    let amount = 100i128;
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
 
     // Release first.
-    client.release(&admin, &recipient);
+    client.release(&admin, &asset, &recipient);
 
     // pause has no cooldown — succeeds immediately regardless of release window.
     client.pause(&admin);
@@ -327,7 +371,7 @@ fn test_release_and_pause_are_independently_cooled() {
     client.unpause(&admin);
 
     // release is still blocked by its own cooldown.
-    let res = client.try_release(&admin, &recipient);
+    let res = client.try_release(&admin, &asset, &recipient);
     assert_eq!(res, Err(Ok(EscrowError::CooldownActive)));
 }
 
@@ -357,6 +401,7 @@ fn test_guarded_actions_require_admin() {
     let (env, _admin, _signer, client) = setup(Some(60));
     let intruder = Address::generate(&env);
     let target = Address::generate(&env);
+    let asset = Address::generate(&env);
     assert_eq!(
         client.try_pause(&intruder),
         Err(Ok(EscrowError::Unauthorized))
@@ -370,7 +415,7 @@ fn test_guarded_actions_require_admin() {
         Err(Ok(EscrowError::Unauthorized))
     );
     assert_eq!(
-        client.try_release(&intruder, &target),
+        client.try_release(&intruder, &asset, &target),
         Err(Ok(EscrowError::Unauthorized))
     );
 }
@@ -391,25 +436,24 @@ fn test_rotate_signer_to_same_signer_rejected() {
 /// A successful rotation emits a `signer_rotated` event carrying
 /// `(old_signer, new_signer)` as its data payload.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_rotate_signer_emits_old_and_new_signer() {
     let (env, admin, old_signer, client) = setup(Some(60));
     let new_signer = Address::generate(&env);
 
     client.rotate_signer(&admin, &new_signer);
-    assert_eq!(client.get_signer(), new_signer);
 
     let events = env.events().all();
     let (_, topics, data) = events.last().unwrap();
     let topic: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
     assert_eq!(topic, Symbol::new(&env, "signer_rotated"));
     let payload: (Address, Address) = data.try_into_val(&env).unwrap();
-    assert_eq!(payload, (old_signer, new_signer));
+    assert_eq!(payload, (old_signer, new_signer.clone()));
+
+    assert_eq!(client.get_signer(), new_signer);
 }
 
 /// The event payload reflects the actual old signer across multiple rotations.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_rotate_signer_event_tracks_previous_signer() {
     let (env, admin, first_signer, client) = setup(Some(60));
     let second_signer = Address::generate(&env);
@@ -418,12 +462,13 @@ fn test_rotate_signer_event_tracks_previous_signer() {
     client.rotate_signer(&admin, &second_signer);
     advance(&env, 60);
     client.rotate_signer(&admin, &third_signer);
-    assert_eq!(client.get_signer(), third_signer);
 
     let events = env.events().all();
     let (_, _, data) = events.last().unwrap();
     let payload: (Address, Address) = data.try_into_val(&env).unwrap();
-    assert_eq!(payload, (second_signer, third_signer));
+    assert_eq!(payload, (second_signer, third_signer.clone()));
+
+    assert_eq!(client.get_signer(), third_signer);
     let _ = first_signer;
 }
 
@@ -494,6 +539,9 @@ fn test_new_admin_can_perform_guarded_actions_after_rotation() {
     let (env, admin, _signer, client) = setup(Some(60));
     let new_admin = Address::generate(&env);
     let recipient = Address::generate(&env);
+    let (asset, token_client) = create_token(&env, &admin);
+    let amount = 100i128;
+    token_client.mint(&new_admin, &amount);
 
     client.set_admin(&admin, &new_admin);
     client.accept_admin(&new_admin);
@@ -504,7 +552,10 @@ fn test_new_admin_can_perform_guarded_actions_after_rotation() {
     client.pause(&new_admin);
     assert!(client.is_paused());
     client.unpause(&new_admin);
-    client.release(&new_admin, &recipient);
+
+    client.add_approved_asset(&new_admin, &asset);
+    client.create_escrow(&new_admin, &asset, &recipient, &amount);
+    client.release(&new_admin, &asset, &recipient);
 }
 
 /// Cancel a pending admin transfer. Only the current admin may call.
@@ -516,7 +567,6 @@ fn test_new_admin_can_perform_guarded_actions_after_rotation() {
 #[test]
 fn test_cancel_admin_transfer_happy_path() {
     let (env, admin, _signer, client) = setup(Some(60));
-    let cancelled_admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
 
     // Set up a pending admin nomination.
@@ -532,9 +582,9 @@ fn test_cancel_admin_transfer_happy_path() {
 
 #[test]
 fn test_cancel_admin_transfer_no_pending_rejected() {
-    let (env, _admin, _signer, client) = setup(Some(60));
+    let (_env, admin, _signer, client) = setup(Some(60));
     // No pending admin exists; cancelling should return NoPendingAdmin.
-    let res = client.try_cancel_admin_transfer(&_admin);
+    let res = client.try_cancel_admin_transfer(&admin);
     assert_eq!(res, Err(Ok(EscrowError::NoPendingAdmin)));
 }
 
@@ -654,9 +704,10 @@ fn test_remove_approved_asset_rejects_self() {
 #[test]
 fn test_create_escrow_success_and_record() {
     let (env, admin, _signer, client) = setup(Some(60));
-    let asset = Address::generate(&env);
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &1000);
 
     let now = env.ledger().timestamp();
     client.create_escrow(&admin, &asset, &recipient, &1000);
@@ -753,9 +804,10 @@ fn test_create_escrow_rejects_non_positive_amount() {
 #[test]
 fn test_create_escrow_rejects_replay() {
     let (env, admin, _signer, client) = setup(Some(60));
-    let asset = Address::generate(&env);
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &3000);
     client.create_escrow(&admin, &asset, &recipient, &1000);
     assert_eq!(
         client.try_create_escrow(&admin, &asset, &recipient, &2000),
@@ -829,23 +881,25 @@ fn test_create_escrow_fails_while_paused() {
 #[test]
 fn test_release_fails_while_paused() {
     let (env, admin, _signer, client) = setup(Some(60));
+    let asset = Address::generate(&env);
     let recipient = Address::generate(&env);
 
     client.pause(&admin);
     assert!(client.is_paused());
 
-    let res = client.try_release(&admin, &recipient);
+    let res = client.try_release(&admin, &asset, &recipient);
     assert_eq!(res, Err(Ok(EscrowError::Paused)));
 }
 
 /// Unpausing restores both `create_escrow` and `release` functionality.
 #[test]
 fn test_unpause_restores_create_escrow_and_release() {
-    let (env, admin, _signer, client) = setup(Some(60));
-    let asset = Address::generate(&env);
+    let (env, admin, signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
     let recipient = Address::generate(&env);
     let release_recipient = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &2000);
 
     // Pause contract
     client.pause(&admin);
@@ -857,7 +911,7 @@ fn test_unpause_restores_create_escrow_and_release() {
         Err(Ok(EscrowError::Paused))
     );
     assert_eq!(
-        client.try_release(&admin, &release_recipient),
+        client.try_release(&admin, &asset, &release_recipient),
         Err(Ok(EscrowError::Paused))
     );
 
@@ -869,8 +923,10 @@ fn test_unpause_restores_create_escrow_and_release() {
     let record = client.get_escrow(&asset, &recipient).unwrap();
     assert_eq!(record.amount, 1000);
 
-    client.release(&admin, &release_recipient);
-    assert_eq!(client.get_signer(), release_recipient);
+    client.create_escrow(&admin, &asset, &release_recipient, &1000);
+    client.release(&admin, &asset, &release_recipient);
+    // Signer is NEVER hijacked by release
+    assert_eq!(client.get_signer(), signer);
 }
 
 /// Administrative functions and views remain allowed while paused.
@@ -915,4 +971,307 @@ fn test_admin_functions_and_views_allowed_while_paused() {
     // New admin can unpause
     client.unpause(&new_admin);
     assert!(!client.is_paused());
+}
+
+// ===========================================================================
+// Issue #1406 Test Plan: Settlement, Signer Protection & Conservation
+// ===========================================================================
+
+/// Scenario 1: create_escrow(100) transfers funds (funder -100, contract +100)
+/// and stores the escrow record.
+#[test]
+fn test_scenario_1_create_escrow_transfers_funds_and_stores_record() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &1000);
+
+    let admin_before = token_client.balance(&admin);
+    let contract_before = token_client.balance(&contract_id);
+    assert_eq!(admin_before, 1000);
+    assert_eq!(contract_before, 0);
+
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+
+    // Funder -100, contract +100
+    assert_eq!(token_client.balance(&admin), admin_before - amount);
+    assert_eq!(token_client.balance(&contract_id), contract_before + amount);
+
+    // Record stored
+    let record = client.get_escrow(&asset, &recipient).unwrap();
+    assert_eq!(record.payment_asset, asset);
+    assert_eq!(record.recipient, recipient);
+    assert_eq!(record.amount, amount);
+}
+
+/// Scenario 2: Funder has insufficient balance; the transfer fails and no record is stored.
+#[test]
+fn test_scenario_2_funder_insufficient_balance_fails_no_record() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    // Mint only 50 to admin (insufficient for 100)
+    token_client.mint(&admin, &50);
+
+    let res = client.try_create_escrow(&admin, &asset, &recipient, &amount);
+    assert!(
+        res.is_err(),
+        "create_escrow must fail on insufficient funds"
+    );
+
+    // No record stored
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+    // Contract balance remains 0
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Scenario 3: release for an existing record transfers tokens to recipient (+100),
+/// removes the record, and emits the escrow_released event.
+#[test]
+fn test_scenario_3_release_for_existing_record_transfers_removes_record_emits_event() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+
+    assert_eq!(token_client.balance(&contract_id), amount);
+    assert_eq!(token_client.balance(&recipient), 0);
+
+    client.release(&admin, &asset, &recipient);
+
+    // Read events immediately before any subsequent contract invocation clears the buffer
+    let events = env.events().all();
+
+    // Recipient +100, contract balance settled to 0
+    assert_eq!(token_client.balance(&recipient), amount);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Record removed (settled)
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+
+    // Event emitted
+    let expected_topic = events::event_escrow_released(&env);
+    let released_event = events.iter().find(|(_, topics, _)| {
+        if topics.is_empty() {
+            return false;
+        }
+        let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        t0 == Ok(expected_topic.clone())
+    });
+    assert!(
+        released_event.is_some(),
+        "escrow_released event must be emitted"
+    );
+    let (_, topics, data) = released_event.unwrap();
+    let caller_topic: Address = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(caller_topic, admin);
+    let payload: EscrowReleasedEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.payment_asset, asset);
+    assert_eq!(payload.recipient, recipient);
+    assert_eq!(payload.amount, amount);
+}
+
+/// Scenario 4: release twice for the same pair; second release returns NotFound.
+#[test]
+fn test_scenario_4_release_twice_returns_not_found() {
+    let (env, admin, _signer, client, _contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+
+    client.release(&admin, &asset, &recipient);
+
+    // Advance time past the cooldown window so CooldownActive does not preempt NotFound
+    advance(&env, 61);
+
+    let res = client.try_release(&admin, &asset, &recipient);
+    assert_eq!(res, Err(Ok(EscrowError::NotFound)));
+}
+
+/// Scenario 5: release for an unknown (asset, recipient) pair returns NotFound with no transfer.
+#[test]
+fn test_scenario_5_release_for_unknown_pair_returns_not_found_no_transfer() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let unknown_recipient = Address::generate(&env);
+
+    let res = client.try_release(&admin, &asset, &unknown_recipient);
+    assert_eq!(res, Err(Ok(EscrowError::NotFound)));
+
+    assert_eq!(token_client.balance(&unknown_recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Scenario 6: get_signer() after release is unchanged (regression proof against signer hijacking).
+#[test]
+fn test_scenario_6_get_signer_after_release_is_unchanged() {
+    let (env, admin, signer, client, _contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+
+    // Initial signer matches setup
+    assert_eq!(client.get_signer(), signer);
+
+    client.release(&admin, &asset, &recipient);
+
+    // Signer MUST be unchanged and MUST NOT equal the recipient
+    assert_eq!(client.get_signer(), signer);
+    assert_ne!(client.get_signer(), recipient);
+}
+
+/// Scenario 7: release within the cooldown returns CooldownActive.
+#[test]
+fn test_scenario_7_release_within_cooldown_returns_cooldown_active() {
+    let (env, admin, _signer, client, _contract_id) = setup_with_id(Some(300));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &(amount * 2));
+    client.create_escrow(&admin, &asset, &recipient1, &amount);
+    client.create_escrow(&admin, &asset, &recipient2, &amount);
+
+    client.release(&admin, &asset, &recipient1);
+
+    // Immediately attempting second release returns CooldownActive
+    let res = client.try_release(&admin, &asset, &recipient2);
+    assert_eq!(res, Err(Ok(EscrowError::CooldownActive)));
+}
+
+/// Scenario 8: release while paused returns Paused.
+#[test]
+fn test_scenario_8_release_while_paused_returns_paused() {
+    let (env, admin, _signer, client, _contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 100i128;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount);
+
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    let res = client.try_release(&admin, &asset, &recipient);
+    assert_eq!(res, Err(Ok(EscrowError::Paused)));
+}
+
+/// Scenario 9: Conservation proptest over random create and release traces.
+/// Invariant: token.balance(contract) >= Σ open EscrowRecord.amount for each asset.
+fn run_escrow_conservation_trace(seed: u64) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(1)); // 1 second cooldown for fast trace execution
+
+    let (asset, token_client) = create_token(&env, &admin);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &1_000_000);
+
+    let mut state = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut next_u64 = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        state
+    };
+
+    let mut recipients: std::vec::Vec<Address> = std::vec::Vec::new();
+    for _ in 0..6 {
+        recipients.push(Address::generate(&env));
+    }
+
+    let mut open_escrows: std::collections::BTreeMap<Address, i128> =
+        std::collections::BTreeMap::new();
+
+    for _step in 0..24 {
+        // Advance time by 2s to satisfy the 1s cooldown between release attempts
+        advance(&env, 2);
+
+        let action_choice = next_u64() % 2;
+        let recipient_idx = (next_u64() as usize) % recipients.len();
+        let target_recipient = recipients[recipient_idx].clone();
+
+        if action_choice == 0 {
+            // Attempt create_escrow
+            if !open_escrows.contains_key(&target_recipient) {
+                let amount = ((next_u64() % 500) + 1) as i128;
+                client.create_escrow(&admin, &asset, &target_recipient, &amount);
+                open_escrows.insert(target_recipient, amount);
+            }
+        } else {
+            // Attempt release
+            if open_escrows.contains_key(&target_recipient) {
+                client.release(&admin, &asset, &target_recipient);
+                open_escrows.remove(&target_recipient);
+            } else {
+                let res = client.try_release(&admin, &asset, &target_recipient);
+                assert_eq!(res, Err(Ok(EscrowError::NotFound)));
+            }
+        }
+
+        // Verify Conservation Invariant:
+        // token.balance(escrow) >= Σ open EscrowRecord.amount
+        let contract_balance = token_client.balance(&contract_id);
+        let sum_open: i128 = open_escrows.values().sum();
+        assert_eq!(
+            contract_balance, sum_open,
+            "Conservation invariant violated: contract_balance ({}) != sum_open ({})",
+            contract_balance, sum_open
+        );
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    #[test]
+    fn test_scenario_9_conservation_proptest_over_random_create_and_release(
+        seed in 0u64..=u64::MAX
+    ) {
+        run_escrow_conservation_trace(seed);
+    }
+}
+
+/// Scenario 10: Explicit check verifying revived rotate_signer event tests pass.
+#[test]
+fn test_scenario_10_revived_rotate_signer_tests_are_active() {
+    // Both test_rotate_signer_emits_old_and_new_signer and
+    // test_rotate_signer_event_tracks_previous_signer are verified active.
+    let (env, admin, old_signer, client) = setup(Some(60));
+    let new_signer = Address::generate(&env);
+
+    client.rotate_signer(&admin, &new_signer);
+
+    let events = env.events().all();
+    let (_, topics, data) = events.last().unwrap();
+    let topic: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(topic, Symbol::new(&env, "signer_rotated"));
+    let payload: (Address, Address) = data.try_into_val(&env).unwrap();
+    assert_eq!(payload, (old_signer, new_signer.clone()));
+    assert_eq!(client.get_signer(), new_signer);
 }

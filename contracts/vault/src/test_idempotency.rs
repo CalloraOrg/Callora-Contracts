@@ -12,11 +12,19 @@
 //!   atomically (no balance change, no markers written).
 //! - `is_request_processed` reflects processed state.
 //! - `prune_processed_requests` clears a marker so its id can be reused.
+//!
+//! # Native-build caveat
+//!
+//! Outside a wasm build the vault's settlement client is a no-op stub
+//! (`settlement::Client` in `lib.rs`), so the vault never calls the real
+//! settlement contract from a unit test. Cross-contract settlement accounting
+//! is therefore not observable here; the settlement-side rules are covered by
+//! the settlement crate's own tests.
 
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
+use soroban_sdk::{token, Address, Env, Error, IntoVal, InvokeError, Symbol, Vec};
 
 use super::*;
 
@@ -147,6 +155,28 @@ fn deduct_zero_request_id_is_never_deduplicated() {
 
     assert_eq!(client.balance(), 700);
     assert!(!client.is_request_processed(&0u64));
+}
+
+#[test]
+fn deduct_zero_request_id_does_not_mark_settlement() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    // The vault must never mark id `0` on its own side.
+    client.deduct(&owner, &100i128, &0u64);
+    client.deduct(&owner, &100i128, &0u64);
+
+    assert_eq!(client.balance(), 800);
+    assert!(!client.is_request_processed(&0u64));
+
+    // Outside a wasm build the settlement call is stubbed, so settlement is
+    // never invoked and stays untouched. (Settlement deduplicates *every*
+    // request id, including `0`; that rule is asserted by the settlement
+    // crate's own tests.)
+    let settlement_addr = client.get_settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    assert_eq!(settlement_client.get_total_received(), 0);
 }
 
 #[test]
@@ -391,7 +421,11 @@ fn prune_processed_request_allows_reuse_and_emits_event() {
     assert!(!client.is_request_processed(&91u64));
     assert!(client.is_request_processed(&92u64));
 
-    // The id can now be reused.
+    // The id can now be reused. The vault's own marker was pruned, so the
+    // replay is accepted here. In a wasm build the settlement contract still
+    // holds a marker for the same id and would reject the forwarded
+    // `record_deduction` with settlement's own `DuplicateRequestId`; the
+    // native build stubs that call, so the difference is not observable here.
     client.deduct(&owner, &10i128, &91u64);
     assert_eq!(client.balance(), 790);
 }
@@ -418,4 +452,77 @@ fn prune_allowed_during_pause() {
     let ids = soroban_sdk::vec![&env, 93u64];
     client.prune_processed_requests(&owner, &ids);
     assert!(!client.is_request_processed(&93u64));
+}
+
+// ---------------------------------------------------------------------------
+// Cross-contract: settlement sentinel agreement
+// ---------------------------------------------------------------------------
+//
+// Outside a wasm build the vault's settlement client is a no-op stub, so the
+// settlement contract is not invoked from these unit tests and its accounting
+// stays at zero. What *is* observable here is the vault side of the
+// interaction: which request ids the vault marks, and which ones it lets
+// through.
+
+#[test]
+fn settlement_emits_event_for_zero_request_id() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    client.deduct(&owner, &123i128, &0u64);
+
+    // Capture the events straight after the call: the test host resets the
+    // event buffer on every subsequent top-level invocation.
+    let events = env.events().all();
+
+    let settlement_addr = client.get_settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    // The stubbed settlement contract is never called from a native build.
+    assert_eq!(settlement_client.get_total_received(), 0);
+
+    // The vault still emits its own `deduct` event, carrying the deducted
+    // amount and the remaining balance.
+    let mut found = false;
+    for (addr, topics, data) in events.iter() {
+        if addr != client.address {
+            continue;
+        }
+        let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+        if topic0 == Symbol::new(&env, "deduct") {
+            let (amount, remaining): (i128, i128) = data.into_val(&env);
+            assert_eq!(amount, 123);
+            assert_eq!(remaining, 877);
+            found = true;
+        }
+    }
+    assert!(found, "the vault must emit its deduct event for id 0");
+}
+
+#[test]
+fn batch_deduct_zero_ids_marks_only_nonzero_in_settlement() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    let batch = items(&env, &[(100, 0), (200, 0), (50, 5)]);
+    client.batch_deduct(&owner, &batch);
+    assert_eq!(client.balance(), 650);
+
+    let settlement_addr = client.get_settlement();
+    let settlement_client =
+        callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
+    // The stubbed settlement contract is never called from a native build.
+    assert_eq!(settlement_client.get_total_received(), 0);
+
+    // Only id `5` is marked on the vault side.
+    assert!(client.is_request_processed(&5u64));
+    assert!(!client.is_request_processed(&0u64));
+
+    // Replaying id `5` is rejected on both sides; id `0` still goes through.
+    assert!(is_vault_err(
+        client.try_deduct(&owner, &10i128, &5u64),
+        VaultError::DuplicateRequestId as u32
+    ));
+    client.deduct(&owner, &10i128, &0u64);
+    assert_eq!(client.balance(), 640);
 }

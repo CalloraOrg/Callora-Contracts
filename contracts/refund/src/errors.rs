@@ -22,4 +22,8 @@ pub enum RefundError {
     Overflow = 8,
     /// Refund request is not in the expected status.
     InvalidStatus = 9,
+    /// Contract token balance or accumulated fees are insufficient for payout or withdrawal.
+    InsufficientBalance = 10,
+    /// Recipient address is invalid (e.g. self or token address).
+    InvalidRecipient = 11,
 }

@@ -42,6 +42,27 @@ pub enum DataKey {
 /// Ledger cadence used across the workspace for TTL policy.
 const LEDGERS_PER_DAY: u32 = 17_280;
 
+/// TTL policy for the contract instance holding the admin address.
+///
+/// The admin lives in instance storage, which must be refreshed on every
+/// entrypoint — including read-only views — so the contract cannot archive out
+/// from under integrators that only ever register or resolve codes. Extends to
+/// ~60 days whenever the remaining TTL falls below ~30 days, mirroring the
+/// workspace convention (`contracts/fee`, `contracts/vault`).
+const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+/// Lifetime of the temporary `RecentErr(Address)` entry — the most recent code
+/// logged by a user.
+///
+/// This is deliberately short: the value exists only for short-term debugging
+/// and rate-limiting feedback, so it is written with a ~8-minute lifetime
+/// (`RECENT_ERR_TTL_LEDGERS` ledgers at 5 s/ledger) and left to expire
+/// naturally. It is intentionally *not* refreshed on reads and must not be
+/// relied upon as durable state — use the persistent `ErrorReg(code)` registry
+/// for anything that needs to survive.
+const RECENT_ERR_TTL_LEDGERS: u32 = 100;
+
 /// TTL policy for the persistent error registry.
 ///
 /// A registry entry is refreshed when its remaining TTL drops below ~30 days,
@@ -57,8 +78,20 @@ pub struct ErrorsContract;
 
 #[contractimpl]
 impl ErrorsContract {
+    /// Extend the instance storage TTL holding the admin address.
+    ///
+    /// Called on every entrypoint, including read-only views, before any
+    /// instance state is accessed, so the contract instance never archives due
+    /// to inactivity.
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     pub fn init(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
+        Self::bump_instance(&env);
 
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -85,6 +118,7 @@ impl ErrorsContract {
     ///   payload `(code, desc)`) is emitted.
     pub fn register_error(env: Env, admin: Address, code: u32, desc: String) -> Result<(), Error> {
         admin.require_auth();
+        Self::bump_instance(&env);
 
         let stored_admin: Address = env
             .storage()
@@ -130,6 +164,7 @@ impl ErrorsContract {
     ///   `(code, desc)`) is emitted.
     pub fn update_error(env: Env, admin: Address, code: u32, desc: String) -> Result<(), Error> {
         admin.require_auth();
+        Self::bump_instance(&env);
 
         let stored_admin: Address = env
             .storage()
@@ -164,6 +199,7 @@ impl ErrorsContract {
     /// A successful lookup refreshes the registry entry's TTL, so codes that
     /// integrators actively resolve stay available.
     pub fn get_error_description(env: Env, code: u32) -> Option<String> {
+        Self::bump_instance(&env);
         let key = DataKey::ErrorReg(code);
         let desc: Option<String> = env.storage().persistent().get(&key);
         if desc.is_some() {
@@ -183,6 +219,7 @@ impl ErrorsContract {
     /// event is published.
     pub fn log_error(env: Env, user: Address, code: u32) -> Result<(), Error> {
         user.require_auth();
+        Self::bump_instance(&env);
 
         let reg_key = DataKey::ErrorReg(code);
 
@@ -190,11 +227,6 @@ impl ErrorsContract {
         if !env.storage().persistent().has(&reg_key) {
             return Err(Error::UnknownErrorCode);
         }
-
-        // Overflow-safe: checked_add prevents silent wrap at u32::MAX.
-        // This is the only arithmetic path in the contract; all other
-        // operations are storage reads/writes and comparisons.
-        let _safe_calc = code.checked_add(1).ok_or(Error::Overflow)?;
 
         // A code that is actively logged is actively used — keep it warm.
         env.storage()
@@ -205,9 +237,11 @@ impl ErrorsContract {
             .temporary()
             .set(&DataKey::RecentErr(user.clone()), &code);
 
-        env.storage()
-            .temporary()
-            .extend_ttl(&DataKey::RecentErr(user.clone()), 100, 100);
+        env.storage().temporary().extend_ttl(
+            &DataKey::RecentErr(user.clone()),
+            RECENT_ERR_TTL_LEDGERS,
+            RECENT_ERR_TTL_LEDGERS,
+        );
 
         env.events()
             .publish((Symbol::new(&env, "error_logged"), user), code);
@@ -218,6 +252,7 @@ impl ErrorsContract {
     /// Return the most recent code logged by `user`, or `None` if they never
     /// logged an error.
     pub fn get_recent_error(env: Env, user: Address) -> Option<u32> {
+        Self::bump_instance(&env);
         env.storage().temporary().get(&DataKey::RecentErr(user))
     }
 }
