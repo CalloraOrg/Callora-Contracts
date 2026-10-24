@@ -10,15 +10,6 @@ All topic/data types refer to Soroban/Stellar XDR values.
 - `release` signature updated to `(caller, payment_asset, recipient)`. It verifies the record exists, deletes it before transfer (CEI), transfers tokens to `recipient`, and emits `escrow_released`.
 - `release` no longer overwrites `StorageKey::Signer`, ensuring `rotate_signer` maintains exclusive control over contract signing.
 
-## Change Note (2026-10) — Issue #1411: fee contract real token transfers
-
-`contracts/fee`: `init` now takes a `token: Address` argument (stored under
-`DataKey::Token`), `deposit` pulls real tokens via `token::Client::transfer`
-before incrementing `Accumulated`, and `withdraw` transfers tokens to the
-recipient after decrementing the counter. New events `fee_initialized`,
-`fee_set`, and `fee_deposited` are emitted with the `"callora_v1"` version
-marker at topic[1].
-
 ## Change Note (2026-10) — Issue #1411: recipient audit trail and TTL management
 
 `contracts/recipient`: `update_recipient` now emits `RecipientUpdatedEvent` carrying `{ name, old_address, new_address }` instead of only the new record, providing a verifiable audit trail of payout address modifications. Registry instances and persistent entries are bumped across write and view entrypoints.
@@ -1492,25 +1483,6 @@ Side effect: developer balance map entry for `GDEV...` is incremented by
   cheaper to filter on.
 - A `payment_received` with `to_pool = false` is always paired with exactly
   one `balance_credited` event in the same transaction.
-
----
-
-### `allocation_recorded`
-
-Emitted by `receive_payment()` and once per item in `batch_receive_payment()`
-after the corresponding `payment_received` (and, when applicable,
-`balance_credited` / `deposit`) events. Carries the running totals so indexers
-can reconcile `TotalReceived` against `TotalAllocated` without extra reads.
-
-| Index              | Location | Type    | Description                                                       |
-|--------------------|----------|---------|-------------------------------------------------------------------|
-| topic 0            | topics   | Symbol  | `"allocation_recorded"`                                           |
-| topic 1            | topics   | Address | `caller` — authorized vault or admin                              |
-| `amount`           | data     | i128    | amount allocated in this call (USDC micro-units)                  |
-| `total_allocated`  | data     | i128    | `TotalAllocated` after this credit (post-state)                   |
-| `total_received`   | data     | i128    | `TotalReceived` at the time of this credit                        |
-| `unallocated`      | data     | i128    | `total_received - total_allocated` after this credit (post-state) |
-
 
 ---
 

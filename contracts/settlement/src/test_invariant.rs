@@ -1,9 +1,9 @@
 //! Property-based invariant test: settlement balance conservation.
 //!
 //! # Invariant
-//! After every operation in an arbitrary sequence of `record_deduction`,
-//! `receive_payment`, `batch_receive_payment`, and
-//! `withdraw_developer_balance`, the following must hold:
+//! After every operation in an arbitrary sequence of `receive_payment`,
+//! `batch_receive_payment`, and `withdraw_developer_balance`, the following
+//! must hold:
 //!
 //! ```text
 //! total_in == sum(per_developer_balance) + global_pool.total_balance

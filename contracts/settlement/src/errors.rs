@@ -58,7 +58,6 @@ use soroban_sdk::contracterror;
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
-/// | 51   | ExceedsUnallocated           | Credit exceeds unallocated deducted funds            |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -126,6 +125,4 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
-    /// Credit would exceed the unallocated deducted funds held by settlement.
-    ExceedsUnallocated = 51,
 }
