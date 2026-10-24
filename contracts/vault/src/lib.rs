@@ -159,6 +159,9 @@ pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 /// forced past `i128::MAX` in a single invocation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Strkey of the all-zero contract address, rejected as a `withdraw_to` recipient.
+const ZERO_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 pub mod token {
     pub use soroban_sdk::token::Client;
 }
@@ -1073,8 +1076,7 @@ impl CalloraVault {
     pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
-        Self::require_positive_amount(amount).unwrap();
-        Self::require_not_reentrant(&env).unwrap();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
@@ -1151,7 +1153,7 @@ impl CalloraVault {
         Self::require_positive_amount(amount)?;
 
         // Zero-address check first.
-        if to == Address::from_contract_id(&BytesN::<32>::from_array(&env, &[0u8; 32])) {
+        if to == Address::from_str(&env, ZERO_CONTRACT_ADDRESS) {
             return Err(VaultError::ZeroAddressRecipient);
         }
 

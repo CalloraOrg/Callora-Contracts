@@ -20,7 +20,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (12, SettlementError::InsufficientContractBalance),
         (13, SettlementError::DailyWithdrawCapExceeded),
         (14, SettlementError::GasExhaustionRisk),
-        (15, SettlementError::ReasonTooLong),
+        // code 15 retired (was ReasonTooLong)
         (16, SettlementError::MigrationSameAddress),
         (17, SettlementError::InvalidMigrationTarget),
         (18, SettlementError::NoDeveloperBalance),
@@ -68,7 +68,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 51);
+    assert_eq!(seen.len(), 50);
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 12 | `InsufficientContractBalance` | Settlement | Contract USDC balance is lower than requested amount |",
         "| 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |",
         "| 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |",
-        "| 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |",
+        "| 15 | _reserved_ (was `ReasonTooLong`) | Settlement | Retired: never returned |",
         "| 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |",
         "| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |",
         "| 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |",
