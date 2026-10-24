@@ -159,13 +159,13 @@ pub enum Severity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AdminBroadcast {
     pub severity: Severity,
-    pub message: soroban_sdk:x:String,
+    pub message: soroban_sdk::String,
 }
 
 /// Storage TTL policy entry for a given storage key category.
 ///
 /// Retained for ABI compatibility with the off-chain tooling that consumes the
-/// settlement contract's TT\ views. Note that the `ttl` field is **not** a live
+/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
 /// measurement: contract code cannot observe the remaining TTL of a ledger
 /// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
 /// `liveUntilLedgerSeq` against the current ledger sequence — see
@@ -337,15 +337,7 @@ pub struct AdminMigrationEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeProposedEvent {
-    pub wasm_hash: soroban_sdk::BytesN32>,
+    pub wasm_hash: soroban_sdk::BytesN<32>,
     pub proposed_at: u64,
     pub execute_after: u64,
-}
-
-/// Emitted when a pending WASM upgrade is cancelled by the admin.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct UpgradeCancelledEvent {
-    pub wasm_hash: soroban_sdk:BytesN32>,
-    pub cancelled_at: u64,
 }
