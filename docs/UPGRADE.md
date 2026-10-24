@@ -51,6 +51,44 @@ User deposits USDC
 
 ## Contract Storage Layouts
 
+### Shared storage-migration validator (`callora-storage-migration`)
+
+Contracts that call `StorageMigrationValidator` (`revenue_pool`, `checkpoint`,
+`yield`, and `migrate`) store the validator's bookkeeping in **instance**
+storage alongside their own keys. Since Issue #1415 those keys are namespaced:
+
+| Purpose | Namespaced key |
+|---------|----------------|
+| Storage-layout version | `SmVersion` |
+| Schema/layout hash | `SmSchemaLayoutHash` |
+| Upgrade authorization | `SmAuthorizedUpgrade` |
+| Rollback backup marker | `SmBackupPresent` |
+
+The validator lazily reads through the pre-namespacing keys (`Version`,
+`SchemaLayoutHash`, `AuthorizedUpgrade`, `BackupPresent`) on first access, so
+existing deployments keep their recorded version without an explicit migration
+step. The legacy slots are left in place because some hosts use the same
+encodings for their own business keys.
+
+`EmergencyMigration::validate_before_upgrade` is now an authenticated,
+admin-only entrypoint:
+
+```rust
+pub fn validate_before_upgrade(
+    env: Env,
+    caller: Address,
+    target_version: u32,
+    wasm_hash: BytesN<32>,
+    allow_rollback: bool,
+) -> Result<(), StorageMigrationError>
+```
+
+It calls `caller.require_auth()`, verifies `caller == Admin`, then applies the
+hash and version checks in that order (auth → admin → hash → version). A
+non-admin gets `StorageMigrationError::Unauthorized` before any authorization
+slot can be written. Because success records the validator's upgrade guard,
+this is not a read-only dry run.
+
 ### Vault (`contracts/vault/src/lib.rs`)
 
 The vault uses **instance storage** with the following keys:

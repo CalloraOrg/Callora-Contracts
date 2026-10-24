@@ -70,7 +70,7 @@
 //!
 //! - **Every hot read** (`get_claim`, `has_claim`, and the internal reads
 //!   inside `batch_claim`) calls `extend_ttl` on the `ClaimRecord` entry with
-//!   a `PERSISTENT_BUMP` of 10 000 ledgers (≈16 days).
+//!   a `PERSISTENT_BUMP` of 120 days worth of ledgers.
 //! - **Every write** also bumps the instance-storage TTL via
 //!   `extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT)`.
 //! - The `ClaimConsumed` persistent entry is bumped alongside the `Claim`
@@ -100,19 +100,26 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Ve
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Extend **instance** storage TTL by 10 000 ledgers (≈16 days) on mutating calls.
-pub const BUMP_AMOUNT: u32 = 10_000;
-/// Minimum remaining instance TTL before triggering a bump (≈1.5 days).
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// Ledgers per day on the Stellar network (5 s per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-/// Extend **persistent** claim entry TTL by 10 000 ledgers on every hot read.
+/// Network maximum `max_entry_ttl` (in ledgers). No TTL extension may exceed
+/// this value; the constant sanity test asserts every bump stays below it.
+pub const MAX_ENTRY_TTL: u32 = 6_312_000;
+
+/// Extend **instance** storage TTL by 60 days worth of ledgers on mutating calls.
+pub const BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+/// Minimum remaining instance TTL before triggering a bump (30 days).
+pub const LIFETIME_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Extend **persistent** claim entry TTL by 120 days worth of ledgers on every hot read.
 ///
 /// This is the core mechanism that prevents archival pressure on claim storage.
 /// Any code path that reads a `ClaimRecord` MUST call `extend_ttl` with these
 /// constants before returning the data.
-pub const PERSISTENT_BUMP: u32 = 10_000;
-/// Minimum remaining persistent TTL before triggering a claim-entry bump (≈1.5 days).
-pub const PERSISTENT_THRESHOLD: u32 = 1_000;
+pub const PERSISTENT_BUMP: u32 = LEDGERS_PER_DAY * 120;
+/// Minimum remaining persistent TTL before triggering a claim-entry bump (30 days).
+pub const PERSISTENT_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// Extend a **consumed-claim tombstone** (`StorageKey::ClaimConsumed`) TTL by
 /// this many ledgers (~6 months) on every touch — matching the long-lived
@@ -159,6 +166,13 @@ pub enum StorageKey {
     /// stronger question "has this id ever existed, and whose is it?", which
     /// is what makes the identifier globally unique for the life of the
     /// contract rather than merely un-replayable after settlement.
+    ///
+    /// The reservation is extended with the `CONSUMED_TOMBSTONE_*` lifetime
+    /// (matching `ClaimConsumed`) so it outlives the short-lived `ClaimRecord`.
+    /// If the entry is archived and later restored, the stored owner is
+    /// returned unchanged and the id remains reserved. If it has expired
+    /// entirely, the id is treated as free again — which is why the long
+    /// tombstone lifetime is required to keep the replay guarantee intact.
     ClaimIdOwner(BytesN<32>),
 }
 
@@ -309,8 +323,8 @@ impl CalloraBatchClaim {
         if let Some(owner) = reserved_for.clone() {
             env.storage().persistent().extend_ttl(
                 &owner_key,
-                PERSISTENT_THRESHOLD,
-                PERSISTENT_BUMP,
+                CONSUMED_TOMBSTONE_THRESHOLD,
+                CONSUMED_TOMBSTONE_BUMP,
             );
             if owner != claimant {
                 return Err(BatchClaimError::ClaimIdAlreadyUsed);
@@ -388,7 +402,7 @@ impl CalloraBatchClaim {
         }
         env.storage()
             .persistent()
-            .extend_ttl(&owner_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+            .extend_ttl(&owner_key, CONSUMED_TOMBSTONE_THRESHOLD, CONSUMED_TOMBSTONE_BUMP);
 
         Self::bump_instance(&env);
         env.events()
@@ -627,6 +641,7 @@ impl CalloraBatchClaim {
     /// - [`BatchClaimError::ClaimNotFound`] if `claimant` has no record.
     pub fn get_claim(env: Env, claimant: Address) -> Result<ClaimRecord, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::Claim(claimant);
 
         // Hot-read TTL bump: prevent archival of frequently polled entries.
@@ -652,6 +667,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn has_claim(env: Env, claimant: Address) -> Result<bool, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::Claim(claimant);
 
         // Hot-read TTL bump.
@@ -681,6 +697,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_consumed(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::ClaimConsumed(claim_id);
 
         if env.storage().persistent().has(&key) {
@@ -711,6 +728,7 @@ impl CalloraBatchClaim {
         claim_id: BytesN<32>,
     ) -> Result<Option<Address>, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::ClaimIdOwner(claim_id);
         if env.storage().persistent().has(&key) {
             env.storage()
@@ -731,6 +749,7 @@ impl CalloraBatchClaim {
     /// # Errors
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
+        Self::bump_instance(&env);
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
     }
 
@@ -784,6 +803,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn total_claims(env: Env) -> Result<u32, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         Ok(env
             .storage()
             .instance()
@@ -798,6 +818,7 @@ impl CalloraBatchClaim {
     /// # Errors
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn get_admin(env: Env) -> Result<Address, BatchClaimError> {
+        Self::bump_instance(&env);
         Self::require_admin(&env)
     }
 
