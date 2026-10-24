@@ -7,7 +7,7 @@
 #![cfg(test)]
 extern crate std;
 use crate::admin::{
-    check_and_record_upgrade, get_cooldown, set_cooldown, DEFAULT_COOLDOWN_SECONDS,
+    check_and_record_upgrade, get_cooldown, init_admin, set_cooldown, DEFAULT_COOLDOWN_SECONDS,
 };
 use crate::errors::UpgradeError;
 use soroban_sdk::{
@@ -18,6 +18,17 @@ use soroban_sdk::{
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Initialise the stored admin and return its address.
+///
+/// Every test that exercises `check_and_record_upgrade` or `set_cooldown`
+/// must call this first, since both now require the caller to be the stored
+/// admin.
+fn setup_admin(env: &Env) -> Address {
+    let admin = Address::generate(env);
+    init_admin(env, &admin);
+    admin
+}
 
 /// Return all events published by any contract in the environment, filtered
 /// to those whose first topic is the given string.
@@ -44,7 +55,6 @@ fn events_with_topic<'a>(
 // ===========================================================================
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_default_cooldown() {
     let env = Env::default();
     let cooldown = get_cooldown(&env);
@@ -52,22 +62,20 @@ fn test_default_cooldown() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_set_and_get_cooldown() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     set_cooldown(&env, &caller, 3600);
     assert_eq!(get_cooldown(&env), 3600);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_check_and_record_upgrade_first_time() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     // First time should always succeed
     let res = check_and_record_upgrade(&env, &caller);
@@ -83,11 +91,10 @@ fn test_check_and_record_upgrade_first_time() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_check_and_record_upgrade_cooldown_not_elapsed() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     // Set timestamp to 100
     env.ledger().set_timestamp(100);
@@ -105,11 +112,10 @@ fn test_check_and_record_upgrade_cooldown_not_elapsed() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_check_and_record_upgrade_cooldown_elapsed() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     env.ledger().set_timestamp(100);
 
@@ -139,11 +145,10 @@ fn test_check_and_record_upgrade_cooldown_elapsed() {
 ///
 /// Shape: topics `(cooldown_set, caller)`, data `new_cooldown_secs`.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_cooldown_emits_cooldown_set_event() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
     let new_cooldown: u64 = 3_600;
 
     set_cooldown(&env, &caller, new_cooldown);
@@ -167,11 +172,10 @@ fn set_cooldown_emits_cooldown_set_event() {
 /// `set_cooldown` called twice emits two separate `cooldown_set` events,
 /// one for each invocation.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_cooldown_emits_separate_events_on_repeated_calls() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     set_cooldown(&env, &caller, 1_800);
     set_cooldown(&env, &caller, 7_200);
@@ -193,11 +197,10 @@ fn set_cooldown_emits_separate_events_on_repeated_calls() {
 /// `upgrade_recorded` shape:
 ///   topics `(upgrade_recorded, caller)`, data `recorded_timestamp`.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn check_and_record_upgrade_first_call_emits_started_and_recorded() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
     env.ledger().set_timestamp(500);
 
     check_and_record_upgrade(&env, &caller).unwrap();
@@ -249,11 +252,10 @@ fn check_and_record_upgrade_first_call_emits_started_and_recorded() {
 /// When the cooldown has elapsed, a second `check_and_record_upgrade` call
 /// also emits both events with the updated timestamp.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn check_and_record_upgrade_second_call_after_cooldown_emits_events() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     env.ledger().set_timestamp(100);
     check_and_record_upgrade(&env, &caller).unwrap();
@@ -279,11 +281,10 @@ fn check_and_record_upgrade_second_call_after_cooldown_emits_events() {
 /// When the cooldown has NOT elapsed, `check_and_record_upgrade` returns
 /// `Err(CooldownNotElapsed)` and must NOT emit any events.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn check_and_record_upgrade_cooldown_not_elapsed_emits_no_events() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
 
     env.ledger().set_timestamp(100);
     check_and_record_upgrade(&env, &caller).unwrap();
@@ -312,11 +313,10 @@ fn check_and_record_upgrade_cooldown_not_elapsed_emits_no_events() {
 /// `upgrade_started` is emitted BEFORE `upgrade_recorded` within the same call.
 /// We verify ordering by comparing their positions in `env.events().all()`.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn upgrade_started_precedes_upgrade_recorded_in_event_order() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
     env.ledger().set_timestamp(1_000);
 
     check_and_record_upgrade(&env, &caller).unwrap();
@@ -357,11 +357,10 @@ fn upgrade_started_precedes_upgrade_recorded_in_event_order() {
 /// `check_and_record_upgrade` with a custom cooldown reports the custom window
 /// in the `upgrade_started` data payload.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn upgrade_started_data_reflects_custom_cooldown() {
     let env = Env::default();
     env.mock_all_auths();
-    let caller = Address::generate(&env);
+    let caller = setup_admin(&env);
     let custom_cooldown: u64 = 7_200;
 
     set_cooldown(&env, &caller, custom_cooldown);
@@ -376,4 +375,68 @@ fn upgrade_started_data_reflects_custom_cooldown() {
         cw, custom_cooldown,
         "upgrade_started data must report the active cooldown window"
     );
+}
+
+// ===========================================================================
+// Admin restriction tests (issue: restrict check_and_record_upgrade to admin)
+// ===========================================================================
+
+/// A non-admin signer must not be able to record an upgrade: the call returns
+/// `Unauthorized`, leaves `last_upg_tm` untouched, and emits no events.
+#[test]
+fn non_admin_cannot_record_upgrade() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let _admin = setup_admin(&env);
+    let attacker = Address::generate(&env);
+    env.ledger().set_timestamp(100);
+
+    let res = check_and_record_upgrade(&env, &attacker);
+    assert_eq!(res, Err(UpgradeError::Unauthorized));
+
+    let last = env
+        .storage()
+        .instance()
+        .get::<_, u64>(&Symbol::new(&env, "last_upg_tm"));
+    assert!(last.is_none(), "failed call must not write last_upg_tm");
+
+    assert_eq!(events_with_topic(&env, "upgrade_started").len(), 0);
+    assert_eq!(events_with_topic(&env, "upgrade_recorded").len(), 0);
+}
+
+/// `check_and_record_upgrade` returns `NotInitialized` when no admin is set.
+#[test]
+fn check_and_record_upgrade_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let caller = Address::generate(&env);
+
+    let res = check_and_record_upgrade(&env, &caller);
+    assert_eq!(res, Err(UpgradeError::NotInitialized));
+}
+
+/// Griefing proof-of-concept: an attacker calling every hour must not be able
+/// to keep resetting the cooldown and lock the admin out of upgrading.
+#[test]
+fn attacker_cannot_grief_admin_cooldown() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = setup_admin(&env);
+    let attacker = Address::generate(&env);
+
+    env.ledger().set_timestamp(0);
+    assert!(check_and_record_upgrade(&env, &admin).is_ok());
+
+    // Attacker hammers the entry point every hour across the cooldown window.
+    let mut t: u64 = 0;
+    while t < DEFAULT_COOLDOWN_SECONDS {
+        t += 3_600;
+        env.ledger().set_timestamp(t);
+        let res = check_and_record_upgrade(&env, &attacker);
+        assert_eq!(res, Err(UpgradeError::Unauthorized));
+    }
+
+    // Once the cooldown has elapsed the admin can still upgrade.
+    env.ledger().set_timestamp(DEFAULT_COOLDOWN_SECONDS);
+    assert!(check_and_record_upgrade(&env, &admin).is_ok());
 }
