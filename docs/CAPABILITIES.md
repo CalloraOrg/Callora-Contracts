@@ -48,6 +48,12 @@ let has_batch_deduct = caps & CAP_BATCH_DEDUCT != 0;
 | 17 | `0x20000` | `CAP_UPGRADE` | `propose_upgrade()` / `execute_upgrade()` — admin-gated WASM replacement | v1.0.0 |
 | 18–63 | — | *(reserved)* | Always zero; reserved for future capabilities | — |
 
+### Stake capability bits (reserved)
+
+The following bits are reserved for the `CalloraStake` contract. They are
+currently **cleared** because no matching entrypoint is exported yet; the bit
+positions are never reused.
+
 ## Stability guarantee
 
 - A bit position is assigned once and never reused for a different feature.
@@ -61,6 +67,7 @@ let has_batch_deduct = caps & CAP_BATCH_DEDUCT != 0;
 2. Cache the result — it is immutable for a given WASM deployment.
 3. Use `caps & CAP_<FEATURE> != 0` to gate feature-specific code paths.
 4. Treat an unknown bit as a forward-compatible signal: ignore it, do not error.
+5. A cleared bit means the entrypoint is **not** exported; do not call it.
 
 ## Constant values (for off-chain SDKs)
 
@@ -85,5 +92,5 @@ export const CAP_SLIPPAGE_GUARD     = 0x10000n; // Reserved (cleared)
 export const CAP_UPGRADE            = 0x20000n;
 
 // Exact mask of all supported capabilities in this version:
-export const ALL_CAPABILITIES       = 0x28F3Fn;
+export const ALL_CAPABILITIES       = 0x0n;
 ```

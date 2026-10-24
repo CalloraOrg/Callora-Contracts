@@ -20,6 +20,9 @@ use soroban_sdk::contracterror;
 /// | 10   | CapNotPositive           | Global cap must be greater than zero                |
 /// | 11   | NewAdminSameAsCurrent    | Nominated admin is the same as current admin       |
 /// | 12   | NoAdminTransferPending   | No admin transfer is pending to cancel             |
+/// | 13   | InvalidConfig            | Configuration value is invalid                     |
+/// | 14   | InvalidRecipient         | Recipient address is invalid                       |
+/// | 15   | AmountNotPositive        | Distribution amount must be greater than zero      |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -49,8 +52,11 @@ pub enum DistributeError {
     /// No admin transfer is pending to cancel (code 12).
     NoAdminTransferPending = 12,
 
+    /// Configuration value is invalid (code 13).
     InvalidConfig = 13,
+    /// Recipient address is invalid (code 14).
     InvalidRecipient = 14,
+    /// Distribution amount must be greater than zero (code 15).
     AmountNotPositive = 15,
     AmountExceedsMaxDistribute = 16,
     InsufficientBalance = 17,
@@ -65,6 +71,7 @@ mod tests {
     /// Verify that every error discriminant is unique and sequential.
     #[test]
     fn error_codes_are_unique_and_sequential() {
+        // All 19 variants must map to codes 1..=19 with no gaps or duplicates.
         let codes: [u32; 19] = [
             DistributeError::NotInitialized as u32,
             DistributeError::AlreadyInitialized as u32,
@@ -86,6 +93,7 @@ mod tests {
             DistributeError::AlreadyPaused as u32,
             DistributeError::NotPaused as u32,
         ];
+        // `seen` is sized to 20 so index `code` (max 19) is always in bounds.
         let mut seen = [false; 20];
         for (i, &code) in codes.iter().enumerate() {
             assert_eq!(

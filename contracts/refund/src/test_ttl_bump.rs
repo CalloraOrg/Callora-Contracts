@@ -7,7 +7,7 @@
 //! infrequent writes.
 
 use crate::{
-    RefundContract, RefundContractClient, RefundError, RefundStatus, INSTANCE_BUMP_AMOUNT,
+    RefundContract, RefundContractClient, RefundError, INSTANCE_BUMP_AMOUNT,
     INSTANCE_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
 };
 use soroban_sdk::testutils::{storage::Instance, storage::Persistent, Address as _, Ledger};
@@ -150,7 +150,7 @@ fn test_get_refund_request_bumps_persistent_ttl() {
 
 #[test]
 fn test_get_refund_request_not_found() {
-    let (env, _admin, client) = setup();
+    let (_env, _admin, client) = setup();
 
     let result = client.try_get_refund_request(&999);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::NotFound);
@@ -159,7 +159,7 @@ fn test_get_refund_request_not_found() {
 #[test]
 #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_multiple_refund_requests_bump_ttl() {
-    let (env, admin, client) = setup();
+    let (env, _admin, client) = setup();
     let requester1 = Address::generate(&env);
     let requester2 = Address::generate(&env);
     let token = Address::generate(&env);

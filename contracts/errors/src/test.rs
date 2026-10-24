@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use soroban_sdk::testutils::storage::Instance;
 use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, IntoVal, String, Symbol};
@@ -114,7 +115,6 @@ fn test_log_error_emits_event() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_registry_lookup_extends_ttl() {
     let env = Env::default();
     let (client, admin) = setup(&env);
@@ -122,6 +122,16 @@ fn test_registry_lookup_extends_ttl() {
     let desc = String::from_str(&env, "Insufficient Balance");
     client.register_error(&admin, &101, &desc);
     let key = DataKey::ErrorReg(101);
+
+    // Keep the instance alive across the idle jump: in production the network
+    // only calls a contract whose instance entry is live, so the test must
+    // model a live instance rather than an archived one. The read path under
+    // test bumps the persistent entry, not the instance.
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(REGISTRY_TTL_BUMP, REGISTRY_TTL_BUMP);
+    });
 
     // Advance the ledger until the registry entry's remaining TTL has dropped
     // below the refresh threshold, but the entry has not yet expired.
@@ -145,7 +155,6 @@ fn test_registry_lookup_extends_ttl() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_log_error_extends_registry_ttl() {
     let env = Env::default();
     let (client, admin) = setup(&env);
@@ -154,6 +163,13 @@ fn test_log_error_extends_registry_ttl() {
     let desc = String::from_str(&env, "Insufficient Balance");
     client.register_error(&admin, &101, &desc);
     let key = DataKey::ErrorReg(101);
+
+    // Keep the instance live across the idle jump (see the lookup test above).
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(REGISTRY_TTL_BUMP, REGISTRY_TTL_BUMP);
+    });
 
     env.ledger()
         .set_sequence_number(REGISTRY_TTL_BUMP - REGISTRY_TTL_THRESHOLD + 1);
@@ -182,15 +198,13 @@ fn test_overflow_protection() {
     let (client, admin) = setup(&env);
     let user = Address::generate(&env);
 
-    // Registering u32::MAX makes the code valid, so the arithmetic guard is
-    // what rejects it.
+    // A registered u32::MAX is a valid code: logging it must succeed and store
+    // it verbatim (no arithmetic guard rejects the maximum code).
     let desc = String::from_str(&env, "Max Code");
     client.register_error(&admin, &u32::MAX, &desc);
 
-    assert_eq!(
-        client.try_log_error(&user, &u32::MAX).unwrap_err().unwrap(),
-        Error::Overflow
-    );
+    assert_eq!(client.log_error(&user, &u32::MAX), ());
+    assert_eq!(client.get_recent_error(&user), Some(u32::MAX));
 }
 
 #[test]
@@ -229,12 +243,10 @@ fn test_overflow_edge_round_trip() {
     client.register_error(&admin, &(u32::MAX - 1), &desc);
     client.register_error(&admin, &u32::MAX, &desc);
 
-    // Boundary: code at max - 1 succeeds, max fails, then max - 1 still succeeds.
+    // Both the boundary and the maximum code are valid and loggable.
     assert_eq!(client.log_error(&user, &(u32::MAX - 1)), ());
-    assert_eq!(
-        client.try_log_error(&user, &u32::MAX).unwrap_err().unwrap(),
-        Error::Overflow
-    );
+    assert_eq!(client.log_error(&user, &u32::MAX), ());
+    assert_eq!(client.get_recent_error(&user), Some(u32::MAX));
     assert_eq!(client.log_error(&user, &(u32::MAX - 1)), ());
 }
 
@@ -462,11 +474,17 @@ fn test_register_emits_event_and_extends_ttl() {
 /// A successful update emits `error_updated`, rewrites the value, and
 /// re-extends the TTL after it has aged below the threshold.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_update_replaces_description_emits_event_and_extends_ttl() {
     let (env, contract_id, client, admin) = setup_full();
     let original = String::from_str(&env, "old");
     client.register_error(&admin, &101, &original);
+
+    // Keep the instance live across the idle jump (see the lookup test above).
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(REGISTRY_TTL_BUMP, REGISTRY_TTL_BUMP);
+    });
 
     // Age the entry below the extension threshold.
     let seq = env.ledger().sequence();
@@ -549,11 +567,137 @@ fn test_log_error_unchanged_for_registered_codes() {
     });
     assert_eq!(recent, Some(101), "log_error must store the recent code");
 
-    // Overflow protection is also unchanged: even a registered description
-    // for u32::MAX does not soften the Overflow rejection.
-    client.register_error(&admin, &u32::MAX, &String::from_str(&env, "overflow"));
+    // A registered u32::MAX is now a valid code and logs successfully.
+    client.register_error(&admin, &u32::MAX, &String::from_str(&env, "max"));
+    assert_eq!(client.log_error(&user, &u32::MAX), ());
+    assert_eq!(client.get_recent_error(&user), Some(u32::MAX));
+}
+
+// ---------------------------------------------------------------------------
+// Instance TTL policy — every entrypoint (including views) must refresh it
+// ---------------------------------------------------------------------------
+
+/// Remaining instance TTL (in ledgers) for the errors contract.
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+/// Age the instance below the bump threshold while keeping it live, then run
+/// `call` and assert the instance TTL was refreshed to `INSTANCE_BUMP_AMOUNT`.
+fn assert_instance_refreshed<F: FnOnce()>(env: &Env, contract_id: &Address, call: F) {
+    // Ensure the instance has room to age without being archived, then park it
+    // just above the threshold boundary.
+    env.as_contract(contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let before = instance_ttl(env, contract_id);
+    assert!(
+        before < INSTANCE_BUMP_THRESHOLD,
+        "precondition: instance TTL ({before}) must be below the bump threshold"
+    );
+
+    call();
+
     assert_eq!(
-        client.try_log_error(&user, &u32::MAX).unwrap_err().unwrap(),
-        Error::Overflow
+        instance_ttl(env, contract_id),
+        INSTANCE_BUMP_AMOUNT,
+        "entrypoint must refresh the instance TTL to INSTANCE_BUMP_AMOUNT"
+    );
+}
+
+/// `register_error` (write path) refreshes instance TTL.
+#[test]
+fn test_register_error_bumps_instance_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+    let desc = String::from_str(&env, "desc");
+    assert_instance_refreshed(&env, &contract_id, || {
+        client.register_error(&admin, &101, &desc);
+    });
+}
+
+/// `update_error` (write path) refreshes instance TTL.
+#[test]
+fn test_update_error_bumps_instance_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+    client.register_error(&admin, &101, &String::from_str(&env, "old"));
+    let updated = String::from_str(&env, "new");
+    assert_instance_refreshed(&env, &contract_id, || {
+        client.update_error(&admin, &101, &updated);
+    });
+}
+
+/// `get_error_description` (read-only view) refreshes instance TTL.
+#[test]
+fn test_get_error_description_bumps_instance_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+    client.register_error(&admin, &101, &String::from_str(&env, "desc"));
+    assert_instance_refreshed(&env, &contract_id, || {
+        let _ = client.get_error_description(&101);
+    });
+}
+
+/// `log_error` refreshes instance TTL.
+#[test]
+fn test_log_error_bumps_instance_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+    let user = Address::generate(&env);
+    client.register_error(&admin, &101, &String::from_str(&env, "desc"));
+    assert_instance_refreshed(&env, &contract_id, || {
+        client.log_error(&user, &101);
+    });
+}
+
+/// `get_recent_error` (read-only view) refreshes instance TTL.
+#[test]
+fn test_get_recent_error_bumps_instance_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+    let user = Address::generate(&env);
+    client.register_error(&admin, &101, &String::from_str(&env, "desc"));
+    client.log_error(&user, &101);
+    assert_instance_refreshed(&env, &contract_id, || {
+        let _ = client.get_recent_error(&user);
+    });
+}
+
+/// `register_error(u32::MAX)` followed by `log_error(u32::MAX)` succeeds and the
+/// code round-trips through `get_recent_error`.
+#[test]
+fn test_register_and_log_max_error_code() {
+    let (env, contract_id, client, admin) = setup_full();
+    let user = Address::generate(&env);
+
+    let desc = String::from_str(&env, "Max Code");
+    client.register_error(&admin, &u32::MAX, &desc);
+    assert_eq!(stored_desc(&env, &contract_id, u32::MAX).unwrap(), desc);
+
+    assert_eq!(client.log_error(&user, &u32::MAX), ());
+    assert_eq!(client.get_recent_error(&user), Some(u32::MAX));
+}
+
+/// The `RecentErr` temporary entry keeps its deliberate short (~8 minute)
+/// lifetime rather than being extended to the registry budget.
+#[test]
+fn test_recent_err_lifetime_is_short() {
+    use soroban_sdk::testutils::storage::Temporary;
+
+    let (env, contract_id, client, admin) = setup_full();
+    let user = Address::generate(&env);
+    client.register_error(&admin, &101, &String::from_str(&env, "desc"));
+    client.log_error(&user, &101);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage()
+            .temporary()
+            .get_ttl(&DataKey::RecentErr(user.clone()))
+    });
+    assert_eq!(
+        ttl, RECENT_ERR_TTL_LEDGERS,
+        "RecentErr must use the deliberate short lifetime"
     );
 }

@@ -102,6 +102,7 @@ pub enum DataKey {
 pub enum StorageKey {
     UsdcToken,
     ProcessedRequest(u64),
+    ReentrancyGuard,
     ReserveCap(Address),
     DeveloperConfig(Address),
     DeveloperState(Address),
@@ -162,7 +163,6 @@ pub mod token {
     pub use soroban_sdk::token::Client;
 }
 
-#[cfg(target_arch = "wasm32")]
 pub mod settlement {
     use soroban_sdk::{contractclient, Address, Env};
 
@@ -179,37 +179,7 @@ pub mod settlement {
             ledger_seq: u32,
         );
         fn record_deduction(env: Env, amount: i128, request_id: u64);
-    }
-}
-
-/// In native/test mode the settlement contract is registered directly in the
-/// test `Env`. The vault emits USDC transfers; settlement accounting is
-/// verified through its own public interface.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod settlement {
-    use soroban_sdk::{Address, Env};
-    pub struct Client<'a> {
-        _env: &'a Env,
-        _addr: &'a Address,
-    }
-    impl<'a> Client<'a> {
-        pub fn new(env: &'a Env, addr: &'a Address) -> Self {
-            Client {
-                _env: env,
-                _addr: addr,
-            }
-        }
-        pub fn receive_payment(
-            &self,
-            _caller: &Address,
-            _amount: &i128,
-            _to_global_pool: &bool,
-            _developer: &Option<Address>,
-            _token: &Address,
-            _nonce: &u32,
-        ) {
-        }
-        pub fn record_deduction(&self, _amount: &i128, _request_id: &u64) {}
+        fn clear_deduction_request(env: Env, request_id: u64);
     }
 }
 
@@ -270,11 +240,19 @@ impl CalloraVault {
         caller: &Address,
         amount: i128,
     ) -> Result<(), VaultError> {
-        // 1. Owner-or-authorized-caller check (issue #1107: the owner may
-        //    always deduct; a configured authorized caller may deduct too).
+        let mut items = Vec::new(env);
+        items.push_back((amount, 0_u64));
+        Self::validate_deduct_batch(env, caller, &items)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_deduct_batch(
+        env: &Env,
+        caller: &Address,
+        items: &Vec<(i128, u64)>,
+    ) -> Result<i128, VaultError> {
         Self::require_authorized_deduct_caller(env.clone(), caller)?;
 
-        // 2. Pause guard.
         if env
             .storage()
             .instance()
@@ -284,30 +262,63 @@ impl CalloraVault {
             return Err(VaultError::Paused);
         }
 
-        // 3-5. Amount bounds (positive, min_deposit, max_deduct).
+        if items.is_empty() {
+            return Err(VaultError::BatchEmpty);
+        }
+        if items.len() > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+
         let min_dep = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
+            .ok_or(VaultError::NotInitialized)?;
         let max_deduct = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+            .ok_or(VaultError::NotInitialized)?;
 
-        // 6. Balance check.
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        if current_bal < amount {
+
+        let mut total_amount: i128 = 0;
+        let mut seen_ids: Vec<u64> = Vec::new(env);
+
+        for item in items.iter() {
+            let (amount, request_id) = item;
+            if amount <= 0 {
+                return Err(VaultError::AmountNotPositive);
+            }
+            if amount < min_dep {
+                return Err(VaultError::BelowMinDeposit);
+            }
+            if amount > max_deduct {
+                return Err(VaultError::ExceedsMaxDeduct);
+            }
+            if request_id != 0 {
+                Self::require_not_duplicate(env, &request_id)?;
+                if seen_ids.contains(&request_id) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_ids.push_back(request_id);
+            }
+            total_amount = total_amount
+                .checked_add(amount)
+                .ok_or(VaultError::Overflow)?;
+        }
+
+        if total_amount > current_bal {
             return Err(VaultError::InsufficientBalance);
         }
 
-        Ok(())
+        current_bal
+            .checked_sub(total_amount)
+            .ok_or(VaultError::Overflow)
     }
 
     /// Initialize the Callora Vault contract (one-time setup).
@@ -319,18 +330,34 @@ impl CalloraVault {
     /// # Parameters
     /// - `owner` — vault owner; only this address may call owner-gated functions.
     /// - `usdc_token` — USDC token contract address used for all transfers.
-    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0).
+    /// - `initial_balance` — the tracked balance to record at startup (must be ≥ 0
+    ///   and, when non-zero, backed by the vault's on-ledger USDC balance).
     /// - `authorized_caller` — address permitted to call [`deduct`] and [`batch_deduct`].
     /// - `min_deposit` — minimum accepted deposit amount in stroops; must be > 0.
     /// - `revenue_pool` — optional revenue pool address; may be `None`.
     /// - `max_deduct` — per-call deduction cap in stroops; must be > 0 and ≥ `min_deposit`.
     /// - `settlement` — settlement contract address that receives deducted funds.
     ///
-    /// # Panics
-    /// - If already initialized.
-    /// - If `min_deposit <= 0`, `max_deduct <= 0`, or `min_deposit > max_deduct`.
+    /// # Authorization
+    /// `owner.require_auth()` is enforced. This prevents a third party from
+    /// front-running the deployment and initializing the vault with an owner
+    /// they control.
     ///
-    /// No auth is required; `init` is a constructor and may only succeed once.
+    /// # Errors
+    /// - [`VaultError::AlreadyInitialized`] — `init` has already succeeded.
+    /// - [`VaultError::MinDepositNotPositive`] — `min_deposit <= 0`.
+    /// - [`VaultError::MaxDeductNotPositive`] — `max_deduct <= 0`.
+    /// - [`VaultError::MinDepositExceedsMaxDeduct`] — `min_deposit > max_deduct`.
+    /// - [`VaultError::AmountNotPositive`] — `initial_balance < 0`.
+    /// - [`VaultError::UsdcTokenCannotBeVault`] — `usdc_token` is the vault address.
+    /// - [`VaultError::RevenuePoolCannotBeVault`] — `revenue_pool` is the vault address.
+    /// - [`VaultError::SettlementCannotBeVault`] — `settlement` is the vault address.
+    /// - [`VaultError::SettlementEqualsRevenuePool`] — `settlement == revenue_pool`.
+    /// - [`VaultError::InsufficientBalance`] — `initial_balance > 0` exceeds the
+    ///   vault's current on-ledger USDC balance.
+    ///
+    /// All validation runs before the first storage write, so a failed `init`
+    /// leaves the contract untouched and can be retried.
     pub fn init(
         env: Env,
         owner: Address,
@@ -345,6 +372,34 @@ impl CalloraVault {
         if env.storage().instance().has(&DataKey::Owner) {
             return Err(VaultError::AlreadyInitialized);
         }
+
+        // Require the owner's authorization before any state is written so a
+        // front-runner cannot initialize the vault on the owner's behalf.
+        owner.require_auth();
+
+        // Address sanity checks: none of the configured contracts may alias the
+        // vault itself, and settlement proceeds must not be routed to the same
+        // address that receives revenue-pool funds.
+        let contract_address = env.current_contract_address();
+        if usdc_token == contract_address {
+            return Err(VaultError::UsdcTokenCannotBeVault);
+        }
+        if let Some(ref pool) = revenue_pool {
+            if *pool == contract_address {
+                return Err(VaultError::RevenuePoolCannotBeVault);
+            }
+        }
+        if let Some(ref settlement_addr) = settlement {
+            if *settlement_addr == contract_address {
+                return Err(VaultError::SettlementCannotBeVault);
+            }
+            if let Some(ref pool) = revenue_pool {
+                if settlement_addr == pool {
+                    return Err(VaultError::SettlementEqualsRevenuePool);
+                }
+            }
+        }
+
         let min_dep_val = min_deposit.unwrap_or(0);
         if min_dep_val <= 0 {
             return Err(VaultError::MinDepositNotPositive);
@@ -360,6 +415,15 @@ impl CalloraVault {
         let initial_balance_val = initial_balance.unwrap_or(0);
         if initial_balance_val < 0 {
             return Err(VaultError::AmountNotPositive);
+        }
+
+        // Never record unbacked funds. The tracked balance may not exceed the
+        // USDC actually held by the vault at initialization time.
+        if initial_balance_val > 0 {
+            let usdc_client = crate::token::Client::new(&env, &usdc_token);
+            if usdc_client.balance(&contract_address) < initial_balance_val {
+                return Err(VaultError::InsufficientBalance);
+            }
         }
 
         env.storage().instance().set(&DataKey::Owner, &owner);
@@ -550,9 +614,12 @@ impl CalloraVault {
             Self::require_not_duplicate(&env, &request_id)?;
         }
 
+        Self::require_not_reentrant(&env)?;
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
+
         let new_bal = current_bal
             .checked_sub(amount)
-            .unwrap_or_else(|| panic!("Math underflow"));
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
         env.events().publish(
@@ -568,7 +635,9 @@ impl CalloraVault {
         usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-        settlement_client.record_deduction(&amount, &request_id);
+        if request_id != 0 {
+            settlement_client.record_deduction(&amount, &request_id);
+        }
 
         // Record the idempotency marker only after every state mutation and
         // external call has succeeded. Any earlier failure reverts the whole
@@ -576,6 +645,7 @@ impl CalloraVault {
         if request_id != 0 {
             Self::mark_request_processed(&env, &request_id);
         }
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -632,20 +702,8 @@ impl CalloraVault {
         items: Vec<(i128, u64)>,
     ) -> Result<(), VaultError> {
         caller.require_auth();
+        Self::validate_deduct_batch(&env, &caller, &items)?;
 
-        // Authorization and lifecycle preconditions — checked before mutation.
-        // Same owner-or-caller rule as `deduct`; without this a cleared
-        // authorized caller panicked instead of falling back to the owner.
-        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
-
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::Paused);
-        }
         let settlement_addr = Self::require_settlement(&env)?;
         let usdc_addr = env
             .storage()
@@ -653,71 +711,21 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // Boundary / batch-limit preconditions — checked before mutation.
-        if items.is_empty() {
-            return Err(VaultError::BatchEmpty);
-        }
-        if items.len() > MAX_BATCH_SIZE {
-            return Err(VaultError::BatchTooLarge);
-        }
-
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap_or_else(|| panic!("Min deposit not set"));
-
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
 
-        // Validate every item and accumulate the total with checked arithmetic,
-        // before any transfer or mutation. An overflowing total, an out-of-range
-        // item, or a total that exceeds the tracked balance fails the whole call
-        // atomically (mirrors `deduct`'s explicit pre-transfer checks).
-        let mut total_amount: i128 = 0i128;
-        let mut seen_ids: Vec<u64> = Vec::new(&env);
-        for item in items.iter() {
-            let (amount, request_id) = item;
-            if amount <= 0 {
-                return Err(VaultError::AmountNotPositive);
-            }
-            if amount < min_dep {
-                return Err(VaultError::BelowMinDeposit);
-            }
-            if amount > max_deduct {
-                return Err(VaultError::ExceedsMaxDeduct);
-            }
-            // Idempotency: reject an id already recorded in storage as well as
-            // an id repeated within this same batch. Both checks run before any
-            // mutation so a duplicate fails the whole batch atomically.
-            // `request_id == 0` means "no idempotency" and is never recorded.
-            if request_id != 0 {
-                Self::require_not_duplicate(&env, &request_id)?;
-                if seen_ids.contains(&request_id) {
-                    return Err(VaultError::DuplicateRequestId);
-                }
-                seen_ids.push_back(request_id);
-            }
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-        if total_amount > current_bal {
-            return Err(VaultError::InsufficientBalance);
-        }
+        let total_amount = items.iter().try_fold(0_i128, |acc, (amount, _)| {
+            acc.checked_add(amount).ok_or(VaultError::Overflow)
+        })?;
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-
         let usdc_client = token::Client::new(&env, &usdc_addr);
+
+        Self::require_not_reentrant(&env)?;
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
 
         // All preconditions passed. Now the value-conserving mutation pair is
         // performed atomically: forward exactly `total_amount` to settlement
@@ -730,10 +738,12 @@ impl CalloraVault {
             &total_amount,
         );
 
-        let mut new_bal = current_bal;
+        let mut running_bal = current_bal;
         for item in items.iter() {
             let (amount, request_id) = item;
-            new_bal = new_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+            running_bal = running_bal
+                .checked_sub(amount)
+                .ok_or(VaultError::Overflow)?;
 
             env.events().publish(
                 (
@@ -741,10 +751,12 @@ impl CalloraVault {
                     events::event_version_v1(&env),
                     caller.clone(),
                 ),
-                (amount, new_bal),
+                (amount, running_bal),
             );
 
-            settlement_client.record_deduction(&amount, &request_id);
+            if request_id != 0 {
+                settlement_client.record_deduction(&amount, &request_id);
+            }
 
             // Persist the idempotency marker only after this item's transfer
             // and settlement call succeed; a later failure reverts the batch.
@@ -752,7 +764,10 @@ impl CalloraVault {
                 Self::mark_request_processed(&env, &request_id);
             }
         }
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -941,7 +956,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -998,7 +1013,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1047,18 +1062,20 @@ impl CalloraVault {
     /// # Panics
     /// - `"amount must be positive"` — `amount <= 0`.
     /// - `"insufficient balance"` — vault balance < `amount`.
-    pub fn withdraw(env: Env, amount: i128) -> i128 {
-        let owner = Self::get_owner(env.clone());
+    pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
+        let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
         Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
+        Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
 
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).unwrap();
+        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1066,13 +1083,15 @@ impl CalloraVault {
             .storage()
             .instance()
             .get(&DataKey::UsdcToken)
-            .expect("vault not initialized");
+            .ok_or(VaultError::NotInitialized)?;
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &owner,
             &amount,
         );
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1083,7 +1102,7 @@ impl CalloraVault {
             (amount, new_bal),
         );
 
-        new_bal
+        Ok(new_bal)
     }
 
     /// Withdraw USDC from the vault to an arbitrary recipient address (owner only).
@@ -1110,40 +1129,50 @@ impl CalloraVault {
     /// - `"insufficient balance"` — vault balance < `amount`.
     /// - `"cannot withdraw to vault address"` — `to == vault_address`.
     /// - `"cannot withdraw to token address"` — `to == usdc_token`.
-    pub fn withdraw_to(env: Env, to: Address, amount: i128) -> i128 {
-        let owner = Self::get_owner(env.clone());
+    pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
+        let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
         Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
+        Self::require_positive_amount(amount)?;
+
+        // Zero-address check first.
+        if to == Address::from_contract_id(&BytesN::<32>::from_array(&env, &[0u8; 32])) {
+            return Err(VaultError::ZeroAddressRecipient);
+        }
 
         // Recipient validation
-        assert!(
-            to != env.current_contract_address(),
-            "cannot withdraw to vault address"
-        );
+        if to == env.current_contract_address() {
+            return Err(VaultError::InvalidRecipient);
+        }
 
         let usdc_addr: Address = env
             .storage()
             .instance()
             .get(&DataKey::UsdcToken)
-            .expect("vault not initialized");
+            .ok_or(VaultError::NotInitialized)?;
 
-        assert!(to != usdc_addr, "cannot withdraw to token address");
+        if to == usdc_addr {
+            return Err(VaultError::InvalidRecipient);
+        }
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
 
         if current_bal < amount {
-            panic!("insufficient balance");
+            return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).unwrap();
+        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &to,
             &amount,
         );
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1155,7 +1184,7 @@ impl CalloraVault {
             (amount, new_bal),
         );
 
-        new_bal
+        Ok(new_bal)
     }
 
     /// Admin distribute USDC surplus to a recipient (admin only).
@@ -1175,6 +1204,7 @@ impl CalloraVault {
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         Self::require_admin(&env, &caller).unwrap();
         Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
 
         if amount <= 0 {
             panic!("amount must be positive");
@@ -1193,7 +1223,9 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
 
+        env.storage().temporary().set(&StorageKey::ReentrancyGuard, &true);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
+        env.storage().temporary().remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1239,16 +1271,16 @@ impl CalloraVault {
     ///
     /// The owner is set at [`init`] and may be transferred via a two-step
     /// ownership-transfer flow. No auth required; this is a read-only view.
-    pub fn get_owner(env: Env) -> Address {
+    pub fn get_owner(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"))
+            .ok_or(VaultError::NotInitialized)
     }
 
     pub(crate) fn require_owner(env: Env, caller: Address) -> Result<(), VaultError> {
-        let owner = Self::get_owner(env);
+        let owner = Self::get_owner(env.clone())?;
         if caller != owner {
             return Err(VaultError::Unauthorized);
         }
@@ -1258,12 +1290,12 @@ impl CalloraVault {
     ///
     /// All vault transfers use this token contract. No auth required; this is a
     /// read-only view.
-    pub fn get_usdc_token(env: Env) -> Address {
+    pub fn get_usdc_token(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"))
+            .ok_or(VaultError::NotInitialized)
     }
     /// Return the per-call deduction cap in USDC stroops.
     ///
@@ -1306,7 +1338,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1336,12 +1368,12 @@ impl CalloraVault {
     /// set, which cannot occur after a successful [`init`].
     ///
     /// No auth required; this is a read-only view.
-    pub fn get_settlement(env: Env) -> Address {
+    pub fn get_settlement(env: Env) -> Result<Address, VaultError> {
         Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::Settlement)
-            .unwrap_or_else(|| panic!("Settlement not set"))
+            .ok_or(VaultError::NotInitialized)
     }
 
     /// Update the settlement contract address (owner only).
@@ -1375,7 +1407,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::Owner)
-            .unwrap_or_else(|| panic!("Owner not set"));
+            .ok_or(VaultError::NotInitialized)?;
 
         if caller != owner {
             return Err(VaultError::Unauthorized);
@@ -1394,7 +1426,7 @@ impl CalloraVault {
             .storage()
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
-            .unwrap_or_else(|| panic!("USDC Token not set"));
+            .ok_or(VaultError::NotInitialized)?;
         if settlement == usdc_addr {
             return Err(VaultError::SettlementCannotBeToken);
         }
@@ -2399,6 +2431,18 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Reject a nested call that re-enters the vault while a token transfer is
+    /// still in flight. This prevents call-back reentry through malicious token
+    /// contracts (e.g. the transfer hook) from executing a second deduct or
+    /// withdraw within the same transaction.
+    pub(crate) fn require_not_reentrant(env: &Env) -> Result<(), VaultError> {
+        let key = StorageKey::ReentrancyGuard;
+        if env.storage().temporary().get::<_, bool>(&key).unwrap_or(false) {
+            return Err(VaultError::Unauthorized);
+        }
+        Ok(())
+    }
+
     /// Persist a processed-request marker in persistent storage and set its TTL.
     fn mark_request_processed(env: &Env, request_id: &u64) {
         let key = StorageKey::ProcessedRequest(*request_id);
@@ -2440,6 +2484,12 @@ impl CalloraVault {
             }
             if removed_temporary {
                 env.storage().temporary().remove(&key);
+            }
+            if env.storage().instance().has(&DataKey::Settlement) {
+                let settlement_addr = Self::require_settlement(&env).ok();
+                if let Some(addr) = settlement_addr {
+                    let _ = settlement::Client::new(&env, &addr).try_clear_deduction_request(&id);
+                }
             }
             if removed_persistent || removed_temporary {
                 env.events().publish(
@@ -2940,7 +2990,15 @@ mod test_allowlist_remove;
 mod test_views;
 
 #[cfg(test)]
+mod test_simulate_parity;
+
+#[cfg(test)]
 mod test_reentrancy;
+
+/// Issue #1395 — init owner authorization, backed initial balance, and
+/// address-alias validation.
+#[cfg(test)]
+mod test_init_hardening;
 
 #[cfg(test)]
 mod test;

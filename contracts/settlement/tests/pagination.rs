@@ -13,7 +13,10 @@
 
 extern crate std;
 
-use callora_settlement::{CalloraSettlement, CalloraSettlementClient, StorageKey, INDEX_PAGE_SIZE};
+use callora_settlement::{
+    CalloraSettlement, CalloraSettlementClient, SettlementError, StorageKey, INDEX_PAGE_SIZE,
+    MAX_DEVELOPER_BALANCES_PAGE_SIZE,
+};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, Vec};
 
@@ -218,7 +221,7 @@ fn cursor_pagination_returns_each_developer_exactly_once() {
     credit_developers(&env, &client, &vault, &token, total);
 
     let mut seen = std::collections::HashSet::new();
-    let mut cursor: Option<Address> = None;
+    let mut cursor: Option<u32> = None;
     let page_size = 3u32;
 
     loop {
@@ -258,6 +261,58 @@ fn get_developer_balances_page_start_offset_works() {
             full.get((i + 2) as u32).unwrap().address
         );
     }
+}
+
+#[test]
+fn pagination_page_reads_only_requested_index_pages() {
+    let env = Env::default();
+    let (admin, vault, token, client) = setup(&env);
+    assert!(client
+        .get_developer_balances_page(&admin, &0, &50, &token)
+        .is_empty());
+
+    let developers = credit_developers(&env, &client, &vault, &token, 120);
+    let first = client.get_developer_balances_page(&admin, &0, &50, &token);
+    assert_eq!(first.len(), 50);
+    for index in 0..50 {
+        assert_eq!(
+            first.get(index).unwrap().address,
+            developers[index as usize]
+        );
+    }
+
+    let resources_before = env.cost_estimate().resources().read_entries;
+    let last = client.get_developer_balances_page(&admin, &100, &50, &token);
+    let resources_after = env.cost_estimate().resources().read_entries;
+    assert_eq!(last.len(), 20);
+    for index in 0..20 {
+        assert_eq!(
+            last.get(index).unwrap().address,
+            developers[(index + 100) as usize]
+        );
+    }
+    let read_entries = resources_after.saturating_sub(resources_before);
+    assert!(
+        read_entries <= 25,
+        "last page should only read its index page and balances, read {read_entries} entries"
+    );
+    assert!(client
+        .get_developer_balances_page(&admin, &120, &50, &token)
+        .is_empty());
+    assert!(client
+        .get_developer_balances_page(&admin, &0, &0, &token)
+        .is_empty());
+    assert_eq!(
+        client
+            .get_developer_balances_page(
+                &admin,
+                &0,
+                &(MAX_DEVELOPER_BALANCES_PAGE_SIZE + 1),
+                &token
+            )
+            .len(),
+        MAX_DEVELOPER_BALANCES_PAGE_SIZE
+    );
 }
 
 // ─── 4. migrate_index_to_pages — resumable and idempotent ────────────────────

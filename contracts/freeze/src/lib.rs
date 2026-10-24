@@ -107,6 +107,22 @@ impl FreezeOp {
 pub const MAX_FREEZE_OPS: usize = 64;
 
 // ---------------------------------------------------------------------------
+// TTL policy
+// ---------------------------------------------------------------------------
+
+/// Approximate number of ledgers per day on Stellar (5 seconds per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Threshold at which instance storage TTL is extended (~30 days).
+///
+/// All freeze state lives in instance storage, so the entrypoint-level
+/// [`CalloraFreeze::bump_instance`] helper keeps the instance alive.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL when instance storage is extended (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+
+// ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
 
@@ -157,6 +173,18 @@ pub struct CalloraFreeze;
 
 #[contractimpl]
 impl CalloraFreeze {
+    /// Extend the instance storage TTL.
+    ///
+    /// All freeze state (admin, frozen flag, operator, reason, timestamp)
+    /// lives in instance storage. Calling this on every entrypoint — including
+    /// read-only views — keeps the instance from archiving due to inactivity,
+    /// mirroring the vault/escrow convention.
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     /// Initialise the contract with an `admin` address.
     ///
     /// Emits a `freeze_initialized` event on success.
@@ -169,6 +197,7 @@ impl CalloraFreeze {
     /// * [`FreezeError::AlreadyInitialized`] — admin already set.
     pub fn init(env: Env, admin: Address) -> Result<(), FreezeError> {
         admin.require_auth();
+        Self::bump_instance(&env);
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(FreezeError::AlreadyInitialized);
         }
@@ -183,6 +212,7 @@ impl CalloraFreeze {
     /// # Errors
     /// * [`FreezeError::NotInitialized`] — `init` has not been called.
     pub fn get_admin(env: Env) -> Result<Address, FreezeError> {
+        Self::bump_instance(&env);
         env.storage()
             .instance()
             .get(&DataKey::Admin)
@@ -191,6 +221,7 @@ impl CalloraFreeze {
 
     /// Return `true` if the contract is currently frozen.
     pub fn is_frozen(env: Env) -> bool {
+        Self::bump_instance(&env);
         env.storage()
             .instance()
             .get::<_, bool>(&DataKey::Frozen)
@@ -207,6 +238,7 @@ impl CalloraFreeze {
     /// # Errors
     /// * [`FreezeError::NotInitialized`] — `init` has not been called.
     pub fn get_freeze_status(env: Env) -> Result<FreezeStatus, FreezeError> {
+        Self::bump_instance(&env);
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(FreezeError::NotInitialized);
         }
@@ -241,6 +273,7 @@ impl CalloraFreeze {
     /// * [`FreezeError::AlreadyFrozen`] — contract is already frozen.
     pub fn freeze(env: Env, caller: Address, reason: Symbol) -> Result<(), FreezeError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone())?;
         let operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
 
@@ -275,6 +308,7 @@ impl CalloraFreeze {
     /// * [`FreezeError::NotFrozen`] — contract is not currently frozen.
     pub fn unfreeze(env: Env, caller: Address) -> Result<(), FreezeError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
             return Err(FreezeError::Unauthorized);
@@ -308,6 +342,7 @@ impl CalloraFreeze {
         operator: Option<Address>,
     ) -> Result<(), FreezeError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
             return Err(FreezeError::Unauthorized);
@@ -326,6 +361,7 @@ impl CalloraFreeze {
 
     /// Return the configured freeze operator, or `None` if unset.
     pub fn get_freeze_operator(env: Env) -> Option<Address> {
+        Self::bump_instance(&env);
         env.storage().instance().get(&DataKey::FreezeOperator)
     }
 }

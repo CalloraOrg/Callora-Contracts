@@ -10,6 +10,19 @@ All topic/data types refer to Soroban/Stellar XDR values.
 - `release` signature updated to `(caller, payment_asset, recipient)`. It verifies the record exists, deletes it before transfer (CEI), transfers tokens to `recipient`, and emits `escrow_released`.
 - `release` no longer overwrites `StorageKey::Signer`, ensuring `rotate_signer` maintains exclusive control over contract signing.
 
+## Change Note (2026-10) — Issue #1411: fee contract real token transfers
+
+`contracts/fee`: `init` now takes a `token: Address` argument (stored under
+`DataKey::Token`), `deposit` pulls real tokens via `token::Client::transfer`
+before incrementing `Accumulated`, and `withdraw` transfers tokens to the
+recipient after decrementing the counter. New events `fee_initialized`,
+`fee_set`, and `fee_deposited` are emitted with the `"callora_v1"` version
+marker at topic[1].
+
+## Change Note (2026-10) — Issue #1411: recipient audit trail and TTL management
+
+`contracts/recipient`: `update_recipient` now emits `RecipientUpdatedEvent` carrying `{ name, old_address, new_address }` instead of only the new record, providing a verifiable audit trail of payout address modifications. Registry instances and persistent entries are bumped across write and view entrypoints.
+
 ## Change Note (2026-04)
 
 The `workspace-members-dedup` hardening patch does not introduce event additions, removals, or payload shape changes.
@@ -1427,6 +1440,25 @@ Side effect: developer balance map entry for `GDEV...` is incremented by
 
 ---
 
+### `allocation_recorded`
+
+Emitted by `receive_payment()` and once per item in `batch_receive_payment()`
+after the corresponding `payment_received` (and, when applicable,
+`balance_credited` / `deposit`) events. Carries the running totals so indexers
+can reconcile `TotalReceived` against `TotalAllocated` without extra reads.
+
+| Index              | Location | Type    | Description                                                       |
+|--------------------|----------|---------|-------------------------------------------------------------------|
+| topic 0            | topics   | Symbol  | `"allocation_recorded"`                                           |
+| topic 1            | topics   | Address | `caller` — authorized vault or admin                              |
+| `amount`           | data     | i128    | amount allocated in this call (USDC micro-units)                  |
+| `total_allocated`  | data     | i128    | `TotalAllocated` after this credit (post-state)                   |
+| `total_received`   | data     | i128    | `TotalReceived` at the time of this credit                        |
+| `unallocated`      | data     | i128    | `total_received - total_allocated` after this credit (post-state) |
+
+
+---
+
 ### `supported_token_added`
 
 Emitted when the admin registers a token for settlement payments. The event is
@@ -1887,6 +1919,209 @@ Emitted by `set_freeze_operator()` for both set and clear operations.
 
 ---
 
+## Contract: `callora-recipient` (v0.1.0)
+
+Events emitted by the recipient registry contract for payout address resolution, indexing, and auditing updates.
+
+### `init`
+
+Emitted once by `init()` when initializing the registry admin.
+
+| Index   | Location | Type    | Description                     |
+|---------|----------|---------|---------------------------------|
+| topic 0 | topics   | Symbol  | `"init"`                        |
+| topic 1 | topics   | Address | `admin` — initial admin address |
+| data    | data     | `()`    | empty                           |
+
+```json
+{
+  "topics": ["init", "GADMIN..."],
+  "data": null
+}
+```
+
+---
+
+### `recipient_registered`
+
+Emitted by `register_recipient()` when a new recipient is mapped to an address.
+
+| Index     | Location | Type    | Description                       |
+|-----------|----------|---------|-----------------------------------|
+| topic 0   | topics   | Symbol  | `"recipient_registered"`          |
+| topic 1   | topics   | String  | `name` — recipient name           |
+| `name`    | data     | String  | recipient name identifier         |
+| `address` | data     | Address | on-ledger payout address          |
+
+```json
+{
+  "topics": ["recipient_registered", "vendor"],
+  "data": { "name": "vendor", "address": "GADDR..." }
+}
+```
+
+---
+
+### `recipient_updated`
+
+Emitted by `update_recipient()` when an existing recipient's payout address is changed.
+Carries both `old_address` and `new_address` to provide an immutable audit trail for indexers and compliance.
+
+| Index         | Location | Type    | Description                       |
+|---------------|----------|---------|-----------------------------------|
+| topic 0       | topics   | Symbol  | `"recipient_updated"`             |
+| topic 1       | topics   | String  | `name` — recipient name           |
+| `name`        | data     | String  | recipient name identifier         |
+| `old_address` | data     | Address | previous on-ledger payout address |
+| `new_address` | data     | Address | updated on-ledger payout address  |
+
+```json
+{
+  "topics": ["recipient_updated", "vendor"],
+  "data": { "name": "vendor", "old_address": "GOLD...", "new_address": "GNEW..." }
+}
+```
+
+---
+
+### `recipient_removed`
+
+Emitted by `remove_recipient()` when a recipient is removed from the registry.
+
+| Index   | Location | Type   | Description             |
+|---------|----------|--------|-------------------------|
+| topic 0 | topics   | Symbol | `"recipient_removed"`   |
+| topic 1 | topics   | String | `name` — recipient name |
+| data    | data     | `()`   | empty                   |
+
+```json
+{
+  "topics": ["recipient_removed", "vendor"],
+  "data": null
+}
+```
+
+---
+
+## Contract: Callora Refund
+
+### `initialized`
+
+Emitted once when the refund contract is initialized.
+
+| Index   | Location | Type             | Description          |
+|---------|----------|------------------|----------------------|
+| topic 0 | topics   | Symbol           | `"initialized"`      |
+| data    | data     | InitializedEvent | `{ admin: Address }` |
+
+```json
+{
+  "topics": ["initialized"],
+  "data": { "admin": "GADMIN..." }
+}
+```
+
+---
+
+### `refund_requested`
+
+Emitted when a requester files a new refund request.
+
+| Index   | Location | Type                 | Description                                      |
+|---------|----------|----------------------|--------------------------------------------------|
+| topic 0 | topics   | Symbol               | `"refund_requested"`                             |
+| data    | data     | RefundRequestedEvent | `{ request_id: u64, requester: Address, token: Address, amount: i128, reason: Symbol }` |
+
+```json
+{
+  "topics": ["refund_requested"],
+  "data": {
+    "request_id": 1,
+    "requester": "GREQUESTER...",
+    "token": "GTOKEN...",
+    "amount": 10000000,
+    "reason": "item_not_received"
+  }
+}
+```
+
+---
+
+### `refund_processed`
+
+Emitted on every status transition of a refund request (`Approved`, `Rejected`, or `Processed`).
+
+Extended with `token`, `fee`, and `net` fields for asset identification and financial reconciliation:
+- For `Approved` and `Rejected` transitions, `fee = 0` and `net = 0`.
+- For `Processed` transitions, `fee = floor(amount * fee_bps / 10_000)` is retained in the contract, and `net = amount - fee` is transferred to the requester.
+
+| Index   | Location | Type                 | Description                                                                                                            |
+|---------|----------|----------------------|------------------------------------------------------------------------------------------------------------------------|
+| topic 0 | topics   | Symbol               | `"refund_processed"`                                                                                                   |
+| data    | data     | RefundProcessedEvent | `{ request_id: u64, processor: Address, amount: i128, token: Address, fee: i128, net: i128, status: RefundStatus }` |
+
+```json
+{
+  "topics": ["refund_processed"],
+  "data": {
+    "request_id": 1,
+    "processor": "GADMIN...",
+    "amount": 10000000,
+    "token": "GTOKEN...",
+    "fee": 250000,
+    "net": 9750000,
+    "status": "Processed"
+  }
+}
+```
+
+---
+
+### `fees_withdrawn`
+
+Emitted when accumulated protocol fees are withdrawn by the admin.
+
+| Index   | Location | Type               | Description                                                    |
+|---------|----------|--------------------|----------------------------------------------------------------|
+| topic 0 | topics   | Symbol             | `"fees_withdrawn"`                                             |
+| data    | data     | FeesWithdrawnEvent | `{ admin: Address, token: Address, to: Address, amount: i128 }` |
+
+```json
+{
+  "topics": ["fees_withdrawn"],
+  "data": {
+    "admin": "GADMIN...",
+    "token": "GTOKEN...",
+    "to": "GRECIPIENT...",
+    "amount": 250000
+  }
+}
+```
+
+---
+
+### `config_updated`
+
+Emitted when the admin updates the refund configuration.
+
+| Index   | Location | Type                     | Description                                                 |
+|---------|----------|--------------------------|-------------------------------------------------------------|
+| topic 0 | topics   | Symbol                   | `"config_updated"`                                          |
+| data    | data     | RefundConfigUpdatedEvent | `{ admin: Address, fee_bps: u32, min_refund_amount: i128 }` |
+
+```json
+{
+  "topics": ["config_updated"],
+  "data": {
+    "admin": "GADMIN...",
+    "fee_bps": 250,
+    "min_refund_amount": 1000000
+  }
+}
+```
+
+---
+
 ## Contract: `callora-escrow` (v0.1.0)
 
 Events emitted by the escrow contract managing token-backed escrows, rate-limited admin critical actions, and key rotations.
@@ -2082,6 +2317,15 @@ Emitted by `release()` when funds are paid out to the recipient and the record i
 | `freeze_set`             | freeze          | `freeze()`                               |
 | `freeze_cleared`         | freeze          | `unfreeze()`                             |
 | `freeze_operator_set`    | freeze          | `set_freeze_operator()` (set or clear)   |
+| `init`                   | recipient       | `init()`                                 |
+| `recipient_registered`   | recipient       | `register_recipient()`                   |
+| `recipient_updated`      | recipient       | `update_recipient()`                     |
+| `recipient_removed`      | recipient       | `remove_recipient()`                     |
+| `initialized`            | refund          | `init()`                                 |
+| `refund_requested`       | refund          | `request_refund()`                       |
+| `refund_processed`       | refund          | `approve_refund()`, `reject_refund()`, `process_refund()` |
+| `fees_withdrawn`         | refund          | `withdraw_fees()`                        |
+| `config_updated`         | refund          | `update_config()`                        |
 | `init`                   | escrow          | `init()`                                 |
 | `cooldown_set`           | escrow          | `set_cooldown()`                         |
 | `action`                 | escrow          | `pause()` / `unpause()`                  |
@@ -2117,4 +2361,6 @@ Emitted by `release()` when funds are paid out to the recipient and the record i
 | 0.1.1   | distribute    | Publish per-leg transfer events (`distribute_started`, `distribute`, `distribute_completed`) with recipient topic and `DistributionLifecycleEvent` payload for payout reconciliation |
 | 0.0.1   | freeze        | Added `freeze_initialized`, `freeze_set`, `freeze_cleared`, `freeze_operator_set` events; `reason` persisted in storage; `get_freeze_status()` view added (Issue #1217) |
 | 0.3.0   | revenue-pool  | Moved `admin_changed` from `set_admin()` to `accept_admin()` so nomination no longer announces a change (Issue #1163) |
+| 0.1.0   | recipient     | Registry TTL management and audit trail: `recipient_updated` emits `RecipientUpdatedEvent { name, old_address, new_address }` (Issue #1411) |
+| 0.1.0   | refund        | Extended `refund_processed` event with `token`, `fee`, and `net`; added `fees_withdrawn` event on `withdraw_fees()` |
 | 0.1.0   | escrow        | Settle escrow records on release, pull backed tokens on create_escrow, preserve signer across releases, emit `escrow_released` (Issue #1406) |
