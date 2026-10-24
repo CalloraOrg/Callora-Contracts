@@ -271,6 +271,13 @@ Helper and admin functions such as [`get_developer_balance`](contracts/settlemen
   - This requires `caller == get_vault(env)` or `caller == get_admin(env)`.
 - Positive credit amount:
   - `amount > 0`
+- Ledger bound (replay guard): the caller-supplied `ledger_seq` must not be in
+  the future:
+  - `ledger_seq <= env.ledger().sequence()`, otherwise the call reverts with
+    `SettlementError::FutureLedgerSeq` before any HWM is written.
+- Replay guard: `ledger_seq` must be strictly greater than the stored
+  high-water mark (HWM) for the target (developer or pool):
+  - `ledger_seq > stored_hwm`, otherwise `SettlementError::ReplayDetected`.
 - If `to_pool == false`, a developer address must be supplied:
   - `developer.is_some()`
 
@@ -282,12 +289,103 @@ Helper and admin functions such as [`get_developer_balance`](contracts/settlemen
 - All other developers' balances are unchanged.
 - For the `to_pool == true` branch, the developer-balance map is unchanged, so the invariant is preserved.
 - If any pre-condition fails, the call reverts and the original credited balances are preserved.
+- On success the HWM for the credited target is advanced to `ledger_seq`. The
+  HWM is only ever advanced to a value that is `<= env.ledger().sequence()`,
+  so a caller cannot brick a developer or the pool by supplying
+  `ledger_seq = u32::MAX`.
 
 ---
 
 ## How Tests Support the Invariant
 
 The test suite in `contracts/settlement/src/test.rs` provides practical evidence for the non-negative credited-balance invariant:
+
+- **Developer credit test** (`test_receive_payment_to_developer`):
+
+---
+
+## Settlement Replay High-Water Mark Invariant
+
+**Invariant**: For every reachable state of [`CalloraSettlement`](contracts/settlement/src/lib.rs#L45), every stored replay high-water mark (HWM) — both the per-developer mark at `StorageKey::HighWaterMark(Address)` and the global-pool mark at `StorageKey::PoolHighWaterMark` — is **less than or equal to** the current ledger sequence at the time it was written, and therefore **less than or equal to** the current ledger sequence of any later reachable state.
+
+- **Storage fields**:
+  - per-developer: `StorageKey::HighWaterMark(Address)` (persistent, TTL `HWM_LIVE` / `HWM_THRESHOLD`)
+  - global pool: `StorageKey::PoolHighWaterMark` (instance)
+- **Accessors**: none public; the marks are read only by
+  [`check_developer`](contracts/settlement/src/replay_guard.rs#L35) and
+  [`check_pool`](contracts/settlement/src/replay_guard.rs#L59).
+- **Guarantee**: A stored HWM can never exceed the ledger sequence that was
+  current when it was written. Consequently no caller can permanently block
+  future credits by supplying a large `ledger_seq`.
+
+### Threat model
+
+`ledger_seq` is a caller-supplied argument, not a value read from the ledger.
+On `main`, `check_developer` / `check_pool` accept any `ledger_seq` and store
+it verbatim, so a single credit with `ledger_seq = u32::MAX` sets the HWM to
+`u32::MAX` and every later credit to that developer (or to the pool) fails
+with `ReplayDetected` forever. Because nothing on `main` removes the HWM,
+this is a permanent griefing vector reachable by any authorized caller (the
+vault or the admin).
+
+The fix bounds `ledger_seq` by `env.ledger().sequence()` before the HWM is
+written. A caller can therefore only advance the HWM up to the current
+ledger, which is exactly the value the guard is meant to track.
+
+### Reorg threat model
+
+Soroban ledgers are not expected to reorg in normal operation, but the guard
+is designed so that a reorg cannot resurrect a credit that was already
+observed: the HWM is monotonic and only advances. If a ledger is replayed at
+the same sequence, the second credit for the same target is rejected with
+`ReplayDetected` (strict `>` comparison). Callers that need to credit the
+same developer twice in one ledger must batch the credits (see below) rather
+than issue two separate `receive_payment` calls with the same `ledger_seq`.
+
+### Same-ledger credits
+
+Two credits for the same developer with the same `ledger_seq` collide: the
+second fails with `ReplayDetected`. This is intentional — the HWM is a
+per-target replay guard, not a per-request nonce. Callers that need multiple
+credits to one developer in one ledger must use `batch_receive_payment`,
+which aggregates repeated developers before the HWM check.
+
+### Repeated developers in a batch
+
+`batch_receive_payment` aggregates repeated developer entries before the HWM
+check: `[(dev, 10), (dev, 5)]` credits `dev` with `15` and advances the HWM
+once. This is approach (a) from the issue. The batch is atomic: if any item
+fails validation (including the ledger bound or the HWM check), no HWM is
+written and no balance is updated.
+
+### Recovery path
+
+`reset_high_water_mark(env, caller, target, new_mark)` is admin-only and
+requires `new_mark <= env.ledger().sequence()`. It emits a `hwm_reset` event
+carrying the old and new values. It exists so an operator can recover from a
+mark that was set too high by a bug or a compromised caller; it is not a
+substitute for the ledger bound, which prevents the situation from arising.
+
+---
+
+## How Tests Support the Replay HWM Invariant
+
+The replay tests in `contracts/settlement/src/test.rs` (filter
+`cargo test -p callora-settlement replay`) cover:
+
+- `receive_payment` with `ledger_seq = current + 1` → `FutureLedgerSeq`, no
+  HWM written.
+- `ledger_seq = u32::MAX` → `FutureLedgerSeq` (on `main` this succeeds and
+  bricks the developer).
+- Valid credit at seq N, then another at N → `ReplayDetected`.
+- Batch `[(dev, 10), (dev, 5)]` → aggregated `15`, no partial write.
+- `reset_high_water_mark` by admin lowers the mark, emits the event, and a
+  later valid credit succeeds.
+- `reset_high_water_mark` by a non-admin → `Unauthorized`.
+- `reset` with `new_mark > current ledger` → rejected.
+- Pool path (`to_pool = true`) with a future seq → `FutureLedgerSeq`.
+- The previously ignored `test_admin_migration` test passes and is no longer
+  ignored.
 
 - **Developer credit test** (`test_receive_payment_to_developer`):
   - Verifies that a positive settlement credit creates a positive developer balance while leaving the global pool unchanged.
@@ -299,6 +397,10 @@ The test suite in `contracts/settlement/src/test.rs` provides practical evidence
   - Verify unauthorized or zero-amount calls revert before credited balances can be corrupted.
 
 Together with the explicit pre-/post-conditions above, these tests help auditors and maintainers validate that **settlement developer credits are always non-negative** in all reachable states.
+
+Together with the replay HWM tests above, they also validate that the replay
+guard cannot be driven past the current ledger by a caller-supplied
+`ledger_seq`.
 
 ---
 

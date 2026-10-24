@@ -94,7 +94,7 @@ must not be reassigned once released.
 | 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
 | 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |
 | 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
-| 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
+| 17 | `InvalidHigrationTarget` | Settlement | Migration target is the settlement contract |
 | 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |
 | 19 | `TimelockOverflow` | Settlement | Timelock timestamp addition overflowed |
 | 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
@@ -128,6 +128,8 @@ must not be reassigned once released.
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
+| 51 | `FutureLedgerSeq` | Settlement | Caller-supplied `ledger_seq` exceeds the current ledger sequence |
+| 52 | `DuplicateDeveloperInBatch` | Settlement | A batch lists the same developer more than once |
 
 ## Revenue Pool
 

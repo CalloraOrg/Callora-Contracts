@@ -15,6 +15,24 @@
 //! If a chain reorg replays a settlement transaction the vault-provided
 //! `ledger_seq` will be the same (or lower) than the stored HWM.  The guard
 //! rejects the call, preventing a double credit.
+//!
+//! # Ledger binding
+//!
+//! `ledger_seq` is caller-supplied, so it is never trusted blindly: any value
+//! greater than [`Env::ledger`]`.sequence()` is rejected with
+//! [`SettlementError::FutureLedgerSeq`] before the HWM is read or written.
+//! This prevents a single credit at `u32::MAX` from permanently bricking a
+//! developer (or the pool) by raising the HWM beyond any reachable ledger.
+//!
+//! # Same-ledger credits
+//!
+//! The comparison is strict (`ledger_seq <= stored` is rejected), so two
+//! credits for the same developer in the same ledger collide.  Callers must
+//! aggregate them into a single credit, or use `batch_receive_payment` with
+//! repeated developers (which aggregates before the HWM check).  A per-ledger
+//! nonce is intentionally not used: it would require additional persistent
+//! state and does not improve the reorg guarantee, since a reorg replay of the
+//! same transaction carries the same nonce.
 
 use soroban_sdk::{Address, Env};
 
@@ -29,14 +47,19 @@ pub const HWM_THRESHOLD: u32 = crate::types::PERSISTENT_BUMP_THRESHOLD;
 
 /// Validate a settlement claim for `developer`.
 ///
-/// Returns [`SettlementError::ReplayDetected`] when `ledger_seq <= stored`
-/// high-water mark.  On success the stored mark is raised to `ledger_seq` and
-/// the persistent TTL is extended.
+/// Returns [`SettlementError::FutureLedgerSeq`] when `ledger_seq` is greater
+/// than the current ledger sequence, and [`SettlementError::ReplayDetected`]
+/// when `ledger_seq <= stored` high-water mark.  On success the stored mark is
+/// raised to `ledger_seq` and the persistent TTL is extended.
 pub fn check_developer(
     env: &Env,
     developer: &Address,
     ledger_seq: u32,
 ) -> Result<(), SettlementError> {
+    if ledger_seq > env.ledger().sequence() {
+        return Err(SettlementError::FutureLedgerSeq);
+    }
+
     let key = StorageKey::HighWaterMark(developer.clone());
     let stored: u32 = env.storage().persistent().get(&key).unwrap_or(0);
 
@@ -57,6 +80,10 @@ pub fn check_developer(
 /// Behaviour is identical to [`check_developer`] but the HWM is stored in
 /// instance storage (no per-developer key).
 pub fn check_pool(env: &Env, ledger_seq: u32) -> Result<(), SettlementError> {
+    if ledger_seq > env.ledger().sequence() {
+        return Err(SettlementError::FutureLedgerSeq);
+    }
+
     let key = StorageKey::PoolHighWaterMark;
     let stored: u32 = env.storage().instance().get(&key).unwrap_or(0);
 
