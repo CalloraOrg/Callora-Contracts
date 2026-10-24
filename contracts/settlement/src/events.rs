@@ -1,4 +1,3 @@
-
 //! Event topic Symbol constructors and structured emit helpers for the
 //! Callora Settlement contract.
 //!

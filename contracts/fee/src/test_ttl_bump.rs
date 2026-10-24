@@ -1,5 +1,4 @@
 #[cfg(test)]
-
 use crate::{
     ContractError, FeeContract, FeeContractClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
     LEDGERS_PER_DAY,

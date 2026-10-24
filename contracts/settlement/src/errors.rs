@@ -31,9 +31,9 @@ use soroban_sdk::contracterror;
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
 /// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
-/// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
-/// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
-/// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
+/// | 24   | InvalidClaimWindow           | Claim window parameters are invalid                   |
+/// | 25   | ClaimWindowClosed            | Developer claim window is not currently open          |
+/// | 26   | MinBalanceViolation          | Withdrawal would leave balance below the minimum      |
 /// | 27   | ReplayDetected                | Settlement claim was replayed or out of order        |
 /// | 28   | BatchEmpty                    | Batch operation received an empty vector             |
 /// | 29   | BatchTooLarge                 | Batch operation exceeded the maximum allowed size    |
