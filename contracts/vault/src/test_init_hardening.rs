@@ -1,7 +1,16 @@
+//! Regression coverage for init hardening (issue #1395):
+//!
+//! - owner authorization is required, blocking front-running;
+//! - a non-zero `initial_balance` must be backed by on-ledger USDC;
+//! - contract-address aliasing and `settlement == revenue_pool` are rejected
+//!   with typed errors;
+//! - every validation runs before the first storage write, so a rejected init
+//!   can be retried and the tracked-balance invariant is preserved.
+
 extern crate std;
 
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{token, Address, Env, IntoVal, Symbol};
 
 use super::*;
 
@@ -28,336 +37,415 @@ fn create_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
     (addr, client)
 }
 
+fn init_args(env: &Env) -> (Address, i128, i128) {
+    let settlement = Address::generate(env);
+    (settlement, 1, 1_000_000_000)
+}
+
 // ---------------------------------------------------------------------------
-// Re-init guard
+// 1. Missing owner auth
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "vault already initialized")]
-fn reinit_panics() {
+fn init_without_owner_auth_is_rejected() {
+    let env = Env::default();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    // No auth mocks: owner.require_auth() must fail.
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+
+    assert!(result.is_err(), "init without owner auth must fail");
+    // The failed call must not have written the owner key.
+    assert!(
+        client.try_get_owner().is_err(),
+        "rejected init must leave storage untouched"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2. Owner-authorized success
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_with_owner_auth_succeeds() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
+    let (settlement, min_deposit, max_deduct) = init_args(&env);
 
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
+        &Some(owner.clone()),
+        &Some(min_deposit),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &Some(max_deduct),
+        &Some(settlement),
     );
-    // second call must panic
-    client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
-    );
-}
 
-#[test]
-fn reinit_via_try_returns_err() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
-    );
-    let result = client.try_init(&owner, &usdc, &None, &None, &None, &None, &None);
-    assert!(result.is_err(), "second init must return Err");
+    assert_eq!(client.get_owner(), owner);
+    assert_eq!(client.balance(), 0);
 }
 
 // ---------------------------------------------------------------------------
-// usdc_token validation
+// 3. Unbacked initial balance
 // ---------------------------------------------------------------------------
 
 #[test]
-#[should_panic(expected = "usdc_token cannot be vault address")]
-fn init_usdc_token_is_vault_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (vault_addr, client) = create_vault(&env);
-
-    // pass the vault's own address as usdc_token
-    client.init(
-        &owner,
-        &vault_addr,
-        &0,
-        &owner,
-        &1,
-        &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
-    );
-}
-
-// ---------------------------------------------------------------------------
-// min_deposit validation
-// ---------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "min_deposit must be positive")]
-fn init_min_deposit_zero_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(&owner, &usdc, &None, &None, &Some(0), &None, &None);
-}
-
-#[test]
-#[should_panic(expected = "min_deposit must be positive")]
-fn init_min_deposit_negative_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(&owner, &usdc, &None, &None, &Some(-1), &None, &None);
-}
-
-#[test]
-fn init_min_deposit_one_succeeds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    let meta = client.init(&owner, &usdc, &None, &None, &Some(1), &None, &None);
-    assert_eq!(meta.min_deposit, 1);
-}
-
-// ---------------------------------------------------------------------------
-// max_deduct validation
-// ---------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "max_deduct must be positive")]
-fn init_max_deduct_zero_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        0,
-        &soroban_sdk::Address::generate(&env),
-    );
-}
-
-#[test]
-#[should_panic(expected = "min_deposit cannot exceed max_deduct")]
-fn init_min_deposit_exceeds_max_deduct_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    // min=100, max=50 → invalid
-    client.init(&owner, &usdc, &None, &None, &Some(100), &None, &Some(50));
-}
-
-#[test]
-fn init_min_equals_max_deduct_succeeds() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    let meta = client.init(&owner, &usdc, &None, &None, &Some(50), &None, &Some(50));
-    assert_eq!(meta.min_deposit, 50);
-    assert_eq!(client.get_max_deduct(), 50);
-}
-
-// ---------------------------------------------------------------------------
-// revenue_pool validation
-// ---------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "revenue_pool cannot be vault address")]
-fn init_revenue_pool_is_vault_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (vault_addr, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(&owner, &usdc, &None, &None, &None, &Some(vault_addr), &None);
-}
-
-#[test]
-fn init_with_valid_revenue_pool_stores_it() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let pool = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(
-        &owner,
-        &usdc,
-        &None,
-        &None,
-        &None,
-        &Some(pool.clone()),
-        &None,
-    );
-    assert_eq!(client.get_revenue_pool(), Some(pool));
-}
-
-#[test]
-fn init_without_revenue_pool_stores_none() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
-    );
-    assert_eq!(client.get_revenue_pool(), None);
-}
-
-// ---------------------------------------------------------------------------
-// authorized_caller validation
-// ---------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "authorized_caller cannot be vault address")]
-fn init_authorized_caller_is_vault_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (vault_addr, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    client.init(&owner, &usdc, &None, &Some(vault_addr), &None, &None, &None);
-}
-
-// ---------------------------------------------------------------------------
-// initial_balance validation
-// ---------------------------------------------------------------------------
-
-#[test]
-#[should_panic(expected = "initial_balance exceeds on-ledger USDC balance")]
-fn init_initial_balance_exceeds_onchain_panics() {
+fn init_rejects_unbacked_initial_balance() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
 
-    // fund vault with 50 but claim 100
+    // Vault only holds 50 USDC but claims 100.
     usdc_admin.mint(&vault_addr, &50);
-    client.init(&owner, &usdc, &Some(100), &None, &None, &None, &None);
+
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+
+    assert_eq!(result, Err(Ok(VaultError::InsufficientBalance)));
+    assert!(client.try_get_owner().is_err(), "no state may be written");
 }
 
 #[test]
-fn init_initial_balance_zero_no_onchain_check() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    // zero balance — no on-chain check needed
-    let meta = client.init(&owner, &usdc, &Some(0), &None, &None, &None, &None);
-    assert_eq!(meta.balance, 0);
-}
-
-#[test]
-fn init_initial_balance_exact_onchain_succeeds() {
+fn init_can_retry_after_unbacked_balance_rejection() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    usdc_admin.mint(&vault_addr, &50);
+    let rejected = client.try_init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement.clone()),
+    );
+    assert_eq!(rejected, Err(Ok(VaultError::InsufficientBalance)));
+
+    // Back the vault, then initialization must succeed.
+    usdc_admin.mint(&vault_addr, &50);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+    assert_eq!(client.balance(), 100);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Backed initial balance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_records_backed_initial_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
 
     usdc_admin.mint(&vault_addr, &200);
-    let meta = client.init(&owner, &usdc, &Some(200), &None, &None, &None, &None);
-    assert_eq!(meta.balance, 200);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(200),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+
+    assert_eq!(client.balance(), 200);
+    assert_eq!(usdc_client.balance(&vault_addr), 200);
 }
 
-// ---------------------------------------------------------------------------
-// Post-init state correctness
-// ---------------------------------------------------------------------------
-
 #[test]
-fn init_sets_admin_to_owner() {
+fn init_zero_balance_skips_onledger_check() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (_, client) = create_vault(&env);
     let (usdc, _, _) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
 
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(0),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
     );
-    assert_eq!(client.get_admin(), owner);
+    assert_eq!(client.balance(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// 5. Address validation (typed errors)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_rejects_usdc_token_as_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let settlement = Address::generate(&env);
+
+    let result = client.try_init(
+        &owner,
+        &vault_addr,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+    assert_eq!(result, Err(Ok(VaultError::UsdcTokenCannotBeVault)));
 }
 
 #[test]
-fn init_emits_event_with_balance() {
+fn init_rejects_settlement_as_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(vault_addr),
+    );
+    assert_eq!(result, Err(Ok(VaultError::SettlementCannotBeVault)));
+}
+
+#[test]
+fn init_rejects_revenue_pool_as_vault() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &Some(vault_addr),
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+    assert_eq!(result, Err(Ok(VaultError::RevenuePoolCannotBeVault)));
+}
+
+#[test]
+fn init_rejects_settlement_equal_to_revenue_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    let pool = Address::generate(&env);
+
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &Some(pool.clone()),
+        &Some(1_000_000_000),
+        &Some(pool),
+    );
+    assert_eq!(result, Err(Ok(VaultError::SettlementEqualsRevenuePool)));
+}
+
+// ---------------------------------------------------------------------------
+// 6. Second init
+// ---------------------------------------------------------------------------
+
+#[test]
+fn second_init_returns_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    client.init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement.clone()),
+    );
+
+    let result = client.try_init(
+        &owner,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+    assert_eq!(result, Err(Ok(VaultError::AlreadyInitialized)));
+}
+
+// ---------------------------------------------------------------------------
+// 7. Front-run simulation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn front_runner_cannot_initialize_for_owner_then_owner_succeeds() {
+    let env = Env::default();
+    let attacker = Address::generate(&env);
+    let victim = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, _) = create_usdc(&env, &attacker);
+    let settlement = Address::generate(&env);
+
+    // Attacker attempts to initialize the victim-owned vault without the
+    // victim's signature.
+    let front_run = client.try_init(
+        &victim,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement.clone()),
+    );
+    assert!(front_run.is_err(), "front-run without owner auth must fail");
+
+    // The legitimate owner can now initialize with their authorization.
+    env.mock_all_auths();
+    client.init(
+        &victim,
+        &usdc,
+        &Some(0),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+    assert_eq!(client.get_owner(), victim);
+}
+
+// ---------------------------------------------------------------------------
+// 8. Invariant and event
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_preserves_tracked_balance_invariant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (vault_addr, client) = create_vault(&env);
+    let (usdc, usdc_client, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    // Over-fund the vault; only `initial_balance` may be recorded.
+    usdc_admin.mint(&vault_addr, &250);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(100),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
+
+    let tracked = client.balance();
+    let on_ledger = usdc_client.balance(&vault_addr);
+    assert_eq!(tracked, 100);
+    assert!(
+        on_ledger >= tracked,
+        "tracked balance must never exceed on-ledger USDC"
+    );
+}
+
+#[test]
+fn init_emits_event_with_backed_balance() {
     let env = Env::default();
     env.mock_all_auths();
     let owner = Address::generate(&env);
     let (vault_addr, client) = create_vault(&env);
     let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
 
     usdc_admin.mint(&vault_addr, &500);
-    client.init(&owner, &usdc, &Some(500), &None, &None, &None, &None);
+    client.init(
+        &owner,
+        &usdc,
+        &Some(500),
+        &None,
+        &Some(1),
+        &None,
+        &Some(1_000_000_000),
+        &Some(settlement),
+    );
 
-    use soroban_sdk::testutils::Events as _;
-    use soroban_sdk::IntoVal;
     let events = env.events().all();
     let ev = events
         .iter()
@@ -374,22 +462,11 @@ fn init_emits_event_with_balance() {
 }
 
 #[test]
-fn init_default_min_deposit_is_one() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let owner = Address::generate(&env);
-    let (_, client) = create_vault(&env);
-    let (usdc, _, _) = create_usdc(&env, &owner);
-
-    let meta = client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
-    );
-    assert_eq!(meta.min_deposit, DEFAULT_MIN_DEPOSIT);
+fn error_codes_remain_stable_and_append_only() {
+    assert_eq!(VaultError::AlreadyInitialized as u32, 2);
+    assert_eq!(VaultError::InsufficientBalance as u32, 5);
+    assert_eq!(VaultError::UsdcTokenCannotBeVault as u32, 14);
+    assert_eq!(VaultError::RevenuePoolCannotBeVault as u32, 15);
+    assert_eq!(VaultError::SettlementCannotBeVault as u32, 56);
+    assert_eq!(VaultError::SettlementEqualsRevenuePool as u32, 59);
 }

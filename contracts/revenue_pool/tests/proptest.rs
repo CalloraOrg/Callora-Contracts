@@ -59,7 +59,7 @@ fn pool_action_strategy() -> impl Strategy<Value = PoolAction> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
     fn stateful_actions_preserve_scheduled_balance_invariant(

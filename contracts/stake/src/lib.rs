@@ -1,16 +1,13 @@
-#![no_std]
-
+#no_std
+`pubmod migrate;
 mod views;
-pub mod migrate;
 
 pub use views::{
     capabilities, CAP_DELEGATION, CAP_REWARDS, CAP_SLASHING, CAP_STAKE_UNSTAKE, CAP_STAKE_VIEW,
-    CAP_WITHDRAW_TIMELOCK, SUPPORTED_CAPABILITIES,
+    CAP_WITHDRAW_TIMELOCK, IMPLEMENTED_CAPABILITIES, SUPPORTED_CAPABILITIES,
 };
 
-pub use migrate::{
-    CalloraStakeMigrate, CurrentStake, LegacyStake, StakeMigrateError, StorageKey,
-};
+pub use migrate::{CalloraStakeMigrate, CurrentStake, LegacyStake, StakeMigrateError, StorageKey};
 
 use soroban_sdk::{contract, contractimpl, Env};
 

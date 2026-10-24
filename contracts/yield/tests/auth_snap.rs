@@ -3,8 +3,7 @@ extern crate std;
 
 use callora_yield::{AccountLimits, CalloraYieldLimits, CalloraYieldLimitsClient};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::BytesN;
-use soroban_sdk::{Address, Env, IntoVal};
+use soroban_sdk::{Address, BytesN, Env, IntoVal};
 
 macro_rules! mock_auth {
     ($env:expr, $addr:expr, $client:expr, $fn_name:expr, $($arg:expr),*) => {
@@ -20,13 +19,50 @@ macro_rules! mock_auth {
     };
 }
 
+/// Deploy the contract and initialize it with a fresh admin.
+///
+/// `init` authenticates the admin (#1414), so it runs under `mock_all_auths`.
+/// The mock is then cleared with `set_auths(&[])` so every subsequent call in
+/// these snapshot tests starts *unauthenticated*; each test opts in to exactly
+/// the signatures it needs via [`mock_auth!`].
 fn setup(env: &Env) -> (Address, Address, CalloraYieldLimitsClient<'_>) {
     let contract = env.register(CalloraYieldLimits, ());
     let client = CalloraYieldLimitsClient::new(env, &contract);
     let admin = Address::generate(env);
+    env.mock_all_auths();
     client.init(&admin);
+    env.mock_auths(&[]);
     (contract, admin, client)
 }
+
+/// Register `admin` as an operator (it authorizes itself).
+fn register_admin_operator(env: &Env, admin: &Address, client: &CalloraYieldLimitsClient) {
+    mock_auth!(env, admin, client, "set_operator", admin, admin);
+    client.set_operator(admin, admin);
+}
+
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_requires_admin_auth() {
+    let env = Env::default();
+    let contract = env.register(CalloraYieldLimits, ());
+    let client = CalloraYieldLimitsClient::new(&env, &contract);
+    let admin = Address::generate(&env);
+
+    let res = client.try_init(&admin);
+    assert!(res.is_err(), "init must require auth on admin");
+    assert!(
+        client.try_get_admin().is_err(),
+        "an unauthenticated init must not store an admin"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Admin lifecycle + registry
+// ---------------------------------------------------------------------------
 
 #[test]
 fn set_admin_requires_auth() {
@@ -67,6 +103,32 @@ fn cancel_admin_transfer_requires_auth() {
 }
 
 #[test]
+fn set_operator_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let operator = Address::generate(&env);
+    let res = client.try_set_operator(&intruder, &operator);
+    assert!(res.is_err(), "set_operator must require auth on admin");
+    assert!(!client.get_operator(&operator));
+}
+
+#[test]
+fn remove_operator_requires_auth() {
+    let env = Env::default();
+    let (_contract, admin, client) = setup(&env);
+    let operator = Address::generate(&env);
+    register_admin_operator(&env, &admin, &client);
+    mock_auth!(&env, &admin, client, "set_operator", &admin, &operator);
+    client.set_operator(&admin, &operator);
+
+    let intruder = Address::generate(&env);
+    let res = client.try_remove_operator(&intruder, &operator);
+    assert!(res.is_err(), "remove_operator must require auth on admin");
+    assert!(client.get_operator(&operator));
+}
+
+#[test]
 fn set_default_limits_requires_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);
@@ -104,6 +166,12 @@ fn clear_account_limits_requires_auth() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Operator-gated counter mutators
+// ---------------------------------------------------------------------------
+
+/// An account naming itself as the operator has its own signature but is not
+/// registered, so the call is rejected without touching counters.
 #[test]
 fn place_bet_requires_auth() {
     let env = Env::default();
@@ -122,8 +190,26 @@ fn place_bet_requires_auth() {
     );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
-    let res = client.try_place_bet(&alice);
-    assert!(res.is_err(), "place_bet must require auth on caller");
+    let res = client.try_place_bet(&alice, &alice);
+    assert!(res.is_err(), "place_bet must require a registered operator");
+    assert_eq!(client.get_account_state(&alice).bets, 0);
+}
+
+/// A registered operator still has to sign; registration is not authority.
+#[test]
+fn registered_operator_mutation_requires_signature() {
+    let env = Env::default();
+    let (_contract, admin, client) = setup(&env);
+    let operator = Address::generate(&env);
+    let alice = Address::generate(&env);
+    register_admin_operator(&env, &admin, &client);
+    mock_auth!(&env, &admin, client, "set_operator", &admin, &operator);
+    client.set_operator(&admin, &operator);
+
+    // No `mock_auth!` for the operator: the signature is missing.
+    let res = client.try_place_bet(&operator, &alice);
+    assert!(res.is_err(), "operator must still authorize every call");
+    assert_eq!(client.get_account_state(&alice).bets, 0);
 }
 
 #[test]
@@ -131,24 +217,14 @@ fn clear_bet_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(
-        &env,
-        &admin,
-        client,
-        "set_account_limits",
-        &admin,
-        &alice,
-        5u32,
-        5u32,
-        5u32
-    );
-    client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
+    register_admin_operator(&env, &admin, &client);
 
-    mock_auth!(&env, &alice, client, "place_bet", &alice);
-    client.place_bet(&alice);
+    mock_auth!(&env, &admin, client, "place_bet", &admin, &alice);
+    client.place_bet(&admin, &alice);
 
-    let res = client.try_clear_bet(&alice);
-    assert!(res.is_err(), "clear_bet must require auth on caller");
+    let res = client.try_clear_bet(&alice, &alice);
+    assert!(res.is_err(), "clear_bet must require a registered operator");
+    assert_eq!(client.get_account_state(&alice).bets, 1);
 }
 
 #[test]
@@ -169,8 +245,12 @@ fn open_position_requires_auth() {
     );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
-    let res = client.try_open_position(&alice);
-    assert!(res.is_err(), "open_position must require auth on caller");
+    let res = client.try_open_position(&alice, &alice);
+    assert!(
+        res.is_err(),
+        "open_position must require a registered operator"
+    );
+    assert_eq!(client.get_account_state(&alice).positions, 0);
 }
 
 #[test]
@@ -178,23 +258,16 @@ fn close_position_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(
-        &env,
-        &admin,
-        client,
-        "set_account_limits",
-        &admin,
-        &alice,
-        5u32,
-        5u32,
-        5u32
-    );
-    client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
-    mock_auth!(&env, &alice, client, "open_position", &alice);
-    client.open_position(&alice);
+    register_admin_operator(&env, &admin, &client);
+    mock_auth!(&env, &admin, client, "open_position", &admin, &alice);
+    client.open_position(&admin, &alice);
 
-    let res = client.try_close_position(&alice);
-    assert!(res.is_err(), "close_position must require auth on caller");
+    let res = client.try_close_position(&alice, &alice);
+    assert!(
+        res.is_err(),
+        "close_position must require a registered operator"
+    );
+    assert_eq!(client.get_account_state(&alice).positions, 1);
 }
 
 #[test]
@@ -215,8 +288,9 @@ fn subscribe_requires_auth() {
     );
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
-    let res = client.try_subscribe(&alice);
-    assert!(res.is_err(), "subscribe must require auth on caller");
+    let res = client.try_subscribe(&alice, &alice);
+    assert!(res.is_err(), "subscribe must require a registered operator");
+    assert_eq!(client.get_account_state(&alice).subscriptions, 0);
 }
 
 #[test]
@@ -224,23 +298,16 @@ fn unsubscribe_requires_auth() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
-    mock_auth!(
-        &env,
-        &admin,
-        client,
-        "set_account_limits",
-        &admin,
-        &alice,
-        5u32,
-        5u32,
-        5u32
-    );
-    client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
-    mock_auth!(&env, &alice, client, "subscribe", &alice);
-    client.subscribe(&alice);
+    register_admin_operator(&env, &admin, &client);
+    mock_auth!(&env, &admin, client, "subscribe", &admin, &alice);
+    client.subscribe(&admin, &alice);
 
-    let res = client.try_unsubscribe(&alice);
-    assert!(res.is_err(), "unsubscribe must require auth on caller");
+    let res = client.try_unsubscribe(&alice, &alice);
+    assert!(
+        res.is_err(),
+        "unsubscribe must require a registered operator"
+    );
+    assert_eq!(client.get_account_state(&alice).subscriptions, 1);
 }
 
 #[test]
@@ -252,6 +319,10 @@ fn upgrade_requires_auth() {
     let res = client.try_upgrade(&intruder, &hash);
     assert!(res.is_err(), "upgrade must require auth on caller");
 }
+
+// ---------------------------------------------------------------------------
+// Views stay unauthenticated
+// ---------------------------------------------------------------------------
 
 #[test]
 fn get_admin_no_auth() {
@@ -284,6 +355,14 @@ fn get_account_state_no_auth() {
 }
 
 #[test]
+fn get_operator_no_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let bob = Address::generate(&env);
+    assert!(!client.get_operator(&bob));
+}
+
+#[test]
 fn can_place_bet_no_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);
@@ -307,11 +386,16 @@ fn can_subscribe_no_auth() {
     let _ = client.can_subscribe(&bob);
 }
 
+// ---------------------------------------------------------------------------
+// Signed operator happy path
+// ---------------------------------------------------------------------------
+
 #[test]
 fn authenticated_happy_path() {
     let env = Env::default();
     let (_contract, admin, client) = setup(&env);
     let alice = Address::generate(&env);
+    register_admin_operator(&env, &admin, &client);
     mock_auth!(
         &env,
         &admin,
@@ -324,20 +408,20 @@ fn authenticated_happy_path() {
         3u32
     );
     client.set_account_limits(&admin, &alice, &3u32, &3u32, &3u32);
-    mock_auth!(&env, &alice, client, "place_bet", &alice);
-    client.place_bet(&alice);
-    mock_auth!(&env, &alice, client, "place_bet", &alice);
-    client.place_bet(&alice);
-    mock_auth!(&env, &alice, client, "place_bet", &alice);
-    client.place_bet(&alice);
 
-    mock_auth!(&env, &alice, client, "place_bet", &alice);
-    let try_res = client.try_place_bet(&alice);
+    for _ in 0..3 {
+        mock_auth!(&env, &admin, client, "place_bet", &admin, &alice);
+        client.place_bet(&admin, &alice);
+    }
+
+    mock_auth!(&env, &admin, client, "place_bet", &admin, &alice);
+    let try_res = client.try_place_bet(&admin, &alice);
     assert_eq!(try_res, Err(Ok(callora_yield::YieldLimitError::BetsAtCap)));
 }
 
 #[test]
 fn auth_snap_covers_expected_mutator_count() {
-    const EXPECTED_MUTATORS: usize = 13;
-    assert_eq!(EXPECTED_MUTATORS, 13);
+    // admin trio + limits trio + operator pair + counter sextet + upgrade.
+    const EXPECTED_MUTATORS: usize = 15;
+    assert_eq!(EXPECTED_MUTATORS, 15);
 }

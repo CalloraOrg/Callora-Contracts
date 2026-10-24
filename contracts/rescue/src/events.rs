@@ -153,6 +153,10 @@ pub fn event_rescue_capped(env: &Env) -> Symbol {
 }
 
 /// Returns the Symbol for the canonical event version marker used by Callora.
+///
+/// Defined for API parity with other Callora event modules; not yet used by
+/// rescue events (rescue topics do not include the version marker at topic[1]).
+#[allow(dead_code)]
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
 }
@@ -214,7 +218,11 @@ pub fn emit_rescue(env: &Env, admin: &Address, payload: &RescueEvent) {
 /// * `payload` - Structured rescue event details (includes `cap` field).
 pub fn emit_rescue_capped(env: &Env, admin: &Address, payload: &RescueEvent) {
     env.events().publish(
-        (event_rescue_capped(env), admin.clone(), payload.token.clone()),
+        (
+            event_rescue_capped(env),
+            admin.clone(),
+            payload.token.clone(),
+        ),
         payload.clone(),
     );
 }
@@ -248,7 +256,10 @@ mod tests {
     #[test]
     fn test_event_rescue_capped_bytes() {
         let env = Env::default();
-        assert_eq!(event_rescue_capped(&env), Symbol::new(&env, "rescue_capped"));
+        assert_eq!(
+            event_rescue_capped(&env),
+            Symbol::new(&env, "rescue_capped")
+        );
     }
 
     // ── Structured payload tests ──────────────────────────────────────────

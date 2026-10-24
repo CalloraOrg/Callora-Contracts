@@ -59,6 +59,7 @@ pub fn set_developer_min_balance(
     min_balance: i128,
 ) {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(env);
     let admin = crate::CalloraSettlement::get_admin(env.clone()).unwrap();
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
@@ -73,8 +74,8 @@ pub fn set_developer_min_balance(
     );
     env.storage().persistent().extend_ttl(
         &StorageKey::DeveloperMinBalance(developer.clone()),
-        50_000,
-        50_000,
+        PERSISTENT_BUMP_THRESHOLD,
+        PERSISTENT_BUMP_AMOUNT,
     );
 
     events::emit_developer_min_balance_changed(
@@ -114,6 +115,11 @@ pub fn get_developer_min_balance(env: &Env, developer: Address) -> i128 {
 /// configured). Returns [`SettlementError::MinBalanceViolation`] when the
 /// remaining balance would fall **below** the configured minimum.
 ///
+/// This check is read-only: it never extends TTLs, so it is safe to call from
+/// the side-effect-free `simulate_claim` path. Callers that need TTL
+/// maintenance (e.g. `withdraw_developer_balance`) must extend the
+/// [`StorageKey::DeveloperMinBalance`] entry explicitly.
+///
 /// # Arguments
 ///
 /// * `env` - Execution environment.
@@ -124,7 +130,11 @@ pub fn check_min_balance(
     developer: &Address,
     remaining_balance: i128,
 ) -> Result<(), SettlementError> {
-    let min = get_developer_min_balance(env, developer.clone());
+    let min: i128 = env
+        .storage()
+        .persistent()
+        .get(&StorageKey::DeveloperMinBalance(developer.clone()))
+        .unwrap_or(0);
     if min > 0 && remaining_balance < min {
         return Err(SettlementError::MinBalanceViolation);
     }

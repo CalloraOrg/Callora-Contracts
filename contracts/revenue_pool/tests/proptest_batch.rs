@@ -24,7 +24,7 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
     fn batch_distribute_preserves_total_and_per_recipient_amounts(

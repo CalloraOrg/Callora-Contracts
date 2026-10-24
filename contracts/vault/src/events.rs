@@ -9,7 +9,10 @@ use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
 ///
-/// Emitted when the vault contract is first initialized with an owner and initial balance.
+/// Emitted exactly once, after the owner has authorized initialization and all
+/// configuration (including a fully backed `initial_balance`) has validated.
+/// Topics are `(init, callora_v1, owner)`; the data payload is the recorded
+/// initial balance.
 pub fn event_init(env: &Env) -> Symbol {
     Symbol::new(env, "init")
 }
@@ -93,6 +96,13 @@ pub fn event_ownership_nominated(env: &Env) -> Symbol {
 /// Emitted when a nominated owner accepts and completes the ownership transfer.
 pub fn event_ownership_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "ownership_accepted")
+}
+
+/// Returns the Symbol for the `"ownership_cancelled"` event topic.
+///
+/// Emitted when the current owner cancels a pending ownership transfer.
+pub fn event_ownership_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "ownership_cancelled")
 }
 
 /// Returns the Symbol for the `"withdraw"` event topic.
@@ -207,6 +217,17 @@ pub fn event_upgrade_completed(env: &Env) -> Symbol {
 /// Data: ()
 pub fn event_allowlist_add(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_add")
+}
+
+/// Emitted when a single address is removed from the deposit allowlist.
+///
+/// Topics: ("allowlist_remove", "callora_v1", caller: Address, depositor: Address)
+/// Data: ()
+///
+/// Only emitted when the address was actually present and removed. No event is
+/// emitted when the address was not in the list (idempotent remove).
+pub fn event_allowlist_remove(env: &Env) -> Symbol {
+    Symbol::new(env, "allowlist_remove")
 }
 
 /// Emitted when the deposit allowlist is cleared.
@@ -355,7 +376,7 @@ pub fn event_swept(env: &Env) -> Symbol {
 /// to enable explicit version handling by indexers while preserving the
 /// original first-slot byte identity for backward compatibility.
 pub fn event_version_v1(env: &Env) -> Symbol {
-    Symbol::new(env, "callora.v1")
+    Symbol::new(env, "callora_v1")
 }
 
 #[cfg(test)]
@@ -453,6 +474,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_ownership_accepted(&env);
         assert_eq!(sym, Symbol::new(&env, "ownership_accepted"));
+    }
+
+    #[test]
+    fn test_event_ownership_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_ownership_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "ownership_cancelled"));
     }
 
     #[test]
@@ -558,6 +586,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_allowlist_add(&env);
         assert_eq!(sym, Symbol::new(&env, "allowlist_add"));
+    }
+
+    #[test]
+    fn test_event_allowlist_remove_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_allowlist_remove(&env);
+        assert_eq!(sym, Symbol::new(&env, "allowlist_remove"));
     }
 
     #[test]
@@ -688,5 +723,18 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_timelock_window_changed(&env);
         assert_eq!(sym, Symbol::new(&env, "tl_window_changed"));
+    }
+}
+
+#[cfg(test)]
+mod version_symbol_tests {
+    use super::*;
+
+    /// Regression: `"callora.v1"` contains `.`, which Soroban rejects in a
+    /// Symbol, so `init` panicked on every call.
+    #[test]
+    fn test_event_version_v1_is_a_valid_symbol() {
+        let env = soroban_sdk::Env::default();
+        assert_eq!(event_version_v1(&env), Symbol::new(&env, "callora_v1"));
     }
 }

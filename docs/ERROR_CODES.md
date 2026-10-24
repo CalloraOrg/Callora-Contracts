@@ -58,13 +58,21 @@ must not be reassigned once released.
 | 41 | `InvalidColdThreshold` | Vault | Cold threshold must be between 1 and signer count |
 | 42 | `DuplicateColdSigner` | Vault | Duplicate address found in cold signer set |
 | 43 | `ExceedsReserveCap` | Vault | Deposit would exceed the configured per-token reserve cap |
-| 44 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
-| 45 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
-| 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
-| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
-| 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
+| 44 | `CallerNotInAllowlist` | Vault | Caller is not in allowlist and not owner |
+| 45 | `InvalidRecipient` | Vault | Withdrawal recipient is the vault address or USDC token address |
+| 46 | `ZeroAddressRecipient` | Vault | Withdrawal recipient is the zero address |
+| 47 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
+| 48 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
+| 51 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
+| 52 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
+| 53 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
+| 54 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
+| 55 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit |
+| 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
+| 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
+| 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
 
 ## Settlement
 
@@ -112,6 +120,15 @@ must not be reassigned once released.
 | 40 | `InvalidVault` | Settlement | Vault address is invalid |
 | 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
 | 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |
+| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |
+| 44 | `NoUpgradePending` | Settlement | No upgrade proposal is currently pending |
+| 45 | `ZeroWasmHash` | Settlement | Proposed WASM hash is all-zero (rejected) |
+| 46 | `UpgradeTimelockNotExpired` | Settlement | Upgrade timelock delay has not yet elapsed |
+| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |
+| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
+| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
+| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
+| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
 
 ## Revenue Pool
 
@@ -151,18 +168,6 @@ must not be reassigned once released.
 | 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
 | 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
 | 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
-| 5 | `UpgradeNotAllowed` | Upgrade | Upgrade operation is currently disabled |
-| 6 | `MigrationPending` | Upgrade | A migration or upgrade is already pending |
-| 7 | `TimelockNotExpired` | Upgrade | Required timelock delay has not elapsed |
-| 8 | `SameWasmHash` | Upgrade | New WASM hash is identical to current WASM hash |
-| 9 | `SameVersion` | Upgrade | Proposed version matches current version |
-| 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
-| 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
-| 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
-| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
-| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
-| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
-| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
 
 ## Freeze
 
@@ -174,5 +179,3 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
-
-

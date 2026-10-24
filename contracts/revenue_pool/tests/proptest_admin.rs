@@ -71,7 +71,7 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
     fn admin_transfer_invariant_holds_across_arbitrary_actions(

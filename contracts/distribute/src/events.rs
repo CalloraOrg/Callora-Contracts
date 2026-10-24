@@ -1,4 +1,64 @@
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol};
+
+/// Schema version for structured distribution lifecycle event payloads.
+pub const DISTRIBUTION_EVENT_VERSION: u32 = 1;
+
+/// Identifies which distribution entry point emitted a lifecycle event.
+///
+/// `Single` corresponds to the `distribute` single-transfer entrypoint (always
+/// leg index 0 of 1), while `Batch` corresponds to each leg of `batch_distribute`.
+/// This lets an indexer decode every lifecycle payload with one struct type.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DistributionMode {
+    Single,
+    Batch,
+}
+
+/// Stable, versioned payload shared by distribution lifecycle events.
+///
+/// The same struct shape is emitted by both the single and batch distribution
+/// paths, so indexers decoding by topic do not need to branch on the entry
+/// point. The `mode` field distinguishes the two paths.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DistributionLifecycleEvent {
+    pub version: u32,
+    pub amount: i128,
+    pub mode: DistributionMode,
+    pub batch_index: u32,
+    pub batch_size: u32,
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+}
+
+impl DistributionLifecycleEvent {
+    pub fn new(
+        env: &Env,
+        amount: i128,
+        mode: DistributionMode,
+        batch_index: u32,
+        batch_size: u32,
+    ) -> Self {
+        Self {
+            version: DISTRIBUTION_EVENT_VERSION,
+            amount,
+            mode,
+            batch_index,
+            batch_size,
+            ledger_sequence: env.ledger().sequence(),
+            timestamp: env.ledger().timestamp(),
+        }
+    }
+
+    /// Builds the lifecycle payload for a single distribution.
+    ///
+    /// Always uses `DistributionMode::Single` with leg index 0 and leg count 1,
+    /// so the single and batch paths share one payload shape.
+    pub fn single(env: &Env, amount: i128) -> Self {
+        Self::new(env, amount, DistributionMode::Single, 0, 1)
+    }
+}
 
 /// Returns the Symbol for the `"init"` event topic.
 ///
@@ -10,8 +70,10 @@ pub fn event_init(env: &Env) -> Symbol {
 
 /// Returns the Symbol for the `"admin_changed"` event topic.
 ///
-/// Emitted during `set_admin` alongside `admin_transfer_started` to record the
-/// before/after admin intent for indexers and audit trails.
+/// Emitted by `accept_admin` (step 2 of the two-step rotation) once the admin
+/// slot has been updated, carrying `(previous_admin, new_admin)` so indexers
+/// record the change only when it actually happens. It is deliberately not
+/// published by `set_admin`, which only nominates a successor.
 pub fn event_admin_changed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_changed")
 }
@@ -56,28 +118,33 @@ pub fn event_set_max_distribute(env: &Env) -> Symbol {
 
 /// Returns the Symbol for the `"distribute"` event topic.
 ///
-/// Emitted when the admin distributes USDC to a single recipient via `distribute`.
-/// This is the legacy single-event shape retained for backwards compatibility with
-/// off-chain subscribers written against the pre-lifecycle schema.
-/// New indexers should subscribe to the structured `distribute_started` / `distribute_completed` pair.
+/// Emitted when the admin distributes USDC to a single recipient via `distribute`
+/// or per payment leg in `batch_distribute`. This per-transfer event carries a
+/// bare `i128` amount and is kept for backward compatibility.
+///
+/// New indexers should subscribe to the structured `distribute_started` /
+/// `distribute_completed` pair, which is the canonical structured source for
+/// distribution lifecycle tracking.
 pub fn event_distribute(env: &Env) -> Symbol {
     Symbol::new(env, "distribute")
 }
 
 /// Returns the Symbol for the `"distribute_started"` event topic.
 ///
-/// Emitted before the USDC transfer begins in the `distribute` entrypoint.
-/// Captures the intent to distribute, allowing indexers to track in-flight operations.
-/// Pair with `distribute_completed` to confirm atomic success.
+/// Emitted before the USDC commitment in the `distribute` entrypoint or per-leg
+/// in `batch_distribute`. The payload is always a `DistributionLifecycleEvent`,
+/// with `DistributionMode::Single` for the single path and `DistributionMode::Batch`
+/// for the batch path. Pair with `distribute_completed` to confirm atomic success.
 pub fn event_distribute_started(env: &Env) -> Symbol {
     Symbol::new(env, "distribute_started")
 }
 
 /// Returns the Symbol for the `"distribute_completed"` event topic.
 ///
-/// Emitted after the USDC transfer succeeds in the `distribute` entrypoint.
-/// Confirms the distribution completed atomically. Receipt of `distribute_started`
+/// Emitted after the USDC transfer succeeds in the `distribute` entrypoint or per-leg
+/// in `batch_distribute`. Confirms the distribution completed atomically. Receipt of `distribute_started`
 /// without a matching `distribute_completed` at the same ledger indicates failure.
+/// The payload is always a `DistributionLifecycleEvent`.
 pub fn event_distribute_completed(env: &Env) -> Symbol {
     Symbol::new(env, "distribute_completed")
 }
@@ -105,9 +172,73 @@ pub fn event_batch_distribute_completed(env: &Env) -> Symbol {
     Symbol::new(env, "batch_distribute_completed")
 }
 
+/// Returns the Symbol for the `"batch_distribute"` event topic.
+pub fn event_batch_distribute(env: &Env) -> Symbol {
+    Symbol::new(env, "batch_distribute")
+}
+
+/// Returns the Symbol for the `"batch_leg"` event topic.
+pub fn event_batch_leg(env: &Env) -> Symbol {
+    Symbol::new(env, "batch_leg")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
-    Symbol::new(env, "callora.v1")
+    Symbol::new(env, "callora_v1")
+}
+
+/// Emits a structured lifecycle event immediately before a validated distribution transfer.
+///
+/// Topic tuple is always `(distribute_started, "callora_v1", recipient)` and the
+/// data is always a `DistributionLifecycleEvent`, regardless of distribution mode.
+pub fn emit_distribute_started(
+    env: &Env,
+    recipient: &Address,
+    payload: &DistributionLifecycleEvent,
+) {
+    env.events().publish(
+        (
+            event_distribute_started(env),
+            event_version_v1(env),
+            recipient.clone(),
+        ),
+        payload.clone(),
+    );
+}
+
+/// Emits a structured lifecycle event after a distribution transfer succeeds.
+///
+/// Topic tuple is always `(distribute_completed, "callora_v1", recipient)` and the
+/// data is always a `DistributionLifecycleEvent`, regardless of distribution mode.
+pub fn emit_distribute_completed(
+    env: &Env,
+    recipient: &Address,
+    payload: &DistributionLifecycleEvent,
+) {
+    env.events().publish(
+        (
+            event_distribute_completed(env),
+            event_version_v1(env),
+            recipient.clone(),
+        ),
+        payload.clone(),
+    );
+}
+
+/// Emits a per-leg distribution transfer event with recipient topic and amount data.
+///
+/// This is the backward-compatible `bare i128` payload event. It is kept as-is
+/// for existing consumers; the structured `distribute_started` / `distribute_completed`
+/// pair is the canonical source for new indexers.
+pub fn emit_distribute(env: &Env, recipient: &Address, amount: i128) {
+    env.events().publish(
+        (
+            event_distribute(env),
+            event_version_v1(env),
+            recipient.clone(),
+        ),
+        amount,
+    );
 }
 
 #[cfg(test)]
@@ -118,15 +249,16 @@ mod tests {
     /// Snapshot: proves event_init still maps to exactly the bytes for "init".
     #[test]
     fn test_event_init_bytes() {
-        let env = Env::default();
-        assert_eq!(event_init(&env), Symbol::new(&env, "init"));
+        let env
+            = Env::default();
+        assert_eq(event_init(&env), Symbol::new(&env, "init"));
     }
 
     /// Snapshot: proves event_admin_changed still maps to exactly the bytes for "admin_changed".
     #[test]
     fn test_event_admin_changed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_changed(&env),
             Symbol::new(&env, "admin_changed")
         );
@@ -136,7 +268,7 @@ mod tests {
     #[test]
     fn test_event_admin_transfer_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_transfer_started(&env),
             Symbol::new(&env, "admin_transfer_started")
         );
@@ -146,7 +278,7 @@ mod tests {
     #[test]
     fn test_event_admin_transfer_completed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_transfer_completed(&env),
             Symbol::new(&env, "admin_transfer_completed")
         );
@@ -156,7 +288,7 @@ mod tests {
     #[test]
     fn test_event_admin_cancelled_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_cancelled(&env),
             Symbol::new(&env, "admin_cancelled")
         );
@@ -166,14 +298,14 @@ mod tests {
     #[test]
     fn test_event_pause_set_bytes() {
         let env = Env::default();
-        assert_eq!(event_pause_set(&env), Symbol::new(&env, "pause_set"));
+        assert_eq(event_pause_set(&env), Symbol::new(&env, "pause_set"));
     }
 
     /// Snapshot: proves event_set_max_distribute still maps to exactly the bytes for "set_max_distribute".
     #[test]
     fn test_event_set_max_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_set_max_distribute(&env),
             Symbol::new(&env, "set_max_distribute")
         );
@@ -183,21 +315,21 @@ mod tests {
     #[test]
     fn test_event_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(event_distribute(&env), Symbol::new(&env, "distribute"));
+        assert_eq(event_distribute(&env), Symbol::new(&env, "distribute"));
     }
 
     /// Snapshot: proves event_upgraded still maps to exactly the bytes for "upgraded".
     #[test]
     fn test_event_upgraded_bytes() {
         let env = Env::default();
-        assert_eq!(event_upgraded(&env), Symbol::new(&env, "upgraded"));
+        assert_eq(event_upgraded(&env), Symbol::new(&env, "upgraded"));
     }
 
     /// Snapshot: proves event_distribute_started still maps to exactly the bytes for "distribute_started".
     #[test]
     fn test_event_distribute_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_distribute_started(&env),
             Symbol::new(&env, "distribute_started")
         );
@@ -207,7 +339,7 @@ mod tests {
     #[test]
     fn test_event_distribute_completed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_distribute_completed(&env),
             Symbol::new(&env, "distribute_completed")
         );
@@ -217,7 +349,7 @@ mod tests {
     #[test]
     fn test_event_batch_distribute_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_batch_distribute_started(&env),
             Symbol::new(&env, "batch_distribute_started")
         );
@@ -227,9 +359,56 @@ mod tests {
     #[test]
     fn test_event_batch_distribute_completed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_batch_distribute_completed(&env),
             Symbol::new(&env, "batch_distribute_completed")
         );
+    }
+
+    /// Snapshot: proves event_batch_distribute still maps to exactly the bytes for "batch_distribute".
+    #[test]
+    fn test_event_batch_distribute_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_batch_distribute(&env),
+            Symbol::new(&env, "batch_distribute")
+        );
+    }
+
+    /// Snapshot: proves event_batch_leg still maps to exactly the bytes for "batch_leg".
+    #[test]
+    fn test_event_batch_leg_bytes() {
+        let env = Env::default();
+        assert_eq(event_batch_leg(&env), Symbol::new(&env, "batch_leg"));
+    }
+
+    /// Snapshot: proves event_version_v1 still maps to exactly the bytes for "callora_v1".
+    #[test]
+    fn test_event_version_v1_bytes() {
+        let env = Env::default();
+        assert_eq(event_version_v1(&env), Symbol::new(&env, "callora_v1"));
+    }
+
+    /// Proves the single-mode lifecycle payload has the same shape as the batch one.
+    #[test]
+    fn test_single_lifecycle_payload() {
+        let env = Env::default();
+        let payload = DistributionLifecycleEvent::single(&env, 100);
+        assert_eq(payload.version, DISTRIBUTION_EVENT_VERSION);
+        assert_eq(payload.amount, 100);
+        assert_eq(payload.mode, DistributionMode::Single);
+        assert_eq(payload.batch_index, 0);
+        assert_eq(payload.batch_size, 1);
+    }
+
+    /// Proves the batch-mode lifecycle payload is built with the expected leg metadata.
+    #[test]
+    fn test_batch_lifecycle_payload() {
+        let env = Env::default();
+        let payload =
+            DistributionLifecycleEvent::new(&env, 50, DistributionMode::Batch, 1, 3);
+        assert_eq(payload.mode, DistributionMode::Batch);
+        assert_eq(payload.batch_index, 1);
+        assert_eq(payload.batch_size, 3);
     }
 }

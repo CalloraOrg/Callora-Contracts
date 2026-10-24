@@ -19,6 +19,7 @@ use soroban_sdk::contracterror;
 /// | 9    | Overflow             | Arithmetic overflow detected                         |
 /// | 10   | NoAdminTransferPending | No admin nomination is in progress                |
 /// | 11   | MigrationPending     | An authorized upgrade must be finalized first       |
+/// | 12-19 | (migration errors)  | Mapped from `StorageMigrationError`; see variants   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]

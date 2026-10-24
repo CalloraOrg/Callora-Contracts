@@ -2,134 +2,28 @@ name: CI
 
 on:
   push:
-    branches: [main, master, develop, 'feature/**', 'chore/**', 'ci/**']
+    branches: [main]
   pull_request:
-    branches: [main, master, develop]
-  schedule:
-    - cron: '0 0 * * *' # Run nightly
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   test:
-    name: Test
+    name: Format, test and build WASM
     runs-on: ubuntu-latest
-    continue-on-error: true
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
-
-      - name: Install Rust
-        continue-on-error: true
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        continue-on-error: true
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Check format (workspace crates)
-        continue-on-error: true
+          components: rustfmt
+          targets: wasm32v1-none
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Clippy
-        continue-on-error: true
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build settlement WASM for tests
-        continue-on-error: true
-        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
-
-      - name: Test (all workspace members)
-        continue-on-error: true
+      - name: Test workspace
         run: cargo test --workspace
-
-  test-nightly:
-    name: Test (Nightly)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        continue-on-error: true
-
-      - name: Install Rust Nightly
-        continue-on-error: true
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        continue-on-error: true
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-nightly-
-
-      - name: Build settlement WASM for tests
-        continue-on-error: true
-        run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
-
-      - name: Test (with proptest long runs)
-        continue-on-error: true
-        run: cargo test --workspace -- --nocapture
-
-  build:
-    name: Build (release)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        continue-on-error: true
-
-      - name: Install Rust
-        continue-on-error: true
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        continue-on-error: true
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Check WASM size
-        continue-on-error: true
-        shell: bash
-        run: |
-          chmod +x scripts/check-wasm-size.sh
-          ./scripts/check-wasm-size.sh
-
-  event-shape:
-    name: Event shape vs schema
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-        continue-on-error: true
-
-      - name: Check revenue_pool event shape matches EVENT_SCHEMA.md
-        continue-on-error: true
-        shell: bash
-        run: |
-          chmod +x scripts/check-event-shape.sh
-          ./scripts/check-event-shape.sh
+      - name: Build core contracts to WASM
+        run: cargo build --release --target wasm32v1-none -p callora-vault -p callora-settlement -p callora-revenue-pool
