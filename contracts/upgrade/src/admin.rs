@@ -172,9 +172,10 @@ pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), Upgra
 
     // Keep the cooldown state live. The host contract owns instance TTL policy;
     // this only refreshes the TTL of the instance entry holding the record.
-    env.storage()
-        .instance()
-        .extend_ttl(crate::admin::INSTANCE_TTL_THRESHOLD, crate::admin::INSTANCE_TTL_EXTEND);
+    env.storage().instance().extend_ttl(
+        crate::admin::INSTANCE_TTL_THRESHOLD,
+        crate::admin::INSTANCE_TTL_EXTEND,
+    );
 
     // Timestamp is now persisted — confirm the record.
     env.events()
