@@ -79,6 +79,8 @@ impl RefundContract {
             },
         );
 
+        Self::bump_instance_ttl(&env);
+
         Self::emit_initialized(&env, &admin, fee_bps, min_refund_amount);
 
         Ok(())
@@ -99,7 +101,18 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `InvalidAmount` - Amount is not positive.
     /// * `AmountTooLow` - Amount is below minimum refund amount.
+    /// * `TooManyOpenRequests` - Requester's capped index contains only open requests.
     /// * `Overflow` - Refund counter would overflow.
+    ///
+    /// # Bounded Cost
+    /// When the requester's index reaches [`MAX_REQUESTER_REFUNDS`], eviction scans
+    /// at most [`MAX_REQUESTER_REFUNDS`] (100) records in index order (oldest first).
+    /// Only finished requests (`Rejected` or `Processed`) are eligible for eviction.
+    /// The scan inspects at most 100 persistent entries (O(N) with N <= 100), placing
+    /// a deterministic bound on CPU instructions and storage operations. If all slots
+    /// are occupied by open requests (`Pending` or `Approved`), the transaction aborts
+    /// with [`RefundError::TooManyOpenRequests`] before writing any state or advancing
+    /// [`StorageKey::RefundCounter`].
     pub fn request_refund(
         env: Env,
         requester: Address,
@@ -122,6 +135,42 @@ impl RefundContract {
             .ok_or(RefundError::NotInitialized)?;
         if amount < config.min_refund_amount {
             return Err(RefundError::AmountTooLow);
+        }
+
+        let requester_key = StorageKey::RequesterRefunds(requester.clone());
+        let mut requester_refunds: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&requester_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        if requester_refunds.len() >= MAX_REQUESTER_REFUNDS {
+            let mut eviction_index: Option<u32> = None;
+            for i in 0..requester_refunds.len() {
+                let existing_id = requester_refunds.get(i).unwrap();
+                let existing_key = StorageKey::PendingRefund(existing_id);
+                if let Some(existing_req) = env
+                    .storage()
+                    .persistent()
+                    .get::<StorageKey, RefundRequest>(&existing_key)
+                {
+                    if existing_req.status == RefundStatus::Rejected
+                        || existing_req.status == RefundStatus::Processed
+                    {
+                        eviction_index = Some(i);
+                        break;
+                    }
+                }
+            }
+
+            match eviction_index {
+                Some(idx) => {
+                    requester_refunds.remove(idx);
+                }
+                None => {
+                    return Err(RefundError::TooManyOpenRequests);
+                }
+            }
         }
 
         let counter: u64 = env
@@ -150,15 +199,6 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
-        let requester_key = StorageKey::RequesterRefunds(requester.clone());
-        let mut requester_refunds: soroban_sdk::Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&requester_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-        if requester_refunds.len() >= MAX_REQUESTER_REFUNDS {
-            requester_refunds.remove(0);
-        }
         requester_refunds.push_back(request_id);
         env.storage()
             .persistent()
