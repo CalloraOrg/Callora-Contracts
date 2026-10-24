@@ -419,7 +419,7 @@ fn cancel_upgrade_removes_proposal() {
 fn propose_sweep_stores_recipient_amount_and_deadline() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -440,7 +440,7 @@ fn execute_sweep_fails_before_window() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
     // Fund vault so the on-ledger transfer would succeed.
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -456,7 +456,7 @@ fn execute_sweep_fails_before_window() {
 fn execute_sweep_succeeds_at_boundary_and_transfers() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -473,7 +473,7 @@ fn execute_sweep_succeeds_at_boundary_and_transfers() {
 fn execute_sweep_succeeds_within_grace_period() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -490,7 +490,7 @@ fn execute_sweep_succeeds_within_grace_period() {
 fn execute_sweep_fails_after_expiry() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -527,7 +527,7 @@ fn propose_sweep_rejects_non_positive_amount() {
 fn cancel_sweep_removes_proposal() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -641,7 +641,7 @@ fn propose_upgrade_rejects_timestamp_overflow() {
 fn propose_sweep_rejects_timestamp_overflow() {
     let env = Env::default();
     let (vault_addr, client, admin, recipient, _) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -945,7 +945,7 @@ fn legacy_pending_sweep_migrates_and_exposes_expiry() {
 fn legacy_pending_sweep_executes_within_grace_period() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -976,7 +976,7 @@ fn legacy_pending_sweep_executes_within_grace_period() {
 fn legacy_pending_sweep_fails_after_migrated_expiry() {
     let env = Env::default();
     let (_, client, admin, recipient, vault_addr) = setup(&env);
-    let usdc = client.get_usdc_token().unwrap();
+    let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
 
@@ -1001,4 +1001,321 @@ fn legacy_pending_sweep_fails_after_migrated_expiry() {
     assert_eq!(res.unwrap_err().unwrap(), VaultError::ProposalExpired);
     let bal = token::Client::new(&env, &usdc).balance(&recipient);
     assert_eq!(bal, 0);
+}
+
+// ---------------------------------------------------------------------------
+// Expiry is effective: views hide expired proposals without writing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn view_pause_is_none_after_expiry_without_clearing_storage() {
+    let env = Env::default();
+    let (_, client, admin, _, vault_addr) = setup(&env);
+    client.propose_pause(&admin);
+    let proposal = client.get_pending_pause().expect("pending pause");
+
+    // Boundary is inclusive: expires_at itself is still live.
+    env.ledger().set_timestamp(proposal.expires_at);
+    assert!(client.get_pending_pause().is_some());
+
+    // One second past expiry: the view treats it as absent.
+    env.ledger().set_timestamp(proposal.expires_at + 1);
+    assert!(client.get_pending_pause().is_none());
+
+    // Read-only: the expired entry is still present for prune to clear.
+    env.as_contract(&vault_addr, || {
+        let stored: Option<PendingPause> =
+            env.storage().persistent().get(&StorageKey::PendingPause);
+        assert_eq!(stored, Some(proposal));
+    });
+}
+
+#[test]
+fn view_upgrade_is_none_after_expiry_without_clearing_storage() {
+    let env = Env::default();
+    let (_, client, admin, _, vault_addr) = setup(&env);
+    let hash = BytesN::from_array(&env, &[31u8; 32]);
+    client.propose_upgrade(&admin, &hash);
+    let proposal = client.get_pending_upgrade().expect("pending upgrade");
+
+    env.ledger().set_timestamp(proposal.expires_at);
+    assert!(client.get_pending_upgrade().is_some());
+
+    env.ledger().set_timestamp(proposal.expires_at + 1);
+    assert!(client.get_pending_upgrade().is_none());
+
+    env.as_contract(&vault_addr, || {
+        let stored: Option<PendingUpgrade> =
+            env.storage().persistent().get(&StorageKey::PendingUpgrade);
+        assert_eq!(stored, Some(proposal));
+    });
+}
+
+#[test]
+fn view_sweep_is_none_after_expiry_without_clearing_storage() {
+    let env = Env::default();
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
+    let usdc = client.get_usdc_token();
+    token::StellarAssetClient::new(&env, &usdc).mint(&vault_addr, &1000);
+    client.propose_sweep(&admin, &recipient, &100i128);
+    let proposal = client.get_pending_sweep().expect("pending sweep");
+
+    env.ledger().set_timestamp(proposal.expires_at);
+    assert!(client.get_pending_sweep().is_some());
+
+    env.ledger().set_timestamp(proposal.expires_at + 1);
+    assert!(client.get_pending_sweep().is_none());
+
+    env.as_contract(&vault_addr, || {
+        let stored: Option<PendingSweep> =
+            env.storage().persistent().get(&StorageKey::PendingSweep);
+        assert_eq!(stored, Some(proposal));
+    });
+}
+
+#[test]
+fn execute_expired_proposals_returns_error_without_clearing_storage() {
+    let env = Env::default();
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
+    let usdc = client.get_usdc_token();
+    token::StellarAssetClient::new(&env, &usdc).mint(&vault_addr, &1000);
+    let hash = BytesN::from_array(&env, &[32u8; 32]);
+
+    client.propose_pause(&admin);
+    client.propose_upgrade(&admin, &hash);
+    client.propose_sweep(&admin, &recipient, &100i128);
+
+    let expires_at = client
+        .get_pending_pause()
+        .expect("pending pause")
+        .expires_at;
+    env.ledger().set_timestamp(expires_at + 1);
+
+    assert_eq!(
+        client.try_execute_pause(&admin),
+        Err(Ok(VaultError::ProposalExpired))
+    );
+    assert_eq!(
+        client.try_execute_upgrade(&admin),
+        Err(Ok(VaultError::ProposalExpired))
+    );
+    assert_eq!(
+        client.try_execute_sweep(&admin),
+        Err(Ok(VaultError::ProposalExpired))
+    );
+
+    // Test plan rows 1-2: after the failing execute the views report the
+    // expired proposals as absent.
+    assert!(client.get_pending_pause().is_none());
+    assert!(client.get_pending_upgrade().is_none());
+    assert!(client.get_pending_sweep().is_none());
+
+    // A failed invocation must not leave behind a partial clear — the raw
+    // entries are still present for the explicit prune call.
+    env.as_contract(&vault_addr, || {
+        assert!(env.storage().persistent().has(&StorageKey::PendingPause));
+        assert!(env.storage().persistent().has(&StorageKey::PendingUpgrade));
+        assert!(env.storage().persistent().has(&StorageKey::PendingSweep));
+    });
+    assert!(!client.is_paused());
+    assert_eq!(client.get_version(), None);
+    assert_eq!(token::Client::new(&env, &usdc).balance(&recipient), 0);
+}
+
+// ---------------------------------------------------------------------------
+// prune_expired_proposals
+// ---------------------------------------------------------------------------
+
+fn expired_proposal_event_kinds(env: &Env) -> std::vec::Vec<Symbol> {
+    let topic = Symbol::new(env, "proposal_expired");
+    let mut kinds = std::vec::Vec::new();
+    for event in env.events().all().iter() {
+        let t0: Symbol = event.1.get(0).unwrap().into_val(env);
+        if t0 == topic {
+            let (kind, _, _, _): (Symbol, u64, u64, u64) = event.2.into_val(env);
+            kinds.push(kind);
+        }
+    }
+    kinds
+}
+
+#[test]
+fn prune_clears_all_expired_proposals_and_emits_one_event_each() {
+    let env = Env::default();
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
+    let usdc = client.get_usdc_token();
+    token::StellarAssetClient::new(&env, &usdc).mint(&vault_addr, &1000);
+    let hash = BytesN::from_array(&env, &[33u8; 32]);
+
+    client.propose_pause(&admin);
+    client.propose_upgrade(&admin, &hash);
+    client.propose_sweep(&admin, &recipient, &100i128);
+
+    let expires_at = client
+        .get_pending_pause()
+        .expect("pending pause")
+        .expires_at;
+    env.ledger().set_timestamp(expires_at + 1);
+
+    assert_eq!(client.prune_expired_proposals(&admin), 3);
+    // Capture events now: the test host resets the event buffer on every
+    // subsequent top-level invocation.
+    let kinds = expired_proposal_event_kinds(&env);
+
+    assert!(client.get_pending_pause().is_none());
+    assert!(client.get_pending_upgrade().is_none());
+    assert!(client.get_pending_sweep().is_none());
+    env.as_contract(&vault_addr, || {
+        assert!(!env.storage().persistent().has(&StorageKey::PendingPause));
+        assert!(!env.storage().persistent().has(&StorageKey::PendingUpgrade));
+        assert!(!env.storage().persistent().has(&StorageKey::PendingSweep));
+    });
+
+    assert_eq!(kinds.len(), 3, "one proposal_expired event per entry");
+    for expected in ["pause", "upgrade", "sweep"] {
+        assert!(
+            kinds.contains(&Symbol::new(&env, expected)),
+            "missing proposal_expired event for {expected}"
+        );
+    }
+}
+
+#[test]
+fn prune_is_admin_only() {
+    let env = Env::default();
+    let (_, client, admin, _, vault_addr) = setup(&env);
+    client.propose_pause(&admin);
+    let expires_at = client
+        .get_pending_pause()
+        .expect("pending pause")
+        .expires_at;
+    env.ledger().set_timestamp(expires_at + 1);
+
+    let intruder = Address::generate(&env);
+    assert_eq!(
+        client.try_prune_expired_proposals(&intruder),
+        Err(Ok(VaultError::Unauthorized))
+    );
+    env.as_contract(&vault_addr, || {
+        assert!(env.storage().persistent().has(&StorageKey::PendingPause));
+    });
+}
+
+#[test]
+fn prune_keeps_live_proposals_and_returns_zero_when_nothing_expired() {
+    let env = Env::default();
+    let (_, client, admin, _, _) = setup(&env);
+
+    // Nothing pending at all.
+    assert_eq!(client.prune_expired_proposals(&admin), 0);
+
+    // A live proposal must survive pruning.
+    client.propose_pause(&admin);
+    env.ledger().set_timestamp(1_700_000_000 + 1);
+    assert_eq!(client.prune_expired_proposals(&admin), 0);
+    assert!(client.get_pending_pause().is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Re-proposing over a live proposal replaces it and emits old + new payloads
+// ---------------------------------------------------------------------------
+
+#[test]
+fn propose_over_live_proposal_emits_replaced_with_old_and_new_payloads() {
+    let env = Env::default();
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
+    let usdc = client.get_usdc_token();
+    token::StellarAssetClient::new(&env, &usdc).mint(&vault_addr, &1000);
+
+    let old_hash = BytesN::from_array(&env, &[41u8; 32]);
+    let new_hash = BytesN::from_array(&env, &[42u8; 32]);
+    client.propose_pause(&admin);
+    client.propose_upgrade(&admin, &old_hash);
+    client.propose_sweep(&admin, &recipient, &100i128);
+
+    env.ledger().set_timestamp(1_700_000_100);
+    let new_recipient = Address::generate(&env);
+    // The test host keeps only the latest top-level invocation's events, so
+    // collect them after each re-proposal.
+    let mut events = std::vec::Vec::new();
+    client.propose_pause(&admin);
+    events.extend(env.events().all().iter());
+    client.propose_upgrade(&admin, &new_hash);
+    events.extend(env.events().all().iter());
+    client.propose_sweep(&admin, &new_recipient, &200i128);
+    events.extend(env.events().all().iter());
+
+    let pause_topic = Symbol::new(&env, "pause_replaced");
+    let upgrade_topic = Symbol::new(&env, "upgrade_replaced");
+    let sweep_topic = Symbol::new(&env, "sweep_replaced");
+    let mut replaced = std::vec::Vec::new();
+    for event in events.iter() {
+        let t0: Symbol = event.1.get(0).unwrap().into_val(&env);
+        if t0 == pause_topic {
+            let version: Symbol = event.1.get(1).unwrap().into_val(&env);
+            assert_eq!(version, Symbol::new(&env, "callora_v1"));
+            let (old, new): ((u64, u64), (u64, u64)) = event.2.into_val(&env);
+            assert_eq!(
+                old,
+                (1_700_000_000, 1_700_000_000 + DEFAULT_TIMELOCK_SECONDS)
+            );
+            assert_eq!(
+                new,
+                (1_700_000_100, 1_700_000_100 + DEFAULT_TIMELOCK_SECONDS)
+            );
+            replaced.push(t0);
+        } else if t0 == upgrade_topic {
+            let (old, new): ((BytesN<32>, u64, u64), (BytesN<32>, u64, u64)) =
+                event.2.into_val(&env);
+            assert_eq!(old.0, old_hash);
+            assert_eq!(new.0, new_hash);
+            assert_eq!(old.1, 1_700_000_000);
+            assert_eq!(new.1, 1_700_000_100);
+            replaced.push(t0);
+        } else if t0 == sweep_topic {
+            let (old, new): ((Address, i128, u64, u64), (Address, i128, u64, u64)) =
+                event.2.into_val(&env);
+            assert_eq!(old.0, recipient);
+            assert_eq!(old.1, 100);
+            assert_eq!(new.0, new_recipient);
+            assert_eq!(new.1, 200);
+            assert_eq!(old.2, 1_700_000_000);
+            assert_eq!(new.2, 1_700_000_100);
+            replaced.push(t0);
+        }
+    }
+    assert_eq!(replaced.len(), 3, "one replaced event per proposal kind");
+
+    let pause = client.get_pending_pause().expect("pause");
+    assert_eq!(pause.proposed_at, 1_700_000_100);
+    assert_eq!(
+        pause.execute_after,
+        1_700_000_100 + DEFAULT_TIMELOCK_SECONDS
+    );
+    let upgrade = client.get_pending_upgrade().expect("upgrade");
+    assert_eq!(upgrade.wasm_hash, new_hash);
+    let sweep = client.get_pending_sweep().expect("sweep");
+    assert_eq!(sweep.to, new_recipient);
+    assert_eq!(sweep.amount, 200);
+}
+
+#[test]
+fn propose_over_expired_proposal_does_not_emit_replaced() {
+    let env = Env::default();
+    let (_, client, admin, _, _) = setup(&env);
+    client.propose_pause(&admin);
+    let old = client.get_pending_pause().expect("pending pause");
+
+    env.ledger().set_timestamp(old.expires_at + 1);
+    client.propose_pause(&admin);
+
+    let replaced_topic = Symbol::new(&env, "pause_replaced");
+    let has_replaced = env.events().all().iter().any(|event| {
+        let t0: Symbol = event.1.get(0).unwrap().into_val(&env);
+        t0 == replaced_topic
+    });
+    assert!(!has_replaced, "expired proposal is absent, not replaced");
+
+    let fresh = client.get_pending_pause().expect("fresh pause");
+    assert_eq!(fresh.proposed_at, old.expires_at + 1);
 }

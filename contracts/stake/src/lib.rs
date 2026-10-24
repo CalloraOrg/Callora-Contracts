@@ -1,6 +1,6 @@
 #![no_std]
 
-mod migrate;
+pub mod migrate;
 mod views;
 
 pub use views::{

@@ -188,6 +188,7 @@ fn settlement_client_records_deduction_on_native_target() {
         callora_settlement::CalloraSettlementClient::new(&env, &settlement_addr);
 
     env.mock_all_auths();
+    usdc_admin.mint(&vault_addr, &1_000i128);
     vault_client.init(
         &owner,
         &usdc_addr,
@@ -198,7 +199,6 @@ fn settlement_client_records_deduction_on_native_target() {
         &Some(500i128),
         &Some(settlement_addr.clone()),
     );
-    usdc_admin.mint(&vault_addr, &1_000i128);
 
     let before = settlement_client.get_total_received();
     vault_client.deduct(&owner, &100i128, &7u64);
