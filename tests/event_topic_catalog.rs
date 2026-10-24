@@ -15,7 +15,7 @@ use soroban_sdk::{Env, Symbol, Vec as SorobanVec};
 // Vault contract topics
 // ---------------------------------------------------------------------------
 
-/// All 36 vault event topics and their expected string representations.
+/// All 41 vault event topics and their expected string representations.
 /// Kept as a single constant array so the count is enforced at compile time.
 const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("init", |e| callora_vault::events::event_init(e)),
@@ -42,7 +42,6 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     }),
     ("deposit", |e| callora_vault::events::event_deposit(e)),
     ("deduct", |e| callora_vault::events::event_deduct(e)),
-    ("deduct_v2", |e| callora_vault::events::event_deduct_v2(e)),
     ("ownership_nominated", |e| {
         callora_vault::events::event_ownership_nominated(e)
     }),
@@ -114,6 +113,18 @@ const VAULT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
         callora_vault::events::event_rescue_funds(e)
     }),
     ("swept", |e| callora_vault::events::event_swept(e)),
+    ("pause_replaced", |e| {
+        callora_vault::events::event_pause_replaced(e)
+    }),
+    ("upgrade_replaced", |e| {
+        callora_vault::events::event_upgrade_replaced(e)
+    }),
+    ("sweep_replaced", |e| {
+        callora_vault::events::event_sweep_replaced(e)
+    }),
+    ("proposal_expired", |e| {
+        callora_vault::events::event_proposal_expired(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -359,7 +370,7 @@ fn topic_counts_match_catalog_documentation() {
     // If you added a new event, update both this test AND the catalog.
     assert_eq!(
         VAULT_TOPICS.len(),
-        38,
+        41,
         "vault topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
@@ -382,7 +393,7 @@ fn topic_counts_match_catalog_documentation() {
             + SETTLEMENT_TOPICS.len()
             + REVENUE_POOL_TOPICS.len()
             + DISTRIBUTE_TOPICS.len(),
-        91,
+        94,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }
@@ -540,34 +551,5 @@ fn set_settlement_topic_in_catalog() {
     assert!(
         found,
         "\"set_settlement\" is missing from the VAULT_TOPICS catalog array"
-    );
-}
-
-/// Explicit catalog test for the `deduct_v2` topic (request_id in data).
-///
-/// Verifies that:
-/// 1. The `event_deduct_v2` constructor produces exactly the bytes for
-///    `"deduct_v2"` (no accidental rename/drift).
-/// 2. The entry is present in `VAULT_TOPICS`.
-/// 3. The legacy `deduct` topic is still present so existing topic filters
-///    keep working.
-#[test]
-fn deduct_v2_topic_in_catalog() {
-    let env = Env::default();
-
-    let sym = callora_vault::events::event_deduct_v2(&env);
-    assert_eq!(
-        sym,
-        Symbol::new(&env, "deduct_v2"),
-        "event_deduct_v2 constructor produced unexpected bytes"
-    );
-
-    assert!(
-        VAULT_TOPICS.iter().any(|(name, _)| *name == "deduct_v2"),
-        "\"deduct_v2\" is missing from the VAULT_TOPICS catalog array"
-    );
-    assert!(
-        VAULT_TOPICS.iter().any(|(name, _)| *name == "deduct"),
-        "legacy \"deduct\" topic must remain in the catalog for backward compatibility"
     );
 }

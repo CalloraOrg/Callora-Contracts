@@ -1,7 +1,7 @@
 #[cfg(test)]
 extern crate std;
 
-use calora_stake::{CalloraStake, CalloraStakeClient, SUPPORTED_CAPABILITIES};
+use callora_stake::{CalloraStake, CalloraStakeClient, SUPPORTED_CAPABILITIES};
 use soroban_sdk::Env;
 
 fn create_contract(env: &Env) -> CalloraStakeClient<'_> {

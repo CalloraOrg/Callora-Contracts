@@ -85,6 +85,11 @@ impl CalloraSettlement {
         inst.set(&StorageKey::GlobalPool, &pool);
         inst.set(&StorageKey::TotalReceived, &0i128);
 
+        // Start the instance lifetime at the full extension target instead of
+        // the network minimum (#1405). Without this, a freshly deployed
+        // contract archives long before its persistent balances do.
+        Self::bump_instance(&env);
+
         events::emit_initialized(&env, &admin, &vault_address, &pool);
     }
 
@@ -106,6 +111,7 @@ impl CalloraSettlement {
     pub fn record_deduction(env: Env, amount: i128, request_id: u64) {
         let vault = Self::get_vault(env.clone()).unwrap();
         vault.require_auth();
+        Self::bump_instance(&env);
         if amount <= 0 {
             env.panic_with_error(SettlementError::AmountNotPositive);
         }
@@ -131,6 +137,20 @@ impl CalloraSettlement {
             PERSISTENT_BUMP_AMOUNT,
         );
         events::emit_deduction_recorded(&env, DeductionRecordedEvent { amount, request_id });
+    }
+
+    /// Remove a previously-recorded deduction marker.
+    ///
+    /// Intended for owner-driven pruning of vault request IDs after the vault
+    /// has explicitly removed the corresponding marker from its own storage.
+    /// This is a no-op if the request was never recorded.
+    pub fn clear_deduction_request(env: Env, request_id: u64) {
+        let vault = Self::get_vault(env.clone()).unwrap();
+        vault.require_auth();
+        let request_key = StorageKey::DeductionRequest(request_id);
+        if env.storage().persistent().has(&request_key) {
+            env.storage().persistent().remove(&request_key);
+        }
     }
 
     /// Receive payment from vault and credit to pool or developer balance.
@@ -164,6 +184,7 @@ impl CalloraSettlement {
     ) {
         caller.require_auth();
         Self::require_authorized_caller(env.clone(), caller.clone());
+        Self::bump_instance(&env);
         Self::require_supported_token(&env, &token);
         if amount <= 0 {
             env.panic_with_error(SettlementError::AmountNotPositive);
@@ -295,6 +316,7 @@ impl CalloraSettlement {
     ) {
         caller.require_auth();
         Self::require_authorized_caller(env.clone(), caller.clone());
+        Self::bump_instance(&env);
 
         let n = items.len();
         Self::require_supported_token(&env, &token);
@@ -493,6 +515,7 @@ impl CalloraSettlement {
     /// contract will use to execute withdrawals.
     pub fn set_usdc_token(env: Env, caller: Address, usdc_address: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -509,6 +532,7 @@ impl CalloraSettlement {
     /// Enable a token for settlement payments. Admin only.
     pub fn add_supported_token(env: Env, caller: Address, token: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -519,6 +543,7 @@ impl CalloraSettlement {
     /// Disable a token for future settlement payments. Existing balances are retained.
     pub fn remove_supported_token(env: Env, caller: Address, token: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let current_admin = Self::get_admin(env.clone()).unwrap();
         if caller != current_admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -599,6 +624,7 @@ impl CalloraSettlement {
         to: Option<Address>,
     ) -> Result<(), SettlementError> {
         let env = env.clone();
+        Self::bump_instance(&env);
         let sim = Self::validate_claim(&env, &developer, amount, to)?;
         Self::bump_claim_storage_ttl(&env, &developer);
 
@@ -821,6 +847,7 @@ impl CalloraSettlement {
         end_ts: u64,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
@@ -866,6 +893,7 @@ impl CalloraSettlement {
         developer: Address,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             return Err(SettlementError::Unauthorized);
@@ -947,6 +975,7 @@ impl CalloraSettlement {
         cap: i128,
     ) -> Result<(), SettlementError> {
         caller.require_auth();
+        Self::bump_instance(&env);
         let current_admin = Self::get_admin(env.clone())?;
         if caller != current_admin {
             return Err(SettlementError::Unauthorized);
@@ -1053,6 +1082,7 @@ impl CalloraSettlement {
         reason: Symbol,
     ) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1096,9 +1126,13 @@ impl CalloraSettlement {
 
     /// Get all developer balances for a specific token (admin only).
     ///
-    /// Iterates the full paged developer index. For deployments with many
-    /// developers, prefer `get_developer_balances_cursor` for bounded,
-    /// paginated access. Bumps instance and persistent TTL for retrieved entries.
+    /// Returns at most [`MAX_DEVELOPER_BALANCES_PAGE_SIZE`] balances. For larger
+    /// indexes, use `get_developer_balances_page` or
+    /// `get_developer_balances_cursor`. Bumps instance and persistent TTL for
+    /// retrieved entries.
+    ///
+    /// # Panics
+    /// * `TooManyResults` if the index contains more than the page-size cap.
     pub fn get_all_developer_balances(
         env: Env,
         caller: Address,
@@ -1113,24 +1147,11 @@ impl CalloraSettlement {
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
 
-        let mut result = Vec::new(&env);
-        Self::iter_index(&env, |address| {
-            let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
-            if env.storage().persistent().has(&key) {
-                env.storage().persistent().extend_ttl(
-                    &key,
-                    PERSISTENT_BUMP_THRESHOLD,
-                    PERSISTENT_BUMP_AMOUNT,
-                );
-            }
-            let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0i128);
-            result.push_back(DeveloperBalance {
-                address,
-                token: token.clone(),
-                balance,
-            });
-        });
-        result
+        let index_len = Self::index_len(&env);
+        if index_len > MAX_DEVELOPER_BALANCES_PAGE_SIZE {
+            env.panic_with_error(SettlementError::TooManyResults);
+        }
+        Self::get_index_slice(&env, 0, index_len, &token)
     }
 
     /// Get a start/limit-paginated slice of developer balances for a token
@@ -1159,51 +1180,24 @@ impl CalloraSettlement {
         }
         let effective_limit = limit.min(MAX_DEVELOPER_BALANCES_PAGE_SIZE);
 
-        let mut result = Vec::new(&env);
-        let mut global_cursor: u32 = 0;
-        let end = start.saturating_add(effective_limit);
-
-        Self::iter_index(&env, |address| {
-            if result.len() >= effective_limit {
-                return;
-            }
-            if global_cursor >= end {
-                global_cursor = global_cursor.saturating_add(1);
-                return;
-            }
-            if global_cursor >= start {
-                let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
-                if env.storage().persistent().has(&key) {
-                    env.storage().persistent().extend_ttl(
-                        &key,
-                        PERSISTENT_BUMP_THRESHOLD,
-                        PERSISTENT_BUMP_AMOUNT,
-                    );
-                }
-                let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
-                result.push_back(DeveloperBalance {
-                    address,
-                    token: token.clone(),
-                    balance,
-                });
-            }
-            global_cursor = global_cursor.saturating_add(1);
-        });
-        result
+        Self::get_index_slice(&env, start, effective_limit, &token)
     }
 
     /// Cursor-based paginated developer balances for a specific token (admin only).
     ///
-    /// Returns up to `limit` developer balance records starting **after** the
-    /// supplied `cursor` address (exclusive), or from the beginning of the
-    /// paged index when `cursor` is `None`.
+    /// Returns up to `limit` developer balance records starting at the supplied
+    /// global index, or from the beginning when `cursor` is `None`. The returned
+    /// cursor is the global index at which the next page begins.
+    ///
+    /// This replaces the former address cursor and is an ABI change. A cursor
+    /// greater than the current index length fails with `InvalidCursor`.
     pub fn get_developer_balances_cursor(
         env: Env,
         caller: Address,
-        cursor: Option<Address>,
+        cursor: Option<u32>,
         limit: u32,
         token: Address,
-    ) -> (Vec<DeveloperBalance>, Option<Address>) {
+    ) -> (Vec<DeveloperBalance>, Option<u32>) {
         caller.require_auth();
         let admin = Self::get_admin(env.clone()).unwrap_or_else(|e| env.panic_with_error(e));
         if caller != admin {
@@ -1228,6 +1222,7 @@ impl CalloraSettlement {
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1246,6 +1241,7 @@ impl CalloraSettlement {
     /// # Events
     /// Emits `admin_accepted` with `(old_admin, new_admin)`.
     pub fn accept_admin(env: Env) {
+        Self::bump_instance(&env);
         let pending: Address = env
             .storage()
             .instance()
@@ -1268,6 +1264,7 @@ impl CalloraSettlement {
     /// Emits `admin_cancelled`.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1286,6 +1283,7 @@ impl CalloraSettlement {
     /// Emits `vault_proposed` with [`VaultProposedEvent`].
     pub fn propose_vault(env: Env, caller: Address, new_vault: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1325,6 +1323,7 @@ impl CalloraSettlement {
     /// Emits `vault_accepted` with [`VaultAcceptedEvent`].
     pub fn accept_vault(env: Env, caller: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let pending: Address = env
             .storage()
             .instance()
@@ -1354,6 +1353,7 @@ impl CalloraSettlement {
     /// Broadcast an operator/emergency message (admin only).
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: soroban_sdk::String) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1384,6 +1384,7 @@ impl CalloraSettlement {
     /// Emits `upgrade_proposed` with the hash, `proposed_at`, and `execute_after`.
     pub fn propose_upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1429,6 +1430,7 @@ impl CalloraSettlement {
     /// kept for consistency with `get_version` / off-chain indexers).
     pub fn execute_upgrade(env: Env, caller: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1459,6 +1461,7 @@ impl CalloraSettlement {
     /// Emits `upgrade_cancelled` with the cancelled WASM hash and current timestamp.
     pub fn cancel_upgrade(env: Env, caller: Address) {
         caller.require_auth();
+        Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone()).unwrap();
         if caller != admin {
             env.panic_with_error(SettlementError::Unauthorized);
@@ -1613,6 +1616,7 @@ impl CalloraSettlement {
         if cursor > count || limit == 0 {
             return Err(SettlementError::InvalidCursor);
         }
+        Self::bump_instance(&env);
 
         let end = cursor.saturating_add(limit.min(MAX_BATCH_SIZE)).min(count);
         for i in cursor..end {
@@ -1702,6 +1706,23 @@ impl CalloraSettlement {
     }
 
     // â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â” Internal helpers â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+
+    /// Extend the contract's instance-storage TTL (#1405).
+    ///
+    /// The instance entry holds `Admin`, `Vault`, `GlobalPool`,
+    /// `TotalReceived`, the USDC pointer and the index bookkeeping, so an
+    /// archived instance blocks **every** entrypoint while developer balances
+    /// are still live in persistent storage.
+    ///
+    /// Every state-changing entrypoint calls this explicitly rather than
+    /// relying on a getter that happens to extend the TTL as a side effect.
+    /// When the remaining TTL is already above [`INSTANCE_BUMP_THRESHOLD`],
+    /// `extend_ttl` is cheap and leaves the entry untouched.
+    pub(crate) fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
 
     fn require_supported_token(env: &Env, token: &Address) {
         let key = StorageKey::SupportedToken(token.clone());
@@ -1833,27 +1854,81 @@ impl CalloraSettlement {
         }
     }
 
-    /// Iterate all paged index entries, calling `f` with each `Address`.
-    ///
-    /// Reads only the persistent pages that actually exist; instance storage
-    /// is touched only for the single `IndexPageCount` read.
-    pub(crate) fn iter_index<F: FnMut(Address)>(env: &Env, mut f: F) {
+    pub(crate) fn index_len(env: &Env) -> u32 {
         let page_count: u32 = env
             .storage()
             .instance()
             .get(&StorageKey::IndexPageCount)
             .unwrap_or(0u32);
-        for p in 0..page_count {
-            let key = StorageKey::IndexPage(p);
+        if page_count == 0 {
+            return 0;
+        }
+
+        let last_page: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::IndexPage(page_count - 1))
+            .unwrap_or_else(|| Vec::new(env));
+        (page_count - 1)
+            .saturating_mul(INDEX_PAGE_SIZE)
+            .saturating_add(last_page.len())
+    }
+
+    pub(crate) fn get_index_slice(
+        env: &Env,
+        start: u32,
+        limit: u32,
+        token: &Address,
+    ) -> Vec<DeveloperBalance> {
+        let mut result = Vec::new(env);
+        if limit == 0 {
+            return result;
+        }
+
+        let page_count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::IndexPageCount)
+            .unwrap_or(0u32);
+        let mut page_index = start / INDEX_PAGE_SIZE;
+        let first_offset = start % INDEX_PAGE_SIZE;
+
+        while page_index < page_count && result.len() < limit {
             let page: Vec<Address> = env
                 .storage()
                 .persistent()
-                .get(&key)
+                .get(&StorageKey::IndexPage(page_index))
                 .unwrap_or_else(|| Vec::new(env));
-            for addr in page.iter() {
-                f(addr);
+            let offset = if page_index == start / INDEX_PAGE_SIZE {
+                first_offset
+            } else {
+                0
+            };
+            for index in offset..page.len() {
+                if result.len() >= limit {
+                    break;
+                }
+                let address = page.get(index).unwrap();
+                let key = StorageKey::DeveloperBalance(address.clone(), token.clone());
+                let balance = if let Some(balance) = env.storage().persistent().get(&key) {
+                    env.storage().persistent().extend_ttl(
+                        &key,
+                        PERSISTENT_BUMP_THRESHOLD,
+                        PERSISTENT_BUMP_AMOUNT,
+                    );
+                    balance
+                } else {
+                    0
+                };
+                result.push_back(DeveloperBalance {
+                    address,
+                    token: token.clone(),
+                    balance,
+                });
             }
+            page_index += 1;
         }
+        result
     }
 }
 #[cfg(test)]
@@ -1883,6 +1958,8 @@ mod test_overflow_safe_math;
 mod test_record_deduction;
 #[cfg(test)]
 mod test_simulate_claim;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod test_ttl_bump;
 #[cfg(test)]

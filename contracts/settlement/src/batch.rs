@@ -48,6 +48,7 @@ pub fn batch_settle(
     env: &Env,
     settlements: Vec<SettleInput>,
 ) -> Result<Vec<SettleOutcome>, SettlementError> {
+    CalloraSettlement::bump_instance(env);
     let mut outcomes = Vec::new(env);
 
     if settlements.is_empty() {
@@ -102,19 +103,33 @@ mod test {
         }
     }
 
+    /// Initialize a contract so `batch_settle` can bump the instance TTL, and
+    /// return a client for it.
+    fn setup(env: &Env) -> crate::CalloraSettlementClient<'_> {
+        let admin = Address::generate(env);
+        let vault = Address::generate(env);
+        let contract_id = env.register(crate::CalloraSettlement, ());
+        let client = crate::CalloraSettlementClient::new(env, &contract_id);
+        client.init(&admin, &vault);
+        client
+    }
+
     #[test]
     fn test_batch_settle_empty_returns_error() {
         let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
         let settlements = Vec::new(&env);
 
-        let result = batch_settle(&env, settlements);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), SettlementError::BatchEmpty);
+        let result = client.try_batch_settle(&settlements);
+        assert_eq!(result, Err(Ok(SettlementError::BatchEmpty)));
     }
 
     #[test]
     fn test_batch_settle_cap_enforced() {
         let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
         let mut settlements = Vec::new(&env);
 
         // Push MAX_BATCH_SIZE + 1 items (exceeding the contract-wide cap)
@@ -122,14 +137,15 @@ mod test {
             settlements.push_back(make_input(&env, Address::generate(&env)));
         }
 
-        let result = batch_settle(&env, settlements);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), SettlementError::BatchTooLarge);
+        let result = client.try_batch_settle(&settlements);
+        assert_eq!(result, Err(Ok(SettlementError::BatchTooLarge)));
     }
 
     #[test]
     fn test_batch_settle_cross_tenant_error() {
         let env = Env::default();
+        env.mock_all_auths();
+        let client = setup(&env);
         let mut settlements = Vec::new(&env);
 
         let alice = Address::generate(&env);
@@ -138,8 +154,7 @@ mod test {
         settlements.push_back(make_input(&env, alice));
         settlements.push_back(make_input(&env, bob));
 
-        let result = batch_settle(&env, settlements);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), SettlementError::CrossTenantBatch);
+        let result = client.try_batch_settle(&settlements);
+        assert_eq!(result, Err(Ok(SettlementError::CrossTenantBatch)));
     }
 }

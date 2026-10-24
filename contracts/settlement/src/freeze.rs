@@ -38,6 +38,7 @@ pub fn freeze_developer(
     _reason: Symbol,
 ) -> Result<(), SettlementError> {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(&env);
     let admin: Address = env
         .storage()
         .instance()
@@ -82,6 +83,7 @@ pub fn unfreeze_developer(
     developer: Address,
 ) -> Result<(), SettlementError> {
     caller.require_auth();
+    crate::CalloraSettlement::bump_instance(&env);
     let admin: Address = env
         .storage()
         .instance()

@@ -107,7 +107,6 @@ fn simulate_claim_min_balance_violation_reported() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn simulate_claim_does_not_extend_persistent_ttls() {
     let (env, contract_id, admin, _vault, usdc) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
@@ -115,6 +114,11 @@ fn simulate_claim_does_not_extend_persistent_ttls() {
     credit(&env, &contract_id, &admin, &developer, &usdc, 500);
     client.set_developer_min_balance(&admin, &developer, &100i128);
     client.set_developer_claim_window(&admin, &developer, &0u64, &u64::MAX);
+
+    // Keep the USDC token contract — a separate contract read during the
+    // simulation's liquidity check — alive across the ledger jump, so only the
+    // settlement entries under test age out.
+    crate::test_support::keep_token_state_alive(&env, &usdc, &contract_id);
 
     // Drop persistent entry TTLs just below the bump threshold so that any
     // extension performed by the simulation becomes observable.

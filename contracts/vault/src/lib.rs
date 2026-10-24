@@ -102,6 +102,7 @@ pub enum DataKey {
 pub enum StorageKey {
     UsdcToken,
     ProcessedRequest(u64),
+    ReentrancyGuard,
     ReserveCap(Address),
     DeveloperConfig(Address),
     DeveloperState(Address),
@@ -158,6 +159,9 @@ pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 /// forced past `i128::MAX` in a single invocation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Strkey of the all-zero contract address, rejected as a `withdraw_to` recipient.
+const ZERO_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
+
 pub mod token {
     pub use soroban_sdk::token::Client;
 }
@@ -178,6 +182,7 @@ pub mod settlement {
             ledger_seq: u32,
         );
         fn record_deduction(env: Env, amount: i128, request_id: u64);
+        fn clear_deduction_request(env: Env, request_id: u64);
     }
 }
 
@@ -238,11 +243,19 @@ impl CalloraVault {
         caller: &Address,
         amount: i128,
     ) -> Result<(), VaultError> {
-        // 1. Owner-or-authorized-caller check (issue #1107: the owner may
-        //    always deduct; a configured authorized caller may deduct too).
+        let mut items = Vec::new(env);
+        items.push_back((amount, 0_u64));
+        Self::validate_deduct_batch(env, caller, &items)?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_deduct_batch(
+        env: &Env,
+        caller: &Address,
+        items: &Vec<(i128, u64)>,
+    ) -> Result<i128, VaultError> {
         Self::require_authorized_deduct_caller(env.clone(), caller)?;
 
-        // 2. Pause guard.
         if env
             .storage()
             .instance()
@@ -252,30 +265,63 @@ impl CalloraVault {
             return Err(VaultError::Paused);
         }
 
-        // 3-5. Amount bounds (positive, min_deposit, max_deduct).
+        if items.is_empty() {
+            return Err(VaultError::BatchEmpty);
+        }
+        if items.len() > MAX_BATCH_SIZE {
+            return Err(VaultError::BatchTooLarge);
+        }
+
         let min_dep = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap();
+            .ok_or(VaultError::NotInitialized)?;
         let max_deduct = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-        Self::require_valid_deduct_amount(amount, min_dep, max_deduct)?;
+            .ok_or(VaultError::NotInitialized)?;
 
-        // 6. Balance check.
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
-        if current_bal < amount {
+
+        let mut total_amount: i128 = 0;
+        let mut seen_ids: Vec<u64> = Vec::new(env);
+
+        for item in items.iter() {
+            let (amount, request_id) = item;
+            if amount <= 0 {
+                return Err(VaultError::AmountNotPositive);
+            }
+            if amount < min_dep {
+                return Err(VaultError::BelowMinDeposit);
+            }
+            if amount > max_deduct {
+                return Err(VaultError::ExceedsMaxDeduct);
+            }
+            if request_id != 0 {
+                Self::require_not_duplicate(env, &request_id)?;
+                if seen_ids.contains(&request_id) {
+                    return Err(VaultError::DuplicateRequestId);
+                }
+                seen_ids.push_back(request_id);
+            }
+            total_amount = total_amount
+                .checked_add(amount)
+                .ok_or(VaultError::Overflow)?;
+        }
+
+        if total_amount > current_bal {
             return Err(VaultError::InsufficientBalance);
         }
 
-        Ok(())
+        current_bal
+            .checked_sub(total_amount)
+            .ok_or(VaultError::Overflow)
     }
 
     /// Initialize the Callora Vault contract (one-time setup).
@@ -571,9 +617,14 @@ impl CalloraVault {
             Self::require_not_duplicate(&env, &request_id)?;
         }
 
+        Self::require_not_reentrant(&env)?;
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
+
         let new_bal = current_bal
             .checked_sub(amount)
-            .unwrap_or_else(|| panic!("Math underflow"));
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
 
         env.events().publish(
@@ -589,7 +640,9 @@ impl CalloraVault {
         usdc_client.transfer(&env.current_contract_address(), &settlement_addr, &amount);
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-        settlement_client.record_deduction(&amount, &request_id);
+        if request_id != 0 {
+            settlement_client.record_deduction(&amount, &request_id);
+        }
 
         // Record the idempotency marker only after every state mutation and
         // external call has succeeded. Any earlier failure reverts the whole
@@ -597,6 +650,9 @@ impl CalloraVault {
         if request_id != 0 {
             Self::mark_request_processed(&env, &request_id);
         }
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -653,20 +709,8 @@ impl CalloraVault {
         items: Vec<(i128, u64)>,
     ) -> Result<(), VaultError> {
         caller.require_auth();
+        Self::validate_deduct_batch(&env, &caller, &items)?;
 
-        // Authorization and lifecycle preconditions — checked before mutation.
-        // Same owner-or-caller rule as `deduct`; without this a cleared
-        // authorized caller panicked instead of falling back to the owner.
-        Self::require_authorized_deduct_caller(env.clone(), &caller)?;
-
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(VaultError::Paused);
-        }
         let settlement_addr = Self::require_settlement(&env)?;
         let usdc_addr = env
             .storage()
@@ -674,71 +718,23 @@ impl CalloraVault {
             .get::<_, Address>(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
-        // Boundary / batch-limit preconditions — checked before mutation.
-        if items.is_empty() {
-            return Err(VaultError::BatchEmpty);
-        }
-        if items.len() > MAX_BATCH_SIZE {
-            return Err(VaultError::BatchTooLarge);
-        }
-
-        let min_dep = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MinDeposit)
-            .unwrap_or_else(|| panic!("Min deposit not set"));
-
-        let max_deduct = env
-            .storage()
-            .instance()
-            .get::<_, i128>(&DataKey::MaxDeduct)
-            .unwrap();
-
         let current_bal = env
             .storage()
             .instance()
             .get::<_, i128>(&DataKey::Balance)
             .unwrap_or(0);
 
-        // Validate every item and accumulate the total with checked arithmetic,
-        // before any transfer or mutation. An overflowing total, an out-of-range
-        // item, or a total that exceeds the tracked balance fails the whole call
-        // atomically (mirrors `deduct`'s explicit pre-transfer checks).
-        let mut total_amount: i128 = 0i128;
-        let mut seen_ids: Vec<u64> = Vec::new(&env);
-        for item in items.iter() {
-            let (amount, request_id) = item;
-            if amount <= 0 {
-                return Err(VaultError::AmountNotPositive);
-            }
-            if amount < min_dep {
-                return Err(VaultError::BelowMinDeposit);
-            }
-            if amount > max_deduct {
-                return Err(VaultError::ExceedsMaxDeduct);
-            }
-            // Idempotency: reject an id already recorded in storage as well as
-            // an id repeated within this same batch. Both checks run before any
-            // mutation so a duplicate fails the whole batch atomically.
-            // `request_id == 0` means "no idempotency" and is never recorded.
-            if request_id != 0 {
-                Self::require_not_duplicate(&env, &request_id)?;
-                if seen_ids.contains(&request_id) {
-                    return Err(VaultError::DuplicateRequestId);
-                }
-                seen_ids.push_back(request_id);
-            }
-            total_amount = total_amount
-                .checked_add(amount)
-                .ok_or(VaultError::Overflow)?;
-        }
-        if total_amount > current_bal {
-            return Err(VaultError::InsufficientBalance);
-        }
+        let total_amount = items.iter().try_fold(0_i128, |acc, (amount, _)| {
+            acc.checked_add(amount).ok_or(VaultError::Overflow)
+        })?;
 
         let settlement_client = settlement::Client::new(&env, &settlement_addr);
-
         let usdc_client = token::Client::new(&env, &usdc_addr);
+
+        Self::require_not_reentrant(&env)?;
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
 
         // All preconditions passed. Now the value-conserving mutation pair is
         // performed atomically: forward exactly `total_amount` to settlement
@@ -751,10 +747,12 @@ impl CalloraVault {
             &total_amount,
         );
 
-        let mut new_bal = current_bal;
+        let mut running_bal = current_bal;
         for item in items.iter() {
             let (amount, request_id) = item;
-            new_bal = new_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+            running_bal = running_bal
+                .checked_sub(amount)
+                .ok_or(VaultError::Overflow)?;
 
             env.events().publish(
                 (
@@ -762,10 +760,12 @@ impl CalloraVault {
                     events::event_version_v1(&env),
                     caller.clone(),
                 ),
-                (amount, new_bal),
+                (amount, running_bal),
             );
 
-            settlement_client.record_deduction(&amount, &request_id);
+            if request_id != 0 {
+                settlement_client.record_deduction(&amount, &request_id);
+            }
 
             // Persist the idempotency marker only after this item's transfer
             // and settlement call succeed; a later failure reverts the batch.
@@ -773,7 +773,12 @@ impl CalloraVault {
                 Self::mark_request_processed(&env, &request_id);
             }
         }
-        env.storage().instance().set(&DataKey::Balance, &new_bal);
+        env.storage()
+            .instance()
+            .set(&DataKey::Balance, &running_bal);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
         Ok(())
     }
 
@@ -1071,6 +1076,7 @@ impl CalloraVault {
     pub fn withdraw(env: Env, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         let current_bal: i128 = env.storage().instance().get(&DataKey::Balance).unwrap_or(0);
@@ -1079,7 +1085,9 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
@@ -1089,11 +1097,17 @@ impl CalloraVault {
             .get(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
 
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &owner,
             &amount,
         );
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1134,10 +1148,11 @@ impl CalloraVault {
     pub fn withdraw_to(env: Env, to: Address, amount: i128) -> Result<i128, VaultError> {
         let owner = Self::get_owner(env.clone())?;
         owner.require_auth();
+        Self::require_not_reentrant(&env)?;
         Self::require_positive_amount(amount)?;
 
         // Zero-address check first.
-        if to == Address::from_contract_id(&BytesN::<32>::from_array(&env, &[0u8; 32])) {
+        if to == Address::from_str(&env, ZERO_CONTRACT_ADDRESS) {
             return Err(VaultError::ZeroAddressRecipient);
         }
 
@@ -1162,15 +1177,23 @@ impl CalloraVault {
             return Err(VaultError::InsufficientBalance);
         }
 
-        let new_bal = current_bal.checked_sub(amount).ok_or(VaultError::Overflow)?;
+        let new_bal = current_bal
+            .checked_sub(amount)
+            .ok_or(VaultError::Overflow)?;
         env.storage().instance().set(&DataKey::Balance, &new_bal);
         Self::bump_instance(&env);
 
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         token::Client::new(&env, &usdc_addr).transfer(
             &env.current_contract_address(),
             &to,
             &amount,
         );
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1202,6 +1225,7 @@ impl CalloraVault {
     pub fn distribute(env: Env, caller: Address, to: Address, amount: i128) {
         Self::require_admin(&env, &caller).unwrap();
         Self::require_positive_amount(amount).unwrap();
+        Self::require_not_reentrant(&env).unwrap();
 
         if amount <= 0 {
             panic!("amount must be positive");
@@ -1220,7 +1244,13 @@ impl CalloraVault {
             panic!("insufficient USDC balance");
         }
 
+        env.storage()
+            .temporary()
+            .set(&StorageKey::ReentrancyGuard, &true);
         usdc.transfer(&env.current_contract_address(), &to, &amount);
+        env.storage()
+            .temporary()
+            .remove(&StorageKey::ReentrancyGuard);
 
         env.events().publish(
             (
@@ -1537,50 +1567,71 @@ impl CalloraVault {
 
     /// Return the outstanding timelocked pause proposal, if any.
     ///
-    /// Returns `None` when no pause proposal is currently staged.  A `Some`
-    /// value means a pause was proposed and can be executed once the ledger
-    /// clock reaches `proposal.execute_after` (via [`execute_pause`]).
+    /// Returns `None` when no pause proposal is currently staged, or when the
+    /// staged proposal has passed its `expires_at` grace deadline. Expired
+    /// proposals are treated as absent until an admin prunes them; this view
+    /// does not clear or mutate an expired entry.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_pause(env: Env) -> Option<timelock::PendingPause> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_pause(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+        match timelock::get_pending_pause(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingPause);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the outstanding timelocked upgrade proposal, if any.
     ///
-    /// Returns `None` when no upgrade proposal is staged.  A `Some` value
-    /// includes the target `wasm_hash` and the `execute_after` deadline (see
-    /// [`execute_upgrade`]).
+    /// Returns `None` when no upgrade proposal is staged, or when the staged
+    /// proposal has passed its `expires_at` grace deadline. Expired proposals
+    /// are treated as absent until an admin prunes them; this view never
+    /// writes or clears storage.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_upgrade(env: Env) -> Option<timelock::PendingUpgrade> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_upgrade(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+        match timelock::get_pending_upgrade(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingUpgrade);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the outstanding timelocked sweep proposal, if any.
     ///
-    /// Returns `None` when no sweep proposal is staged.  A `Some` value
-    /// includes the recipient address, the amount, and the `execute_after`
-    /// deadline (see [`execute_sweep`]).
+    /// Returns `None` when no sweep proposal is staged, or when the staged
+    /// proposal has passed its `expires_at` grace deadline. Expired proposals
+    /// are treated as absent until an admin prunes them; this view never
+    /// writes or clears storage.
     ///
     /// No auth required; this is a read-only view.
     pub fn get_pending_sweep(env: Env) -> Option<timelock::PendingSweep> {
         Self::bump_instance_ttl(&env);
-        let result = timelock::get_pending_sweep(&env);
-        if result.is_some() {
-            Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+        match timelock::get_pending_sweep(&env) {
+            Some(proposal) => {
+                if env.ledger().timestamp() <= proposal.expires_at {
+                    Self::bump_persistent_key(&env, &StorageKey::PendingSweep);
+                    Some(proposal)
+                } else {
+                    None
+                }
+            }
+            None => None,
         }
-        result
     }
 
     /// Return the recorded WASM hash after a successful upgrade, if any.
@@ -1844,7 +1895,11 @@ impl CalloraVault {
     ///
     /// After the configured timelock window elapses, the pause may be
     /// executed via [`execute_pause`].  Only one pause proposal may be
-    /// active at a time; proposing again replaces the existing proposal.
+    /// active at a time. Proposing again over a live (unexpired) proposal
+    /// replaces it and restarts the timelock; this emits
+    /// `pause_replaced` with the old and new `(proposed_at, execute_after)`
+    /// snapshots in addition to `pause_proposed`. An expired proposal is
+    /// treated as absent and is silently overwritten.
     ///
     /// ### Authorization
     /// `caller.require_auth()` is enforced via [`require_admin`].
@@ -1863,7 +1918,9 @@ impl CalloraVault {
     ///
     /// ### Events
     /// Emits `pause_proposed` with `caller` as topic and
-    /// `(proposed_at, execute_after)` as data.
+    /// `(proposed_at, execute_after)` as data. When a live proposal was
+    /// replaced, also emits `pause_replaced` with
+    /// `((old_proposed_at, old_execute_after), (proposed_at, execute_after))`.
     pub fn propose_pause(env: Env, caller: Address) -> Result<(), VaultError> {
         Self::require_admin(&env, &caller)?;
         let proposed_at = env.ledger().timestamp();
@@ -1873,6 +1930,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_pause(&env);
         timelock::set_pending_pause(
             &env,
             &timelock::PendingPause {
@@ -1885,10 +1943,25 @@ impl CalloraVault {
             (
                 events::event_pause_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
             (proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_pause_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.proposed_at, old.execute_after),
+                        (proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -1913,6 +1986,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending pause proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     ///
     /// ### Events
     /// Emits `pause_executed` with `caller` as topic, then `vault_paused`.
@@ -1924,8 +1998,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_pause(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
 
@@ -2011,7 +2083,11 @@ impl CalloraVault {
     /// Stage a timelocked contract upgrade proposal (admin only).
     ///
     /// After the timelock window elapses the upgrade may be executed via
-    /// [`execute_upgrade`].  Proposing again replaces the existing proposal.
+    /// [`execute_upgrade`].  Proposing again over a live (unexpired)
+    /// proposal replaces it and restarts the timelock; this emits
+    /// `upgrade_replaced` with the old and new
+    /// `(wasm_hash, proposed_at, execute_after)` snapshots. An expired
+    /// proposal is treated as absent and is silently overwritten.
     ///
     /// ### Authorization
     /// `caller.require_auth()` is enforced via [`require_admin`].
@@ -2030,7 +2106,9 @@ impl CalloraVault {
     ///
     /// ### Events
     /// Emits `upgrade_proposed` with `caller` as topic and
-    /// `(wasm_hash, proposed_at, execute_after)` as data.
+    /// `(wasm_hash, proposed_at, execute_after)` as data. When a live
+    /// proposal was replaced, also emits `upgrade_replaced` with the old and
+    /// new `(wasm_hash, proposed_at, execute_after)` snapshots.
     pub fn propose_upgrade(
         env: Env,
         caller: Address,
@@ -2044,6 +2122,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_upgrade(&env);
         timelock::set_pending_upgrade(
             &env,
             &timelock::PendingUpgrade {
@@ -2057,10 +2136,25 @@ impl CalloraVault {
             (
                 events::event_upgrade_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
-            (new_wasm_hash, proposed_at, execute_after),
+            (new_wasm_hash.clone(), proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_upgrade_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.wasm_hash, old.proposed_at, old.execute_after),
+                        (new_wasm_hash, proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -2085,6 +2179,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending upgrade proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     ///
     /// ### Events
     /// Emits `upgrade_executed` with `caller` as topic, then `upgraded`.
@@ -2095,8 +2190,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_upgrade(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
         admin::guard(&env, Symbol::new(&env, "upgrade"))?;
@@ -2164,6 +2257,11 @@ impl CalloraVault {
     }
 
     /// Propose sweeping (distributing) on-ledger USDC surplus to a recipient (admin only, timelocked).
+    ///
+    /// Proposing again over a live (unexpired) sweep proposal replaces it and
+    /// restarts the timelock, emitting `sweep_replaced` with the old and new
+    /// `(to, amount, proposed_at, execute_after)` snapshots. An expired
+    /// proposal is treated as absent and is silently overwritten.
     pub fn propose_sweep(
         env: Env,
         caller: Address,
@@ -2205,6 +2303,7 @@ impl CalloraVault {
         let expires_at =
             timelock::saturating_deadline(execute_after, timelock::PROPOSAL_GRACE_SECONDS)
                 .ok_or(VaultError::TimelockOverflow)?;
+        let existing = timelock::get_pending_sweep(&env);
         timelock::set_pending_sweep(
             &env,
             &timelock::PendingSweep {
@@ -2219,10 +2318,25 @@ impl CalloraVault {
             (
                 events::event_sweep_proposed(&env),
                 events::event_version_v1(&env),
-                caller,
+                caller.clone(),
             ),
-            (to, amount, proposed_at, execute_after),
+            (to.clone(), amount, proposed_at, execute_after),
         );
+        if let Some(old) = existing {
+            if proposed_at <= old.expires_at {
+                env.events().publish(
+                    (
+                        events::event_sweep_replaced(&env),
+                        events::event_version_v1(&env),
+                        caller,
+                    ),
+                    (
+                        (old.to, old.amount, old.proposed_at, old.execute_after),
+                        (to, amount, proposed_at, execute_after),
+                    ),
+                );
+            }
+        }
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -2247,6 +2361,7 @@ impl CalloraVault {
     /// - [`VaultError::Unauthorized`] — caller is not admin.
     /// - [`VaultError::ProposalNotFound`] — no pending sweep proposal.
     /// - [`VaultError::TimelockNotExpired`] — timelock still active.
+    /// - [`VaultError::ProposalExpired`] — the grace period has elapsed.
     /// - [`VaultError::InsufficientBalance`] — surplus < amount.
     ///
     /// ### Events
@@ -2258,8 +2373,6 @@ impl CalloraVault {
             return Err(VaultError::TimelockNotExpired);
         }
         if env.ledger().timestamp() > proposal.expires_at {
-            timelock::clear_pending_sweep(&env);
-            Self::bump_instance_ttl(&env);
             return Err(VaultError::ProposalExpired);
         }
         let usdc_addr: Address = env
@@ -2342,6 +2455,96 @@ impl CalloraVault {
         Ok(())
     }
 
+    /// Remove all expired timelock proposals from persistent storage.
+    ///
+    /// A proposal is expired once the ledger timestamp is strictly greater
+    /// than its `expires_at` grace deadline. Expired proposals are already
+    /// treated as absent by the `get_pending_*` views and rejected by the
+    /// `execute_*` functions; pruning simply reclaims their storage and emits
+    /// an audit event for each removed entry.
+    ///
+    /// ### Authorization
+    /// Admin-only. Pruning mutates persistent contract state, so it is kept
+    /// behind the same [`require_admin`] check as every other timelock
+    /// lifecycle operation. This also prevents arbitrary callers from
+    /// rewriting the proposal audit trail.
+    ///
+    /// ### Returns
+    /// The number of proposals cleared (`0..=3`).
+    ///
+    /// ### Events
+    /// Emits one `proposal_expired` event per cleared entry, with `caller` as
+    /// the third topic and `(kind, proposed_at, execute_after, expires_at)`
+    /// as data. `kind` is `"pause"`, `"upgrade"`, or `"sweep"`.
+    pub fn prune_expired_proposals(env: Env, caller: Address) -> Result<u32, VaultError> {
+        Self::require_admin(&env, &caller)?;
+        let now = env.ledger().timestamp();
+        let mut cleared: u32 = 0;
+
+        if let Some(proposal) = timelock::get_pending_pause(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_pause(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "pause"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        if let Some(proposal) = timelock::get_pending_upgrade(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_upgrade(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "upgrade"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        if let Some(proposal) = timelock::get_pending_sweep(&env) {
+            if now > proposal.expires_at {
+                timelock::clear_pending_sweep(&env);
+                env.events().publish(
+                    (
+                        events::event_proposal_expired(&env),
+                        events::event_version_v1(&env),
+                        caller.clone(),
+                    ),
+                    (
+                        Symbol::new(&env, "sweep"),
+                        proposal.proposed_at,
+                        proposal.execute_after,
+                        proposal.expires_at,
+                    ),
+                );
+                cleared += 1;
+            }
+        }
+
+        Self::bump_instance_ttl(&env);
+        Ok(cleared)
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
@@ -2397,7 +2600,7 @@ impl CalloraVault {
     /// [`CalloraVault::batch_deduct`]. The owner may always deduct; when an
     /// authorized caller is configured it may deduct too.
     fn require_authorized_deduct_caller(env: Env, caller: &Address) -> Result<(), VaultError> {
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller == owner {
             return Ok(());
         }
@@ -2422,6 +2625,23 @@ impl CalloraVault {
         let key = StorageKey::ProcessedRequest(*request_id);
         if env.storage().persistent().has(&key) || env.storage().temporary().has(&key) {
             return Err(VaultError::DuplicateRequestId);
+        }
+        Ok(())
+    }
+
+    /// Reject a nested call that re-enters the vault while a token transfer is
+    /// still in flight. This prevents call-back reentry through malicious token
+    /// contracts (e.g. the transfer hook) from executing a second deduct or
+    /// withdraw within the same transaction.
+    pub(crate) fn require_not_reentrant(env: &Env) -> Result<(), VaultError> {
+        let key = StorageKey::ReentrancyGuard;
+        if env
+            .storage()
+            .temporary()
+            .get::<_, bool>(&key)
+            .unwrap_or(false)
+        {
+            return Err(VaultError::Unauthorized);
         }
         Ok(())
     }
@@ -2468,6 +2688,12 @@ impl CalloraVault {
             if removed_temporary {
                 env.storage().temporary().remove(&key);
             }
+            if env.storage().instance().has(&DataKey::Settlement) {
+                let settlement_addr = Self::require_settlement(&env).ok();
+                if let Some(addr) = settlement_addr {
+                    let _ = settlement::Client::new(&env, &addr).try_clear_deduction_request(&id);
+                }
+            }
             if removed_persistent || removed_temporary {
                 env.events().publish(
                     (
@@ -2510,7 +2736,7 @@ impl CalloraVault {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VaultError::NotInitialized)?;
-        let owner = Self::get_owner(env.clone());
+        let owner = Self::get_owner(env.clone())?;
         if *caller != admin && *caller != owner {
             return Err(VaultError::Unauthorized);
         }
@@ -2965,6 +3191,9 @@ mod test_allowlist_remove;
 
 #[cfg(test)]
 mod test_views;
+
+#[cfg(test)]
+mod test_simulate_parity;
 
 #[cfg(test)]
 mod test_reentrancy;
