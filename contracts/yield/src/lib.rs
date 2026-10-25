@@ -1,3 +1,5 @@
+#![no_std]
+
 //! Yield deposit surface for Callora.
 //!
 //! Protocol yield deposits are implemented by
@@ -27,9 +29,6 @@
 //! The surface is fully backward compatible with prior versions: the existing
 //! `RevenuePool` re-exports remain unchanged, no prior symbol was renamed,
 //! and no prior storage key was reused.
-
-#![no_std]
-
 pub use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
 
 pub mod errors;

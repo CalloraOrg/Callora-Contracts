@@ -342,7 +342,7 @@ pub struct AdminMigrationEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeProposedEvent {
-    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub wasm_hash: soroban_sdk::BytesN32,
     pub proposed_at: u64,
     pub execute_after: u64,
 }
@@ -351,6 +351,6 @@ pub struct UpgradeProposedEvent {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeCancelledEvent {
-    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub wasm_hash: soroban_sdk::BytesN32,
     pub cancelled_at: u64,
 }

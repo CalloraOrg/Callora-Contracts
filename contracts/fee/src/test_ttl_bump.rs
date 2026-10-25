@@ -1,8 +1,6 @@
-#![cfg(test)]
-
+#[cfg(test)]
 use crate::{
-    ContractError, FeeContract, FeeContractClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
-    LEDGERS_PER_DAY,
+    FeeContract, FeeContractClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD, LEDGERS_PER_DAY,
 };
 use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::{Address as _, Ledger as _};

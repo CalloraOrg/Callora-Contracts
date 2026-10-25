@@ -10,7 +10,9 @@ use callora_storage_migration::{
     layout_hash, StorageMigrationError, StorageMigrationValidator, LEGACY_VERSION,
 };
 use errors::CheckpointError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, Address, BytesN, Env, IntoVal, Symbol, Vec,
+};
 
 /// Storage-layout version recorded at init. Bump whenever the checkpoint
 /// storage schema changes.
@@ -871,22 +873,25 @@ impl CalloraCheckpoint {
         Self::require_admin(&env, &caller)?;
         Self::ensure_migration_finalized(&env)?;
 
-        let current_layout_hash = Self::storage_layout_hash(&env);
-        let expected_source_layout_hash =
-            if StorageMigrationValidator::current_version(&env) == LEGACY_VERSION {
-                callora_storage_migration::zero_layout_hash(&env)
-            } else {
-                current_layout_hash.clone()
-            };
-        StorageMigrationValidator::validate_before_upgrade(
+        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
+        if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
             &env,
-            target_version,
-            &current_layout_hash,
-            &expected_source_layout_hash,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &placeholder_layout,
             &new_wasm_hash,
             false,
-        )
-        .map_err(Self::migration_error)?;
+        ) {
+            env.panic_with_error(e);
+        }
+        if let Err(e) = StorageMigrationValidator::finalize_migration(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &new_wasm_hash,
+        ) {
+            env.panic_with_error(e);
+        }
 
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
@@ -901,47 +906,22 @@ impl CalloraCheckpoint {
 
     /// Finalize an authorized upgrade in the new WASM before business calls resume.
     ///
-    /// # Parameters
-    /// * `caller` -- Must be the current admin; must authorize.
-    /// * `target_version` -- Version authorized by [`CalloraCheckpoint::upgrade`].
-    /// * `new_layout_hash` -- Hash of the storage schema implemented by this WASM.
-    ///
-    /// # Errors
-    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
-    /// * [`CheckpointError::UnauthorizedUpgradeState`] -- no matching upgrade is authorized.
-    /// * [`CheckpointError::SchemaMismatch`] -- supplied hash is not this WASM's layout.
-    /// * [`CheckpointError::StorageUnreadable`] -- storage validation failed.
-    pub fn migrate(
-        env: Env,
-        caller: Address,
-        target_version: u32,
-        new_layout_hash: BytesN<32>,
-    ) -> Result<(), CheckpointError> {
-        Self::require_admin(&env, &caller)?;
-
-        if new_layout_hash != Self::storage_layout_hash(&env) {
-            return Err(CheckpointError::SchemaMismatch);
-        }
-
-        let (authorized_version, wasm_hash) = StorageMigrationValidator::authorized_upgrade(&env)
-            .ok_or(CheckpointError::UnauthorizedUpgradeState)?;
-        if authorized_version != target_version {
-            return Err(CheckpointError::UnauthorizedUpgradeState);
-        }
-
-        StorageMigrationValidator::finalize_migration(
-            &env,
-            target_version,
-            &new_layout_hash,
-            &wasm_hash,
-        )
-        .map_err(Self::migration_error)?;
-
-        env.storage()
-            .instance()
-            .remove(&callora_storage_migration::StorageKey::SmAuthorizedUpgrade);
-
-        Ok(())
+    /// Each entry is `(key, expected_type)`. `finalize_migration` reads every
+    /// key and returns `StorageUnreadable` if any is missing or fails to
+    /// decode as the expected type. Keep this list small (the validator
+    /// documents a maximum of 8 probes) and limited to keys that must exist
+    /// for the contract to be usable after an upgrade.
+    fn critical_probe_keys(env: &Env) -> Vec<(soroban_sdk::Val, soroban_sdk::Val)> {
+        let mut probes: Vec<(soroban_sdk::Val, soroban_sdk::Val)> = Vec::new(env);
+        probes.push_back((
+            StorageKey::Admin.into_val(env),
+            <Address as soroban_sdk::TryIntoVal<Env, soroban_sdk::Val>>::try_into_val(
+                &env.current_contract_address(),
+                env,
+            )
+            .unwrap_or_else(|_| soroban_sdk::Val::VOID.into()),
+        ));
+        probes
     }
 }
 

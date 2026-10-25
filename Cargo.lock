@@ -325,6 +325,7 @@ dependencies = [
 name = "callora-fee"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 
