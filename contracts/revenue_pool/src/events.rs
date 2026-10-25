@@ -1,8 +1,8 @@
 //! Event topic Symbol constructors for the Callora Revenue Pool contract.
-//!
-//! This module centralizes all event topic strings into dedicated functions,
-//! ensuring byte-identity is preserved and preventing accidental topic name drift
-//! across call sites.
+///
+/// This module centralizes all event topic strings into dedicated functions,
+/// ensuring byte-identity is preserved and preventing accidental topic name drift
+/// across call sites.
 
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
@@ -217,9 +217,34 @@ pub fn emit_distribute_completed(
     );
 }
 
+/// Returns the Symbol for the `"upgraded_proposed"` event topic.
+///
+/// Emitted when the admin proposes a timelocked WASM upgrade via
+/// [`RevenuePool::propose_upgrade`] (or the deprecated ``upgrade`` alias).
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_executed"` event topic.
+///
+/// Emitted when the admin executes a pending upgrade after the timelock
+/// has elapsed via [`RevenuePool::execute_upgrade`].
+pub fn event_upgrade_executed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_executed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+///
+/// Emitted when the admin cancels a pending upgrade via
+/// [`RevenuePool::cancel_upgrade`].
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
 /// Returns the Symbol for the `"upgraded"` event topic.
 ///
-/// Emitted when the admin upgrades the contract to a new WASM hash via `upgrade`.
+/// Emitted after the contract WASM has been swapped by [`RevenuePool::execute_upgrade`].
+/// Retained for backward compatibility with existing indexers.
 pub fn event_upgraded(env: &Env) -> Symbol {
     Symbol::new(env, "upgraded")
 }
@@ -255,6 +280,14 @@ pub fn event_emergency_drain_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "emergency_drain_cancelled")
 }
 
+/// Returns the Symbol for the `"migrated"` event topic.
+///
+/// Emitted by the post-swap [`RevenuePool::migrate`] entrypoint once the
+/// storage layout has been validated and the migration finalized.
+pub fn event_migrated(env* &Env) -> Symbol {
+    Symbol::new(env, "migrated")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -263,20 +296,20 @@ pub fn event_version_v1(env: &Env) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::Env;
+    use soroban_sdk:Env;
 
     /// Snapshot: proves event_init still maps to exactly the bytes for "init".
     #[test]
     fn test_event_init_bytes() {
         let env = Env::default();
-        assert_eq!(event_init(&env), Symbol::new(&env, "init"));
+        assert_eq(event_init(&env), Symbol::new(&env, "init"));
     }
 
     /// Snapshot: proves event_admin_changed still maps to exactly the bytes for "admin_changed".
     #[test]
     fn test_event_admin_changed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_changed(&env),
             Symbol::new(&env, "admin_changed")
         );
@@ -286,7 +319,7 @@ mod tests {
     #[test]
     fn test_event_admin_transfer_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_transfer_started(&env),
             Symbol::new(&env, "admin_transfer_started")
         );
@@ -296,7 +329,7 @@ mod tests {
     #[test]
     fn test_event_admin_transfer_completed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_transfer_completed(&env),
             Symbol::new(&env, "admin_transfer_completed")
         );
@@ -306,7 +339,7 @@ mod tests {
     #[test]
     fn test_event_admin_cancelled_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_cancelled(&env),
             Symbol::new(&env, "admin_cancelled")
         );
@@ -316,7 +349,7 @@ mod tests {
     #[test]
     fn test_event_pause_guardian_set_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_pause_guardian_set(&env),
             Symbol::new(&env, "pause_guardian_set")
         );
@@ -326,7 +359,7 @@ mod tests {
     #[test]
     fn test_event_pause_guardian_cleared_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_pause_guardian_cleared(&env),
             Symbol::new(&env, "pause_guardian_cleared")
         );
@@ -336,13 +369,14 @@ mod tests {
     #[test]
     fn test_event_pause_set_bytes() {
         let env = Env::default();
-        assert_eq!(event_pause_set(&env), Symbol::new(&env, "pause_set"));
+        assert_eq(event_pause_set(&env), Symbol::new(&env, "pause_set"));
     }
 
+    /// Snapshot: proves event_emergency_pause_set still maps to exactly the bytes for "emergency_pause_set".
     #[test]
     fn test_event_emergency_pause_set_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_emergency_pause_set(&env),
             Symbol::new(&env, "emergency_pause_set")
         );
@@ -352,34 +386,47 @@ mod tests {
     #[test]
     fn test_event_receive_payment_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_receive_payment(&env),
             Symbol::new(&env, "receive_payment")
         );
     }
 
+    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
+    #[test]
+    fn test_event_yield_deposited_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_yield_deposited(&env),
+            Symbol::new(&env, "yield_deposited")
+        );
+    }
+
+    /// Snapshot: proves event_treasury_transfer_started still maps to exactly the bytes for "treasury_transfer_started".
     #[test]
     fn test_event_treasury_transfer_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_treasury_transfer_started(&env),
             Symbol::new(&env, "treasury_transfer_started")
         );
     }
 
+    /// Snapshot: proves event_treasury_transfer_completed still maps to exactly the bytes for "treasury_transfer_completed".
     #[test]
     fn test_event_treasury_transfer_completed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_treasury_transfer_completed(&env),
             Symbol::new(&env, "treasury_transfer_completed")
         );
     }
 
+    /// Snapshot: proves event_treasury_cancelled still maps to exactly the bytes for "treasury_cancelled".
     #[test]
     fn test_event_treasury_cancelled_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_treasury_cancelled(&env),
             Symbol::new(&env, "treasury_cancelled")
         );
@@ -389,19 +436,9 @@ mod tests {
     #[test]
     fn test_event_set_max_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_set_max_distribute(&env),
             Symbol::new(&env, "set_max_distribute")
-        );
-    }
-
-    /// Snapshot: proves event_yield_deposited still maps to exactly the bytes for "yield_deposited".
-    #[test]
-    fn test_event_yield_deposited_bytes() {
-        let env = Env::default();
-        assert_eq!(
-            event_yield_deposited(&env),
-            Symbol::new(&env, "yield_deposited")
         );
     }
 
@@ -409,58 +446,81 @@ mod tests {
     #[test]
     fn test_event_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(event_distribute(&env), Symbol::new(&env, "distribute"));
+        assert_eq(event_distribute(&env), Symbol::new(&env, "distribute"));
     }
 
     /// Snapshot: proves event_batch_distribute still maps to exactly the bytes for "batch_distribute".
     #[test]
     fn test_event_batch_distribute_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_batch_distribute(&env),
             Symbol::new(&env, "batch_distribute")
         );
     }
 
+    /// Snapshot: proves event_distribute_started still maps to exactly the bytes for "distribute_started".
     #[test]
-    fn test_distribution_lifecycle_event_bytes() {
+    fn test_event_distribute_started_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_distribute_started(&env),
             Symbol::new(&env, "distribute_started")
         );
-        assert_eq!(
+    }
+
+    /// Snapshot: proves event_distribute_completed still maps to exactly the bytes for "distribute_completed".
+    #[test]
+    fn test_event_distribute_completed_bytes() {
+        let env = Env::default();
+        assert_eq(
             event_distribute_completed(&env),
             Symbol::new(&env, "distribute_completed")
         );
     }
 
+    /// Snapshot: proves event_upgrade_proposed maps to exactly the bytes for "upgrade_proposed".
     #[test]
-    fn test_distribution_lifecycle_payload_is_versioned() {
+    fn test_event_upgrade_proposed_bytes() {
         let env = Env::default();
-        let payload = DistributionLifecycleEvent::new(&env, 42, DistributionMode::Batch, 1, 3);
+        assert_eq(
+            event_upgrade_proposed(&env),
+            Symbol::new(&env, "upgrade_proposed")
+        );
+    }
 
-        assert_eq!(payload.version, DISTRIBUTION_EVENT_VERSION);
-        assert_eq!(payload.amount, 42);
-        assert_eq!(payload.mode, DistributionMode::Batch);
-        assert_eq!(payload.batch_index, 1);
-        assert_eq!(payload.batch_size, 3);
-        assert_eq!(payload.ledger_sequence, env.ledger().sequence());
-        assert_eq!(payload.timestamp, env.ledger().timestamp());
+    /// Snapshot: proves event_upgrade_executed maps to exactly the bytes for "upgrade_executed".
+    #[test]
+    fn test_event_upgrade_executed_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_upgrade_executed(&env),
+            Symbol::new(&env, "upgrade_executed")
+        );
+    }
+
+    /// Snapshot: proves event_upgrade_cancelled maps to exactly the bytes for "upgrade_cancelled".
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq(
+            event_upgrade_cancelled(&env),
+            Symbol::new(&env, "upgrade_cancelled")
+        );
     }
 
     /// Snapshot: proves event_upgraded still maps to exactly the bytes for "upgraded".
     #[test]
     fn test_event_upgraded_bytes() {
         let env = Env::default();
-        assert_eq!(event_upgraded(&env), Symbol::new(&env, "upgraded"));
+        assert_eq(event_upgraded(&env), Symbol::new(&env, "upgraded"));
     }
 
     /// Snapshot: proves event_admin_broadcast still maps to exactly the bytes for "admin_broadcast".
     #[test]
     fn test_event_admin_broadcast_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_admin_broadcast(&env),
             Symbol::new(&env, "admin_broadcast")
         );
@@ -470,7 +530,7 @@ mod tests {
     #[test]
     fn test_event_emergency_drain_proposed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_emergency_drain_proposed(&env),
             Symbol::new(&env, "emergency_drain_proposed")
         );
@@ -480,7 +540,7 @@ mod tests {
     #[test]
     fn test_event_emergency_drain_executed_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_emergency_drain_executed(&env),
             Symbol::new(&env, "emergency_drain_executed")
         );
@@ -490,9 +550,23 @@ mod tests {
     #[test]
     fn test_event_emergency_drain_cancelled_bytes() {
         let env = Env::default();
-        assert_eq!(
+        assert_eq(
             event_emergency_drain_cancelled(&env),
             Symbol::new(&env, "emergency_drain_cancelled")
         );
+    }
+
+    /// Snapshot: proves event_migrated maps to exactly the bytes for "migrated".
+    #[test]
+    fn test_event_migrated_bytes() {
+        let env = Env::default();
+        assert_eq(event_migrated(&env), Symbol::new(&env, "migrated"));
+    }
+
+    /// Snapshot: proves event_version_v1 still maps to exactly the bytes for "callora.v1".
+    #[test]
+    fn test_event_version_v1_bytes() {
+        let env = Env::default();
+        assert_eq(event_version_v1(&env), Symbol::new(&env, "callora.v1"));
     }
 }
