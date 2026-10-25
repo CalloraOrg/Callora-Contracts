@@ -3,14 +3,12 @@
 Events emitted by all Callora contracts for indexers, frontends, and auditors.
 All topic/data types refer to Soroban/Stellar XDR values.
 
-## Change Note (2026-10) — Issue #1411: fee contract real token transfers
+## Change Note (2026-10) — Issue #1406: escrow backed creation and settling release
 
-`contracts/fee`: `init` now takes a `token: Address` argument (stored under
-`DataKey::Token`), `deposit` pulls real tokens via `token::Client::transfer`
-before incrementing `Accumulated`, and `withdraw` transfers tokens to the
-recipient after decrementing the counter. New events `fee_initialized`,
-`fee_set`, and `fee_deposited` are emitted with the `"callora_v1"` version
-marker at topic[1].
+`contracts/escrow`:
+- `create_escrow` transfers `amount` of `payment_asset` from funder into the escrow contract before storing `EscrowRecord`.
+- `release` signature updated to `(caller, payment_asset, recipient)`. It verifies the record exists, deletes it before transfer (CEI), transfers tokens to `recipient`, and emits `escrow_released`.
+- `release` no longer overwrites `StorageKey::Signer`, ensuring `rotate_signer` maintains exclusive control over contract signing.
 
 ## Change Note (2026-10) — Issue #1411: recipient audit trail and TTL management
 
@@ -514,6 +512,61 @@ Default at deployment: `DEFAULT_TIMELOCK_SECONDS` = 172 800 s (48 h).
 > the admin shortened the escape-hatch delay. Indexers and monitoring systems
 > SHOULD alert on this condition because a shortened window reduces the time
 > available for community reaction to a malicious admin action.
+
+---
+
+### Timelock proposal events
+
+All vault timelock events use the standard shape: `topic[0]` is the event
+name, `topic[1]` is the `"callora_v1"` version marker, and `topic[2]` is the
+admin `caller`.
+
+| Event | Trigger | Data |
+|-------|---------|------|
+| `pause_proposed` | `propose_pause` | `(proposed_at, execute_after)` |
+| `upgrade_proposed` | `propose_upgrade` | `(wasm_hash, proposed_at, execute_after)` |
+| `sweep_proposed` | `propose_sweep` | `(to, amount, proposed_at, execute_after)` |
+| `pause_replaced` | `propose_pause` over a live proposal | `((old_proposed_at, old_execute_after), (proposed_at, execute_after))` |
+| `upgrade_replaced` | `propose_upgrade` over a live proposal | `((old_wasm_hash, old_proposed_at, old_execute_after), (wasm_hash, proposed_at, execute_after))` |
+| `sweep_replaced` | `propose_sweep` over a live proposal | `((old_to, old_amount, old_proposed_at, old_execute_after), (to, amount, proposed_at, execute_after))` |
+| `pause_executed` | `execute_pause` | executed-at ledger timestamp |
+| `upgrade_executed` | `execute_upgrade` | executed-at ledger timestamp |
+| `sweep_executed` | `execute_sweep` | `(to, amount, executed_at)` |
+| `pause_cancelled` | `cancel_pause` | `bool` (whether a proposal existed) |
+| `upgrade_cancelled` | `cancel_upgrade` | `bool` (whether a proposal existed) |
+| `sweep_cancelled` | `cancel_sweep` | `bool` (whether a proposal existed) |
+| `proposal_expired` | `prune_expired_proposals` | `(kind, proposed_at, execute_after, expires_at)` |
+
+Replacement semantics: a proposal whose `expires_at` has not yet passed is
+"live". Proposing over a live proposal replaces it and restarts the timelock;
+an expired proposal is treated as absent and is silently overwritten. This
+choice is also documented in `docs/UPGRADE.md`.
+
+### `proposal_expired`
+
+Emitted once per expired proposal cleared by `prune_expired_proposals`. The
+`kind` field is one of `"pause"`, `"upgrade"`, or `"sweep"`.
+
+| Index   | Location | Type                                                       | Description |
+|---------|----------|------------------------------------------------------------|-------------|
+| topic 0 | topics   | Symbol                                                     | `"proposal_expired"` |
+| topic 1 | topics   | Symbol                                                     | `"callora_v1"` (version marker) |
+| topic 2 | topics   | Address                                                    | `caller` — admin who pruned |
+| data[0] | data     | Symbol                                                     | proposal kind: `"pause"` / `"upgrade"` / `"sweep"` |
+| data[1] | data     | u64                                                        | `proposed_at` |
+| data[2] | data     | u64                                                        | `execute_after` |
+| data[3] | data     | u64                                                        | `expires_at` |
+
+```json
+{
+  "topics": ["proposal_expired", "callora_v1", "GADMIN..."],
+  "data": ["pause", 1700000000, 1700172800, 1700777600]
+}
+```
+
+Expired proposals remain in storage until pruned, but the `get_pending_*`
+views return `null` and the `execute_*` functions return
+`ProposalExpired (58)` without attempting a storage write.
 
 ---
 
@@ -1433,25 +1486,6 @@ Side effect: developer balance map entry for `GDEV...` is incremented by
 
 ---
 
-### `allocation_recorded`
-
-Emitted by `receive_payment()` and once per item in `batch_receive_payment()`
-after the corresponding `payment_received` (and, when applicable,
-`balance_credited` / `deposit`) events. Carries the running totals so indexers
-can reconcile `TotalReceived` against `TotalAllocated` without extra reads.
-
-| Index              | Location | Type    | Description                                                       |
-|--------------------|----------|---------|-------------------------------------------------------------------|
-| topic 0            | topics   | Symbol  | `"allocation_recorded"`                                           |
-| topic 1            | topics   | Address | `caller` — authorized vault or admin                              |
-| `amount`           | data     | i128    | amount allocated in this call (USDC micro-units)                  |
-| `total_allocated`  | data     | i128    | `TotalAllocated` after this credit (post-state)                   |
-| `total_received`   | data     | i128    | `TotalReceived` at the time of this credit                        |
-| `unallocated`      | data     | i128    | `total_received - total_allocated` after this credit (post-state) |
-
-
----
-
 ### `supported_token_added`
 
 Emitted when the admin registers a token for settlement payments. The event is
@@ -2115,6 +2149,136 @@ Emitted when the admin updates the refund configuration.
 
 ---
 
+## Contract: `callora-escrow` (v0.1.0)
+
+Events emitted by the escrow contract managing token-backed escrows, rate-limited admin critical actions, and key rotations.
+
+### `init`
+
+Emitted once by `init()`.
+
+| Index   | Location | Type    | Description                               |
+|---------|----------|---------|-------------------------------------------|
+| topic 0 | topics   | Symbol  | `"init"`                                  |
+| topic 1 | topics   | Address | `admin` — initial admin address           |
+| data    | data     | u64     | `cooldown_secs` — cool-off window seconds |
+
+```json
+{
+  "topics": ["init", "GADMIN..."],
+  "data": 3600
+}
+```
+
+---
+
+### `cooldown_set`
+
+Emitted by `set_cooldown()` when the admin adjusts the cool-off window.
+
+| Index   | Location | Type    | Description                   |
+|---------|----------|---------|-------------------------------|
+| topic 0 | topics   | Symbol  | `"cooldown_set"`              |
+| topic 1 | topics   | Address | `caller` — admin address      |
+| data    | data     | u64     | `secs` — new cooldown seconds |
+
+---
+
+### `action`
+
+Emitted when a guarded critical action without a dedicated payload executes (e.g. `pause`, `unpause`).
+
+| Index   | Location | Type    | Description                         |
+|---------|----------|---------|-------------------------------------|
+| topic 0 | topics   | Symbol  | `"action"`                          |
+| topic 1 | topics   | Address | `caller` — admin address            |
+| data    | data     | Symbol  | action tag (`"pause"`, `"unpause"`) |
+
+---
+
+### `signer_rotated`
+
+Emitted by `rotate_signer()` when the active contract signer is updated.
+
+| Index        | Location | Type    | Description                  |
+|--------------|----------|---------|------------------------------|
+| topic 0      | topics   | Symbol  | `"signer_rotated"`           |
+| topic 1      | topics   | Address | `caller` — admin address     |
+| `old_signer` | data[0]  | Address | previously authorized signer |
+| `new_signer` | data[1]  | Address | newly authorized signer      |
+
+---
+
+### `admin_nominated` / `admin_accepted` / `admin_cancelled`
+
+Two-step admin transfer events following standard Callora governance lifecycle.
+
+---
+
+### `asset_approved` / `asset_removed`
+
+Emitted when payment assets are approved or revoked by the admin.
+
+| Index   | Location | Type    | Description                           |
+|---------|----------|---------|---------------------------------------|
+| topic 0 | topics   | Symbol  | `"asset_approved"` / `"asset_removed"`|
+| topic 1 | topics   | Address | `caller` — admin address              |
+| data    | data     | Address | `asset` — token contract address      |
+
+---
+
+### `escrow_created`
+
+Emitted by `create_escrow()` after tokens are successfully transferred into the contract.
+
+| Index           | Location | Type    | Description                         |
+|-----------------|----------|---------|-------------------------------------|
+| topic 0         | topics   | Symbol  | `"escrow_created"`                  |
+| topic 1         | topics   | Address | `caller` — admin funder address     |
+| `payment_asset` | data     | Address | token contract address              |
+| `recipient`     | data     | Address | designated payout recipient         |
+| `amount`        | data     | i128    | funded amount in token micro-units  |
+| `created_at`    | data     | u64     | creation ledger timestamp           |
+
+```json
+{
+  "topics": ["escrow_created", "GADMIN..."],
+  "data": {
+    "payment_asset": "GASSET...",
+    "recipient": "GRECIPIENT...",
+    "amount": 1000000,
+    "created_at": 1700000000
+  }
+}
+```
+
+---
+
+### `escrow_released`
+
+Emitted by `release()` when funds are paid out to the recipient and the record is settled.
+
+| Index           | Location | Type    | Description                         |
+|-----------------|----------|---------|-------------------------------------|
+| topic 0         | topics   | Symbol  | `"escrow_released"`                 |
+| topic 1         | topics   | Address | `caller` — admin address            |
+| `payment_asset` | data     | Address | token contract address              |
+| `recipient`     | data     | Address | designated payout recipient         |
+| `amount`        | data     | i128    | released amount in token micro-units|
+
+```json
+{
+  "topics": ["escrow_released", "GADMIN..."],
+  "data": {
+    "payment_asset": "GASSET...",
+    "recipient": "GRECIPIENT...",
+    "amount": 1000000
+  }
+}
+```
+
+---
+
 ## Indexer quick-reference
 
 | Event                    | Contract        | Trigger                                  |
@@ -2135,6 +2299,10 @@ Emitted when the admin updates the refund configuration.
 | `set_max_deduct`         | vault           | `set_max_deduct()`                       |
 | `set_authorized_caller` | vault           | `set_authorized_caller()`                |
 | `tl_window_changed`     | vault           | `set_timelock_window()`                  |
+| `pause_replaced`        | vault           | `propose_pause()` over a live proposal   |
+| `upgrade_replaced`      | vault           | `propose_upgrade()` over a live proposal |
+| `sweep_replaced`        | vault           | `propose_sweep()` over a live proposal   |
+| `proposal_expired`      | vault           | `prune_expired_proposals()`              |
 | `metadata_set`           | vault           | `set_metadata()`                         |
 | `metadata_updated`       | vault           | `update_metadata()`                      |
 | `metadata_removed`       | vault           | `remove_metadata()`                      |
@@ -2189,6 +2357,17 @@ Emitted when the admin updates the refund configuration.
 | `refund_processed`       | refund          | `approve_refund()`, `reject_refund()`, `process_refund()` |
 | `fees_withdrawn`         | refund          | `withdraw_fees()`                        |
 | `config_updated`         | refund          | `update_config()`                        |
+| `init`                   | escrow          | `init()`                                 |
+| `cooldown_set`           | escrow          | `set_cooldown()`                         |
+| `action`                 | escrow          | `pause()` / `unpause()`                  |
+| `signer_rotated`         | escrow          | `rotate_signer()`                        |
+| `admin_nominated`        | escrow          | `set_admin()`                            |
+| `admin_accepted`         | escrow          | `accept_admin()`                         |
+| `admin_cancelled`        | escrow          | `cancel_admin_transfer()`                |
+| `asset_approved`         | escrow          | `add_approved_asset()`                   |
+| `asset_removed`          | escrow          | `remove_approved_asset()`                |
+| `escrow_created`         | escrow          | `create_escrow()`                        |
+| `escrow_released`        | escrow          | `release()`                              |
 
 ---
 
@@ -2215,4 +2394,4 @@ Emitted when the admin updates the refund configuration.
 | 0.3.0   | revenue-pool  | Moved `admin_changed` from `set_admin()` to `accept_admin()` so nomination no longer announces a change (Issue #1163) |
 | 0.1.0   | recipient     | Registry TTL management and audit trail: `recipient_updated` emits `RecipientUpdatedEvent { name, old_address, new_address }` (Issue #1411) |
 | 0.1.0   | refund        | Extended `refund_processed` event with `token`, `fee`, and `net`; added `fees_withdrawn` event on `withdraw_fees()` |
-
+| 0.1.0   | escrow        | Settle escrow records on release, pull backed tokens on create_escrow, preserve signer across releases, emit `escrow_released` (Issue #1406) |

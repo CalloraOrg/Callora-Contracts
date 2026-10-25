@@ -344,14 +344,12 @@ fn overflow_guard_is_robust_at_u32_max() {
     let admin = Address::generate(&env);
     let user = Address::generate(&env);
     client.init(&admin);
-    // u32::MAX must be a registered code for the arithmetic guard to be the
-    // thing that rejects it.
+    // u32::MAX is a valid registered code and must be loggable: the contract
+    // performs no arithmetic on the code, so the maximum value cannot overflow.
     let desc = String::from_str(&env, "Max Code");
     client.register_error(&admin, &u32::MAX, &desc);
-    assert_eq!(
-        client.try_log_error(&user, &u32::MAX).unwrap_err().unwrap(),
-        Error::Overflow
-    );
+    assert_eq!(client.log_error(&user, &u32::MAX), ());
+    assert_eq!(client.get_recent_error(&user), Some(u32::MAX));
 }
 
 #[test]

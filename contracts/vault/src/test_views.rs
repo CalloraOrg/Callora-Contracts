@@ -71,7 +71,7 @@ fn get_owner_before_init_panics() {
 fn get_owner_returns_owner_after_init() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
-    assert_eq!(client.get_owner().unwrap(), owner);
+    assert_eq!(client.get_owner(), owner);
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +134,7 @@ fn get_usdc_token_before_init_panics() {
 fn get_usdc_token_returns_address_after_init() {
     let env = Env::default();
     let (_, client, usdc) = setup(&env);
-    assert_eq!(client.get_usdc_token().unwrap(), usdc);
+    assert_eq!(client.get_usdc_token(), usdc);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ fn get_settlement_returns_address_configured_at_init() {
     let env = Env::default();
     let settlement = Address::generate(&env);
     let (_, client, _) = setup_with(&env, 0, Some(10_000), Some(settlement.clone()), None);
-    assert_eq!(client.get_settlement().unwrap(), settlement);
+    assert_eq!(client.get_settlement(), settlement);
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn get_settlement_returns_address_after_set() {
     let settlement = Address::generate(&env);
 
     client.set_settlement(&owner, &settlement);
-    assert_eq!(client.get_settlement().unwrap(), settlement);
+    assert_eq!(client.get_settlement(), settlement);
 }
 
 // ---------------------------------------------------------------------------

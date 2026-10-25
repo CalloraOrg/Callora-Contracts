@@ -22,7 +22,7 @@ use soroban_sdk::contracterror;
 /// | 12   | InsufficientContractBalance  | Contract USDC balance is lower than requested amount |
 /// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
 /// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
-/// | 15   | ReasonTooLong                | Reason `Symbol` exceeds the allowed length           |
+/// | 15   | _reserved_ (was ReasonTooLong) | Retired; never returned                            |
 /// | 16   | MigrationSameAddress         | Migration source and target are identical            |
 /// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
 /// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
@@ -57,8 +57,8 @@ use soroban_sdk::contracterror;
 /// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
-/// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
-/// | 51   | ExceedsUnallocated           | Credit exceeds unallocated deducted funds            |
+/// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
+/// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -77,7 +77,8 @@ pub enum SettlementError {
     InsufficientContractBalance = 12,
     DailyWithdrawCapExceeded = 13,
     GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
+    // code 15 reserved (was ReasonTooLong; never returned). Retired so the
+    // enum stays within Soroban's 50-case limit for contract error specs.
     MigrationSameAddress = 16,
     InvalidMigrationTarget = 17,
     NoDeveloperBalance = 18,
@@ -126,6 +127,7 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
-    /// Credit would exceed the unallocated deducted funds held by settlement.
-    ExceedsUnallocated = 51,
+    /// `get_all_developer_balances` index exceeds
+    /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
+    TooManyResults = 51,
 }

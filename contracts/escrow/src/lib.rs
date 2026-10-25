@@ -28,7 +28,7 @@
 //! |---|---|:---:|---|
 //! | [`CalloraEscrow::create_escrow`] | Fund-Affecting | **No** | Rejects with [`EscrowError::Paused`] |
 //! | [`CalloraEscrow::release`] | Fund-Affecting | **No** | Rejects with [`EscrowError::Paused`] |
-//! | [`CalloraEscrow::pause`] | Admin Critical | **Yes** | Cooldown-guarded |
+//! | [`CalloraEscrow::pause`] | Admin Critical | **Yes** | Circuit-breaker (not cooldown-guarded) |
 //! | [`CalloraEscrow::unpause`] | Admin Critical | **Yes** | Restores fund operations |
 //! | [`CalloraEscrow::rotate_signer`] | Admin Critical | **Yes** | Allows key rotation during incident |
 //! | [`CalloraEscrow::set_cooldown`] | Admin Config | **Yes** | Allows cooldown adjustment |
@@ -123,6 +123,18 @@ pub struct EscrowRecord {
     pub amount: i128,
     /// Ledger timestamp at which the escrow was created.
     pub created_at: u64,
+}
+
+/// Event payload emitted when an escrow is released.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowReleasedEvent {
+    /// The payment asset contract released.
+    pub payment_asset: Address,
+    /// The designated recipient of the escrowed funds.
+    pub recipient: Address,
+    /// Escrow amount released in payment asset micro-units.
+    pub amount: i128,
 }
 
 /// Number of ledgers to extend persistent escrow entries by on read/write.
@@ -347,8 +359,12 @@ impl CalloraEscrow {
     /// a designated recipient. The cooldown prevents rapid sequential releases
     /// from a compromised admin key.
     ///
+    /// The record is removed before outbound token transfer (following Checks-Effects-Interactions)
+    /// to provide replay protection. The contract signer is preserved and never overwritten.
+    ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
+    /// * `payment_asset` -- Payment asset of the escrow to release.
     /// * `recipient` -- Address of the fund recipient.
     ///
     /// # Errors
@@ -356,23 +372,41 @@ impl CalloraEscrow {
     /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
     /// * [`EscrowError::NotInitialized`] -- contract not initialized.
     /// * [`EscrowError::CooldownActive`] -- a `release` ran within the cool-off window.
+    /// * [`EscrowError::NotFound`] -- no escrow record found for `(payment_asset, recipient)`.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"release"` tag as data.
-    pub fn release(env: Env, caller: Address, recipient: Address) -> Result<(), EscrowError> {
+    /// Emits `escrow_released` with `caller` as topic and [`EscrowReleasedEvent`] as data.
+    pub fn release(
+        env: Env,
+        caller: Address,
+        payment_asset: Address,
+        recipient: Address,
+    ) -> Result<(), EscrowError> {
         Self::extend_instance_ttl(&env);
+        // Error precedence: 1. pause, 2. admin auth, 3. cooldown, 4. record exists.
         Self::require_not_paused(&env)?;
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_RELEASE);
         admin::guard(&env, &action)?;
 
-        // Persist the release recipient for on-chain auditability.
-        env.storage()
-            .instance()
-            .set(&StorageKey::Signer, &recipient);
+        let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
+        let persistent = env.storage().persistent();
+        let record: EscrowRecord = persistent.get(&key).ok_or(EscrowError::NotFound)?;
+
+        // Remove the record before the outbound transfer (CEI) to guarantee replay protection.
+        persistent.remove(&key);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &payment_asset);
+        token_client.transfer(&env.current_contract_address(), &recipient, &record.amount);
+
+        let event = EscrowReleasedEvent {
+            payment_asset,
+            recipient,
+            amount: record.amount,
+        };
 
         env.events()
-            .publish((events::event_action(&env), caller), action);
+            .publish((events::event_escrow_released(&env), caller), event);
 
         Ok(())
     }
@@ -590,6 +624,9 @@ impl CalloraEscrow {
     /// [`CalloraEscrow::add_approved_asset`]; unapproved, malformed, and replay
     /// inputs fail closed without leaking protected detail.
     ///
+    /// Funds are transferred from the admin `caller` into the escrow contract before
+    /// recording the escrow.
+    ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
     /// * `payment_asset` -- The approved payment asset for this escrow.
@@ -635,6 +672,11 @@ impl CalloraEscrow {
         if persistent.has(&key) {
             return Err(EscrowError::EscrowExists);
         }
+
+        // Transfer funds from the admin caller into the escrow contract.
+        // If the funder has insufficient balance, the transfer fails and no state is recorded.
+        let token_client = soroban_sdk::token::Client::new(&env, &payment_asset);
+        token_client.transfer(&caller, &env.current_contract_address(), &amount);
 
         let record = EscrowRecord {
             payment_asset: payment_asset.clone(),

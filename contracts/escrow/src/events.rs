@@ -90,6 +90,14 @@ pub fn event_escrow_created(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_created")
 }
 
+/// Returns the Symbol for the `"escrow_released"` event topic.
+///
+/// Emitted when an existing escrow is released to the designated recipient
+/// via [`crate::CalloraEscrow::release`].
+pub fn event_escrow_released(env: &Env) -> Symbol {
+    Symbol::new(env, "escrow_released")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -178,6 +186,16 @@ mod tests {
         assert_eq!(
             event_escrow_created(&env),
             Symbol::new(&env, "escrow_created")
+        );
+    }
+
+    /// Snapshot: proves event_escrow_released maps to exactly the bytes for "escrow_released".
+    #[test]
+    fn test_event_escrow_released_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_escrow_released(&env),
+            Symbol::new(&env, "escrow_released")
         );
     }
 }

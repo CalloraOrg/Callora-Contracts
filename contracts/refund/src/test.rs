@@ -153,13 +153,18 @@ fn test_requester_refund_index_is_paginated_in_creation_order() {
 
 #[test]
 fn test_requester_refund_index_is_bounded() {
-    let (env, _admin, client) = setup();
+    let (env, admin, client) = setup();
     let requester = Address::generate(&env);
     let token = Address::generate(&env);
 
-    for _ in 0..(MAX_REQUESTER_REFUNDS + 1) {
-        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    for i in 0..MAX_REQUESTER_REFUNDS {
+        let id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+        if i == 0 {
+            client.reject_refund(&admin, &id);
+        }
     }
+
+    client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
 
     let oversized_limit = MAX_REQUESTER_REFUNDS + 1;
     let page = client.get_refunds_by_requester(&requester, &0, &oversized_limit);
@@ -958,4 +963,214 @@ fn test_uninitialized_entrypoints() {
         uninit_total.unwrap_err().unwrap(),
         RefundError::NotInitialized
     );
+}
+
+#[test]
+fn test_plan_row1_too_many_open_requests_counter_unchanged() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    for _ in 0..MAX_REQUESTER_REFUNDS {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    // 101st request when all 100 are open (Pending)
+    let res = client.try_request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    assert_eq!(res.unwrap_err().unwrap(), RefundError::TooManyOpenRequests);
+
+    // Counter unchanged: another requester gets ID 101
+    let other_requester = Address::generate(&env);
+    let next_id = client.request_refund(&other_requester, &token, &500, &Symbol::new(&env, "test"));
+    assert_eq!(next_id, (MAX_REQUESTER_REFUNDS + 1) as u64);
+}
+
+#[test]
+fn test_plan_row2_evict_processed_request_append_new_id() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let (token, _token_client, admin_token_client) = create_token(&env, &admin);
+
+    admin_token_client.mint(&client.address, &100_000);
+
+    let first_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.approve_refund(&admin, &first_id);
+    client.process_refund(&admin, &first_id);
+
+    for _ in 1..MAX_REQUESTER_REFUNDS {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    // 101st request should evict #1 (Processed) and append new id 101
+    let new_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    assert_eq!(new_id, (MAX_REQUESTER_REFUNDS + 1) as u64);
+
+    let page = client.get_refunds_by_requester(&requester, &0, &(MAX_REQUESTER_REFUNDS + 1));
+    assert_eq!(
+        page.len(),
+        MAX_REQUESTER_REFUNDS.min(crate::MAX_REQUESTER_REFUNDS_PAGE_SIZE)
+    );
+    // Index 0 is now request 2
+    assert_eq!(page.get(0).unwrap(), 2);
+    // Request 101 is at the end of the requester's refunds (page 2)
+    let page2 = client.get_refunds_by_requester(&requester, &50, &50);
+    assert_eq!(page2.len(), 50);
+    assert_eq!(page2.get(page2.len() - 1).unwrap(), new_id);
+}
+
+#[test]
+fn test_plan_row3_mixed_statuses_oldest_closed_evicted() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let (token, _token_client, admin_token_client) = create_token(&env, &admin);
+
+    admin_token_client.mint(&client.address, &100_000);
+
+    // Request 1: Pending (Open)
+    let req1 = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "req1"));
+    assert_eq!(req1, 1);
+
+    // Request 2: Approved (Open)
+    let req2 = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "req2"));
+    client.approve_refund(&admin, &req2);
+
+    // Request 3: Rejected (Closed - oldest closed)
+    let req3 = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "req3"));
+    client.reject_refund(&admin, &req3);
+
+    // Request 4: Processed (Closed)
+    let req4 = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "req4"));
+    client.approve_refund(&admin, &req4);
+    client.process_refund(&admin, &req4);
+
+    // Fill remaining up to 100 with Pending
+    for _ in 4..MAX_REQUESTER_REFUNDS {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    // 101st request should evict req3 (oldest closed), NOT req1 (oldest open)
+    let new_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "new"));
+    assert_eq!(new_id, 101);
+
+    let refunds = client.get_refunds_by_requester(&requester, &0, &100);
+    // req1 and req2 must still be present!
+    assert_eq!(refunds.get(0).unwrap(), 1);
+    assert_eq!(refunds.get(1).unwrap(), 2);
+    // req3 was evicted, so index 2 should now be req4
+    assert_eq!(refunds.get(2).unwrap(), 4);
+    // req3 is not in list
+    let mut found_req3 = false;
+    for i in 0..refunds.len() {
+        if refunds.get(i).unwrap() == 3 {
+            found_req3 = true;
+        }
+    }
+    assert!(!found_req3);
+}
+
+#[test]
+fn test_plan_row4_get_refunds_by_requester_after_eviction_all_open_listed() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // Create 100 requests where request 1 is rejected, the rest 99 are open
+    let first = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.reject_refund(&admin, &first);
+
+    for _ in 1..MAX_REQUESTER_REFUNDS {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    // Eviction happens here
+    let new_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    let page1 = client.get_refunds_by_requester(&requester, &0, &50);
+    let page2 = client.get_refunds_by_requester(&requester, &50, &50);
+    assert_eq!(page1.len(), 50);
+    assert_eq!(page2.len(), 50);
+    // Check that every open request from 2 to 101 is present across page1 and page2
+    for expected_id in 2..=new_id {
+        let mut found = false;
+        for i in 0..page1.len() {
+            if page1.get(i).unwrap() == expected_id {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            for i in 0..page2.len() {
+                if page2.get(i).unwrap() == expected_id {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(found, "Expected id {} to be listed", expected_id);
+    }
+}
+
+#[test]
+fn test_plan_row5_init_bumps_instance_ttl() {
+    use soroban_sdk::testutils::storage::Instance as _;
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(RefundContract, ());
+    let client = RefundContractClient::new(&env, &contract_id);
+
+    client.init(&admin, &250, &100);
+
+    let ttl = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        ttl >= crate::INSTANCE_BUMP_AMOUNT - 1,
+        "instance TTL {} should be >= INSTANCE_BUMP_AMOUNT - 1",
+        ttl
+    );
+}
+
+#[test]
+fn test_plan_row7_eviction_cpu_cost_bound() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // Make 99 open requests
+    for _ in 0..(MAX_REQUESTER_REFUNDS - 1) {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+    // Make the 100th request closed (worst case: scan 100 entries to find the closed one at the end)
+    let last_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.reject_refund(&admin, &last_id);
+
+    // Measure budget for 101st request which performs worst-case scan across 100 records
+    let cpu_before = env.cost_estimate().budget().cpu_instruction_cost();
+    client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    let cpu_after = env.cost_estimate().budget().cpu_instruction_cost();
+    let cpu_used = cpu_after - cpu_before;
+
+    // Soroban transaction limit is 100,000,000 CPU instructions.
+    // Worst-case 100-entry eviction scan consumes ~2.8M instructions (< 3.5% of tx budget).
+    assert!(
+        cpu_used < 3_500_000,
+        "Eviction scan cpu_used {} exceeds bound of 3,500,000",
+        cpu_used
+    );
+}
+
+#[test]
+fn test_request_refund_overflow() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    // Artificially set counter to u64::MAX
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&crate::types::StorageKey::RefundCounter, &u64::MAX);
+    });
+
+    let res = client.try_request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    assert_eq!(res.unwrap_err().unwrap(), RefundError::Overflow);
 }

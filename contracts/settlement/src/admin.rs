@@ -24,6 +24,7 @@ fn get_usdc(env: &Env) -> Address {
 
 pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Address, to: &Address) {
     require_admin(env, caller);
+    CalloraSettlement::bump_instance(env);
     if from == to {
         env.panic_with_error(SettlementError::MigrationSameAddress);
     }
@@ -63,6 +64,7 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
 
 pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Address) {
     require_admin(env, caller);
+    CalloraSettlement::bump_instance(env);
     let migration = timelock::get_pending_migration(env, from)
         .unwrap_or_else(|| env.panic_with_error(SettlementError::MigrationNotFound));
     let executed_at = env.ledger().timestamp();
