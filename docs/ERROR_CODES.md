@@ -54,25 +54,17 @@ must not be reassigned once released.
 | 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
 | 38 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
 | 39 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
-| 40 | _reserved_ (was `ColdSignersEmpty`) | Vault | Retired: never returned; removed to keep `VaultError` within the 50-case contract error spec limit |
-| 41 | _reserved_ (was `InvalidColdThreshold`) | Vault | Retired: never returned; removed to keep `VaultError` within the 50-case contract error spec limit |
-| 42 | _reserved_ (was `DuplicateColdSigner`) | Vault | Retired: never returned; removed to keep `VaultError` within the 50-case contract error spec limit |
+| 40 | `ColdSignersEmpty` | Vault | Cold signer set cannot be empty |
+| 41 | `InvalidColdThreshold` | Vault | Cold threshold must be between 1 and signer count |
+| 42 | `DuplicateColdSigner` | Vault | Duplicate address found in cold signer set |
 | 43 | `ExceedsReserveCap` | Vault | Deposit would exceed the configured per-token reserve cap |
-| 44 | `CallerNotInAllowlist` | Vault | Caller is not in allowlist and not owner |
-| 45 | `InvalidRecipient` | Vault | Withdrawal recipient is the vault address or USDC token address |
-| 46 | `ZeroAddressRecipient` | Vault | Withdrawal recipient is the zero address |
-| 47 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
-| 48 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
+| 44 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
+| 45 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
+| 46 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
+| 47 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
+| 48 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit (rejects sub-unit/dust transfers); currently enforced on `propose_sweep` |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
-| 51 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
-| 52 | `TimelockNotExpired` | Vault | Action attempted before the timelock window has elapsed |
-| 53 | `TimelockOverflow` | Vault | `proposed_at + window` overflowed `u64` |
-| 54 | `InvalidTimelockWindow` | Vault | Proposed timelock window is outside the allowed `MIN..=MAX` bounds |
-| 55 | `BelowMinTransferAmount` | Vault | Amount is below the vault's configured minimum transfer unit |
-| 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
-| 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
-| 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
 
 ## Settlement
 
@@ -92,7 +84,7 @@ must not be reassigned once released.
 | 12 | `InsufficientContractBalance` | Settlement | Contract USDC balance is lower than requested amount |
 | 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |
 | 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
-| 15 | _reserved_ (was `ReasonTooLong`) | Settlement | Retired: never returned |
+| 15 | `ReasonTooLong` | Settlement | Reason `Symbol` exceeds the allowed length |
 | 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
 | 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
 | 18 | `NoDeveloperBalance` | Settlement | Migration source has no positive balance |
@@ -127,8 +119,8 @@ must not be reassigned once released.
 | 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |
 | 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
-| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
-| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
+| 51 | `UpgradeProposalExpired` | Settlement | Upgrade proposal is past its expiry |
 
 ## Revenue Pool
 

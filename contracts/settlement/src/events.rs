@@ -31,7 +31,7 @@ use crate::types::{
     AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
     DeductionRecordedEvent, DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent,
     DeveloperWithdrawEvent, GlobalPool, PaymentReceivedEvent, UpgradeCancelledEvent,
-    UpgradeProposedEvent, VaultAcceptedEvent, VaultProposedEvent,
+    UpgradeProposedEvent, UpgradeReplacedEvent, VaultAcceptedEvent, VaultProposedEvent,
 };
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
@@ -777,10 +777,38 @@ pub fn emit_upgrade_proposed(env: &Env, caller: &Address, payload: UpgradePropos
 /// # Arguments
 /// * `env` - Soroban environment handle.
 /// * `caller` - Admin address cancelling the proposal.
-/// * `payload` - Structured cancellation details.
+/// * `payload` - Structured cancellation details, including a `reason` Symbol
+///   (e.g. `"admin_rotation"` or `"user_initiated"`).
 pub fn emit_upgrade_cancelled(env: &Env, caller: &Address, payload: UpgradeCancelledEvent) {
     env.events()
         .publish((event_upgrade_cancelled(env), caller.clone()), payload);
+}
+
+/// Returns the Symbol for the `"upgrade_replaced"` event topic.
+pub fn event_upgrade_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_replaced")
+}
+
+/// Emit `"upgrade_replaced"` when `propose_upgrade` supersedes an existing
+/// pending proposal.
+///
+/// **What**: Records that a previously proposed WASM upgrade has been replaced
+/// by a newer proposal; the old hash is superseded and a fresh timelock window
+/// begins for the new hash.
+///
+/// **How**: `env.events().publish()` with topic `(upgrade_replaced, caller)` and payload `UpgradeReplacedEvent`.
+///
+/// **Why**: Lets indexers distinguish a replacement from a cancellation and
+/// track which proposal is currently live.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address proposing the replacement.
+/// * `payload` - Structured replacement details including the superseded
+///   proposal's fields and `replaced_at`.
+pub fn emit_upgrade_replaced(env: &Env, caller: &Address, payload: UpgradeReplacedEvent) {
+    env.events()
+        .publish((event_upgrade_replaced(env), caller.clone()), payload);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -977,6 +1005,15 @@ mod tests {
         assert_eq!(
             event_upgrade_cancelled(&env),
             Symbol::new(&env, "upgrade_cancelled")
+        );
+    }
+
+    #[test]
+    fn test_event_upgrade_replaced_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_upgrade_replaced(&env),
+            Symbol::new(&env, "upgrade_replaced")
         );
     }
 }

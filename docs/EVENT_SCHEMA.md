@@ -1675,6 +1675,83 @@ operational edge cases (off-chain payment reconciliation, dispute resolution).
 - This event is **never** paired with a `payment_received` event.
 - For full accounting, sum `balance_credited.amount` + `developer_force_credited.amount` to compute total developer inflows.
 
+### `upgrade_proposed`
+
+Emitted by `propose_upgrade()` when the admin stages a timelocked WASM upgrade.
+
+| Index   | Location | Type           | Description                                                |
+|---------|----------|----------------|------------------------------------------------------------|
+| topic 0 | topics   | Symbol         | `"upgrade_proposed"`                                       |
+| topic 1 | topics   | Address        | `caller` -- admin that proposed the upgrade                |
+| data    | data     | UpgradeProposedEvent | structured proposal payload (see below)           |
+
+`UpgradeProposedEvent` fields:
+
+| Field         | Type          | Description                                 |
+|---------------|---------------|---------------------------------------------|
+| `wasm_hash`   | BytesN<32>    | WASM hash proposed for installation         |
+| `proposed_at` | u64           | ledger timestamp at proposal time           |
+| `execute_after` | u64         | earliest execution timestamp (`+ 48 h`)     |
+
+```json
+{
+  "topics": ["upgrade_proposed", "GADMIN..."],
+  "data": {
+    "wasm_hash": "a1b2c3d4...",
+    "proposed_at": 1700000000,
+    "execute_after": 1701728000
+  }
+}
+```
+
+### `upgrade_replaced`
+
+Emitted by `propose_upgrade()` when a proposal already exists and is superseded by a new proposal. The old hash is replaced and a fresh timelock window begins.
+
+| Index   | Location | Type                | Description                                              |
+|---------|----------|---------------------|----------------------------------------------------------|
+| topic 0 | topics   | Symbol              | `"upgrade_replaced"`                                     |
+| topic 1 | topics   | Address             | `caller` -- admin proposing the replacement              |
+| data    | data     | UpgradeReplacedEvent | structured replacement payload (see below)             |
+
+`UpgradeReplacedEvent` fields:
+
+| Field         | Type          | Description                                            |
+|---------------|---------------|--------------------------------------------------------|
+| `wasm_hash`   | BytesN<32>    | superseded WASM hash                                   |
+| `proposed_at` | u64           | original proposal timestamp                            |
+| `execute_after` | u64         | original earliest execution timestamp                  |
+| `expires_at`  | u64           | original expiry timestamp                              |
+| `replaced_at` | u64           | ledger timestamp when the replacement was proposed     |
+
+### `upgrade_cancelled`
+
+Emitted by `cancel_upgrade()` and by `accept_admin()` on admin rotation, when a pending upgrade proposal is voided.
+
+| Index   | Location | Type                 | Description                                                |
+|---------|----------|----------------------|------------------------------------------------------------|
+| topic 0 | topics   | Symbol               | `"upgrade_cancelled"`                                    |
+| topic 1 | topics   | Address              | `caller` -- admin cancelling (or old admin on rotation)  |
+| data    | data     | UpgradeCancelledEvent | structured cancellation payload (see below)             |
+
+`UpgradeCancelledEvent` fields:
+
+| Field         | Type          | Description                                            |
+|---------------|---------------|--------------------------------------------------------|
+| `wasm_hash`   | BytesN<32>    | cancelled WASM hash                                    |
+| `cancelled_at`| u64           | ledger timestamp of cancellation                       |
+| `reason`      | Symbol        | `"user_initiated"` for `cancel_upgrade`, `"admin_rotation"` when cleared by `accept_admin` |
+
+### `upgraded` (legacy)
+
+| Index   | Location | Type       | Description                                       |
+|---------|----------|------------|---------------------------------------------------|
+| topic 0 | topics   | Symbol     | `"upgraded"`                                      |
+| topic 1 | topics   | Address    | `caller` -- admin who executed the upgrade        |
+| data    | data     | BytesN<32> | `new_wasm_hash` -- hash of the deployed WASM blob |
+
+Emitted by `execute_upgrade()` after the WASM is installed and the proposal is cleared.
+
 ---
 
 ## Contract: `callora-distribute` (v0.1.0)
