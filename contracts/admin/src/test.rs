@@ -1,37 +1,81 @@
-//! Integration tests for the Callora Admin contract.
+//! Integration tests for the Callora Admin library.
 //!
-//! These tests drive the admin module directly (no `#[contract]` macro
-//! is involved), matching the testing style used in `contracts/upgrade`.
-//!
-//! Coverage:
-//! - get_admin / get_pending_admin view behaviour
-//! - init happy path + double-init panic
-//! - set_admin auth + topic + data shape + repeated-nomination replacement
-//! - accept_admin auth + topic + data shape + non-pending caller panic
-//! - cancel_admin_transfer auth + topic + data shape + no-pending panic
-//! - full three-event lifecycle ordering
-//! - failed calls emit zero events
-//! - event-log completeness (every path emits exactly the documented count)
-//! - TTL bookkeeping fires on every write
+//! Ported to use `AdminHarness` (a thin `#[contract]` wrapper around the library
+//! entry points), mirroring `contracts/upgrade/tests/auth_regression.rs` to
+//! execute inside a real contract context with typed [`AdminError`] codes.
 
 #![cfg(test)]
 extern crate std;
 
-use super::*;
+use crate::admin::{self, PendingRotation, ROTATION_DELAY_SECS, ROTATION_GRACE_SECS};
+use crate::errors::{self, AdminError};
+use crate::limits;
 use soroban_sdk::{
+    contract, contractimpl,
     testutils::{Address as _, Events as _, Ledger as _},
     Address, Env, IntoVal, Symbol,
 };
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Harness
 // ---------------------------------------------------------------------------
 
-/// Return all events published by any contract in the environment, filtered
-/// to those whose topic[0] matches the given string.
-///
-/// Mirrors the helper used in `contracts/upgrade/src/test.rs` so that the
-/// assertion style stays identical across the workspace.
+#[contract]
+pub struct AdminHarness;
+
+#[contractimpl]
+impl AdminHarness {
+    pub fn init(env: Env, admin: Address) -> Result<(), AdminError> {
+        admin::init(&env, &admin)
+    }
+
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), AdminError> {
+        admin::set_admin(&env, &caller, &new_admin)
+    }
+
+    pub fn accept_admin(env: Env, caller: Address) -> Result<(), AdminError> {
+        admin::accept_admin(&env, &caller)
+    }
+
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), AdminError> {
+        admin::cancel_admin_transfer(&env, &caller)
+    }
+
+    pub fn get_admin(env: Env) -> Option<Address> {
+        admin::get_admin(&env)
+    }
+
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        admin::get_pending_admin(&env)
+    }
+
+    pub fn get_pending_rotation(env: Env) -> Option<PendingRotation> {
+        admin::get_pending_rotation(&env)
+    }
+
+    pub fn get_rotation_id(env: Env) -> u64 {
+        admin::get_rotation_id(&env)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers and fixtures
+// ---------------------------------------------------------------------------
+
+fn setup_harness(env: &Env) -> (AdminHarnessClient<'_>, Address) {
+    let id = env.register(AdminHarness, ());
+    let client = AdminHarnessClient::new(env, &id);
+    (client, id)
+}
+
+fn setup_with_admin(env: &Env) -> (AdminHarnessClient<'_>, Address, Address) {
+    env.mock_all_auths();
+    let (client, id) = setup_harness(env);
+    let admin = Address::generate(env);
+    client.init(&admin);
+    (client, id, admin)
+}
+
 fn events_with_topic<'a>(
     env: &'a Env,
     topic: &str,
@@ -50,795 +94,813 @@ fn events_with_topic<'a>(
         .collect()
 }
 
-/// Set the ledger clock to an absolute timestamp (issue #1045).
 fn set_timestamp(env: &Env, timestamp: u64) {
     env.ledger().with_mut(|li| li.timestamp = timestamp);
 }
 
-/// Advance the ledger clock past the rotation timelock (issue #1045).
-///
-/// Nominations are not acceptable until `ROTATION_DELAY_SECS` have elapsed,
-/// so every test that drives a *successful* acceptance has to serve the delay
-/// first. Lands one second past the ETA, comfortably inside the grace window.
 fn warp_past_timelock(env: &Env) {
     let now = env.ledger().timestamp();
-    set_timestamp(env, now + admin::ROTATION_DELAY_SECS + 1);
-}
-
-/// Initialize the admin contract in a fresh env with a single admin.
-fn fresh_env_with_admin() -> (Env, Address) {
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    admin::init(&env, &admin);
-    (env, admin)
+    set_timestamp(env, now + ROTATION_DELAY_SECS + 1);
 }
 
 // ===========================================================================
-// View behaviour
+// Test Plan Scenarios (1–10)
 // ===========================================================================
 
-/// `init` makes the admin address visible through `get_admin`.
+/// Test Plan Scenario 1: `init` without auth fails closed.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn get_admin_returns_initial_admin_after_init() {
+fn scenario_1_init_without_auth_fails() {
     let env = Env::default();
-    assert!(admin::get_admin(&env).is_none());
-
-    let admin = Address::generate(&env);
-    admin::init(&env, &admin);
-
-    assert_eq!(admin::get_admin(&env), Some(admin.clone()));
-}
-
-/// `get_pending_admin` is `None` before any nomination is made.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn get_pending_admin_is_none_initially() {
-    let (env, _admin) = fresh_env_with_admin();
-    assert!(admin::get_pending_admin(&env).is_none());
-}
-
-// ===========================================================================
-// init
-// ===========================================================================
-
-/// `init` emits exactly one `admin_init` event with the initial admin in
-/// topic[1] and `()` as data.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn init_emits_admin_init_event() {
-    let env = Env::default();
+    let (client, _id) = setup_harness(&env);
     let admin = Address::generate(&env);
 
-    admin::init(&env, &admin);
+    // No `mock_all_auths` or authorization provided
+    let res = client.try_init(&admin);
+    assert!(res.is_err(), "init must reject caller without auth");
+    assert!(client.get_admin().is_none());
+}
 
-    let matches = events_with_topic(&env, "admin_init");
+/// Test Plan Scenario 2: `init` twice returns typed `AlreadyInitialized`.
+#[test]
+fn scenario_2_init_twice_returns_already_initialized() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let imposter = Address::generate(&env);
+
+    let res = client.try_init(&imposter);
+    assert_eq!(res, Err(Ok(AdminError::AlreadyInitialized)));
+    assert_eq!(client.get_admin(), Some(admin));
+}
+
+/// Test Plan Scenario 3: `set_admin` by a non-admin returns `Unauthorized`.
+#[test]
+fn scenario_3_set_admin_by_non_admin_returns_unauthorized() {
+    let env = Env::default();
+    let (client, _id, _admin) = setup_with_admin(&env);
+    let intruder = Address::generate(&env);
+    let nominee = Address::generate(&env);
+
+    let res = client.try_set_admin(&intruder, &nominee);
+    assert_eq!(res, Err(Ok(AdminError::Unauthorized)));
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// Test Plan Scenario 4: `set_admin` self-nomination returns `SameAdmin`.
+#[test]
+fn scenario_4_set_admin_self_nomination_returns_same_admin() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+
+    let res = client.try_set_admin(&admin, &admin);
+    assert_eq!(res, Err(Ok(AdminError::SameAdmin)));
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// Test Plan Scenario 5: `accept_admin` with no pending admin returns `NoPendingAdmin`.
+#[test]
+fn scenario_5_accept_admin_no_pending_returns_no_pending_admin() {
+    let env = Env::default();
+    let (client, _id, _admin) = setup_with_admin(&env);
+    let stranger = Address::generate(&env);
+
+    let res = client.try_accept_admin(&stranger);
+    assert_eq!(res, Err(Ok(AdminError::NoPendingAdmin)));
+}
+
+/// Test Plan Scenario 6: `accept_admin` by the wrong caller returns `UnauthorizedPending`.
+#[test]
+fn scenario_6_accept_admin_wrong_caller_returns_unauthorized_pending() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    warp_past_timelock(&env);
+
+    let res = client.try_accept_admin(&attacker);
+    assert_eq!(res, Err(Ok(AdminError::UnauthorizedPending)));
+    assert_eq!(client.get_admin(), Some(admin));
+    assert_eq!(client.get_pending_admin(), Some(nominee));
+}
+
+/// Test Plan Scenario 7: `accept_admin` after nomination expires returns `NominationExpired`.
+#[test]
+fn scenario_7_accept_admin_after_expiry_returns_nomination_expired() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    let expires_at = client.get_pending_rotation().unwrap().expires_at;
+    set_timestamp(&env, expires_at + 1);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Err(Ok(AdminError::NominationExpired)));
+    assert_eq!(client.get_admin(), Some(admin));
+    assert_eq!(client.get_pending_admin(), Some(nominee));
+}
+
+/// Test Plan Scenario 8: Full rotation lifecycle emits three events in order.
+#[test]
+fn scenario_8_full_rotation_lifecycle_emits_three_events_in_order() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _id) = setup_harness(&env);
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    // Step 1: init emits admin_init
+    client.init(&admin);
+    let init_events = events_with_topic(&env, "admin_init");
+    assert_eq!(init_events.len(), 1);
+
+    // Step 2: set_admin emits admin_nominated
+    client.set_admin(&admin, &new_admin);
+    let nom_events = events_with_topic(&env, "admin_nominated");
+    assert_eq!(nom_events.len(), 1);
+
+    // Step 3: accept_admin emits admin_changed
+    warp_past_timelock(&env);
+    client.accept_admin(&new_admin);
+    let chg_events = events_with_topic(&env, "admin_changed");
+    assert_eq!(chg_events.len(), 1);
+    assert_eq!(events_with_topic(&env, "admin_cancelled").len(), 0);
+
+    assert_eq!(client.get_admin(), Some(new_admin));
+    assert!(client.get_pending_admin().is_none());
+}
+
+/// Test Plan Scenario 9: Unauthorized calls produce no events and leave state unchanged.
+#[test]
+fn scenario_9_unauthorized_calls_emit_no_events_and_preserve_state() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+
+    // Unauthorized set_admin produces 0 events in its invocation
+    let res_set = client.try_set_admin(&stranger, &Address::generate(&env));
+    assert_eq!(res_set, Err(Ok(AdminError::Unauthorized)));
+    assert_eq!(env.events().all().len(), 0);
+
+    // Unauthorized accept_admin produces 0 events in its invocation
+    let res_accept = client.try_accept_admin(&stranger);
+    assert_eq!(res_accept, Err(Ok(AdminError::UnauthorizedPending)));
+    assert_eq!(env.events().all().len(), 0);
+
+    // Unauthorized cancel_admin_transfer produces 0 events in its invocation
+    let res_cancel = client.try_cancel_admin_transfer(&stranger);
+    assert_eq!(res_cancel, Err(Ok(AdminError::Unauthorized)));
+    assert_eq!(env.events().all().len(), 0);
+
+    // State is intact
+    assert_eq!(client.get_admin(), Some(admin));
+    assert_eq!(client.get_pending_admin(), Some(nominee));
+}
+
+// ===========================================================================
+// Design Constraint: Pin Error Precedence of accept_admin
+//
+// Order: pending exists -> auth -> caller matches -> not expired -> timelock elapsed
+// ===========================================================================
+
+#[test]
+fn test_accept_admin_error_precedence_pinned() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    // Precedence 1: Pending existence checked before auth.
+    // With no pending rotation, even an unauthenticated caller gets NoPendingAdmin.
+    env.set_auths(&[]);
+    let res = client.try_accept_admin(&stranger);
     assert_eq!(
-        matches.len(),
-        1,
-        "init must emit exactly one admin_init event"
+        res,
+        Err(Ok(AdminError::NoPendingAdmin)),
+        "NoPendingAdmin must take precedence over caller auth"
     );
 
+    // Now establish a pending nomination.
+    env.mock_all_auths();
+    client.set_admin(&admin, &nominee);
+
+    // Precedence 2: Auth is checked after pending exists, but before caller identity.
+    env.set_auths(&[]);
+    let res_no_auth = client.try_accept_admin(&nominee);
+    assert!(
+        res_no_auth.is_err(),
+        "accept_admin without auth must fail at auth"
+    );
+    // Ensure it didn't succeed or mutate
+    assert_eq!(client.get_admin(), Some(admin.clone()));
+
+    // Precedence 3: Caller identity is checked before timing (expired / timelock).
+    // Even if expired and before ETA, wrong caller gets UnauthorizedPending.
+    env.mock_all_auths();
+    let res_wrong_caller = client.try_accept_admin(&stranger);
+    assert_eq!(
+        res_wrong_caller,
+        Err(Ok(AdminError::UnauthorizedPending)),
+        "UnauthorizedPending must take precedence over expiry/timelock"
+    );
+
+    // Precedence 4: Expiry is checked before timelock elapsed.
+    let expires_at = client.get_pending_rotation().unwrap().expires_at;
+    set_timestamp(&env, expires_at + 10);
+    let res_expired = client.try_accept_admin(&nominee);
+    assert_eq!(
+        res_expired,
+        Err(Ok(AdminError::NominationExpired)),
+        "NominationExpired must take precedence over timelock"
+    );
+
+    // Precedence 5: Timelock elapsed is checked when not expired.
+    let eta = client.get_pending_rotation().unwrap().eta;
+    set_timestamp(&env, eta - 1);
+    let res_timelock = client.try_accept_admin(&nominee);
+    assert_eq!(
+        res_timelock,
+        Err(Ok(AdminError::TimelockNotElapsed)),
+        "TimelockNotElapsed returned when not expired but before eta"
+    );
+
+    // Finally, when all checks pass:
+    set_timestamp(&env, eta);
+    let res_ok = client.try_accept_admin(&nominee);
+    assert_eq!(res_ok, Ok(Ok(())));
+    assert_eq!(client.get_admin(), Some(nominee));
+}
+
+// ===========================================================================
+// Revived and Ported Admin Tests
+// ===========================================================================
+
+#[test]
+fn get_admin_returns_initial_admin_after_init() {
+    let env = Env::default();
+    let (client, _id) = setup_harness(&env);
+    assert!(client.get_admin().is_none());
+
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    assert_eq!(client.get_admin(), Some(admin));
+}
+
+#[test]
+fn get_pending_admin_is_none_initially() {
+    let env = Env::default();
+    let (client, _id, _admin) = setup_with_admin(&env);
+    assert!(client.get_pending_admin().is_none());
+}
+
+#[test]
+fn init_emits_admin_init_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _id) = setup_harness(&env);
+    let admin = Address::generate(&env);
+
+    client.init(&admin);
+
+    let matches = events_with_topic(&env, "admin_init");
+    assert_eq!(matches.len(), 1);
+
     let (topics, data) = &matches[0];
-    assert_eq!(topics.len(), 2, "admin_init must carry exactly 2 topics");
+    assert_eq!(topics.len(), 2);
 
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_init"));
 
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(
-        topic1, admin,
-        "admin_init topic[1] must be the initial admin"
-    );
+    assert_eq!(topic1, admin);
 
-    // data is `()` (empty tuple).
     let _: () = data.clone().into_val(&env);
 }
 
-/// Calling `init` twice must panic with the documented error string and
-/// **not** emit a second `admin_init` event.
-#[test]
-#[should_panic(expected = "admin contract already initialized")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn init_twice_panics() {
-    let env = Env::default();
-    let admin = Address::generate(&env);
-    let imposter = Address::generate(&env);
-
-    admin::init(&env, &admin);
-    admin::init(&env, &imposter);
-}
-
-// ===========================================================================
-// set_admin
-// ===========================================================================
-
-/// `set_admin` requires `require_auth` on the caller.
 #[test]
 fn set_admin_requires_auth() {
     let env = Env::default();
-    let invader = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let new_admin = Address::generate(&env);
 
-    // No `env.mock_all_auths()` here — auth must be enforced.
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::set_admin(&env, &invader, &new_admin);
-    }));
-    assert!(
-        res.is_err(),
-        "set_admin must require auth and panic when caller does not authorize"
-    );
+    env.set_auths(&[]);
+    let res = client.try_set_admin(&admin, &new_admin);
+    assert!(res.is_err(), "set_admin must require auth on caller");
 }
 
-/// `set_admin` rejects a caller that is not the current admin with the
-/// documented error string. Auth must still succeed first.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn set_admin_unauthorized_caller_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let intruder = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-
-    admin::init(&env, &admin);
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::set_admin(&env, &intruder, &new_admin);
-    }));
-    assert!(
-        res.is_err(),
-        "intruder must not be allowed to nominate a new admin"
-    );
-}
-
-/// `set_admin` emits exactly one `admin_nominated` event with caller in
-/// topic[1] and the nominated address as data.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_admin_emits_admin_nominated_event_with_correct_shape() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let new_admin = Address::generate(&env);
-    admin::init(&env, &admin);
 
-    admin::set_admin(&env, &admin, &new_admin);
+    client.set_admin(&admin, &new_admin);
 
     let matches = events_with_topic(&env, "admin_nominated");
-    assert_eq!(
-        matches.len(),
-        1,
-        "set_admin must emit exactly one admin_nominated event"
-    );
+    assert_eq!(matches.len(), 1);
 
     let (topics, data) = &matches[0];
-    assert_eq!(topics.len(), 2, "admin_nominated must carry 2 topics");
+    assert_eq!(topics.len(), 2);
 
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_nominated"));
 
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(
-        topic1, admin,
-        "admin_nominated topic[1] must be the current admin (caller)"
-    );
+    assert_eq!(topic1, admin);
 
-    let payload: Address = data.clone().into_val(&env);
-    assert_eq!(
-        payload, new_admin,
-        "admin_nominated data must be the pending admin address"
-    );
+    let (nominated, eta, expires_at): (Address, u64, u64) = data.clone().into_val(&env);
+    assert_eq!(nominated, new_admin);
+    assert!(eta > 0);
+    assert!(expires_at > eta);
 }
 
-/// After `set_admin`, `get_pending_admin` returns the nominated address and
-/// `get_admin` is unchanged (the rotation has not completed yet).
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_admin_updates_only_pending_slot() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let new_admin = Address::generate(&env);
-    admin::init(&env, &admin);
 
-    admin::set_admin(&env, &admin, &new_admin);
+    client.set_admin(&admin, &new_admin);
 
-    assert_eq!(
-        admin::get_pending_admin(&env),
-        Some(new_admin.clone()),
-        "pending_admin must equal the nominated address after set_admin"
-    );
-    assert_eq!(
-        admin::get_admin(&env),
-        Some(admin.clone()),
-        "active admin must NOT change on set_admin"
-    );
+    assert_eq!(client.get_pending_admin(), Some(new_admin));
+    assert_eq!(client.get_admin(), Some(admin));
 }
 
-/// Calling `set_admin` twice without an intervening accept replaces the
-/// pending slot and emits a fresh `admin_nominated` event for the new
-/// nominee — the prior nomination is implicitly cancelled.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_admin_replaces_prior_pending_nomination() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let nominee_a = Address::generate(&env);
     let nominee_b = Address::generate(&env);
-    admin::init(&env, &admin);
 
-    admin::set_admin(&env, &admin, &nominee_a);
-    admin::set_admin(&env, &admin, &nominee_b);
+    client.set_admin(&admin, &nominee_a);
+    let matches_a = events_with_topic(&env, "admin_nominated");
+    assert_eq!(matches_a.len(), 1);
+    let (nominated_a, _, _): (Address, u64, u64) = matches_a[0].1.clone().into_val(&env);
+    assert_eq!(nominated_a, nominee_a);
 
-    assert_eq!(admin::get_pending_admin(&env), Some(nominee_b.clone()));
+    client.set_admin(&admin, &nominee_b);
+    let matches_b = events_with_topic(&env, "admin_nominated");
+    assert_eq!(matches_b.len(), 1);
+    let (nominated_b, _, _): (Address, u64, u64) = matches_b[0].1.clone().into_val(&env);
+    assert_eq!(nominated_b, nominee_b);
 
-    let matches = events_with_topic(&env, "admin_nominated");
-    assert_eq!(
-        matches.len(),
-        2,
-        "two set_admin calls must emit two admin_nominated events"
-    );
-
-    // Most recent event carries nominee_b as data.
-    let payload_b: Address = matches[1].1.clone().into_val(&env);
-    assert_eq!(payload_b, nominee_b);
+    assert_eq!(client.get_pending_admin(), Some(nominee_b));
 }
 
-// ===========================================================================
-// accept_admin
-// ===========================================================================
-
-/// `accept_admin` requires `require_auth` on the caller.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn accept_admin_requires_auth() {
     let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
     let nominee = Address::generate(&env);
 
-    // Establish a pending admin through a mocked-auth path.
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &nominee);
+    client.set_admin(&admin, &nominee);
 
-    // Strip auth — accept must panic.
     env.set_auths(&[]);
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Issue #1045: rotation is timelocked; serve the delay first.
-        warp_past_timelock(&env);
-        admin::accept_admin(&env, &nominee);
-    }));
-    assert!(
-        res.is_err(),
-        "accept_admin must require auth and panic when caller does not authorize"
-    );
-}
-
-/// `accept_admin` panics with `no pending admin transfer` when there is no
-/// pending nomination.
-#[test]
-#[should_panic(expected = "no pending admin transfer")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn accept_admin_with_no_pending_admin_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let stranger = Address::generate(&env);
-    admin::init(&env, &admin);
-
-    // Issue #1045: rotation is timelocked; serve the delay first.
     warp_past_timelock(&env);
-    admin::accept_admin(&env, &stranger);
+    let res = client.try_accept_admin(&nominee);
+    assert!(res.is_err(), "accept_admin must require auth");
 }
 
-/// `accept_admin` rejects a caller that is not equal to the pending admin.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn accept_admin_wrong_caller_panics() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let nominee = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &nominee);
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Issue #1045: rotation is timelocked; serve the delay first.
-        warp_past_timelock(&env);
-        admin::accept_admin(&env, &attacker);
-    }));
-    assert!(
-        res.is_err(),
-        "a non-pending address must not be able to accept the role"
-    );
-}
-
-/// `accept_admin` emits exactly one `admin_changed` event whose data
-/// carries `(previous_admin, new_admin)`, promoting the pending admin to
-/// the active role.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn accept_admin_emits_admin_changed_event_with_correct_shape() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let new_admin = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &new_admin);
 
-    // Issue #1045: rotation is timelocked; serve the delay first.
+    client.set_admin(&admin, &new_admin);
     warp_past_timelock(&env);
-    admin::accept_admin(&env, &new_admin);
+    client.accept_admin(&new_admin);
 
     let matches = events_with_topic(&env, "admin_changed");
-    assert_eq!(
-        matches.len(),
-        1,
-        "accept_admin must emit exactly one admin_changed event"
-    );
+    assert_eq!(matches.len(), 1);
 
     let (topics, data) = &matches[0];
-    assert_eq!(topics.len(), 2, "admin_changed must carry 2 topics");
+    assert_eq!(topics.len(), 2);
 
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_changed"));
 
-    // topic[1] is the incoming admin (the caller who just accepted).
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(
-        topic1, new_admin,
-        "admin_changed topic[1] must be the incoming admin"
-    );
+    assert_eq!(topic1, new_admin);
 
-    let (previous_admin, new_admin_data): (Address, Address) = data.clone().into_val(&env);
-    assert_eq!(
-        previous_admin, admin,
-        "admin_changed data[0] must be the previous admin"
-    );
-    assert_eq!(
-        new_admin_data, new_admin,
-        "admin_changed data[1] must be the new admin"
-    );
+    let (prev, curr): (Address, Address) = data.clone().into_val(&env);
+    assert_eq!(prev, admin);
+    assert_eq!(curr, new_admin);
 
-    // Active admin must have flipped; pending slot must be empty.
-    assert_eq!(
-        admin::get_admin(&env),
-        Some(new_admin.clone()),
-        "active admin must equal the pending admin after accept"
-    );
-    assert!(
-        admin::get_pending_admin(&env).is_none(),
-        "pending slot must be cleared after accept"
-    );
+    assert_eq!(client.get_admin(), Some(new_admin));
+    assert!(client.get_pending_admin().is_none());
 }
 
-// ===========================================================================
-// cancel_admin_transfer
-// ===========================================================================
-
-/// `cancel_admin_transfer` requires `require_auth` on the caller.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_admin_transfer_requires_auth() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let pending = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &pending);
 
-    // Strip auth — cancel must panic.
+    client.set_admin(&admin, &pending);
+
     env.set_auths(&[]);
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::cancel_admin_transfer(&env, &admin);
-    }));
+    let res = client.try_cancel_admin_transfer(&admin);
     assert!(res.is_err(), "cancel_admin_transfer must require auth");
 }
 
-/// `cancel_admin_transfer` panics with `no pending admin transfer` when no
-/// nomination is in progress.
 #[test]
-#[should_panic(expected = "no pending admin transfer")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn cancel_admin_transfer_with_no_pending_panics() {
+fn cancel_admin_transfer_with_no_pending_returns_no_pending_admin() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    admin::init(&env, &admin);
+    let (client, _id, admin) = setup_with_admin(&env);
 
-    admin::cancel_admin_transfer(&env, &admin);
+    let res = client.try_cancel_admin_transfer(&admin);
+    assert_eq!(res, Err(Ok(AdminError::NoPendingAdmin)));
 }
 
-/// `cancel_admin_transfer` rejects an unauthorized caller.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn cancel_admin_transfer_unauthorized_caller_panics() {
+fn cancel_admin_transfer_unauthorized_caller_returns_unauthorized() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let pending = Address::generate(&env);
     let stranger = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &pending);
 
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::cancel_admin_transfer(&env, &stranger);
-    }));
-    assert!(
-        res.is_err(),
-        "a non-admin caller must not be able to cancel a transfer"
-    );
+    client.set_admin(&admin, &pending);
+
+    let res = client.try_cancel_admin_transfer(&stranger);
+    assert_eq!(res, Err(Ok(AdminError::Unauthorized)));
 }
 
-/// `cancel_admin_transfer` emits exactly one `admin_cancelled` event whose
-/// data carries the address of the pending admin that was dropped.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_admin_transfer_emits_admin_cancelled_event_with_correct_shape() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let pending = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &pending);
 
-    admin::cancel_admin_transfer(&env, &admin);
+    client.set_admin(&admin, &pending);
+    client.cancel_admin_transfer(&admin);
 
     let matches = events_with_topic(&env, "admin_cancelled");
-    assert_eq!(
-        matches.len(),
-        1,
-        "cancel_admin_transfer must emit exactly one admin_cancelled event"
-    );
+    assert_eq!(matches.len(), 1);
 
     let (topics, data) = &matches[0];
-    assert_eq!(topics.len(), 2, "admin_cancelled must carry 2 topics");
+    assert_eq!(topics.len(), 2);
 
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_cancelled"));
 
     let topic1: Address = topics.get(1).unwrap().into_val(&env);
-    assert_eq!(
-        topic1, admin,
-        "admin_cancelled topic[1] must be the current admin"
-    );
+    assert_eq!(topic1, admin);
 
     let payload: Address = data.clone().into_val(&env);
-    assert_eq!(
-        payload, pending,
-        "admin_cancelled data must be the pending admin that was cancelled"
-    );
+    assert_eq!(payload, pending);
 
-    // Pending slot is empty after cancellation; active admin is unchanged.
-    assert!(
-        admin::get_pending_admin(&env).is_none(),
-        "pending slot must be empty after cancellation"
-    );
-    assert_eq!(
-        admin::get_admin(&env),
-        Some(admin.clone()),
-        "active admin must NOT change on cancel"
-    );
+    assert!(client.get_pending_admin().is_none());
+    assert_eq!(client.get_admin(), Some(admin));
 }
 
-// ===========================================================================
-// Full rotation lifecycle — happy path
-// ===========================================================================
-
-/// A full admin rotation:
-/// `init(admin)` → `set_admin(admin, new)` → `accept_admin(new)`.
-///
-/// Produces exactly three events in this order:
-/// 1. `admin_init` (admin, ...)
-/// 2. `admin_nominated` (admin, new)
-/// 3. `admin_changed` (new, (admin, new))
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn full_rotation_lifecycle_emits_three_events_in_order() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &new_admin);
-    // Issue #1045: rotation is timelocked; serve the delay first.
-    warp_past_timelock(&env);
-    admin::accept_admin(&env, &new_admin);
-
-    // One event of each kind.
-    assert_eq!(events_with_topic(&env, "admin_init").len(), 1);
-    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 1);
-    assert_eq!(events_with_topic(&env, "admin_changed").len(), 1);
-    assert_eq!(events_with_topic(&env, "admin_cancelled").len(), 0);
-
-    // Position the events by matching topics in the order they appear.
-    let init_sym = Symbol::new(&env, "admin_init");
-    let nom_sym = Symbol::new(&env, "admin_nominated");
-    let chg_sym = Symbol::new(&env, "admin_changed");
-
-    let mut init_pos: Option<usize> = None;
-    let mut nom_pos: Option<usize> = None;
-    let mut chg_pos: Option<usize> = None;
-
-    for (i, event) in env.events().all().iter().enumerate() {
-        if event.1.is_empty() {
-            continue;
-        }
-        let t0: Symbol = event.1.get(0).unwrap().into_val(&env);
-        if t0 == init_sym {
-            init_pos = Some(i);
-        } else if t0 == nom_sym {
-            nom_pos = Some(i);
-        } else if t0 == chg_sym {
-            chg_pos = Some(i);
-        }
-    }
-
-    assert!(init_pos.is_some(), "admin_init event missing");
-    assert!(nom_pos.is_some(), "admin_nominated event missing");
-    assert!(chg_pos.is_some(), "admin_changed event missing");
-
-    assert!(
-        init_pos.unwrap() < nom_pos.unwrap(),
-        "admin_init must precede admin_nominated"
-    );
-    assert!(
-        nom_pos.unwrap() < chg_pos.unwrap(),
-        "admin_nominated must precede admin_changed"
-    );
-
-    // Final state matches the new admin with no pending rotation.
-    assert_eq!(admin::get_admin(&env), Some(new_admin));
-    assert!(admin::get_pending_admin(&env).is_none());
-}
-
-/// A full lifecycle with an explicit cancellation between two successful
-/// rotations emits:
-/// `admin_init`, `admin_nominated`, `admin_cancelled`, `admin_nominated`,
-/// `admin_changed` — in that positional order.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_between_rotations_keeps_event_order_consistent() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin_a = Address::generate(&env);
+    let (client, _id, admin_a) = setup_with_admin(&env);
     let dropped = Address::generate(&env);
     let admin_b = Address::generate(&env);
 
-    admin::init(&env, &admin_a);
-    admin::set_admin(&env, &admin_a, &dropped);
-    admin::cancel_admin_transfer(&env, &admin_a);
-    admin::set_admin(&env, &admin_a, &admin_b);
-    // Issue #1045: rotation is timelocked; serve the delay first.
-    warp_past_timelock(&env);
-    admin::accept_admin(&env, &admin_b);
+    client.set_admin(&admin_a, &dropped);
+    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 1);
 
-    assert_eq!(events_with_topic(&env, "admin_init").len(), 1);
-    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 2);
+    client.cancel_admin_transfer(&admin_a);
     assert_eq!(events_with_topic(&env, "admin_cancelled").len(), 1);
+
+    client.set_admin(&admin_a, &admin_b);
+    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 1);
+
+    warp_past_timelock(&env);
+    client.accept_admin(&admin_b);
     assert_eq!(events_with_topic(&env, "admin_changed").len(), 1);
 
-    assert_eq!(admin::get_admin(&env), Some(admin_b));
-    assert!(admin::get_pending_admin(&env).is_none());
+    assert_eq!(client.get_admin(), Some(admin_b));
+    assert!(client.get_pending_admin().is_none());
 }
 
-/// Multiple rotations back-to-back show that each successful handover
-/// emits exactly one `admin_changed` event with the correct before/after
-/// pair.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn repeated_rotations_each_emit_one_admin_changed_with_correct_pair() {
     let env = Env::default();
-    env.mock_all_auths();
-    let a = Address::generate(&env);
+    let (client, _id, a) = setup_with_admin(&env);
     let b = Address::generate(&env);
     let c = Address::generate(&env);
 
-    admin::init(&env, &a);
-    admin::set_admin(&env, &a, &b);
-    // Issue #1045: rotation is timelocked; serve the delay first.
+    client.set_admin(&a, &b);
     warp_past_timelock(&env);
-    admin::accept_admin(&env, &b);
-    admin::set_admin(&env, &b, &c);
-    // Issue #1045: rotation is timelocked; serve the delay first.
-    warp_past_timelock(&env);
-    admin::accept_admin(&env, &c);
+    client.accept_admin(&b);
 
-    let changed = events_with_topic(&env, "admin_changed");
-    assert_eq!(
-        changed.len(),
-        2,
-        "two successful handovers must emit exactly two admin_changed events"
-    );
-
-    let (prev1, new1): (Address, Address) = changed[0].1.clone().into_val(&env);
+    let changed1 = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed1.len(), 1);
+    let (prev1, new1): (Address, Address) = changed1[0].1.clone().into_val(&env);
     assert_eq!(prev1, a);
     assert_eq!(new1, b);
 
-    let (prev2, new2): (Address, Address) = changed[1].1.clone().into_val(&env);
+    client.set_admin(&b, &c);
+    warp_past_timelock(&env);
+    client.accept_admin(&c);
+
+    let changed2 = events_with_topic(&env, "admin_changed");
+    assert_eq!(changed2.len(), 1);
+    let (prev2, new2): (Address, Address) = changed2[0].1.clone().into_val(&env);
     assert_eq!(prev2, b);
     assert_eq!(new2, c);
 
-    assert_eq!(admin::get_admin(&env), Some(c));
+    assert_eq!(client.get_admin(), Some(c));
 }
 
-// ===========================================================================
-// Negative lifecycle — failed calls must NOT emit events
-// ===========================================================================
-
-/// An unauthorized `set_admin` call (caught panic) must not produce any
-/// `admin_nominated` event in the event stream.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn unauthorized_set_admin_emits_no_events() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let intruder = Address::generate(&env);
-    let nominee = Address::generate(&env);
-    admin::init(&env, &admin);
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::set_admin(&env, &intruder, &nominee);
-    }));
-    assert!(res.is_err());
-
-    assert_eq!(
-        events_with_topic(&env, "admin_nominated").len(),
-        0,
-        "unauthorized set_admin must not emit admin_nominated"
-    );
-    assert!(
-        admin::get_pending_admin(&env).is_none(),
-        "no pending admin should be created on failed set_admin"
-    );
-}
-
-/// An unauthorized `accept_admin` call (caught panic) must not produce any
-/// `admin_changed` event, and pending slot must remain populated.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn unauthorized_accept_admin_emits_no_events_and_leaves_state_unchanged() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let nominee = Address::generate(&env);
-    let impostor = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &nominee);
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // Issue #1045: rotation is timelocked; serve the delay first.
-        warp_past_timelock(&env);
-        admin::accept_admin(&env, &impostor);
-    }));
-    assert!(res.is_err());
-
-    assert_eq!(
-        events_with_topic(&env, "admin_changed").len(),
-        0,
-        "unauthorized accept_admin must not emit admin_changed"
-    );
-    assert_eq!(
-        admin::get_pending_admin(&env),
-        Some(nominee),
-        "failed accept must leave pending slot intact"
-    );
-    assert_eq!(
-        admin::get_admin(&env),
-        Some(admin),
-        "failed accept must not change active admin"
-    );
-}
-
-/// An unauthorized `cancel_admin_transfer` call (caught panic) must not
-/// produce any `admin_cancelled` event, and pending slot must remain.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn unauthorized_cancel_admin_transfer_emits_no_events() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let pending = Address::generate(&env);
-    let impostor = Address::generate(&env);
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &pending);
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        admin::cancel_admin_transfer(&env, &impostor);
-    }));
-    assert!(res.is_err());
-
-    assert_eq!(
-        events_with_topic(&env, "admin_cancelled").len(),
-        0,
-        "unauthorized cancel must not emit admin_cancelled"
-    );
-    assert_eq!(
-        admin::get_pending_admin(&env),
-        Some(pending),
-        "failed cancel must leave pending slot intact"
-    );
-}
-
-// ===========================================================================
-// Event-log completeness — every entrypoint emits *exactly* its documented
-// events, no extras, no missing.
-// ===========================================================================
-
-/// A bare `init` must add **exactly one** event to the event log — no
-/// accidental topics from storage writes or TTL bumps.
-#[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn init_event_log_contains_exactly_one_event() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-
-    admin::init(&env, &admin);
+    let (_client, _id, _admin) = setup_with_admin(&env);
 
     let all = env.events().all();
-    assert_eq!(
-        all.len(),
-        1,
-        "init must add exactly one event (admin_init) to the log — extras indicate a leaky invariant"
-    );
+    assert_eq!(all.len(), 1);
 }
 
-/// A bare `set_admin` (after init) must add **exactly one** event to the
-/// event log — the single `admin_nominated`. Catches the silent regression
-/// where `set_admin` would emit `admin_changed` *or* `admin_transfer_started`
-/// alongside the documented topic.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_admin_event_log_contains_exactly_one_event() {
     let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
+    let (client, _id, admin) = setup_with_admin(&env);
     let new_admin = Address::generate(&env);
-    admin::init(&env, &admin);
 
-    admin::set_admin(&env, &admin, &new_admin);
+    client.set_admin(&admin, &new_admin);
 
     let all = env.events().all();
-    // 1 init + 1 nominated = 2 total.
-    assert_eq!(
-        all.len(),
-        2,
-        "set_admin must add exactly one event to the log (init + nominated)"
-    );
+    assert_eq!(all.len(), 1);
 }
 
-/// After a full `init → set_admin → accept_admin` rotation, the event log
-/// must contain **exactly three** entries. Anything more would mean the
-/// contract is leaking ancillary events (e.g. on the underlying instance
-/// bump).
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn full_rotation_event_log_contains_exactly_three_events() {
     let env = Env::default();
     env.mock_all_auths();
+    let (client, _id) = setup_harness(&env);
     let admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
 
-    admin::init(&env, &admin);
-    admin::set_admin(&env, &admin, &new_admin);
-    // Issue #1045: rotation is timelocked; serve the delay first.
-    warp_past_timelock(&env);
-    admin::accept_admin(&env, &new_admin);
+    client.init(&admin);
+    assert_eq!(env.events().all().len(), 1);
 
-    let all = env.events().all();
-    assert_eq!(
-        all.len(),
-        3,
-        "full rotation must emit exactly three events (init + nominated + changed)"
-    );
+    client.set_admin(&admin, &new_admin);
+    assert_eq!(env.events().all().len(), 1);
+
+    warp_past_timelock(&env);
+    client.accept_admin(&new_admin);
+    assert_eq!(env.events().all().len(), 1);
 }
 
 // ===========================================================================
+// Timelock and Boundary Tests
+// ===========================================================================
+
+#[test]
+fn accept_one_second_before_eta_returns_timelock_not_elapsed() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    client.set_admin(&admin, &nominee);
+
+    let eta = client.get_pending_rotation().unwrap().eta;
+    set_timestamp(&env, eta - 1);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Err(Ok(AdminError::TimelockNotElapsed)));
+}
+
+#[test]
+fn accept_at_exact_eta_succeeds() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    client.set_admin(&admin, &nominee);
+
+    let eta = client.get_pending_rotation().unwrap().eta;
+    set_timestamp(&env, eta);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Ok(Ok(())));
+    assert_eq!(client.get_admin(), Some(nominee));
+    assert!(client.get_pending_admin().is_none());
+}
+
+#[test]
+fn accept_at_exact_expiry_succeeds() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    client.set_admin(&admin, &nominee);
+
+    let expires_at = client.get_pending_rotation().unwrap().expires_at;
+    set_timestamp(&env, expires_at);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Ok(Ok(())));
+    assert_eq!(client.get_admin(), Some(nominee));
+}
+
+#[test]
+fn stranger_cannot_nominate() {
+    let env = Env::default();
+    let (client, _id, _admin) = setup_with_admin(&env);
+    let stranger = Address::generate(&env);
+    let nominee = Address::generate(&env);
+
+    let res = client.try_set_admin(&stranger, &nominee);
+    assert_eq!(res, Err(Ok(AdminError::Unauthorized)));
+}
+
+#[test]
+fn cancelled_nomination_cannot_be_accepted_after_the_delay() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    client.cancel_admin_transfer(&admin);
+    warp_past_timelock(&env);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Err(Ok(AdminError::NoPendingAdmin)));
+}
+
+#[test]
+fn cancel_during_the_delay_clears_the_slot_and_keeps_the_admin() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    client.cancel_admin_transfer(&admin);
+
+    assert!(client.get_pending_admin().is_none());
+    assert_eq!(client.get_admin(), Some(admin));
+}
+
+#[test]
+fn stranger_cannot_cancel_a_rotation() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    let res = client.try_cancel_admin_transfer(&stranger);
+    assert_eq!(res, Err(Ok(AdminError::Unauthorized)));
+}
+
+#[test]
+fn expired_nomination_can_still_be_cancelled() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    let expires_at = client.get_pending_rotation().unwrap().expires_at;
+    set_timestamp(&env, expires_at + 1);
+
+    let res = client.try_cancel_admin_transfer(&admin);
+    assert_eq!(res, Ok(Ok(())));
+    assert!(client.get_pending_admin().is_none());
+}
+
+#[test]
+fn swapping_the_nominee_at_the_end_of_the_delay_restarts_it() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let decoy = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    client.set_admin(&admin, &decoy);
+    warp_past_timelock(&env);
+
+    // Swap in the attacker; the clock restarts.
+    client.set_admin(&admin, &attacker);
+
+    let res = client.try_accept_admin(&attacker);
+    assert_eq!(res, Err(Ok(AdminError::TimelockNotElapsed)));
+}
+
+#[test]
+fn renominated_admin_can_accept_after_serving_the_fresh_delay() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    warp_past_timelock(&env);
+
+    // Re-nominate same admin (e.g. to extend grace window or update schedule).
+    // Note: nominee != admin so SameAdmin is not triggered.
+    client.set_admin(&admin, &nominee);
+
+    let res_early = client.try_accept_admin(&nominee);
+    assert_eq!(res_early, Err(Ok(AdminError::TimelockNotElapsed)));
+
+    warp_past_timelock(&env);
+    let res_ok = client.try_accept_admin(&nominee);
+    assert_eq!(res_ok, Ok(Ok(())));
+    assert_eq!(client.get_admin(), Some(nominee));
+}
+
+#[test]
+fn accepting_twice_returns_no_pending_on_second_call() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    client.set_admin(&admin, &nominee);
+    warp_past_timelock(&env);
+    client.accept_admin(&nominee);
+
+    let res = client.try_accept_admin(&nominee);
+    assert_eq!(res, Err(Ok(AdminError::NoPendingAdmin)));
+}
+
+#[test]
+fn previous_admin_cannot_nominate_after_handover() {
+    let env = Env::default();
+    let (client, _id, original_admin) = setup_with_admin(&env);
+    let new_admin = Address::generate(&env);
+    let someone = Address::generate(&env);
+
+    client.set_admin(&original_admin, &new_admin);
+    warp_past_timelock(&env);
+    client.accept_admin(&new_admin);
+
+    let res = client.try_set_admin(&original_admin, &someone);
+    assert_eq!(res, Err(Ok(AdminError::Unauthorized)));
+}
+
+#[test]
+fn nomination_records_schedule_and_monotonic_rotation_id() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let b = Address::generate(&env);
+    let c = Address::generate(&env);
+
+    assert_eq!(client.get_rotation_id(), 0);
+
+    set_timestamp(&env, 1_000);
+    client.set_admin(&admin, &b);
+
+    assert_eq!(client.get_rotation_id(), 1);
+    let r1 = client.get_pending_rotation().unwrap();
+    assert_eq!(r1.new_admin, b);
+    assert_eq!(r1.proposed_at, 1_000);
+    assert_eq!(r1.eta, 1_000 + ROTATION_DELAY_SECS);
+    assert_eq!(
+        r1.expires_at,
+        1_000 + ROTATION_DELAY_SECS + ROTATION_GRACE_SECS
+    );
+    assert_eq!(r1.rotation_id, 1);
+
+    set_timestamp(&env, 5_000);
+    client.set_admin(&admin, &c);
+
+    assert_eq!(client.get_rotation_id(), 2);
+    let r2 = client.get_pending_rotation().unwrap();
+    assert_eq!(r2.rotation_id, 2);
+    assert_eq!(r2.new_admin, c);
+}
+
+#[test]
+fn boundary_arithmetic_saturates_near_max_timestamp() {
+    let env = Env::default();
+    let (client, _id, admin) = setup_with_admin(&env);
+    let nominee = Address::generate(&env);
+
+    set_timestamp(&env, u64::MAX - 10);
+    client.set_admin(&admin, &nominee);
+
+    let r = client.get_pending_rotation().unwrap();
+    assert_eq!(r.eta, u64::MAX);
+    assert_eq!(r.expires_at, u64::MAX);
+}
+
+#[test]
+fn uninitialized_calls_return_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _id) = setup_harness(&env);
+    let caller = Address::generate(&env);
+    let nominee = Address::generate(&env);
+
+    assert_eq!(
+        client.try_set_admin(&caller, &nominee),
+        Err(Ok(AdminError::NotInitialized))
+    );
+    assert_eq!(
+        client.try_cancel_admin_transfer(&caller),
+        Err(Ok(AdminError::NotInitialized))
+    );
+}
+
 // Per-account limits — auth
 // ===========================================================================
 
@@ -854,7 +916,7 @@ fn limits_set_account_requires_admin_auth() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     let res = limits::set_account_limits(&env, &alice, &alice, 5, 5, 5);
     assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
@@ -906,7 +968,7 @@ fn limits_set_default_rejects_non_admin() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let intruder = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     let res = limits::set_default_limits(&env, &intruder, 5, 5, 5);
     assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
@@ -921,7 +983,7 @@ fn limits_clear_account_rejects_non_admin() {
     let admin = Address::generate(&env);
     let intruder = Address::generate(&env);
     let target = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     let res = limits::clear_account_limits(&env, &intruder, &target);
     assert_eq!(res, Err(errors::AdminLimitError::Unauthorized));
@@ -970,7 +1032,7 @@ fn limits_set_account_persists_and_is_readable() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     let res = limits::set_account_limits(&env, &admin, &alice, 2, 3, 4);
     assert_eq!(res, Ok(()));
@@ -989,7 +1051,7 @@ fn limits_set_account_emits_event() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     limits::set_account_limits(&env, &admin, &alice, 5, 6, 7).unwrap();
 
@@ -1004,7 +1066,7 @@ fn limits_set_default_persists() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     limits::set_default_limits(&env, &admin, 10, 20, 30).unwrap();
 
@@ -1021,7 +1083,7 @@ fn limits_set_default_emits_event() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     limits::set_default_limits(&env, &admin, 10, 20, 30).unwrap();
 
@@ -1037,7 +1099,7 @@ fn limits_set_account_rejects_invalid_caps() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     let bad_bets = limits::set_account_limits(&env, &admin, &alice, limits::MAX_CAP + 1, 0, 0);
     assert_eq!(bad_bets, Err(errors::AdminLimitError::InvalidLimit));
@@ -1058,7 +1120,7 @@ fn limits_clear_account_falls_back_to_default() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     // Set a per-account override then set a new global default.
     limits::set_account_limits(&env, &admin, &alice, 1, 1, 1).unwrap();
@@ -1083,7 +1145,7 @@ fn limits_clear_account_emits_event() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     limits::set_account_limits(&env, &admin, &alice, 1, 1, 1).unwrap();
     limits::clear_account_limits(&env, &admin, &alice).unwrap();
@@ -1104,7 +1166,7 @@ fn limits_consume_bet_requires_account_auth() {
     let alice = Address::generate(&env);
 
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        limits::consume_bet(&env, &alice);
+        let _ = limits::consume_bet(&env, &alice);
     }));
     assert!(
         res.is_err(),
@@ -1120,7 +1182,7 @@ fn limits_consume_bet_succeeds_under_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
 
     // First two succeed.
@@ -1139,7 +1201,7 @@ fn limits_consume_bet_emits_event() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
 
     limits::consume_bet(&env, &alice).unwrap();
@@ -1161,7 +1223,7 @@ fn limits_consume_bet_fails_at_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 2, 3, 3).unwrap();
 
     limits::consume_bet(&env, &alice).unwrap();
@@ -1184,7 +1246,7 @@ fn limits_consume_bet_fails_when_fully_disabled() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 0, 0, 0).unwrap();
 
     assert_eq!(
@@ -1201,7 +1263,7 @@ fn limits_consume_position_succeeds_under_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
 
     limits::consume_position(&env, &alice).unwrap();
@@ -1217,7 +1279,7 @@ fn limits_consume_position_fails_at_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 1, 3).unwrap();
 
     limits::consume_position(&env, &alice).unwrap();
@@ -1235,7 +1297,7 @@ fn limits_consume_subscription_succeeds_and_emits() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 2).unwrap();
 
     limits::consume_subscription(&env, &alice).unwrap();
@@ -1254,7 +1316,7 @@ fn limits_consume_subscription_fails_at_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 2).unwrap();
 
     limits::consume_subscription(&env, &alice).unwrap();
@@ -1277,7 +1339,7 @@ fn limits_release_bet_requires_account_auth() {
     let alice = Address::generate(&env);
 
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        limits::release_bet(&env, &alice);
+        let _ = limits::release_bet(&env, &alice);
     }));
     assert!(
         res.is_err(),
@@ -1293,7 +1355,7 @@ fn limits_release_bet_decrements_and_emits() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
 
     limits::consume_bet(&env, &alice).unwrap();
@@ -1329,7 +1391,7 @@ fn limits_release_position_decrements() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
 
     limits::consume_position(&env, &alice).unwrap();
@@ -1362,7 +1424,7 @@ fn limits_release_subscription_decrements_and_emits() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
 
     limits::consume_subscription(&env, &alice).unwrap();
@@ -1401,7 +1463,7 @@ fn limits_can_place_bet_returns_true_under_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 2, 2, 2).unwrap();
 
     assert!(limits::can_place_bet(&env, &alice));
@@ -1419,7 +1481,7 @@ fn limits_can_open_position_returns_false_at_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 2, 1, 2).unwrap();
 
     limits::consume_position(&env, &alice).unwrap();
@@ -1434,7 +1496,7 @@ fn limits_can_subscribe_returns_false_at_cap() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 2, 2, 1).unwrap();
 
     limits::consume_subscription(&env, &alice).unwrap();
@@ -1466,7 +1528,7 @@ fn limits_accounts_are_independent() {
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 2, 2, 2).unwrap();
     limits::set_account_limits(&env, &admin, &bob, 4, 4, 4).unwrap();
 
@@ -1494,7 +1556,7 @@ fn limits_set_after_usage_enforces_new_caps() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     // Let alice accumulate under generous caps.
     limits::set_account_limits(&env, &admin, &alice, 10, 10, 10).unwrap();
@@ -1524,7 +1586,7 @@ fn limits_falls_back_to_default_when_no_override() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     // Set a non-trivial global default.
     limits::set_default_limits(&env, &admin, 3, 3, 3).unwrap();
@@ -1548,7 +1610,7 @@ fn limits_default_change_does_not_affect_overrides() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
 
     limits::set_account_limits(&env, &admin, &alice, 5, 5, 5).unwrap();
     limits::set_default_limits(&env, &admin, 1, 1, 1).unwrap();
@@ -1570,7 +1632,7 @@ fn limits_consume_release_cycle() {
     env.mock_all_auths();
     let admin = Address::generate(&env);
     let alice = Address::generate(&env);
-    admin::init(&env, &admin);
+    let _ = admin::init(&env, &admin);
     limits::set_account_limits(&env, &admin, &alice, 3, 3, 3).unwrap();
 
     limits::consume_bet(&env, &alice).unwrap();
@@ -1604,625 +1666,3 @@ fn limits_account_limits_uniform_constructor() {
 }
 
 // ===========================================================================
-// Issue #1045 - timelocked rotation
-// ===========================================================================
-//
-// These tests drive the module through `env.as_contract`, because the admin
-// module reads and writes contract instance storage and soroban-sdk 22 refuses
-// those calls outside a contract invocation. The pre-existing tests above call
-// the module directly and fail for exactly that reason on an unmodified
-// checkout; nothing below depends on them.
-
-use soroban_sdk::contract;
-
-/// Throwaway contract used only to give the module a storage context.
-#[contract]
-struct RotationHarness;
-
-/// Register the harness and return its address.
-fn harness(env: &Env) -> Address {
-    env.register(RotationHarness, ())
-}
-
-fn h_init(env: &Env, id: &Address, initial_admin: &Address) {
-    env.as_contract(id, || admin::init(env, initial_admin));
-}
-
-fn h_set_admin(env: &Env, id: &Address, caller: &Address, new_admin: &Address) {
-    env.as_contract(id, || admin::set_admin(env, caller, new_admin));
-}
-
-fn h_accept_admin(env: &Env, id: &Address, caller: &Address) {
-    env.as_contract(id, || admin::accept_admin(env, caller));
-}
-
-fn h_cancel(env: &Env, id: &Address, caller: &Address) {
-    env.as_contract(id, || admin::cancel_admin_transfer(env, caller));
-}
-
-fn h_admin(env: &Env, id: &Address) -> Option<Address> {
-    env.as_contract(id, || admin::get_admin(env))
-}
-
-fn h_pending(env: &Env, id: &Address) -> Option<Address> {
-    env.as_contract(id, || admin::get_pending_admin(env))
-}
-
-fn h_rotation(env: &Env, id: &Address) -> Option<admin::PendingRotation> {
-    env.as_contract(id, || admin::get_pending_rotation(env))
-}
-
-fn h_rotation_id(env: &Env, id: &Address) -> u64 {
-    env.as_contract(id, || admin::get_rotation_id(env))
-}
-
-/// A fresh environment with the harness registered and an admin installed.
-fn rotation_fixture() -> (Env, Address, Address) {
-    let env = Env::default();
-    env.mock_all_auths();
-    let id = harness(&env);
-    let admin_addr = Address::generate(&env);
-    h_init(&env, &id, &admin_addr);
-    (env, id, admin_addr)
-}
-
-/// A nomination cannot be accepted before the timelock elapses.
-#[test]
-#[should_panic(expected = "admin rotation timelock has not elapsed")]
-fn accept_one_second_before_eta_panics() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let eta = h_rotation(&env, &id).unwrap().eta;
-    set_timestamp(&env, eta - 1);
-
-    h_accept_admin(&env, &id, &nominee);
-}
-
-/// Acceptance succeeds at exactly the ETA - the lower boundary is inclusive.
-#[test]
-fn accept_at_exact_eta_succeeds() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let eta = h_rotation(&env, &id).unwrap().eta;
-    set_timestamp(&env, eta);
-
-    h_accept_admin(&env, &id, &nominee);
-    // Read the log before the next `as_contract` call opens a new event scope.
-    let changed = events_with_topic(&env, "admin_changed").len();
-
-    assert_eq!(changed, 1);
-    assert_eq!(h_admin(&env, &id), Some(nominee));
-    assert!(h_pending(&env, &id).is_none());
-}
-
-/// A nomination that outlived its grace window is dead: the right nominee,
-/// with valid auth, still cannot accept it.
-#[test]
-#[should_panic(expected = "admin rotation nomination has expired")]
-fn accept_after_expiry_panics() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let expires_at = h_rotation(&env, &id).unwrap().expires_at;
-    set_timestamp(&env, expires_at + 1);
-
-    h_accept_admin(&env, &id, &nominee);
-}
-
-/// Acceptance succeeds on the last second of the grace window - the upper
-/// boundary is inclusive too.
-#[test]
-fn accept_at_exact_expiry_succeeds() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let expires_at = h_rotation(&env, &id).unwrap().expires_at;
-    set_timestamp(&env, expires_at);
-
-    h_accept_admin(&env, &id, &nominee);
-    assert_eq!(h_admin(&env, &id), Some(nominee));
-}
-
-/// Identity is checked before the schedule: a stranger inside the acceptance
-/// window is rejected as unauthorized and learns nothing about the timing.
-#[test]
-#[should_panic(expected = "unauthorized: caller is not pending admin")]
-fn wrong_caller_inside_the_window_panics_as_unauthorized() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-    warp_past_timelock(&env);
-
-    h_accept_admin(&env, &id, &attacker);
-}
-
-/// An unauthorized caller cannot open a rotation at all.
-#[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
-fn stranger_cannot_nominate() {
-    let (env, id, _admin_addr) = rotation_fixture();
-    let attacker = Address::generate(&env);
-
-    h_set_admin(&env, &id, &attacker, &attacker);
-}
-
-/// Cancelling during the delay is the escape hatch the delay exists for: the
-/// nomination cannot be accepted once the delay passes.
-#[test]
-#[should_panic(expected = "no pending admin transfer")]
-fn cancelled_nomination_cannot_be_accepted_after_the_delay() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    h_cancel(&env, &id, &admin_addr);
-    warp_past_timelock(&env);
-
-    h_accept_admin(&env, &id, &nominee);
-}
-
-/// Cancelling leaves the admin untouched and the pending slot empty.
-#[test]
-fn cancel_during_the_delay_clears_the_slot_and_keeps_the_admin() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    h_cancel(&env, &id, &admin_addr);
-    let cancelled = events_with_topic(&env, "admin_cancelled").len();
-    let changed = events_with_topic(&env, "admin_changed").len();
-
-    assert_eq!(cancelled, 1);
-    assert_eq!(changed, 0, "a cancellation is not a handover");
-    assert!(h_pending(&env, &id).is_none());
-    assert_eq!(h_admin(&env, &id), Some(admin_addr));
-}
-
-/// A stranger cannot cancel someone else's rotation.
-#[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
-fn stranger_cannot_cancel_a_rotation() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    let attacker = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    h_cancel(&env, &id, &attacker);
-}
-
-/// An expired nomination can still be cancelled, which clears the dead slot.
-#[test]
-fn expired_nomination_can_still_be_cancelled() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let expires_at = h_rotation(&env, &id).unwrap().expires_at;
-    set_timestamp(&env, expires_at + 1_000);
-
-    h_cancel(&env, &id, &admin_addr);
-    let cancelled = events_with_topic(&env, "admin_cancelled").len();
-
-    assert_eq!(cancelled, 1);
-    assert!(h_pending(&env, &id).is_none());
-}
-
-/// Re-nominating restarts the clock, closing the "pre-warm then swap" path: an
-/// admin cannot wait out the delay on a harmless address and then install a
-/// different one for immediate acceptance.
-#[test]
-#[should_panic(expected = "admin rotation timelock has not elapsed")]
-fn swapping_the_nominee_at_the_end_of_the_delay_restarts_it() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let harmless = Address::generate(&env);
-    let attacker = Address::generate(&env);
-
-    h_set_admin(&env, &id, &admin_addr, &harmless);
-    warp_past_timelock(&env);
-
-    // Swap the nominee at the moment the first nomination became acceptable.
-    h_set_admin(&env, &id, &admin_addr, &attacker);
-    h_accept_admin(&env, &id, &attacker);
-}
-
-/// ...and the replacement does become acceptable once its own delay has run.
-#[test]
-fn renominated_admin_can_accept_after_serving_the_fresh_delay() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let harmless = Address::generate(&env);
-    let successor = Address::generate(&env);
-
-    // The test host scopes the event log to the most recent contract frame,
-    // so each publication is asserted at the point it happens.
-    h_set_admin(&env, &id, &admin_addr, &harmless);
-    assert_eq!(events_with_topic(&env, "admin_nominated").len(), 1);
-    warp_past_timelock(&env);
-
-    h_set_admin(&env, &id, &admin_addr, &successor);
-    assert_eq!(
-        events_with_topic(&env, "admin_nominated").len(),
-        1,
-        "the replacement nomination is published too"
-    );
-    warp_past_timelock(&env);
-
-    h_accept_admin(&env, &id, &successor);
-    assert_eq!(
-        events_with_topic(&env, "admin_changed").len(),
-        1,
-        "only the nomination that served its own delay completed"
-    );
-    assert_eq!(h_admin(&env, &id), Some(successor));
-}
-
-/// Accepting twice is not replayable: the pending slot is gone after the first
-/// acceptance, so a replayed call finds nothing to promote.
-#[test]
-#[should_panic(expected = "no pending admin transfer")]
-fn accepting_twice_panics_on_the_second_call() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-    warp_past_timelock(&env);
-    h_accept_admin(&env, &id, &nominee);
-
-    h_accept_admin(&env, &id, &nominee);
-}
-
-/// The demoted admin cannot re-take the role by replaying their own old
-/// nomination rights: after the handover they are just another address.
-#[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
-fn previous_admin_cannot_nominate_after_handover() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let successor = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &successor);
-    warp_past_timelock(&env);
-    h_accept_admin(&env, &id, &successor);
-
-    h_set_admin(&env, &id, &admin_addr, &admin_addr);
-}
-
-/// The pending record carries the resolved schedule and a fresh, monotonic
-/// rotation id for every nomination.
-#[test]
-fn nomination_records_schedule_and_monotonic_rotation_id() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let first = Address::generate(&env);
-    let second = Address::generate(&env);
-    assert_eq!(h_rotation_id(&env, &id), 0);
-
-    set_timestamp(&env, 1_000);
-    h_set_admin(&env, &id, &admin_addr, &first);
-    let rotation = h_rotation(&env, &id).unwrap();
-    assert_eq!(rotation.new_admin, first);
-    assert_eq!(rotation.proposed_at, 1_000);
-    assert_eq!(rotation.eta, 1_000 + admin::ROTATION_DELAY_SECS);
-    assert_eq!(
-        rotation.expires_at,
-        rotation.eta + admin::ROTATION_GRACE_SECS
-    );
-    assert_eq!(rotation.rotation_id, 1);
-
-    h_set_admin(&env, &id, &admin_addr, &second);
-    let replaced = h_rotation(&env, &id).unwrap();
-    assert_eq!(replaced.new_admin, second);
-    assert_eq!(replaced.rotation_id, 2, "each nomination gets a fresh id");
-    assert_eq!(h_rotation_id(&env, &id), 2);
-}
-
-/// The `admin_nominated` event carries the acceptance window, so an indexer
-/// never has to guess when a rotation becomes live or when it dies.
-#[test]
-fn nomination_event_carries_the_acceptance_window() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    set_timestamp(&env, 5_000);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let nominated = events_with_topic(&env, "admin_nominated");
-    assert_eq!(nominated.len(), 1);
-    let (addr, eta, expires_at): (Address, u64, u64) = nominated[0].1.clone().into_val(&env);
-    assert_eq!(addr, nominee);
-    assert_eq!(eta, 5_000 + admin::ROTATION_DELAY_SECS);
-    assert_eq!(expires_at, eta + admin::ROTATION_GRACE_SECS);
-}
-
-// ===========================================================================
-// Issue #1047 - Validate bounded stream end times before state mutation
-// ===========================================================================
-//
-// These regression tests verify that all timing boundary checks occur
-// BEFORE any state mutations, ensuring atomic all-or-nothing semantics
-// when acceptance is rejected due to expiry or early timing.
-
-/// **Issue #1047**: Rejection at exact expiry must not mutate state.
-///
-/// When a nomination expires at precisely `expires_at`, attempting acceptance
-/// at `expires_at + 1` fails with `ERR_NOMINATION_EXPIRED`. The critical check:
-/// no state is changed, no events are emitted, the pending slot remains intact.
-#[test]
-#[should_panic(expected = "admin rotation nomination has expired")]
-fn acceptance_at_expiry_plus_one_rejects_without_mutation() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    // Remember initial state before the failed attempt
-    let initial_rotation = h_rotation(&env, &id).unwrap();
-    let initial_admin = h_admin(&env, &id);
-    let initial_pending = h_pending(&env, &id);
-
-    let expires_at = initial_rotation.expires_at;
-    set_timestamp(&env, expires_at + 1);
-
-    // Attempt acceptance outside the window — must panic
-    h_accept_admin(&env, &id, &nominee);
-
-    // If this line is reached, the test failed because no panic occurred.
-    // The panic handler should not get here, but we record it anyway.
-}
-
-/// **Issue #1047**: Expiry rejection leaves pending slot unchanged.
-///
-/// A failed acceptance due to expiry must not clear the pending slot.
-/// This allows the current admin to cancel or re-nominate without a gap.
-#[test]
-fn expiry_rejection_preserves_pending_slot() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let expires_at = h_rotation(&env, &id).unwrap().expires_at;
-    set_timestamp(&env, expires_at + 1);
-
-    // Attempt acceptance outside the window — this will panic internally
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h_accept_admin(&env, &id, &nominee);
-    }));
-    assert!(result.is_err(), "acceptance must panic when expired");
-
-    // Verify pending slot still exists unchanged
-    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
-    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
-
-    // Verify no admin_changed event was emitted
-    let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(
-        changed_events.len(),
-        0,
-        "no admin_changed event on expiry rejection"
-    );
-}
-
-/// **Issue #1047**: Early acceptance (before ETA) leaves state intact.
-///
-/// When the timelock has not elapsed and a caller attempts acceptance
-/// before `eta`, the rejection must occur before any state write.
-#[test]
-fn early_acceptance_rejection_leaves_state_unchanged() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let eta = h_rotation(&env, &id).unwrap().eta;
-    set_timestamp(&env, eta - 1);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h_accept_admin(&env, &id, &nominee);
-    }));
-    assert!(
-        result.is_err(),
-        "acceptance before ETA must panic with ERR_TIMELOCK_NOT_ELAPSED"
-    );
-
-    // Verify no state changed
-    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
-    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
-
-    // Verify no admin_changed event
-    let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(changed_events.len(), 0, "no event on early rejection");
-}
-
-/// **Issue #1047**: Non-pending caller rejection is identity-checked first.
-///
-/// Per the documented order in `accept_admin`, identity is verified BEFORE
-/// timing checks. A wrong caller must fail without revealing timing information.
-#[test]
-fn wrong_caller_rejects_before_timing_checks() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-    let wrong_caller = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    // Advance to valid acceptance window
-    warp_past_timelock(&env);
-
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h_accept_admin(&env, &id, &wrong_caller);
-    }));
-    assert!(
-        result.is_err(),
-        "wrong caller must panic with ERR_UNAUTHORIZED_PENDING"
-    );
-
-    // Verify state unchanged and no event emitted
-    assert_eq!(h_pending(&env, &id), Some(nominee.clone()));
-    assert_eq!(h_admin(&env, &id), Some(admin_addr.clone()));
-    let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(changed_events.len(), 0, "identity rejection emits no event");
-}
-
-/// **Issue #1047**: Successful acceptance emits event only after all state committed.
-///
-/// The `admin_changed` event is the atomic commit marker: if it exists, both
-/// the active admin and pending slot have been successfully updated.
-#[test]
-fn successful_acceptance_emits_event_post_commit() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let new_admin = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &new_admin);
-
-    warp_past_timelock(&env);
-    h_accept_admin(&env, &id, &new_admin);
-
-    // Event must exist
-    let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(
-        changed_events.len(),
-        1,
-        "must emit exactly one admin_changed"
-    );
-
-    // Verify state reflects the commitment
-    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
-    assert!(
-        h_pending(&env, &id).is_none(),
-        "pending slot cleared after accept"
-    );
-}
-
-/// **Issue #1047**: Repeated acceptance of same nomination fails atomically.
-///
-/// After successful acceptance clears the pending slot, a second attempt
-/// by the same (now-active) admin fails with ERR_NO_PENDING_ADMIN before
-/// any new state change.
-#[test]
-#[should_panic(expected = "no pending admin transfer")]
-fn second_acceptance_of_same_nomination_fails_with_no_pending() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let new_admin = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &new_admin);
-
-    warp_past_timelock(&env);
-    h_accept_admin(&env, &id, &new_admin);
-
-    // The pending slot is now gone. A second attempt must fail.
-    h_accept_admin(&env, &id, &new_admin);
-}
-
-/// **Issue #1047**: Boundary arithmetic - no overflow on max timestamp.
-///
-/// Even if the ledger timestamp is near u64::MAX, the saturation logic
-/// in `set_admin` ensures `eta` and `expires_at` never wrap around
-/// (instead saturating to u64::MAX). An acceptance at such extreme times
-/// still validates the bounds correctly.
-#[test]
-fn boundary_arithmetic_saturates_near_max_timestamp() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee = Address::generate(&env);
-
-    // Set timestamp near u64::MAX so eta saturation is exercised
-    let near_max = u64::MAX - 1_000_000;
-    set_timestamp(&env, near_max);
-
-    h_set_admin(&env, &id, &admin_addr, &nominee);
-
-    let rotation = h_rotation(&env, &id).unwrap();
-    // eta = now.saturating_add(ROTATION_DELAY_SECS)
-    // expires_at = eta.saturating_add(ROTATION_GRACE_SECS)
-    // Both should saturate to u64::MAX, not wrap
-    assert!(
-        rotation.eta >= near_max,
-        "eta must be >= proposed_at (saturated arithmetic)"
-    );
-    assert!(
-        rotation.expires_at >= rotation.eta,
-        "expires_at must be >= eta (saturated arithmetic)"
-    );
-
-    // Acceptance exactly at the saturated eta should succeed
-    set_timestamp(&env, rotation.eta);
-    warp_past_timelock(&env); // Advance past eta
-
-    // Should not panic due to arithmetic issues
-    h_accept_admin(&env, &id, &nominee);
-    assert_eq!(h_admin(&env, &id), Some(nominee));
-}
-
-/// **Issue #1047**: Concurrent rotations with re-nomination restart the clock.
-///
-/// If admin nominates A, then before acceptance nominates B, the B nomination
-/// gets a fresh `eta` and `expires_at`. The old A window is replaced,
-/// preventing an admin from "warming up" a slot and then swapping attackers.
-#[test]
-fn renomination_restarts_the_clock() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let nominee_a = Address::generate(&env);
-    let nominee_b = Address::generate(&env);
-
-    // Nominate A
-    h_set_admin(&env, &id, &admin_addr, &nominee_a);
-    let rotation_a = h_rotation(&env, &id).unwrap();
-
-    // Advance time but not past A's ETA
-    let early_time = rotation_a.eta - 100;
-    set_timestamp(&env, early_time);
-
-    // Nominate B — clock restarts
-    h_set_admin(&env, &id, &admin_addr, &nominee_b);
-    let rotation_b = h_rotation(&env, &id).unwrap();
-
-    // B's ETA must be later than A's ETA (clock restarted)
-    assert!(
-        rotation_b.eta > rotation_a.eta,
-        "renomination must restart the clock"
-    );
-
-    // A cannot be accepted at A's original ETA
-    set_timestamp(&env, rotation_a.eta);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h_accept_admin(&env, &id, &nominee_a);
-    }));
-    assert!(
-        result.is_err(),
-        "old nominee cannot accept after renomination"
-    );
-
-    // Verify B is still the pending nominee
-    assert_eq!(h_pending(&env, &id), Some(nominee_b.clone()));
-}
-
-/// **Issue #1047**: Idempotence - accepting the same caller twice fails safely.
-///
-/// After the pending slot is cleared by successful acceptance, the same
-/// caller attempting acceptance again fails before any new mutations.
-#[test]
-fn acceptance_idempotence_fails_safely() {
-    let (env, id, admin_addr) = rotation_fixture();
-    let new_admin = Address::generate(&env);
-    h_set_admin(&env, &id, &admin_addr, &new_admin);
-
-    warp_past_timelock(&env);
-    h_accept_admin(&env, &id, &new_admin);
-
-    // Verify first acceptance succeeded
-    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
-    assert!(h_pending(&env, &id).is_none());
-
-    let first_admin_change_count = events_with_topic(&env, "admin_changed").len();
-
-    // Attempt second acceptance — should fail
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        h_accept_admin(&env, &id, &new_admin);
-    }));
-    assert!(result.is_err(), "second acceptance must fail");
-
-    // Verify no new state change or event
-    assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
-    assert!(h_pending(&env, &id).is_none());
-
-    let final_admin_change_count = events_with_topic(&env, "admin_changed").len();
-    assert_eq!(
-        first_admin_change_count, final_admin_change_count,
-        "failed acceptance must not emit additional events"
-    );
-}

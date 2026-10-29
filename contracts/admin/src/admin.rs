@@ -38,11 +38,11 @@
 //! acceptable forever, so an old, forgotten hand-over cannot be redeemed by a
 //! nominee whose key later leaks.
 //!
-//! Both bounds fail closed — [`accept_admin`] panics rather than promoting
-//! when the clock is outside the window, and neither path mutates storage
-//! before the checks pass. Re-nominating restarts the clock, so an admin
-//! cannot pre-warm a slot with a harmless address and swap in another one at
-//! the end of the delay.
+//! Both bounds fail closed — [`accept_admin`] returns typed errors rather than
+//! promoting when the clock is outside the window, and neither path mutates
+//! storage before the checks pass. Re-nominating restarts the clock, so an
+//! admin cannot pre-warm a slot with a harmless address and swap in another one
+//! at the end of the delay.
 //!
 //! Every nomination carries a monotonically increasing `rotation_id`, so an
 //! indexer (or an operator reading events) can tell a fresh nomination from a
@@ -62,6 +62,7 @@
 
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
+use crate::errors::AdminError;
 use crate::events;
 
 // ---------------------------------------------------------------------------
@@ -149,47 +150,33 @@ pub const BUMP_AMOUNT: u32 = 10_000;
 pub const LIFETIME_THRESHOLD: u32 = 1_000;
 
 // ---------------------------------------------------------------------------
-// Error strings
-// ---------------------------------------------------------------------------
-
-const ERR_ALREADY_INITIALIZED: &str = "admin contract already initialized";
-const ERR_NOT_INITIALIZED: &str = "admin contract not initialized";
-const ERR_UNAUTHORIZED: &str = "unauthorized: caller is not admin";
-const ERR_UNAUTHORIZED_PENDING: &str = "unauthorized: caller is not pending admin";
-const ERR_NO_PENDING_ADMIN: &str = "no pending admin transfer";
-/// Issue #1045: acceptance attempted before the timelock elapsed.
-const ERR_TIMELOCK_NOT_ELAPSED: &str = "admin rotation timelock has not elapsed";
-/// Issue #1045: acceptance attempted after the nomination expired.
-const ERR_NOMINATION_EXPIRED: &str = "admin rotation nomination has expired";
-
-// ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 
 /// Initialize the admin contract with an initial admin.
 ///
-/// Can only be called once — re-initialization panics to prevent an attacker
-/// from clobbering the admin slot after deploy.
+/// Can only be called once — re-initialization returns [`AdminError::AlreadyInitialized`]
+/// to prevent an attacker from clobbering the admin slot after deploy.
 ///
 /// # Arguments
 /// * `env` — Soroban environment.
 /// * `admin` — Address to install as the first admin.
 ///
 /// # Auth
-/// No `require_auth` is invoked: `init` is intended to be called once
-/// during deployment before any user-facing identity is bound to the
-/// contract, mirroring the convention used in `contracts/revenue_pool`.
+/// `admin.require_auth()` is invoked first to prevent front-running the initialization.
 ///
-/// # Panics
-/// * `ERR_ALREADY_INITIALIZED` — `init` has been called before.
+/// # Errors
+/// * [`AdminError::AlreadyInitialized`] — `init` has been called before.
 ///
 /// # Events
 /// Emits `admin_init` with `(admin_init, admin)` topics and `()` as the
 /// data payload. The initial admin identity is carried in topic[1], so
 /// there is no redundant address in `data`.
-pub fn init(env: &Env, admin: &Address) {
+pub fn init(env: &Env, admin: &Address) -> Result<(), AdminError> {
+    admin.require_auth();
+
     if env.storage().instance().has(&Symbol::new(env, ADMIN_KEY)) {
-        panic!("{}", ERR_ALREADY_INITIALIZED);
+        return Err(AdminError::AlreadyInitialized);
     }
     let inst = env.storage().instance();
     inst.set(&Symbol::new(env, ADMIN_KEY), admin);
@@ -197,6 +184,8 @@ pub fn init(env: &Env, admin: &Address) {
 
     env.events()
         .publish((events::event_admin_init(env), admin), ());
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -250,16 +239,16 @@ pub fn get_rotation_id(env: &Env) -> u64 {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Read the active admin or panic with [`ERR_NOT_INITIALIZED`].
+/// Read the active admin or return [`AdminError::NotInitialized`].
 ///
 /// Internal helper used by [`set_admin`] and [`cancel_admin_transfer`]
 /// which both assume initialization. Promotion scenarios can use
 /// [`get_admin`] directly when absence is a valid state (e.g. before init).
-fn require_admin_addr(env: &Env) -> Address {
+fn require_admin_addr(env: &Env) -> Result<Address, AdminError> {
     env.storage()
         .instance()
         .get(&Symbol::new(env, ADMIN_KEY))
-        .expect(ERR_NOT_INITIALIZED)
+        .ok_or(AdminError::NotInitialized)
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +262,9 @@ fn require_admin_addr(env: &Env) -> Address {
 /// value (and emits another `admin_nominated` event), so the current admin
 /// can correct an address typo without first cancelling.
 ///
+/// Self-nomination (nominating the current admin) is rejected with
+/// [`AdminError::SameAdmin`].
+///
 /// # Arguments
 /// * `env` — Soroban environment.
 /// * `caller` — Must be the current admin; must authorize.
@@ -283,9 +275,10 @@ fn require_admin_addr(env: &Env) -> Address {
 /// # Auth
 /// `caller.require_auth()` is invoked **before** any storage read or write.
 ///
-/// # Panics
-/// * `ERR_NOT_INITIALIZED` — `init` has not been called yet.
-/// * `ERR_UNAUTHORIZED` — `caller` is not the current admin.
+/// # Errors
+/// * [`AdminError::NotInitialized`] — `init` has not been called yet.
+/// * [`AdminError::Unauthorized`] — `caller` is not the current admin.
+/// * [`AdminError::SameAdmin`] — `new_admin` is identical to the current admin.
 ///
 /// # Timelock (issue #1045)
 /// The nomination is stamped with `eta = now + `[`ROTATION_DELAY_SECS`] and
@@ -299,15 +292,18 @@ fn require_admin_addr(env: &Env) -> Address {
 /// `(admin_nominated, caller)` topics and `(new_admin, eta, expires_at)` as
 /// data, so an indexer learns the acceptance window from the nomination
 /// itself.
-pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
+pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) -> Result<(), AdminError> {
     caller.require_auth();
 
     // Authorization is resolved before anything is read for the write path or
     // written: an unauthorized caller changes no state and learns nothing
     // about the current rotation beyond the fact that they are not the admin.
-    let current = require_admin_addr(env);
+    let current = require_admin_addr(env)?;
     if caller != &current {
-        panic!("{}", ERR_UNAUTHORIZED);
+        return Err(AdminError::Unauthorized);
+    }
+    if new_admin == &current {
+        return Err(AdminError::SameAdmin);
     }
 
     let now = env.ledger().timestamp();
@@ -335,6 +331,8 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
         (events::event_admin_nominated(env), caller),
         (new_admin.clone(), eta, expires_at),
     );
+
+    Ok(())
 }
 
 /// Complete the admin transfer. Only the **pending** admin may call.
@@ -343,13 +341,13 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
 /// atomically, and emits a single `admin_changed` event describing the
 /// before/after state for indexers.
 ///
-/// # Validation Order (Issue #1047)
+/// # Validation Order (Issue #1047 and Design Constraints)
 ///
 /// **All authorization and lifecycle preconditions are checked before any
 /// state mutation** to ensure atomicity and prevent partial commits:
 ///
-/// 1. **Authorization**: `caller.require_auth()` ensures the caller signed
-/// 2. **Pending existence**: Verify a rotation is in progress (read-only)
+/// 1. **Pending existence**: Verify a rotation is in progress (read-only)
+/// 2. **Authorization**: `caller.require_auth()` ensures the caller signed
 /// 3. **Identity**: Verify caller equals pending admin (read-only)
 /// 4. **Timing bounds** (issue #1045):
 ///    - Verify `now <= expires_at` (not expired)
@@ -365,13 +363,15 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
 /// * `caller` — Must equal the pending admin address; must authorize.
 ///
 /// # Auth
-/// `caller.require_auth()` is invoked first; the address check follows.
+/// Precedence order: pending exists, then auth, then caller matches, then not
+/// expired, then timelock elapsed.
 ///
-/// # Panics
-/// * `ERR_NO_PENDING_ADMIN` — no transfer is in progress.
-/// * `ERR_UNAUTHORIZED_PENDING` — caller is not the pending admin.
-/// * `ERR_NOMINATION_EXPIRED` — the acceptance window has closed (#1045).
-/// * `ERR_TIMELOCK_NOT_ELAPSED` — the timelock has not elapsed yet (#1045).
+/// # Errors
+/// * [`AdminError::NoPendingAdmin`] — no transfer is in progress.
+/// * [`AdminError::UnauthorizedPending`] — caller is not the pending admin.
+/// * [`AdminError::NominationExpired`] — the acceptance window has closed (#1045).
+/// * [`AdminError::TimelockNotElapsed`] — the timelock has not elapsed yet (#1045).
+/// * [`AdminError::NotInitialized`] — contract was not initialized.
 ///
 /// The identity check runs **before** the timing checks, so an address that
 /// is not the nominee cannot use the error it gets back to probe where the
@@ -383,37 +383,35 @@ pub fn set_admin(env: &Env, caller: &Address, new_admin: &Address) {
 /// incoming admin who is about to become active — and the data payload is
 /// `(previous_admin, new_admin)` so an indexer can record the full
 /// handover from a single event.
-pub fn accept_admin(env: &Env, caller: &Address) {
-    caller.require_auth();
-
+pub fn accept_admin(env: &Env, caller: &Address) -> Result<(), AdminError> {
     let inst = env.storage().instance();
 
-    // Read pending rotation; fail fast if none exists (read-only).
+    // 1. Pending existence: Read pending rotation; fail fast if none exists (read-only).
     let rotation: PendingRotation = inst
         .get(&Symbol::new(env, PENDING_ADMIN_KEY))
-        .expect(ERR_NO_PENDING_ADMIN);
+        .ok_or(AdminError::NoPendingAdmin)?;
 
-    // Order matters (issue #1045 & #1047): identity first, schedule second.
-    // Every check below is read-only, so any rejection leaves the pending
-    // slot, the admin slot and the rotation counter exactly as they were
-    // found, achieving atomic all-or-nothing semantics.
+    // 2. Auth: caller must authorize.
+    caller.require_auth();
+
+    // 3. Identity check: order matters (issue #1045 & #1047).
     if caller != &rotation.new_admin {
-        panic!("{}", ERR_UNAUTHORIZED_PENDING);
+        return Err(AdminError::UnauthorizedPending);
     }
 
-    // Validate end-time boundaries before state mutation (issue #1047).
+    // 4. Validate timing boundaries before state mutation (issue #1047).
     let now = env.ledger().timestamp();
     if now > rotation.expires_at {
-        panic!("{}", ERR_NOMINATION_EXPIRED);
+        return Err(AdminError::NominationExpired);
     }
     if now < rotation.eta {
-        panic!("{}", ERR_TIMELOCK_NOT_ELAPSED);
+        return Err(AdminError::TimelockNotElapsed);
     }
 
-    // Read active admin; fail if not initialized (read-only).
+    // 5. Read active admin; fail if not initialized (read-only).
     let previous_admin: Address = inst
         .get(&Symbol::new(env, ADMIN_KEY))
-        .expect(ERR_NOT_INITIALIZED);
+        .ok_or(AdminError::NotInitialized)?;
 
     // All preconditions passed. Perform atomic state mutation pair:
     // 1. Update active admin to pending admin
@@ -429,6 +427,8 @@ pub fn accept_admin(env: &Env, caller: &Address) {
         (events::event_admin_changed(env), caller),
         (previous_admin, pending),
     );
+
+    Ok(())
 }
 
 /// Cancel a pending admin transfer. Only the **current** admin may call.
@@ -450,28 +450,28 @@ pub fn accept_admin(env: &Env, caller: &Address) {
 /// # Auth
 /// `caller.require_auth()` is invoked first.
 ///
-/// # Panics
-/// * `ERR_NOT_INITIALIZED` — `init` has not been called.
-/// * `ERR_UNAUTHORIZED` — caller is not the current admin.
-/// * `ERR_NO_PENDING_ADMIN` — there is no pending transfer to cancel.
+/// # Errors
+/// * [`AdminError::NotInitialized`] — `init` has not been called.
+/// * [`AdminError::Unauthorized`] — caller is not the current admin.
+/// * [`AdminError::NoPendingAdmin`] — there is no pending transfer to cancel.
 ///
 /// # Events
 /// Emits exactly one `admin_cancelled` event with
 /// `(admin_cancelled, caller)` topics and the previously-pending admin
 /// address as data so an indexer can record which specific address had
 /// its nomination revoked.
-pub fn cancel_admin_transfer(env: &Env, caller: &Address) {
+pub fn cancel_admin_transfer(env: &Env, caller: &Address) -> Result<(), AdminError> {
     caller.require_auth();
 
-    let current = require_admin_addr(env);
+    let current = require_admin_addr(env)?;
     if caller != &current {
-        panic!("{}", ERR_UNAUTHORIZED);
+        return Err(AdminError::Unauthorized);
     }
 
     let inst = env.storage().instance();
     let rotation: PendingRotation = inst
         .get(&Symbol::new(env, PENDING_ADMIN_KEY))
-        .expect(ERR_NO_PENDING_ADMIN);
+        .ok_or(AdminError::NoPendingAdmin)?;
 
     inst.remove(&Symbol::new(env, PENDING_ADMIN_KEY));
     inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
@@ -483,4 +483,6 @@ pub fn cancel_admin_transfer(env: &Env, caller: &Address) {
         (events::event_admin_cancelled(env), &current),
         rotation.new_admin,
     );
+
+    Ok(())
 }
