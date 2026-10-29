@@ -126,6 +126,14 @@ pub fn event_distribute(env: &Env) -> Symbol {
     Symbol::new(env, "distribute")
 }
 
+/// Returns the Symbol for the `"distribute"` event topic with caller attribution.
+///
+/// Emitted when the admin distributes untracked surplus USDC to a recipient.
+/// The `caller` topic allows indexers to attribute the action to the admin.
+pub fn event_distribute_caller(env: &Env) -> Symbol {
+    Symbol::new(env, "distribute")
+}
+
 /// Returns the Symbol for the `"set_revenue_pool"` event topic.
 ///
 /// Emitted when the owner configures a revenue pool address for fund settlements.
@@ -537,6 +545,13 @@ mod tests {
     fn test_event_distribute_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_distribute(&env);
+        assert_eq!(sym, Symbol::new(&env, "distribute"));
+    }
+
+    #[test]
+    fn test_event_distribute_caller_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_distribute_caller(&env);
         assert_eq!(sym, Symbol::new(&env, "distribute"));
     }
 

@@ -1,7 +1,6 @@
 use soroban_sdk::contracterror;
 
 /// Stable, machine-readable error codes for the Callora Vault contract.
-///
 /// The numeric discriminants in this enum are part of the contract interface and
 /// must remain stable over time. Callers may branch on these `u32` codes instead
 /// of parsing panic strings.
@@ -52,6 +51,8 @@ use soroban_sdk::contracterror;
 /// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
 /// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
 /// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
+/// | 59   | RecipientCannotBeVault         | Distribute recipient cannot be the vault contract        |
+/// | 60   | RecipientCannotBeToken         | Distribute recipient cannot be the USDC token contract   |
 /// | 51   | ProposalNotFound               | No pending timelock proposal for the requested action    |
 /// | 52   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
 /// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
@@ -166,6 +167,10 @@ pub enum VaultError {
     SettlementCannotBeToken = 57,
     /// Proposal has passed its grace period and is no longer executable (code 58).
     ProposalExpired = 58,
-    /// Settlement and revenue pool addresses must be distinct (code 59).
-    SettlementEqualsRevenuePool = 59,
+    /// Distribute recipient cannot be the vault contract itself (code 59).
+    RecipientCannotBeVault = 59,
+    /// Distribute recipient cannot be the USDC token contract (code 60).
+    RecipientCannotBeToken = 60,
+    /// Settlement and revenue pool addresses must be distinct (code 61).
+    SettlementEqualsRevenuePool = 61,
 }
