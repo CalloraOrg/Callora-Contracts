@@ -5,6 +5,8 @@
 //! authorized the invocation. `set_cooldown` must additionally reject any
 //! caller that is not the stored admin, and any out-of-bounds cooldown, without
 //! mutating state or emitting events.
+//! `check_and_record_upgrade` must likewise reject any caller that is not the
+//! stored admin, so a non-admin signer cannot keep resetting the cooldown.
 
 extern crate std;
 
@@ -118,6 +120,137 @@ fn second_caller_still_requires_its_own_auth() {
 
     env.set_auths(&[]);
     assert!(client.try_check_and_record_upgrade(&other).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Admin gate for `check_and_record_upgrade` (issue #1234)
+// ---------------------------------------------------------------------------
+
+/// A non-admin who DOES sign must be rejected, must not move `last_upg_tm`,
+/// and must not emit any events.
+#[test]
+fn non_admin_cannot_check_and_record_upgrade() {
+    let env = Env::default();
+    let (client, _id, _admin) = harness_with_admin(&env); // mock_all_auths active
+    let attacker = Address::generate(&env);
+
+    let res = client.try_check_and_record_upgrade(&attacker);
+    assert_eq!(res, Err(Ok(UpgradeError::Unauthorized)));
+    assert!(client.get_last_upgrade_time().is_none());
+    assert_eq!(env.events().all().len(), 0);
+}
+
+/// The admin's first call succeeds and emits `upgrade_started` then
+/// `upgrade_recorded`, in that order.
+#[test]
+fn admin_first_check_and_record_upgrade_succeeds() {
+    let env = Env::default();
+    let (client, id, admin) = harness_with_admin(&env);
+
+    client.check_and_record_upgrade(&admin);
+    assert!(client.get_last_upgrade_time().is_some());
+
+    let all = env.events().all();
+    assert_eq!(all.len(), 2);
+    let (e0, t0, _) = all.get(0).unwrap();
+    let (e1, t1, _) = all.get(1).unwrap();
+    assert_eq!(e0, id);
+    assert_eq!(e1, id);
+    assert_eq!(
+        Symbol::try_from_val(&env, &t0.get(0).unwrap()).unwrap(),
+        events::event_upgrade_started(&env)
+    );
+    assert_eq!(
+        Symbol::try_from_val(&env, &t1.get(0).unwrap()).unwrap(),
+        events::event_upgrade_recorded(&env)
+    );
+}
+
+/// A second admin call inside the cooldown window is rejected and emits nothing.
+#[test]
+fn admin_within_cooldown_is_rejected() {
+    let env = Env::default();
+    let (client, _id, admin) = harness_with_admin(&env);
+
+    client.check_and_record_upgrade(&admin);
+    let before = client.get_last_upgrade_time();
+    let events_before = env.events().all().len();
+
+    let res = client.try_check_and_record_upgrade(&admin);
+    assert_eq!(res, Err(Ok(UpgradeError::CooldownNotElapsed)));
+    assert_eq!(client.get_last_upgrade_time(), before);
+    assert_eq!(env.events().all().len(), events_before);
+}
+
+/// Once the cooldown elapses the admin can record again.
+#[test]
+fn admin_after_cooldown_succeeds() {
+    let env = Env::default();
+    let (client, _id, admin) = harness_with_admin(&env);
+
+    client.check_and_record_upgrade(&admin);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + DEFAULT_COOLDOWN_SECONDS + 1);
+    client.check_and_record_upgrade(&admin);
+}
+
+/// Griefing proof-of-concept: an attacker calling every hour must not lock the
+/// admin out. After the cooldown elapses from the admin's last successful
+/// record, the admin can upgrade again.
+#[test]
+fn attacker_cannot_grief_admin_out_of_upgrades() {
+    let env = Env::default();
+    let (client, _id, admin) = harness_with_admin(&env);
+    let attacker = Address::generate(&env);
+
+    client.check_and_record_upgrade(&admin);
+    let admin_time = client.get_last_upgrade_time().unwrap();
+
+    // Attacker hammers the entry point every hour for a full cooldown window.
+    let mut t = env.ledger().timestamp();
+    for _ in 0..(DEFAULT_COOLDOWN_SECONDS / 3_600 + 1) {
+        t += 3_600;
+        env.ledger().set_timestamp(t);
+        let res = client.try_check_and_record_upgrade(&attacker);
+        assert_eq!(res, Err(Ok(UpgradeError::Unauthorized)));
+    }
+    assert_eq!(client.get_last_upgrade_time(), Some(admin_time));
+
+    // Admin can still upgrade once the cooldown from its own record elapses.
+    env.ledger()
+        .set_timestamp(admin_time + DEFAULT_COOLDOWN_SECONDS + 1);
+    client.check_and_record_upgrade(&admin);
+}
+
+/// With no admin stored, `check_and_record_upgrade` fails closed.
+#[test]
+fn check_and_record_upgrade_before_init_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, _id, caller) = harness(&env);
+
+    let res = client.try_check_and_record_upgrade(&caller);
+    assert_eq!(res, Err(Ok(UpgradeError::NotInitialized)));
+    assert!(client.get_last_upgrade_time().is_none());
+    assert_eq!(env.events().all().len(), 0);
+}
+
+/// A custom cooldown is reflected in the `upgrade_started` event data.
+#[test]
+fn custom_cooldown_is_reflected_in_upgrade_started_event() {
+    let env = Env::default();
+    let (client, _id, admin) = harness_with_admin(&env);
+
+    client.set_cooldown(&admin, &7_200);
+    client.check_and_record_upgrade(&admin);
+
+    let (_, topics, data) = env.events().all().get(0).unwrap();
+    assert_eq!(
+        Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap(),
+        events::event_upgrade_started(&env)
+    );
+    let cooldown = u64::try_from_val(&env, &data).unwrap();
+    assert_eq!(cooldown, 7_200);
 }
 
 // ---------------------------------------------------------------------------

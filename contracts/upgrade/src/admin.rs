@@ -3,6 +3,9 @@
 //! Enforces a cooldown period between critical upgrade actions to prevent
 //! rapid abuse. This implements the requirements for the GrantFox FWC26 campaign.
 //!
+//! `check_and_record_upgrade` is restricted to the admin stored via [`init_admin`].
+//! Any other signer receives `Unauthorized` without mutating state or emitting events.
+//!
 //! `set_cooldown` is restricted to the admin stored via [`init_admin`] and the
 //! new value must lie in `MIN_COOLDOWN_SECONDS..=MAX_COOLDOWN_SECONDS`.
 //!
@@ -112,9 +115,16 @@ pub fn get_cooldown(env: &Env) -> u64 {
 
 /// Verify that the cooldown period has elapsed since the last upgrade.
 ///
-/// Requires auth from the caller. Returns `Ok(())` if the cooldown has elapsed
-/// or if this is the first upgrade. Otherwise, returns `UpgradeError::CooldownNotElapsed`.
+/// Checks, in order: caller auth, admin is initialized, caller is the admin,
+/// then the cooldown. Returns `Ok(())` if the cooldown has elapsed or if this
+/// is the first upgrade. Otherwise, returns `UpgradeError::CooldownNotElapsed`.
 /// Also updates the last upgrade time to the current ledger timestamp upon success.
+///
+/// # Errors
+/// - `NotInitialized` if no admin is stored.
+/// - `Unauthorized` if `caller` is not the stored admin.
+/// - `CooldownNotElapsed` if the cooldown has not elapsed since the last upgrade.
+/// - `Overflow` if the ledger timestamp is before the last upgrade time.
 ///
 /// # Events
 /// On success, emits two events in order:
@@ -126,6 +136,11 @@ pub fn get_cooldown(env: &Env) -> u64 {
 /// No events are emitted when the call returns `Err`.
 pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), UpgradeError> {
     caller.require_auth();
+
+    let admin = get_admin(env).ok_or(UpgradeError::NotInitialized)?;
+    if *caller != admin {
+        return Err(UpgradeError::Unauthorized);
+    }
 
     let current_time = env.ledger().timestamp();
     let last_time = env
@@ -154,6 +169,13 @@ pub fn check_and_record_upgrade(env: &Env, caller: &Address) -> Result<(), Upgra
     env.storage()
         .instance()
         .set(&Symbol::new(env, LAST_UPGRADE_TIME_KEY), &current_time);
+
+    // Keep the cooldown state live. The host contract owns instance TTL policy;
+    // this only refreshes the TTL of the instance entry holding the record.
+    env.storage().instance().extend_ttl(
+        crate::admin::INSTANCE_TTL_THRESHOLD,
+        crate::admin::INSTANCE_TTL_EXTEND,
+    );
 
     // Timestamp is now persisted — confirm the record.
     env.events()
