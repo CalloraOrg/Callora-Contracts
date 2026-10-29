@@ -128,6 +128,7 @@ pub fn emit_deduction_recorded_batch(env: &Env, events: &soroban_sdk::Vec<Deduct
     }
 }
 
+
 /// Returns the Symbol for the `"balance_credited"` event topic.
 ///
 /// **What**: Returns the canonical symbol for balance credited events.
@@ -380,7 +381,6 @@ pub fn event_price_set(env: &Env) -> Symbol {
 pub fn event_price_removed(env: &Env) -> Symbol {
     Symbol::new(env, "price_removed")
 }
-
 // ─── Emit helpers ────────────────────────────────────────────────────────────
 
 /// Emit `"price_set"` when an offering price is created or changed.
