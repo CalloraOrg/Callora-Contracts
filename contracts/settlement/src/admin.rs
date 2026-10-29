@@ -2,7 +2,6 @@
 
 use soroban_sdk::{Address, Env};
 
-use crate::types::AdminMigrationEvent;
 use crate::{events, timelock, CalloraSettlement, SettlementError, StorageKey};
 
 fn require_admin(env: &Env, caller: &Address) {
@@ -115,11 +114,10 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
         env,
         from,
         &migration.to.clone(),
-        AdminMigrationEvent {
-            from: from.clone(),
-            to: migration.to,
-            amount: migration.amount,
-            executed_at,
+        crate::types::AdminMigrationEvent {
+            old_admin: from.clone(),
+            new_admin: migration.to.clone(),
+            migrated_by: caller.clone(),
         },
     );
 }

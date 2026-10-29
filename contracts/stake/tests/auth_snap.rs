@@ -46,6 +46,7 @@ fn capability_bits_map_to_entrypoints() {
     let client = create_contract(&env);
 
     let caps = client.capabilities();
+    assert_eq!(caps, 0);
 
     // Bit 0 -> stake/unstake entrypoints must exist in the generated client.
     // None are exported today, so the bit must be clear.
