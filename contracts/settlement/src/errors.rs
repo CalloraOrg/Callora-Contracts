@@ -58,7 +58,9 @@ use soroban_sdk::contracterror;
 /// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
-/// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
+/// | 51   | DuplicateRequestIdInBatch    | Deduction request ID is repeated within the batch    |
+/// | 52   | ExceedsUnallocated           | Credit exceeds unallocated deducted funds            |
+/// | 53   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -127,7 +129,11 @@ pub enum SettlementError {
     LengthMismatch = 49,
     /// #1135: `cursor > developers.len()` or `limit == 0`.
     InvalidCursor = 50,
+    /// Deduction request ID is repeated within a single batch.
+    DuplicateRequestIdInBatch = 51,
+    /// Credit would exceed the unallocated deducted funds held by settlement.
+    ExceedsUnallocated = 52,
     /// `get_all_developer_balances` index exceeds
     /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
-    TooManyResults = 51,
+    TooManyResults = 53,
 }
