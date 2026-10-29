@@ -1,7 +1,6 @@
 use soroban_sdk::contracterror;
 
 /// Stable, machine-readable error codes for the Callora Vault contract.
-///
 /// The numeric discriminants in this enum are part of the contract interface and
 /// must remain stable over time. Callers may branch on these `u32` codes instead
 /// of parsing panic strings.

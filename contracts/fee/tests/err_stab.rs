@@ -58,10 +58,22 @@ fn test_error_discriminants_match_expected() {
         ContractError::AlreadyInitialized as u32,
         ExpectedError::AlreadyInitialized as u32
     );
-    assert_eq!(ContractError::Unauthorized as u32, ExpectedError::Unauthorized as u32);
-    assert_eq!(ContractError::InvalidAmount as u32, ExpectedError::InvalidAmount as u32);
-    assert_eq!(ContractError::Overflow as u32, ExpectedError::Overflow as u32);
-    assert_eq!(ContractError::FeeTooHigh as u32, ExpectedError::FeeTooHigh as u32);
+    assert_eq!(
+        ContractError::Unauthorized as u32,
+        ExpectedError::Unauthorized as u32
+    );
+    assert_eq!(
+        ContractError::InvalidAmount as u32,
+        ExpectedError::InvalidAmount as u32
+    );
+    assert_eq!(
+        ContractError::Overflow as u32,
+        ExpectedError::Overflow as u32
+    );
+    assert_eq!(
+        ContractError::FeeTooHigh as u32,
+        ExpectedError::FeeTooHigh as u32
+    );
     assert_eq!(
         ContractError::InsufficientBalance as u32,
         ExpectedError::InsufficientBalance as u32
