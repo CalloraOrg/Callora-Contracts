@@ -327,30 +327,28 @@ pub struct DeveloperForceCreditedEvent {
     pub token: Address,
 }
 
-/// Emitted when the admin proposes or executes a timelock'd developer balance
-/// migration (address rotation).
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct AdminMigrationEvent {
-    pub from: Address,
-    pub to: Address,
-    pub amount: i128,
-    pub executed_at: u64,
-}
-
-/// Emitted when the admin proposes a timelocked WASM upgrade.
+/// Emitted when an admin proposes a timelocked WASM upgrade.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeProposedEvent {
+    pub proposer: Address,
     pub wasm_hash: soroban_sdk::BytesN<32>,
-    pub proposed_at: u64,
     pub execute_after: u64,
 }
 
-/// Emitted when a pending WASM upgrade is cancelled by the admin.
+/// Emitted when a pending WASM upgrade proposal is cancelled.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct UpgradeCancelledEvent {
+    pub canceller: Address,
     pub wasm_hash: soroban_sdk::BytesN<32>,
-    pub cancelled_at: u64,
+}
+
+/// Emitted when an admin migration is recorded.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdminMigrationEvent {
+    pub old_admin: Address,
+    pub new_admin: Address,
+    pub migrated_by: Address,
 }
