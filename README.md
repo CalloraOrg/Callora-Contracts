@@ -141,12 +141,12 @@ sequenceDiagram
 
 3. **Build WASM:**
 
-   ``bash
+   ```bash
    # Build all publishable contract crates and verify their release WASM sizes
    ./scripts/check-wasm-size.sh
 
    # Or build a specific contract manually
-   cargo build --target wasm32-unknown-unknown --release -p callora-vault
+   cargo build --target wasm32v1-none --release -p callora-vault
    ```
 
 ## Development

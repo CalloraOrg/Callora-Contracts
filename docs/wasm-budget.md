@@ -15,8 +15,11 @@ Run the same check used by CI from the repository root:
 
 The script discovers publishable contract crates under `contracts/*/Cargo.toml`
 by looking for `crate-type = ["cdylib", ...]`, builds only those crates for
-`wasm32-unknown-unknown` in release mode, then checks each generated `.wasm`
+`wasm32v1-none` in release mode, then checks each generated `.wasm`
 artifact independently.
+
+The build target defaults to `wasm32v1-none` (matching CI) and can be overridden
+with the `WASM_TARGET` environment variable.
 
 ## Configuration
 
