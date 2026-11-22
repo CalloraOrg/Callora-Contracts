@@ -91,7 +91,7 @@ must not be reassigned once released.
 | 11 | `DeveloperBalanceUnderflow` | Settlement | Developer balance debit would underflow |
 | 12 | `InsufficientContractBalance` | Settlement | Contract USDC balance is lower than requested amount |
 | 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |
-| 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
+| 14 | _reserved_ (was `GasExhaustionRisk`) | Settlement | Retired: never returned |
 | 15 | _reserved_ (was `ReasonTooLong`) | Settlement | Retired: never returned |
 | 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
 | 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
@@ -100,7 +100,7 @@ must not be reassigned once released.
 | 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
-| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
+| 23 | _reserved_ (was `OverDraft`) | Settlement | Retired: never returned |
 | 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |
 | 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
 | 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
@@ -115,7 +115,7 @@ must not be reassigned once released.
 | 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |
 | 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |
 | 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |
-| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |
+| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient or payout name is invalid |
 | 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |
 | 40 | `InvalidVault` | Settlement | Vault address is invalid |
 | 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
@@ -129,6 +129,8 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
+| 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
 
 ## Revenue Pool
 

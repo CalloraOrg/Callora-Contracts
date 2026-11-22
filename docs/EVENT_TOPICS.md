@@ -145,8 +145,10 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 21 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
 | 22 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
 | 23 | `deduction_recorded`         | `event_deduction_recorded`         | Vault accounting deduction recorded            |
+| 24 | `payout_name_set`            | `event_payout_name_set`            | Developer configures a registry payout name    |
+| 25 | `payout_name_cleared`        | `event_payout_name_cleared`        | Developer removes their registry payout name   |
 
-**Total: 23 topics**
+**Total: 25 topics**
 
 ---
 

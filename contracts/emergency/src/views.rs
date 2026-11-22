@@ -13,7 +13,7 @@
 //! ```
 //!
 //! # Bit registry
-//! Reserved bits (6–63) are always zero in this version.
+//! Reserved bits (9–63) are always zero in this version.
 
 use soroban_sdk::Env;
 
@@ -51,7 +51,22 @@ pub const CAP_EMERGENCY_DRAIN_CANCEL: u64 = 1 << 4;
 /// Introduced: v1.0.0
 pub const CAP_PENDING_DRAIN_VIEW: u64 = 1 << 5;
 
-// Bits 6–63 are reserved for future emergency capabilities and are always zero.
+/// Bit 6 — Pause coordinator: admin or guardian can pause every registered
+/// contract through `pause_all`.
+/// Introduced: v1.1.0
+pub const CAP_PAUSE_COORDINATOR: u64 = 1 << 6;
+
+/// Bit 7 — Guardian role: an admin-appointed guardian may trigger
+/// `pause_all` (but never `unpause_all` or registry changes).
+/// Introduced: v1.1.0
+pub const CAP_GUARDIAN_ROLE: u64 = 1 << 7;
+
+/// Bit 8 — Contract registry: admin can register and deregister pausable
+/// contracts that `pause_all` targets.
+/// Introduced: v1.1.0
+pub const CAP_CONTRACT_REGISTRY: u64 = 1 << 8;
+
+// Bits 9–63 are reserved for future emergency capabilities and are always zero.
 
 /// Bitmask of all emergency capabilities exposed by this contract version.
 ///
@@ -64,13 +79,16 @@ pub const ALL_CAPABILITIES: u64 = CAP_EMERGENCY_PAUSE
     | CAP_EMERGENCY_DRAIN_PROPOSE
     | CAP_EMERGENCY_DRAIN_EXECUTE
     | CAP_EMERGENCY_DRAIN_CANCEL
-    | CAP_PENDING_DRAIN_VIEW;
+    | CAP_PENDING_DRAIN_VIEW
+    | CAP_PAUSE_COORDINATOR
+    | CAP_GUARDIAN_ROLE
+    | CAP_CONTRACT_REGISTRY;
 
 /// Return the emergency capability bitmap for this deployment.
 ///
 /// Each set bit signals a supported emergency feature. Bits are stable across
 /// upgrades — once assigned a bit position is never reused for a different
-/// feature. Reserved bits (6–63) are always zero.
+/// feature. Reserved bits (9–63) are always zero.
 ///
 /// Pure view: ignores `_env` (no storage reads). No authentication required.
 pub fn capabilities(_env: &Env) -> u64 {
@@ -102,8 +120,8 @@ mod tests {
     fn reserved_bits_are_clear() {
         let env = Env::default();
         let caps = capabilities(&env);
-        // Bits 6–63 must all be zero.
-        assert_eq!(caps >> 6, 0, "reserved high bits must remain clear");
+        // Bits 9–63 must all be zero.
+        assert_eq!(caps >> 9, 0, "reserved high bits must remain clear");
     }
 
     #[test]
@@ -117,6 +135,9 @@ mod tests {
             ("CAP_EMERGENCY_DRAIN_EXECUTE", CAP_EMERGENCY_DRAIN_EXECUTE),
             ("CAP_EMERGENCY_DRAIN_CANCEL", CAP_EMERGENCY_DRAIN_CANCEL),
             ("CAP_PENDING_DRAIN_VIEW", CAP_PENDING_DRAIN_VIEW),
+            ("CAP_PAUSE_COORDINATOR", CAP_PAUSE_COORDINATOR),
+            ("CAP_GUARDIAN_ROLE", CAP_GUARDIAN_ROLE),
+            ("CAP_CONTRACT_REGISTRY", CAP_CONTRACT_REGISTRY),
         ] {
             assert_ne!(caps & bit, 0, "missing capability bit {name} ({bit:#x})");
         }
@@ -149,7 +170,10 @@ mod tests {
             | CAP_EMERGENCY_DRAIN_PROPOSE
             | CAP_EMERGENCY_DRAIN_EXECUTE
             | CAP_EMERGENCY_DRAIN_CANCEL
-            | CAP_PENDING_DRAIN_VIEW;
+            | CAP_PENDING_DRAIN_VIEW
+            | CAP_PAUSE_COORDINATOR
+            | CAP_GUARDIAN_ROLE
+            | CAP_CONTRACT_REGISTRY;
         assert_eq!(ALL_CAPABILITIES, expected);
     }
 }
