@@ -16,6 +16,8 @@ use soroban_sdk::contracterror;
 /// | 10   | InvalidClaimId       | Identifier is malformed (all-zero)                |
 /// | 11   | BatchTooLarge        | Batch exceeds `MAX_PENDING_AMOUNTS` entries       |
 /// | 12   | BatchEmpty           | Batch input must not be empty                     |
+/// | 13   | ClaimExpired         | Claim expiry timestamp has been reached          |
+/// | 14   | ClaimNotExpired      | Claim expiry timestamp has not been reached      |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -61,4 +63,8 @@ pub enum BatchClaimError {
     /// so client bugs surface as errors instead of wasting fees on a no-op
     /// settlement.
     BatchEmpty = 12,
+    /// Claim expiry timestamp has been reached (code 13).
+    ClaimExpired = 13,
+    /// Claim has not reached its expiry timestamp (code 14).
+    ClaimNotExpired = 14,
 }

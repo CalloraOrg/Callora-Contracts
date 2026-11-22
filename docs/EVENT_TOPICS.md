@@ -185,6 +185,14 @@ Source: [`contracts/revenue_pool/src/events.rs`](../contracts/revenue_pool/src/e
 
 ---
 
+## Batch-Claim Contract (`callora-batch-claim`)
+
+Source: [`contracts/batch_claim/src/events.rs`](../contracts/batch_claim/src/events.rs)
+
+| Topic String | Constructor | Trigger | Data |
+|--------------|-------------|---------|------|
+| `claim_expired` | `event_claim_expired` | Admin removes an expired, unsettled claim with `expire_claim` | `claimant: Address` |
+
 ## Distribute Contract (`callora-distribute`)
 
 Source: [`contracts/distribute/src/events.rs`](../contracts/distribute/src/events.rs)

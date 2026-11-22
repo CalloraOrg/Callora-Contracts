@@ -199,6 +199,8 @@ pub struct ClaimRecord {
     /// (`ClaimIdMismatch`) and permanently rejects any call once
     /// `ClaimConsumed(claim_id) == true` (`ClaimIdAlreadyUsed`).
     pub claim_id: BytesN<32>,
+    /// Unix timestamp at or after which this claim cannot be settled; zero means no expiry.
+    pub expires_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +284,18 @@ impl CalloraBatchClaim {
         claimant: Address,
         amount: i128,
         claim_id: BytesN<32>,
+    ) -> Result<(), BatchClaimError> {
+        Self::add_claim_with_expiry(env, caller, claimant, amount, claim_id, 0)
+    }
+
+    /// Add a claim with an optional Unix timestamp expiry (zero means never).
+    pub fn add_claim_with_expiry(
+        env: Env,
+        caller: Address,
+        claimant: Address,
+        amount: i128,
+        claim_id: BytesN<32>,
+        expires_at: u64,
     ) -> Result<(), BatchClaimError> {
         caller.require_auth();
         let admin = Self::require_admin(&env)?;
@@ -379,6 +393,7 @@ impl CalloraBatchClaim {
             pending_amount: new_pending,
             settled: false,
             claim_id: claim_id.clone(),
+            expires_at,
         };
         env.storage().persistent().set(&key, &record);
         // Bump claim record TTL after writing.
@@ -483,6 +498,10 @@ impl CalloraBatchClaim {
             // 1. Verify the claim_id matches the stored record.
             if record.claim_id != claim_id {
                 return Err(BatchClaimError::ClaimIdMismatch);
+            }
+
+            if record.expires_at != 0 && env.ledger().timestamp() >= record.expires_at {
+                return Err(BatchClaimError::ClaimExpired);
             }
 
             // 2. Verify the claim_id has not been consumed by a prior call.
@@ -624,6 +643,49 @@ impl CalloraBatchClaim {
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_claim_cancelled(&env),), claimant);
+        Ok(())
+    }
+
+    /// Remove an expired, unsettled claim while retaining its claim id reservation.
+    pub fn expire_claim(
+        env: Env,
+        caller: Address,
+        claimant: Address,
+    ) -> Result<(), BatchClaimError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(BatchClaimError::Unauthorized);
+        }
+        let key = StorageKey::Claim(claimant.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        }
+        let record: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(BatchClaimError::ClaimNotFound)?;
+        if record.settled {
+            return Err(BatchClaimError::AlreadySettled);
+        }
+        if record.expires_at == 0 || env.ledger().timestamp() < record.expires_at {
+            return Err(BatchClaimError::ClaimNotExpired);
+        }
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalClaims)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &StorageKey::TotalClaims,
+            &count.checked_sub(1).ok_or(BatchClaimError::Overflow)?,
+        );
+        env.storage().persistent().remove(&key);
+        Self::bump_instance(&env);
+        env.events().publish((events::event_claim_expired(&env),), claimant);
         Ok(())
     }
 
@@ -964,6 +1026,56 @@ mod tests {
         client.add_claim(&admin, &claimant, &1, &id);
         let rec = client.get_claim(&claimant);
         assert_eq!(rec.pending_amount, 1);
+    }
+
+    #[test]
+    fn test_claim_expiry_boundaries_and_admin_sweep() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 201);
+        let now = env.ledger().timestamp();
+        client.add_claim_with_expiry(&admin, &claimant, &10, &id, &(now + 10));
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        let early = client.try_expire_claim(&admin, &claimant);
+        assert_eq!(early, Err(Ok(BatchClaimError::ClaimNotExpired)));
+        env.ledger().set_timestamp(now + 9);
+        assert_eq!(client.batch_claim(&batch), 10);
+
+        let claimant2 = Address::generate(&env);
+        let id2 = make_id(&env, 202);
+        client.add_claim_with_expiry(&admin, &claimant2, &10, &id2, &(now + 20));
+        env.ledger().set_timestamp(now + 20);
+        let mut batch2 = Vec::new(&env);
+        batch2.push_back((claimant2.clone(), id2.clone()));
+        assert_eq!(client.try_batch_claim(&batch2), Err(Ok(BatchClaimError::ClaimExpired)));
+        let intruder = Address::generate(&env);
+        assert_eq!(client.try_expire_claim(&intruder, &claimant2), Err(Ok(BatchClaimError::Unauthorized)));
+        client.expire_claim(&admin, &claimant2);
+        assert_eq!(client.total_claims(), 1);
+        let claimant3 = Address::generate(&env);
+        assert_eq!(client.try_add_claim(&admin, &claimant3, &10, &id2), Err(Ok(BatchClaimError::ClaimIdAlreadyUsed)));
+    }
+
+    #[test]
+    fn test_zero_expiry_never_expires() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 203);
+        client.add_claim(&admin, &claimant, &10, &id);
+        env.ledger().set_timestamp(u64::MAX);
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant, id));
+        assert_eq!(client.batch_claim(&batch), 10);
+    }
+
+    #[test]
+    fn test_claim_expired_event_topic_snapshot() {
+        let env = Env::default();
+        assert_eq!(
+            events::event_claim_expired(&env),
+            soroban_sdk::Symbol::new(&env, "claim_expired")
+        );
     }
 
     // -----------------------------------------------------------------------
