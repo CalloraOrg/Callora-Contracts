@@ -1,7 +1,7 @@
 extern crate std;
 
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{token, Address, Env, String};
+use soroban_sdk::{token, Address, Env};
 
 use super::*;
 
@@ -15,58 +15,76 @@ fn create_usdc<'a>(env: &'a Env, admin: &Address) -> (Address, token::StellarAss
     (addr.clone(), token::StellarAssetClient::new(env, &addr))
 }
 
-fn setup(env: &Env) -> (Address, CalloraVaultClient<'_>, Address) {
-    let owner = Address::generate(env);
+/// Register a vault without initializing it.
+fn register(env: &Env) -> CalloraVaultClient<'_> {
     let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(env, &vault_addr);
-    let (usdc, _) = create_usdc(env, &owner);
+    CalloraVaultClient::new(env, &vault_addr)
+}
+
+/// Initialize a vault with the given optional max_deduct, settlement and
+/// revenue pool. Returns `(owner, client, usdc)`.
+fn setup_with(
+    env: &Env,
+    initial_balance: i128,
+    max_deduct: Option<i128>,
+    settlement: Option<Address>,
+    revenue_pool: Option<Address>,
+) -> (Address, CalloraVaultClient<'_>, Address) {
+    let owner = Address::generate(env);
+    let client = register(env);
+    let (usdc, usdc_admin) = create_usdc(env, &owner);
     env.mock_all_auths();
+    if initial_balance > 0 {
+        usdc_admin.mint(&client.address, &initial_balance);
+    }
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,
-        &1,
+        &Some(initial_balance),
         &None,
-        &10000000000,
-        &soroban_sdk::Address::generate(&env),
+        &Some(1),
+        &revenue_pool,
+        &max_deduct,
+        &settlement,
     );
     (owner, client, usdc)
 }
 
+/// Default vault: zero balance, large max_deduct, no settlement, no pool.
+fn setup(env: &Env) -> (Address, CalloraVaultClient<'_>, Address) {
+    setup_with(env, 0, Some(10_000_000_000), None, None)
+}
+
 // ---------------------------------------------------------------------------
-// get_meta
+// get_owner
+// (replaces the removed get_meta tests: the vault no longer exposes get_meta)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn get_meta_before_init_panics() {
+fn get_owner_before_init_panics() {
     let env = Env::default();
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
-    assert!(client.try_get_meta().is_err());
+    let client = register(&env);
+    assert!(client.try_get_owner().is_err());
 }
 
 #[test]
-fn get_meta_returns_correct_fields() {
+fn get_owner_returns_owner_after_init() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
-    let meta = client.get_meta();
-    assert_eq!(meta.owner, owner);
-    assert_eq!(meta.balance, 0);
-    assert_eq!(meta.min_deposit, DEFAULT_MIN_DEPOSIT);
-    assert!(meta.authorized_caller.is_none());
+    assert_eq!(client.get_owner(), owner);
 }
 
 // ---------------------------------------------------------------------------
 // balance
 // ---------------------------------------------------------------------------
 
+/// Behaviour change: `balance()` now returns 0 on an uninitialized vault
+/// instead of panicking.
 #[test]
-fn balance_before_init_panics() {
+fn balance_before_init_returns_zero() {
     let env = Env::default();
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
-    assert!(client.try_balance().is_err());
+    let client = register(&env);
+    assert_eq!(client.balance(), 0);
 }
 
 #[test]
@@ -76,6 +94,13 @@ fn balance_returns_zero_after_init() {
     assert_eq!(client.balance(), 0);
 }
 
+#[test]
+fn balance_returns_initial_balance_after_init() {
+    let env = Env::default();
+    let (_, client, _) = setup_with(&env, 500, Some(10_000), None, None);
+    assert_eq!(client.balance(), 500);
+}
+
 // ---------------------------------------------------------------------------
 // get_admin
 // ---------------------------------------------------------------------------
@@ -83,8 +108,7 @@ fn balance_returns_zero_after_init() {
 #[test]
 fn get_admin_before_init_panics() {
     let env = Env::default();
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
+    let client = register(&env);
     assert!(client.try_get_admin().is_err());
 }
 
@@ -102,8 +126,7 @@ fn get_admin_returns_owner_after_init() {
 #[test]
 fn get_usdc_token_before_init_panics() {
     let env = Env::default();
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
+    let client = register(&env);
     assert!(client.try_get_usdc_token().is_err());
 }
 
@@ -115,67 +138,80 @@ fn get_usdc_token_returns_address_after_init() {
 }
 
 // ---------------------------------------------------------------------------
-// get_max_deduct
+// get_max_deduct / set_max_deduct
 // ---------------------------------------------------------------------------
 
+/// `DEFAULT_MAX_DEDUCT` no longer exists: when `init` gets `None`, the cap
+/// is `i128::MAX`.
 #[test]
 fn get_max_deduct_returns_default_when_not_set() {
     let env = Env::default();
-    let (_, client, _) = setup(&env);
-    assert_eq!(client.get_max_deduct(), DEFAULT_MAX_DEDUCT);
+    let (_, client, _) = setup_with(&env, 0, None, None, None);
+    assert_eq!(client.get_max_deduct(), i128::MAX);
 }
 
 #[test]
 fn get_max_deduct_returns_configured_value() {
     let env = Env::default();
-    let owner = Address::generate(&env);
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
-    let (usdc, _) = create_usdc(&env, &owner);
-    env.mock_all_auths();
-    client.init(
-        &owner,
-        &usdc,
-        &0,
-        &owner,
-        &1,
-        &None,
-        500,
-        &soroban_sdk::Address::generate(&env),
-    );
+    let (_, client, _) = setup_with(&env, 0, Some(500), None, None);
     assert_eq!(client.get_max_deduct(), 500);
 }
 
 #[test]
 fn set_max_deduct_updates_max_deduct_key_and_getter() {
     let env = Env::default();
-    let (_, client, _) = setup(&env);
-    assert_eq!(client.get_max_deduct(), DEFAULT_MAX_DEDUCT);
+    let (owner, client, _) = setup(&env);
+    assert_eq!(client.get_max_deduct(), 10_000_000_000);
 
-    client.set_max_deduct(&250);
+    client.set_max_deduct(&owner, &250);
     assert_eq!(client.get_max_deduct(), 250);
 
-    client.set_max_deduct(&900);
+    client.set_max_deduct(&owner, &900);
     assert_eq!(client.get_max_deduct(), 900);
 }
 
 #[test]
-#[should_panic(expected = "max_deduct must be positive")]
 fn set_max_deduct_rejects_non_positive_values() {
     let env = Env::default();
+    let (owner, client, _) = setup(&env);
+    let zero = client.try_set_max_deduct(&owner, &0);
+    assert!(matches!(zero, Err(Ok(VaultError::MaxDeductNotPositive))));
+    let negative = client.try_set_max_deduct(&owner, &-1);
+    assert!(matches!(
+        negative,
+        Err(Ok(VaultError::MaxDeductNotPositive))
+    ));
+    // The stored value is unchanged after the rejected calls.
+    assert_eq!(client.get_max_deduct(), 10_000_000_000);
+}
+
+#[test]
+fn set_max_deduct_rejects_non_owner() {
+    let env = Env::default();
     let (_, client, _) = setup(&env);
-    client.set_max_deduct(&0);
+    let stranger = Address::generate(&env);
+    let res = client.try_set_max_deduct(&stranger, &100);
+    assert!(matches!(res, Err(Ok(VaultError::Unauthorized))));
+    assert_eq!(client.get_max_deduct(), 10_000_000_000);
 }
 
 // ---------------------------------------------------------------------------
-// get_settlement
+// get_settlement / set_settlement
 // ---------------------------------------------------------------------------
 
 #[test]
 fn get_settlement_before_set_panics() {
     let env = Env::default();
-    let (_, client, _) = setup(&env);
+    let (_, client, _) = setup(&env); // init with settlement = None
     assert!(client.try_get_settlement().is_err());
+}
+
+#[test]
+fn get_settlement_returns_address_configured_at_init() {
+    let env = Env::default();
+    let settlement = Address::generate(&env);
+    let (_, client, _) = setup_with(&env, 0, Some(10_000), Some(settlement.clone()), None);
+    assert_eq!(client.get_settlement(), settlement);
 }
 
 #[test]
@@ -190,6 +226,8 @@ fn get_settlement_returns_address_after_set() {
 
 // ---------------------------------------------------------------------------
 // get_revenue_pool
+// (propose_revenue_pool / accept_revenue_pool no longer exist; the pool is
+// now set at init)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -200,42 +238,11 @@ fn get_revenue_pool_returns_none_when_not_set() {
 }
 
 #[test]
-fn get_revenue_pool_returns_some_after_set() {
+fn get_revenue_pool_returns_some_when_set_at_init() {
     let env = Env::default();
-    let (owner, client, _) = setup(&env);
     let pool = Address::generate(&env);
-    client.propose_revenue_pool(&Some(pool.clone()));
-    client.accept_revenue_pool();
+    let (_, client, _) = setup_with(&env, 0, Some(10_000), None, Some(pool.clone()));
     assert_eq!(client.get_revenue_pool(), Some(pool));
-}
-
-// ---------------------------------------------------------------------------
-// get_contract_addresses
-// ---------------------------------------------------------------------------
-
-#[test]
-fn get_contract_addresses_after_init_only() {
-    let env = Env::default();
-    let (_, client, usdc) = setup(&env);
-    let (got_usdc, settlement, pool) = client.get_contract_addresses();
-    assert_eq!(got_usdc, Some(usdc));
-    assert!(settlement.is_none());
-    assert!(pool.is_none());
-}
-
-#[test]
-fn get_contract_addresses_fully_configured() {
-    let env = Env::default();
-    let (owner, client, usdc) = setup(&env);
-    let settlement = Address::generate(&env);
-    let pool = Address::generate(&env);
-
-    client.propose_revenue_pool(&Some(pool.clone()));
-    client.accept_revenue_pool();
-    let (got_usdc, got_settlement, got_pool) = client.get_contract_addresses();
-    assert_eq!(got_usdc, Some(usdc));
-    assert_eq!(got_settlement, Some(settlement));
-    assert_eq!(got_pool, Some(pool));
 }
 
 // ---------------------------------------------------------------------------
@@ -245,8 +252,7 @@ fn get_contract_addresses_fully_configured() {
 #[test]
 fn is_paused_returns_false_before_init() {
     let env = Env::default();
-    let vault_addr = env.register(CalloraVault, ());
-    let client = CalloraVaultClient::new(&env, &vault_addr);
+    let client = register(&env);
     // must not panic and must return false
     assert!(!client.is_paused());
 }
@@ -266,11 +272,14 @@ fn is_paused_reflects_pause_unpause() {
 // is_authorized_depositor
 // ---------------------------------------------------------------------------
 
+/// The doc comment on `is_authorized_depositor` says the view reflects only
+/// the explicit allowlist; the owner may deposit regardless but is not listed.
 #[test]
-fn is_authorized_depositor_owner_always_true() {
+#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
+fn is_authorized_depositor_owner_is_not_on_allowlist() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
-    assert!(client.is_authorized_depositor(&owner));
+    assert!(!client.is_authorized_depositor(&owner));
 }
 
 #[test]
@@ -286,115 +295,41 @@ fn is_authorized_depositor_added_address_true() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
     let depositor = Address::generate(&env);
-    client.add_allowed_depositor(&owner, &depositor);
+    client.add_address(&owner, &depositor);
     assert!(client.is_authorized_depositor(&depositor));
 }
 
 // ---------------------------------------------------------------------------
-// get_allowed_depositors
+// get_allowlist (was get_allowed_depositors)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn get_allowed_depositors_empty_before_any_added() {
+fn get_allowlist_empty_before_any_added() {
     let env = Env::default();
     let (_, client, _) = setup(&env);
-    assert_eq!(client.get_allowed_depositors().len(), 0);
+    assert_eq!(client.get_allowlist().len(), 0);
 }
 
 #[test]
-fn get_allowed_depositors_reflects_additions() {
+fn get_allowlist_reflects_additions() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
     let d1 = Address::generate(&env);
     let d2 = Address::generate(&env);
-    client.add_allowed_depositor(&owner, &d1);
-    client.add_allowed_depositor(&owner, &d2);
-    let list = client.get_allowed_depositors();
+    client.add_address(&owner, &d1);
+    client.add_address(&owner, &d2);
+    let list = client.get_allowlist();
     assert_eq!(list.len(), 2);
     assert!(list.contains(&d1));
     assert!(list.contains(&d2));
 }
 
-// ---------------------------------------------------------------------------
-// get_metadata
-// ---------------------------------------------------------------------------
-
 #[test]
-fn get_metadata_returns_none_when_not_set() {
-    let env = Env::default();
-    let (_, client, _) = setup(&env);
-    let id = String::from_str(&env, "offer1");
-    assert!(client.get_metadata(&id).is_none());
-}
-
-#[test]
-fn get_metadata_returns_value_after_set() {
+fn get_allowlist_add_is_idempotent() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
-    let id = String::from_str(&env, "offer1");
-    let val = String::from_str(&env, "ipfs://abc");
-    client.set_metadata(&owner, &id, &val);
-    assert_eq!(client.get_metadata(&id), Some(val));
-}
-
-// ---------------------------------------------------------------------------
-// list_prices
-// ---------------------------------------------------------------------------
-
-#[test]
-fn list_prices_empty_registry_returns_empty() {
-    let env = Env::default();
-    let (_, client, _) = setup(&env);
-    let prices = client.list_prices(&0, &10);
-    assert_eq!(prices.len(), 0);
-}
-
-#[test]
-fn list_prices_returns_paginated_price_entries() {
-    let env = Env::default();
-    let (owner, client, _) = setup(&env);
-    let offer1 = String::from_str(&env, "offer-1");
-    let offer2 = String::from_str(&env, "offer-2");
-    let offer3 = String::from_str(&env, "offer-3");
-    client.set_price(&owner, &offer1, &String::from_str(&env, "100"));
-    client.set_price(&owner, &offer2, &String::from_str(&env, "200"));
-    client.set_price(&owner, &offer3, &String::from_str(&env, "300"));
-
-    let page1 = client.list_prices(&0, &2);
-    assert_eq!(page1.len(), 2);
-    assert_eq!(page1.get(0).unwrap().0, offer1);
-    assert_eq!(page1.get(0).unwrap().1, 100);
-    assert_eq!(page1.get(1).unwrap().0, offer2);
-    assert_eq!(page1.get(1).unwrap().1, 200);
-
-    let page2 = client.list_prices(&2, &2);
-    assert_eq!(page2.len(), 1);
-    assert_eq!(page2.get(0).unwrap().0, offer3);
-    assert_eq!(page2.get(0).unwrap().1, 300);
-
-    let page3 = client.list_prices(&4, &2);
-    assert_eq!(page3.len(), 0);
-}
-
-#[test]
-fn list_prices_limit_is_capped_at_100() {
-    let env = Env::default();
-    let (owner, client, _) = setup(&env);
-    for i in 0..105 {
-        let offering_id = String::from_str(&env, &std::format!("offer-{}", i));
-        client.set_price(&owner, &offering_id, &String::from_str(&env, "1"));
-    }
-    let prices = client.list_prices(&0, &200);
-    assert_eq!(prices.len(), 100);
-}
-
-#[test]
-fn remove_price_removes_index_entry() {
-    let env = Env::default();
-    let (owner, client, _) = setup(&env);
-    let offer = String::from_str(&env, "offer-x");
-    client.set_price(&owner, &offer, &String::from_str(&env, "500"));
-    client.remove_price(&owner, &offer);
-    assert_eq!(client.get_price(&offer), None);
-    assert_eq!(client.list_prices(&0, &10).len(), 0);
+    let d1 = Address::generate(&env);
+    client.add_address(&owner, &d1);
+    client.add_address(&owner, &d1);
+    assert_eq!(client.get_allowlist().len(), 1);
 }

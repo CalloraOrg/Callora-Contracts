@@ -28,6 +28,12 @@ fn revenue_pool_error_codes_are_stable_and_unique() {
         (20, RevenuePoolError::MessageTooLong),
         (21, RevenuePoolError::NoPendingEmergencyDrain),
         (22, RevenuePoolError::TimelockNotExpired),
+        (23, RevenuePoolError::EmergencyPaused),
+        (24, RevenuePoolError::AlreadyEmergencyPaused),
+        (25, RevenuePoolError::NotEmergencyPaused),
+        (26, RevenuePoolError::SharesEmpty),
+        (27, RevenuePoolError::InvalidShareSum),
+        (28, RevenuePoolError::InvalidShare),
     ];
 
     let mut seen = BTreeSet::new();
@@ -39,7 +45,7 @@ fn revenue_pool_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 22);
+    assert_eq!(seen.len(), 28);
 }
 
 #[test]
@@ -68,6 +74,12 @@ fn error_code_docs_list_every_revenue_pool_code() {
         "| 20 | `MessageTooLong` | Revenue Pool | Admin broadcast message exceeds the length limit |",
         "| 21 | `NoPendingEmergencyDrain` | Revenue Pool | No emergency drain proposal is pending |",
         "| 22 | `TimelockNotExpired` | Revenue Pool | Emergency drain timelock has not elapsed |",
+        "| 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |",
+        "| 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |",
+        "| 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |",
+        "| 26 | `SharesEmpty` | Revenue Pool | Share distribution received no recipients |",
+        "| 27 | `InvalidShareSum` | Revenue Pool | Share distribution basis points did not sum to 10_000 |",
+        "| 28 | `InvalidShare` | Revenue Pool | A share was zero or exceeded 10_000 basis points |",
     ];
 
     for line in expected_lines {

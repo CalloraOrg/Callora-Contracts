@@ -1,6 +1,6 @@
 //! Admin-only developer balance recovery operations.
 
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{Address, Env};
 
 use crate::types::AdminMigrationEvent;
 use crate::{events, timelock, CalloraSettlement, SettlementError, StorageKey};
@@ -24,6 +24,7 @@ fn get_usdc(env: &Env) -> Address {
 
 pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Address, to: &Address) {
     require_admin(env, caller);
+    CalloraSettlement::bump_instance(env);
     if from == to {
         env.panic_with_error(SettlementError::MigrationSameAddress);
     }
@@ -63,6 +64,7 @@ pub(crate) fn propose_balance_migration(env: &Env, caller: &Address, from: &Addr
 
 pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Address) {
     require_admin(env, caller);
+    CalloraSettlement::bump_instance(env);
     let migration = timelock::get_pending_migration(env, from)
         .unwrap_or_else(|| env.panic_with_error(SettlementError::MigrationNotFound));
     let executed_at = env.ledger().timestamp();
@@ -94,22 +96,19 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
     env.storage()
         .persistent()
         .set(&destination_key, &new_destination_balance);
-    env.storage()
-        .persistent()
-        .extend_ttl(&source_key, 50_000, 50_000);
-    env.storage()
-        .persistent()
-        .extend_ttl(&destination_key, 50_000, 50_000);
+    env.storage().persistent().extend_ttl(
+        &source_key,
+        crate::types::PERSISTENT_BUMP_THRESHOLD,
+        crate::types::PERSISTENT_BUMP_AMOUNT,
+    );
+    env.storage().persistent().extend_ttl(
+        &destination_key,
+        crate::types::PERSISTENT_BUMP_THRESHOLD,
+        crate::types::PERSISTENT_BUMP_AMOUNT,
+    );
 
-    let mut index: Vec<Address> = env
-        .storage()
-        .instance()
-        .get(&StorageKey::DeveloperIndex)
-        .unwrap_or_else(|| Vec::new(env));
-    CalloraSettlement::sorted_insert(env, &mut index, migration.to.clone());
-    env.storage()
-        .instance()
-        .set(&StorageKey::DeveloperIndex, &index);
+    // Register the destination developer in the paged index if not already present.
+    CalloraSettlement::index_insert(env, migration.to.clone());
     timelock::remove_pending_migration(env, from);
 
     events::emit_admin_migration(

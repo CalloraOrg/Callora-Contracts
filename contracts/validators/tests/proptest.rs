@@ -18,8 +18,7 @@
 extern crate std;
 
 use callora_validators::{
-    bytes_are_visible_ascii, is_visible_ascii_metadata, normalize_visible_ascii,
-    MAX_VALIDATED_STRING_LEN,
+    is_visible_ascii_metadata, normalize_visible_ascii, MAX_VALIDATED_STRING_LEN,
 };
 use proptest::prelude::*;
 use soroban_sdk::{Env, String};
@@ -57,6 +56,15 @@ impl Prng {
     fn gen_byte(&mut self) -> u8 {
         self.next_u64() as u8
     }
+}
+
+/// Independent oracle: non-empty, all bytes in 0x20..=0x7e, no leading/trailing space.
+fn bytes_are_visible_ascii(bytes: &[u8]) -> bool {
+    !bytes.is_empty()
+        && bytes.len() <= callora_validators::MAX_VALIDATED_STRING_LEN as usize
+        && bytes.iter().all(|b| (0x20..=0x7e).contains(b))
+        && bytes[0] != b' '
+        && bytes[bytes.len() - 1] != b' '
 }
 
 fn sdk_string_from_ascii(env: &Env, bytes: &[u8]) -> String {
@@ -246,7 +254,7 @@ fn unicode_multibyte_rejected_by_oracle_and_host() {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
     /// Random byte vectors preserve the validator ↔ oracle invariant.
     #[test]

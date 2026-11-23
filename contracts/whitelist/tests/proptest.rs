@@ -341,6 +341,7 @@ fn add_address_requires_auth() {
     let client = deploy(&env, &admin);
     env.set_auths(&[]);
 
+    env.set_auths(&[]);
     assert!(client.try_add_address(&admin, &address).is_err());
     assert!(client.get_whitelist().is_empty());
 }
@@ -355,6 +356,7 @@ fn remove_address_requires_auth() {
     seed_member(&env, &contract_id, &address);
     env.set_auths(&[]);
 
+    env.set_auths(&[]);
     assert!(client.is_whitelisted(&address));
     assert!(client.try_remove_address(&admin, &address).is_err());
     assert!(client.is_whitelisted(&address));
@@ -370,6 +372,7 @@ fn clear_all_requires_auth() {
     seed_member(&env, &contract_id, &address);
     env.set_auths(&[]);
 
+    env.set_auths(&[]);
     assert!(client.is_whitelisted(&address));
     assert!(client.try_clear_all(&admin).is_err());
     assert!(client.is_whitelisted(&address));

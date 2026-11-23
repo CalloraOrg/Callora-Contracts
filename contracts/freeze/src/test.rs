@@ -1,10 +1,32 @@
 extern crate std;
 
 use crate::errors::FreezeError;
-use crate::{CalloraFreeze, CalloraFreezeClient};
-use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env, Symbol};
+use crate::events::{FreezeOperatorSetEvent, FreezeSetEvent};
+use crate::{
+    CalloraFreeze, CalloraFreezeClient, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
+    LEDGERS_PER_DAY,
+};
+use soroban_sdk::testutils::storage::Instance as _;
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+use soroban_sdk::{Address, Env, Symbol, TryFromVal};
 use std::collections::BTreeSet;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn setup() -> (Env, Address, CalloraFreezeClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(CalloraFreeze, ());
+    let client = CalloraFreezeClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    (env, admin, client)
+}
+
+// ---------------------------------------------------------------------------
+// Existing behaviour tests (unchanged)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_init_and_get_admin() {
@@ -152,4 +174,462 @@ fn test_error_code_docs_coverage() {
     for line in expected_lines {
         assert!(docs.contains(line), "missing freeze docs line: {line}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Event emission tests (new)
+// ---------------------------------------------------------------------------
+
+/// `init` must emit exactly one `freeze_initialized` event with version marker.
+#[test]
+fn test_init_emits_freeze_initialized_event() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let events = env.events().all();
+    // The last emitted event is ours (token mock events may precede it).
+    let evt = events.last().expect("expected at least one event");
+
+    // topics: (freeze_initialized, callora_v1, admin)
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    let topic1 = Symbol::try_from_val(&env, &evt.1.get(1).unwrap()).unwrap();
+    let topic2 = Address::try_from_val(&env, &evt.1.get(2).unwrap()).unwrap();
+
+    assert_eq!(topic0, Symbol::new(&env, "freeze_initialized"));
+    assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
+    assert_eq!(topic2, admin);
+
+    // data is ()
+    let _data: () = TryFromVal::try_from_val(&env, &evt.2).unwrap_or(());
+}
+
+/// `freeze` must emit exactly one `freeze_set` event containing the reason
+/// and the timestamp in the data payload.
+#[test]
+fn test_freeze_emits_freeze_set_event() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let reason = Symbol::new(&env, "exploit_risk");
+    client.freeze(&admin, &reason);
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+
+    // topics: (freeze_set, callora_v1, caller)
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    let topic1 = Symbol::try_from_val(&env, &evt.1.get(1).unwrap()).unwrap();
+    let topic2 = Address::try_from_val(&env, &evt.1.get(2).unwrap()).unwrap();
+
+    assert_eq!(topic0, Symbol::new(&env, "freeze_set"));
+    assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
+    assert_eq!(topic2, admin);
+
+    // data: FreezeSetEvent { reason, frozen_at }
+    let payload = FreezeSetEvent::try_from_val(&env, &evt.2).unwrap();
+    assert_eq!(payload.reason, reason);
+    assert_eq!(payload.frozen_at, env.ledger().timestamp());
+}
+
+/// `unfreeze` must emit exactly one `freeze_cleared` event.
+#[test]
+fn test_unfreeze_emits_freeze_cleared_event() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    client.freeze(&admin, &Symbol::new(&env, "maintenance"));
+    client.unfreeze(&admin);
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+
+    // topics: (freeze_cleared, callora_v1, caller)
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    let topic1 = Symbol::try_from_val(&env, &evt.1.get(1).unwrap()).unwrap();
+    let topic2 = Address::try_from_val(&env, &evt.1.get(2).unwrap()).unwrap();
+
+    assert_eq!(topic0, Symbol::new(&env, "freeze_cleared"));
+    assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
+    assert_eq!(topic2, admin);
+}
+
+/// `set_freeze_operator` (set) emits `freeze_operator_set` with old=None and new=operator.
+#[test]
+fn test_set_freeze_operator_emits_event_on_set() {
+    let (env, admin, client) = setup();
+    let operator = Address::generate(&env);
+    client.init(&admin);
+    client.set_freeze_operator(&admin, &Some(operator.clone()));
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+
+    // topics: (freeze_operator_set, callora_v1, caller)
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    let topic1 = Symbol::try_from_val(&env, &evt.1.get(1).unwrap()).unwrap();
+    let topic2 = Address::try_from_val(&env, &evt.1.get(2).unwrap()).unwrap();
+
+    assert_eq!(topic0, Symbol::new(&env, "freeze_operator_set"));
+    assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
+    assert_eq!(topic2, admin);
+
+    // data: FreezeOperatorSetEvent { old_operator: None, new_operator: Some(operator) }
+    let payload = FreezeOperatorSetEvent::try_from_val(&env, &evt.2).unwrap();
+    assert_eq!(payload.old_operator, None);
+    assert_eq!(payload.new_operator, Some(operator));
+}
+
+/// `set_freeze_operator(None)` emits `freeze_operator_set` with old=Some(op) and new=None.
+#[test]
+fn test_set_freeze_operator_emits_event_on_clear() {
+    let (env, admin, client) = setup();
+    let operator = Address::generate(&env);
+    client.init(&admin);
+    // First set an operator.
+    client.set_freeze_operator(&admin, &Some(operator.clone()));
+    // Now clear it.
+    client.set_freeze_operator(&admin, &None);
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "freeze_operator_set"));
+
+    let payload = FreezeOperatorSetEvent::try_from_val(&env, &evt.2).unwrap();
+    assert_eq!(payload.old_operator, Some(operator));
+    assert_eq!(payload.new_operator, None);
+}
+
+/// `set_freeze_operator` replaces an existing operator: old=Some(old_op), new=Some(new_op).
+#[test]
+fn test_set_freeze_operator_emits_event_on_replace() {
+    let (env, admin, client) = setup();
+    let op_a = Address::generate(&env);
+    let op_b = Address::generate(&env);
+    client.init(&admin);
+    client.set_freeze_operator(&admin, &Some(op_a.clone()));
+    client.set_freeze_operator(&admin, &Some(op_b.clone()));
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "freeze_operator_set"));
+
+    let payload = FreezeOperatorSetEvent::try_from_val(&env, &evt.2).unwrap();
+    assert_eq!(payload.old_operator, Some(op_a));
+    assert_eq!(payload.new_operator, Some(op_b));
+}
+
+// ---------------------------------------------------------------------------
+// get_freeze_status tests (new)
+// ---------------------------------------------------------------------------
+
+/// Before init, `get_freeze_status` returns `NotInitialized`.
+#[test]
+fn test_get_freeze_status_before_init_returns_error() {
+    let (env, _admin, client) = setup();
+    // Do not call init.
+    let _ = env; // suppress unused warning
+    assert_eq!(
+        client.try_get_freeze_status(),
+        Err(Ok(FreezeError::NotInitialized))
+    );
+}
+
+/// After init but before any freeze: `frozen=false`, `reason=None`, `frozen_at=None`.
+#[test]
+fn test_get_freeze_status_after_init_not_frozen() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let status = client.get_freeze_status();
+    assert!(!status.frozen);
+    assert!(status.reason.is_none());
+    assert!(status.frozen_at.is_none());
+
+    let _ = env;
+}
+
+/// After `freeze`: `frozen=true`, `reason` and `frozen_at` are populated.
+#[test]
+fn test_get_freeze_status_after_freeze() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let reason = Symbol::new(&env, "exploit_risk");
+    client.freeze(&admin, &reason);
+
+    let status = client.get_freeze_status();
+    assert!(status.frozen);
+    assert_eq!(status.reason, Some(reason));
+    assert!(status.frozen_at.is_some());
+}
+
+/// After `unfreeze`: `frozen=false`, `reason=None`, `frozen_at=None` (cleared).
+#[test]
+fn test_get_freeze_status_after_unfreeze_cleared() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    client.freeze(&admin, &Symbol::new(&env, "maintenance"));
+    client.unfreeze(&admin);
+
+    let status = client.get_freeze_status();
+    assert!(!status.frozen);
+    assert!(status.reason.is_none());
+    assert!(status.frozen_at.is_none());
+}
+
+/// Reason persisted by `get_freeze_status` matches the reason in the `freeze_set` event.
+#[test]
+fn test_freeze_status_reason_matches_event_payload() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let reason = Symbol::new(&env, "audit_hold");
+    // freeze() is the last call; its event is last in the list.
+    client.freeze(&admin, &reason);
+
+    // Capture the event first, before making another contract call.
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "freeze_set"));
+    let payload = FreezeSetEvent::try_from_val(&env, &evt.2).unwrap();
+
+    // Now call the view to get persisted state.
+    let status = client.get_freeze_status();
+
+    assert_eq!(status.reason, Some(payload.reason));
+    assert_eq!(status.frozen_at, Some(payload.frozen_at));
+}
+
+/// Operator can freeze; the emitted event carries the operator's address, not the admin's.
+#[test]
+fn test_operator_freeze_event_carries_operator_address() {
+    let (env, admin, client) = setup();
+    let operator = Address::generate(&env);
+    client.init(&admin);
+    client.set_freeze_operator(&admin, &Some(operator.clone()));
+
+    let reason = Symbol::new(&env, "emergency");
+    client.freeze(&operator, &reason);
+
+    let events = env.events().all();
+    let evt = events.last().unwrap();
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    let topic2 = Address::try_from_val(&env, &evt.1.get(2).unwrap()).unwrap();
+
+    assert_eq!(topic0, Symbol::new(&env, "freeze_set"));
+    assert_eq!(topic2, operator);
+}
+
+/// Each of the four state-changing entrypoints emits exactly one event (count check).
+/// Each entrypoint is exercised in its own fresh Env so the event list only
+/// contains events from that single call, making the last-event check reliable.
+#[test]
+fn test_each_entrypoint_emits_exactly_one_event() {
+    // --- init ---
+    {
+        let (env, admin, client) = setup();
+        client.init(&admin);
+        let events = env.events().all();
+        let evt = events.last().expect("init: no events");
+        let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+        assert_eq!(
+            topic0,
+            Symbol::new(&env, "freeze_initialized"),
+            "init must emit freeze_initialized"
+        );
+        // Exactly one event with our topic (env is fresh; init is the only call).
+        let count = (0..events.len())
+            .filter(|&i| {
+                let e = events.get(i as u32).unwrap();
+                Symbol::try_from_val(&env, &e.1.get(0).unwrap()).ok()
+                    == Some(Symbol::new(&env, "freeze_initialized"))
+            })
+            .count();
+        assert_eq!(
+            count, 1,
+            "init must emit exactly 1 freeze_initialized event"
+        );
+    }
+
+    // --- set_freeze_operator ---
+    {
+        let (env, admin, client) = setup();
+        let operator = Address::generate(&env);
+        client.init(&admin);
+        client.set_freeze_operator(&admin, &Some(operator));
+        let events = env.events().all();
+        let evt = events.last().expect("set_freeze_operator: no events");
+        let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+        assert_eq!(
+            topic0,
+            Symbol::new(&env, "freeze_operator_set"),
+            "set_freeze_operator must emit freeze_operator_set"
+        );
+    }
+
+    // --- freeze ---
+    {
+        let (env, admin, client) = setup();
+        client.init(&admin);
+        client.freeze(&admin, &Symbol::new(&env, "test_reason"));
+        let events = env.events().all();
+        let evt = events.last().expect("freeze: no events");
+        let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+        assert_eq!(
+            topic0,
+            Symbol::new(&env, "freeze_set"),
+            "freeze must emit freeze_set"
+        );
+    }
+
+    // --- unfreeze ---
+    {
+        let (env, admin, client) = setup();
+        client.init(&admin);
+        client.freeze(&admin, &Symbol::new(&env, "test_reason"));
+        client.unfreeze(&admin);
+        let events = env.events().all();
+        let evt = events.last().expect("unfreeze: no events");
+        let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+        assert_eq!(
+            topic0,
+            Symbol::new(&env, "freeze_cleared"),
+            "unfreeze must emit freeze_cleared"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Instance TTL policy (#1420)
+// ---------------------------------------------------------------------------
+
+/// After `init`, the instance TTL must be at least `INSTANCE_BUMP_AMOUNT - 1`,
+/// measured inside `as_contract` (this is the actual on-ledger TTL).
+#[test]
+fn test_init_sets_instance_ttl_to_bump_amount() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let ttl = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        ttl >= INSTANCE_BUMP_AMOUNT - 1,
+        "instance TTL {ttl} must be >= {} after init",
+        INSTANCE_BUMP_AMOUNT - 1
+    );
+}
+
+/// Age the instance below the bump threshold while keeping it live, run `call`,
+/// then assert the instance TTL was refreshed to `INSTANCE_BUMP_AMOUNT`.
+fn assert_instance_refreshed<F: FnOnce()>(env: &Env, client: &CalloraFreezeClient, call: F) {
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + INSTANCE_BUMP_AMOUNT - INSTANCE_BUMP_THRESHOLD + 10);
+
+    let before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert!(
+        before < INSTANCE_BUMP_THRESHOLD,
+        "precondition: instance TTL {before} must be below {INSTANCE_BUMP_THRESHOLD}"
+    );
+
+    call();
+
+    let after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(
+        after, INSTANCE_BUMP_AMOUNT,
+        "entrypoint must refresh the instance TTL to INSTANCE_BUMP_AMOUNT"
+    );
+}
+
+#[test]
+fn test_get_admin_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_admin();
+    });
+}
+
+#[test]
+fn test_is_frozen_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.is_frozen();
+    });
+}
+
+#[test]
+fn test_get_freeze_status_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_freeze_status();
+    });
+}
+
+#[test]
+fn test_get_freeze_operator_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    assert_instance_refreshed(&env, &client, || {
+        let _ = client.get_freeze_operator();
+    });
+}
+
+#[test]
+fn test_freeze_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let reason = Symbol::new(&env, "ttl");
+    assert_instance_refreshed(&env, &client, || {
+        client.freeze(&admin, &reason);
+    });
+}
+
+#[test]
+fn test_unfreeze_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    client.freeze(&admin, &Symbol::new(&env, "ttl"));
+    assert_instance_refreshed(&env, &client, || {
+        client.unfreeze(&admin);
+    });
+}
+
+#[test]
+fn test_set_freeze_operator_bumps_instance_ttl() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+    let operator = Address::generate(&env);
+    assert_instance_refreshed(&env, &client, || {
+        client.set_freeze_operator(&admin, &Some(operator));
+    });
+}
+
+/// With the 60-day instance bump, an instance kept live at day 45 still accepts
+/// a `freeze()` at day 90 (a call after a long idle period succeeds and
+/// re-extends the instance).
+#[test]
+fn test_freeze_succeeds_after_90_idle_days() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    // Keep the instance alive at day 45 (within the 60-day instance window).
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + LEDGERS_PER_DAY * 45);
+    let _ = client.get_admin();
+
+    // Advance to day 90 — 45 more idle days, still within the refreshed window.
+    env.ledger().set_sequence_number(seq + LEDGERS_PER_DAY * 90);
+
+    let reason = Symbol::new(&env, "after_idle");
+    client.freeze(&admin, &reason);
+    assert!(client.is_frozen());
 }

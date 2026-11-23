@@ -12,6 +12,7 @@
 //! |------------|-------------------------------|--------------------------|
 //! | Instance   | `StorageKey::Admin`           | `Address`                |
 //! | Persistent | `StorageKey::Topic(symbol)`   | `TopicRecord`            |
+//! | Persistent | `StorageKey::TopicAt(index)`  | `Symbol`                 |
 //! | Instance   | `StorageKey::TopicCount`      | `u32`                    |
 //!
 //! ## TTL management
@@ -23,18 +24,25 @@
 //!
 //! ## Events
 //!
-//! | Entrypoint       | Topic               | Data                          |
-//! |------------------|---------------------|-------------------------------|
-//! | `init`           | `"topics_init"`     | `admin: Address`              |
-//! | `register_topic` | `"topic_registered"`| `TopicRecord`                 |
-//! | `deactivate`     | `"topic_deactivated"`| `topic_name: Symbol`         |
+//! | Entrypoint                 | Topic                           | Data                                 |
+//! |----------------------------|---------------------------------|--------------------------------------|
+//! | `init`                     | `"topics_init"`                 | `admin: Address`                     |
+//! | `register_topic`           | `"topic_registered"`            | `TopicRecord`                        |
+//! | `deactivate`               | `"topic_deactivated"`           | `topic_name: Symbol`                 |
+//! | `reactivate`               | `"topic_reactivated"`           | `topic_name: Symbol`                 |
+//! | `set_topic_owner`          | `"topic_owner_chg"`             | `(old_owner, new_owner, name)`       |
+//! | `update_topic_description` | `"topic_description_updated"`   | `(old_description, new_description)` |
 
 pub mod errors;
 pub mod events;
 
 pub use errors::TopicsError;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
+#[cfg(test)]
+mod test_lifecycle;
+
+use callora_validators::normalize_visible_ascii;
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -51,6 +59,9 @@ pub const LIFETIME_THRESHOLD: u32 = 1_000;
 pub const PERSISTENT_BUMP: u32 = 10_000;
 pub const PERSISTENT_THRESHOLD: u32 = 1_000;
 
+/// Maximum number of topics returned by one `list_topics` call.
+pub const MAX_PAGE_SIZE: u32 = 50;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -66,6 +77,8 @@ pub enum StorageKey {
     TopicCount,
     /// Per-topic record keyed by its name.
     Topic(Symbol),
+    /// Topic name at its append-only registration-order position.
+    TopicAt(u32),
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +144,8 @@ impl CalloraTopics {
     /// - [`TopicsError::NotInitialized`] if `init` has not been called.
     /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
     /// - [`TopicsError::TopicAlreadyExists`] if `name` is already registered.
+    /// - [`TopicsError::InvalidDescription`] if `description` is empty, exceeds
+    ///   256 bytes, contains control characters, or has leading/trailing whitespace.
     pub fn register_topic(
         env: Env,
         caller: Address,
@@ -149,6 +164,15 @@ impl CalloraTopics {
             return Err(TopicsError::TopicAlreadyExists);
         }
 
+        Self::validate_description(&description)?;
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TopicCount)
+            .unwrap_or(0);
+        let next_count = count.checked_add(1).ok_or(TopicsError::Overflow)?;
+
         let record = TopicRecord {
             name: name.clone(),
             description,
@@ -157,20 +181,64 @@ impl CalloraTopics {
         };
 
         env.storage().persistent().set(&key, &record);
-
-        let count: u32 = env
-            .storage()
+        let index_key = StorageKey::TopicAt(count);
+        env.storage().persistent().set(&index_key, &name);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        env.storage()
+            .persistent()
+            .extend_ttl(&index_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        env.storage()
             .instance()
-            .get(&StorageKey::TopicCount)
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &StorageKey::TopicCount,
-            &count.checked_add(1).ok_or(TopicsError::Overflow)?,
-        );
+            .set(&StorageKey::TopicCount, &next_count);
 
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_topic_registered(&env), name), record);
+        Ok(())
+    }
+
+    /// Update a topic description without changing its owner or active state.
+    ///
+    /// Only the admin may update descriptions. Description validation is
+    /// identical to [`Self::register_topic`].
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
+    /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    /// - [`TopicsError::InvalidDescription`] if `description` is invalid.
+    pub fn update_topic_description(
+        env: Env,
+        caller: Address,
+        name: Symbol,
+        description: String,
+    ) -> Result<(), TopicsError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(TopicsError::Unauthorized);
+        }
+
+        let key = StorageKey::Topic(name.clone());
+        let mut record: TopicRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(TopicsError::TopicNotFound)?;
+        Self::validate_description(&description)?;
+        let old_description = record.description.clone();
+        record.description = description.clone();
+        env.storage().persistent().set(&key, &record);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (events::event_topic_description_updated(&env), name),
+            (old_description, description),
+        );
         Ok(())
     }
 
@@ -182,6 +250,7 @@ impl CalloraTopics {
     /// - [`TopicsError::NotInitialized`] if `init` has not been called.
     /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
     /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    /// - [`TopicsError::TopicAlreadyInactive`] if the topic is already inactive.
     pub fn deactivate(env: Env, caller: Address, name: Symbol) -> Result<(), TopicsError> {
         caller.require_auth();
         let admin = Self::require_admin(&env)?;
@@ -196,11 +265,88 @@ impl CalloraTopics {
             .get(&key)
             .ok_or(TopicsError::TopicNotFound)?;
 
+        if !record.active {
+            return Err(TopicsError::TopicAlreadyInactive);
+        }
+
         record.active = false;
         env.storage().persistent().set(&key, &record);
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_topic_deactivated(&env),), name);
+        Ok(())
+    }
+
+    /// Reactivate a previously deactivated topic, allowing metered calls again.
+    ///
+    /// Only the admin may reactivate topics.
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
+    /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    pub fn reactivate(env: Env, caller: Address, name: Symbol) -> Result<(), TopicsError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(TopicsError::Unauthorized);
+        }
+
+        let key = StorageKey::Topic(name.clone());
+        let mut record: TopicRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(TopicsError::TopicNotFound)?;
+
+        record.active = true;
+        env.storage().persistent().set(&key, &record);
+        Self::bump_instance(&env);
+        env.events()
+            .publish((events::event_topic_reactivated(&env),), name);
+        Ok(())
+    }
+
+    /// Transfer ownership of a registered topic to a new address.
+    ///
+    /// Only the admin may change topic ownership.
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
+    /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    /// - [`TopicsError::SameOwner`] if `new_owner` equals the current owner.
+    pub fn set_topic_owner(
+        env: Env,
+        caller: Address,
+        name: Symbol,
+        new_owner: Address,
+    ) -> Result<(), TopicsError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(TopicsError::Unauthorized);
+        }
+
+        let key = StorageKey::Topic(name.clone());
+        let mut record: TopicRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(TopicsError::TopicNotFound)?;
+
+        if record.owner == new_owner {
+            return Err(TopicsError::SameOwner);
+        }
+
+        let old_owner = record.owner.clone();
+        record.owner = new_owner.clone();
+        env.storage().persistent().set(&key, &record);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (events::event_topic_owner_changed(&env),),
+            (old_owner, new_owner, name),
+        );
         Ok(())
     }
 
@@ -270,6 +416,61 @@ impl CalloraTopics {
             .unwrap_or(0))
     }
 
+    /// List topics in registration order.
+    ///
+    /// `limit` must be at most [`MAX_PAGE_SIZE`]. A zero limit or a cursor at
+    /// or beyond the topic count returns an empty vector.
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::InvalidPageLimit`] if `limit` exceeds [`MAX_PAGE_SIZE`].
+    /// - [`TopicsError::TopicNotFound`] if an indexed topic record is missing.
+    pub fn list_topics(
+        env: Env,
+        cursor: u32,
+        limit: u32,
+    ) -> Result<Vec<TopicRecord>, TopicsError> {
+        Self::require_admin(&env)?;
+        if limit > MAX_PAGE_SIZE {
+            return Err(TopicsError::InvalidPageLimit);
+        }
+
+        let mut page = Vec::new(&env);
+        if limit == 0 {
+            return Ok(page);
+        }
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TopicCount)
+            .unwrap_or(0);
+        let end = cursor.saturating_add(limit).min(count);
+        for index in cursor..end {
+            let index_key = StorageKey::TopicAt(index);
+            let name: Symbol = env
+                .storage()
+                .persistent()
+                .get(&index_key)
+                .ok_or(TopicsError::TopicNotFound)?;
+            env.storage()
+                .persistent()
+                .extend_ttl(&index_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+
+            let topic_key = StorageKey::Topic(name);
+            let record: TopicRecord = env
+                .storage()
+                .persistent()
+                .get(&topic_key)
+                .ok_or(TopicsError::TopicNotFound)?;
+            env.storage()
+                .persistent()
+                .extend_ttl(&topic_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+            page.push_back(record);
+        }
+        Ok(page)
+    }
+
     /// Return the admin address.
     ///
     /// No auth required.
@@ -290,6 +491,12 @@ impl CalloraTopics {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(TopicsError::NotInitialized)
+    }
+
+    /// Validate descriptions consistently across all entrypoints.
+    fn validate_description(description: &String) -> Result<(), TopicsError> {
+        normalize_visible_ascii(description).map_err(|_| TopicsError::InvalidDescription)?;
+        Ok(())
     }
 
     /// Bump instance storage TTL to keep the contract live.

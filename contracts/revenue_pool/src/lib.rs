@@ -4,11 +4,17 @@ pub mod emergency;
 pub mod errors;
 pub mod events;
 
+use callora_storage_migration::StorageMigrationValidator;
 use emergency::{PendingEmergencyDrain, EMERGENCY_DRAIN_KEY, EMERGENCY_DRAIN_TIMELOCK_SECONDS};
 pub use errors::RevenuePoolError;
 use soroban_sdk::{
     contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, String, Symbol, Vec,
 };
+
+/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
+/// contract. Bumped whenever the on-ledger schema changes so that the
+/// pre-upgrade validation gate can enforce ordered, single-step migrations.
+const STORAGE_MIGRATION_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -28,6 +34,7 @@ pub enum DataKey {
 const ADMIN_KEY: &str = "admin";
 const USDC_KEY: &str = "usdc";
 const PAUSED_KEY: &str = "paused";
+const EMERGENCY_PAUSED_KEY: &str = "emergency_paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const PAUSE_GUARDIAN_KEY: &str = "pause_guardian";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
@@ -47,13 +54,21 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// Maximum admin broadcast message length in characters.
 pub const MAX_MESSAGE_LEN: u32 = 256;
 
+/// Number of ledgers in a single day, assuming ~5 s close time.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
 /// TTL bump constants for instance storage archival risk mitigation.
-/// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 ///
-/// - `BUMP_AMOUNT`: extend TTL by 10 000 ledgers (≈16 days)
-/// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (≈1.5 days)
-pub const BUMP_AMOUNT: u32 = 10_000;
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// The revenue pool holds critical operational state (admin, USDC address,
+/// pause flags, pending drain). If the instance entry archives, every call
+/// fails until an explicit restore, which can stall payouts during quiet
+/// periods or incidents. We therefore keep the instance alive for at least
+/// 30 days after any call, matching the vault and settlement contracts.
+///
+/// - `BUMP_AMOUNT`: extend TTL by 30 days of ledgers
+/// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (1 day)
+pub const BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
+pub const LIFETIME_THRESHOLD: u32 = LEDGERS_PER_DAY;
 
 // ---------------------------------------------------------------------------
 // Auxiliary contract-types
@@ -76,14 +91,21 @@ pub struct AdminBroadcast {
     pub message: String,
 }
 
-/// Remaining storage TTL information for a storage category.
+/// TTL policy (threshold / bump constants) this contract applies to a storage
+/// category.
+///
+/// This deliberately carries **no live-TTL field**. Contract code cannot observe
+/// the remaining TTL of a ledger entry, so any such value would be the
+/// [`BUMP_AMOUNT`] constant mislabelled as a measurement. For live TTLs, read
+/// the ledger entries over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence; see
+/// `docs/STORAGE_TTL_DOCTOR.md` and `scripts/storage-ttl-doctor.ts`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct StorageEntryTtl {
+pub struct TtlPolicy {
     pub category: String,
     pub key_desc: String,
     pub storage_type: String,
-    pub ttl: u32,
     pub threshold: u32,
     pub bump_amount: u32,
 }
@@ -125,6 +147,7 @@ impl RevenuePool {
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events()
             .publish((events::event_init(&env), admin), usdc_token);
@@ -157,6 +180,7 @@ impl RevenuePool {
     }
 
     fn require_not_paused(env: &Env) {
+        Self::require_not_emergency_paused(env);
         if env
             .storage()
             .instance()
@@ -164,6 +188,17 @@ impl RevenuePool {
             .unwrap_or(false)
         {
             env.panic_with_error(RevenuePoolError::Paused);
+        }
+    }
+
+    fn require_not_emergency_paused(env: &Env) {
+        if env
+            .storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(env, EMERGENCY_PAUSED_KEY))
+            .unwrap_or(false)
+        {
+            env.panic_with_error(RevenuePoolError::EmergencyPaused);
         }
     }
 
@@ -210,10 +245,14 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
-    /// Emits `admin_changed` with `(current, new_admin)` and
-    /// `admin_transfer_started` with `new_admin`.
+    /// Emits `admin_transfer_started` with `current` as topic and `new_admin`
+    /// as data. No `admin_changed` event is published while the transfer is
+    /// only pending — the admin does not change until `accept_admin`
+    /// (Issue #1163), so a nomination that is later cancelled never announces
+    /// a change that did not happen.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let current = Self::admin(&env);
         if caller != current {
             env.panic_with_error(RevenuePoolError::Unauthorized);
@@ -221,10 +260,6 @@ impl RevenuePool {
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events().publish(
-            (events::event_admin_changed(&env), current.clone()),
-            (current.clone(), new_admin.clone()),
-        );
         env.events().publish(
             (events::event_admin_transfer_started(&env), current),
             new_admin,
@@ -238,9 +273,14 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
-    /// Emits `admin_transfer_completed` with the new admin as topic.
+    /// Emits `admin_changed` with the previous admin as topic and
+    /// `(previous_admin, new_admin)` as data, followed by
+    /// `admin_transfer_completed` with the new admin as topic.
+    /// Both are published only after the admin slot is updated, so indexers
+    /// observe the change exactly when it happens (Issue #1163).
     pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let inst = env.storage().instance();
         let pending: Address = inst
             .get(&Symbol::new(&env, PENDING_ADMIN_KEY))
@@ -248,9 +288,14 @@ impl RevenuePool {
         if caller != pending {
             env.panic_with_error(RevenuePoolError::Unauthorized);
         }
+        let previous = Self::admin(&env);
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_admin_changed(&env), previous.clone()),
+            (previous, pending.clone()),
+        );
         env.events()
             .publish((events::event_admin_transfer_completed(&env), pending), ());
     }
@@ -262,7 +307,8 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
-    /// Emits `admin_transfer_completed` with the new admin as topic.
+    /// Emits `admin_changed` followed by `admin_transfer_completed` with the
+    /// new admin as topic.
     pub fn claim_admin(env: Env, caller: Address) {
         Self::accept_admin(env, caller);
     }
@@ -277,6 +323,7 @@ impl RevenuePool {
     /// Emits `admin_cancelled` with `(current_admin, pending_admin)`.
     pub fn cancel_admin_transfer(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let current = Self::admin(&env);
         if caller != current {
             env.panic_with_error(RevenuePoolError::Unauthorized);
@@ -315,6 +362,7 @@ impl RevenuePool {
     /// Emits `pause_guardian_set` with `caller` as topic and `guardian` as data.
     pub fn set_pause_guardian(env: Env, caller: Address, guardian: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         env.storage()
             .instance()
@@ -336,6 +384,7 @@ impl RevenuePool {
     /// Emits `pause_guardian_cleared` with `caller` as topic and the previous guardian as data.
     pub fn clear_pause_guardian(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         let inst = env.storage().instance();
         let guardian: Address = inst
@@ -373,6 +422,7 @@ impl RevenuePool {
     /// Emits `pause_set` with `caller` as topic and `true` as data.
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         let admin = Self::admin(&env);
         let guardian = Self::get_pause_guardian(env.clone());
         if caller != admin && guardian.as_ref() != Some(&caller) {
@@ -401,6 +451,7 @@ impl RevenuePool {
     /// Emits `pause_set` with `caller` as topic and `false` as data.
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if !Self::is_paused(env.clone()) {
             env.panic_with_error(RevenuePoolError::NotPaused);
@@ -424,6 +475,71 @@ impl RevenuePool {
             .unwrap_or(false)
     }
 
+    /// Activate recovery-only emergency mode.
+    ///
+    /// The admin or configured pause guardian may call. Once active, normal
+    /// sensitive mutations fail closed; only admin recovery and drain
+    /// cancellation remain available.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is neither admin nor guardian.
+    /// * [`RevenuePoolError::AlreadyEmergencyPaused`] - emergency mode is already active.
+    ///
+    /// # Events
+    /// Emits `emergency_pause_set` with `caller` as topic and `true` as data.
+    pub fn emergency_pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let admin = Self::admin(&env);
+        let guardian = Self::get_pause_guardian(env.clone());
+        if caller != admin && guardian.as_ref() != Some(&caller) {
+            env.panic_with_error(RevenuePoolError::Unauthorized);
+        }
+        if Self::is_emergency_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::AlreadyEmergencyPaused);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &true);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &true);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_emergency_pause_set(&env), caller), true);
+    }
+
+    /// Clear recovery-only emergency mode after operator remediation.
+    ///
+    /// Only the current admin may recover the pool. Recovery also clears the
+    /// regular pause flag so normal operations resume in a single authorised
+    /// action.
+    ///
+    /// # Errors
+    /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
+    /// * [`RevenuePoolError::NotEmergencyPaused`] - emergency mode is not active.
+    ///
+    /// # Events
+    /// Emits `emergency_pause_set` with `caller` as topic and `false` as data.
+    pub fn recover_from_emergency(env: Env, caller: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        if !Self::is_emergency_paused(env.clone()) {
+            env.panic_with_error(RevenuePoolError::NotEmergencyPaused);
+        }
+        let inst = env.storage().instance();
+        inst.set(&Symbol::new(&env, EMERGENCY_PAUSED_KEY), &false);
+        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events()
+            .publish((events::event_emergency_pause_set(&env), caller), false);
+    }
+
+    /// Return `true` when recovery-only emergency mode is active.
+    pub fn is_emergency_paused(env: Env) -> bool {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, bool>(&Symbol::new(&env, EMERGENCY_PAUSED_KEY))
+            .unwrap_or(false)
+    }
+
     // -----------------------------------------------------------------------
     // Yield deposit
     // -----------------------------------------------------------------------
@@ -439,6 +555,7 @@ impl RevenuePool {
     /// Emits `receive_payment` with `caller` as topic and `(amount, from_vault)` as data.
     pub fn receive_payment(env: Env, caller: Address, amount: i128, from_vault: bool) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         env.events().publish(
             (events::event_receive_payment(&env), caller),
@@ -464,6 +581,7 @@ impl RevenuePool {
     /// `(amount, source, cumulative_yield_deposited)` as data.
     pub fn deposit_yield(env: Env, treasury: Address, amount: i128, source: Symbol) {
         treasury.require_auth();
+        Self::require_not_emergency_paused(&env);
         if treasury != Self::admin(&env) {
             env.panic_with_error(RevenuePoolError::Unauthorized);
         }
@@ -530,6 +648,7 @@ impl RevenuePool {
     /// Emits `set_max_distribute` with `(old_max, new_max)`.
     pub fn set_max_distribute(env: Env, caller: Address, max_distribute: i128) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if max_distribute <= 0 {
             env.panic_with_error(RevenuePoolError::MaxDistributeNotPositive);
@@ -717,6 +836,133 @@ impl RevenuePool {
         Ok(())
     }
 
+    /// Distribute a total amount according to basis-point shares.
+    ///
+    /// Recipients and shares are paired by position. Every share must be
+    /// greater than zero and the complete share sum must equal 10_000. Rounded
+    /// amounts are assigned floor-wise using `total * bps / 10_000`; any
+    /// remainder is added deterministically to the first recipient.
+    ///
+    /// All validation completes before the first USDC transfer, so this
+    /// entrypoint is atomic and uses the same batch lifecycle events and
+    /// maximum recipient count as [`batch_distribute`].
+    pub fn distribute_by_shares(
+        env: Env,
+        caller: Address,
+        total: i128,
+        shares: Vec<(Address, u32)>,
+    ) -> Result<(), RevenuePoolError> {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+
+        if total <= 0 {
+            return Err(RevenuePoolError::AmountNotPositive);
+        }
+        if total > Self::get_max_distribute(env.clone()) {
+            return Err(RevenuePoolError::AmountExceedsMaxDistribute);
+        }
+
+        let n = shares.len();
+        if n == 0 {
+            return Err(RevenuePoolError::SharesEmpty);
+        }
+        if n > MAX_BATCH_SIZE {
+            return Err(RevenuePoolError::BatchTooLarge);
+        }
+
+        let mut seen: Map<Address, bool> = Map::new(&env);
+        let mut share_sum: u32 = 0;
+        let mut amounts: Vec<(Address, i128)> = Vec::new(&env);
+        let contract_address = env.current_contract_address();
+        let mut distributed: i128 = 0;
+
+        for share_leg in shares.iter() {
+            let (recipient, bps) = share_leg;
+            if bps == 0 || bps > 10_000 {
+                return Err(RevenuePoolError::InvalidShare);
+            }
+            share_sum = match share_sum.checked_add(bps) {
+                Some(value) => value,
+                None => return Err(RevenuePoolError::Overflow),
+            };
+            if seen.contains_key(recipient.clone()) {
+                return Err(RevenuePoolError::DuplicateRecipient);
+            }
+            seen.set(recipient.clone(), true);
+            if recipient == contract_address {
+                return Err(RevenuePoolError::InvalidRecipient);
+            }
+
+            let amount = total
+                .checked_mul(bps as i128)
+                .and_then(|value| value.checked_div(10_000))
+                .ok_or(RevenuePoolError::Overflow)?;
+            distributed = distributed
+                .checked_add(amount)
+                .ok_or(RevenuePoolError::Overflow)?;
+            amounts.push_back((recipient, amount));
+        }
+
+        if share_sum != 10_000 {
+            return Err(RevenuePoolError::InvalidShareSum);
+        }
+        if distributed < 0 || distributed > total {
+            return Err(RevenuePoolError::Overflow);
+        }
+
+        let remainder = total
+            .checked_sub(distributed)
+            .ok_or(RevenuePoolError::Overflow)?;
+        if remainder > 0 {
+            let (first_recipient, first_amount) = amounts.get(0).ok_or(RevenuePoolError::SharesEmpty)?;
+            amounts.set(
+                0,
+                (
+                    first_recipient,
+                    first_amount
+                        .checked_add(remainder)
+                        .ok_or(RevenuePoolError::Overflow)?,
+                ),
+            );
+        }
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_address);
+
+        if usdc.balance(&contract_address) < total {
+            return Err(RevenuePoolError::InsufficientBalance);
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let mut batch_index = 0_u32;
+        for payment in amounts.iter() {
+            let (to, amount) = payment;
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                batch_index,
+                n,
+            );
+            events::emit_distribute_started(&env, &caller, &to, &lifecycle);
+            usdc.transfer(&contract_address, &to, &amount);
+            env.events()
+                .publish((events::event_batch_distribute(&env), to.clone()), amount);
+            events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            batch_index = batch_index.saturating_add(1);
+        }
+
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Balance view
     // -----------------------------------------------------------------------
@@ -749,7 +995,35 @@ impl RevenuePool {
     /// Emits `upgraded` with `admin` as topic and `new_wasm_hash` as data.
     pub fn upgrade(env: Env, caller: Address, new_wasm_hash: BytesN<32>) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
+
+        // ── Pre-upgrade storage-migration validation ──────────────────────
+        // Runs in the *current* (old) code, before the WASM is swapped, and
+        // never mutates business state. It enforces ordered, single-step
+        // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
+        // rollbacks — ensuring existing deployed data stays readable and no
+        // implicit destructive transformation occurs.
+        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
+        if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &placeholder_layout,
+            &new_wasm_hash,
+            false,
+        ) {
+            env.panic_with_error(e);
+        }
+        if let Err(e) = StorageMigrationValidator::finalize_migration(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &placeholder_layout,
+            &new_wasm_hash,
+        ) {
+            env.panic_with_error(e);
+        }
+
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
         env.storage()
@@ -792,6 +1066,7 @@ impl RevenuePool {
     /// Emits `admin_broadcast` with `caller` as topic and `AdminBroadcast` as data.
     pub fn broadcast(env: Env, caller: Address, severity: Severity, message: String) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         let len = message.len();
         if len == 0 {
@@ -807,28 +1082,29 @@ impl RevenuePool {
     }
 
     // -----------------------------------------------------------------------
-    // Storage TTL introspection
+    // Storage TTL policy introspection
     // -----------------------------------------------------------------------
 
-    /// Return remaining TTL information for each storage category.
-    pub fn get_storage_ttl(env: Env) -> Vec<StorageEntryTtl> {
+    /// Return the TTL policy this contract applies to each storage category.
+    ///
+    /// This view reports **policy constants only** (`threshold` and
+    /// `bump_amount`). Earlier revisions also returned a `ttl` field that was
+    /// the live instance TTL under `cfg(test)` but the constant [`BUMP_AMOUNT`]
+    /// in production builds — a fabricated measurement. Contract code cannot
+    /// observe the remaining TTL of a ledger entry at runtime, so the field was
+    /// removed rather than guessed, and the view was renamed from
+    /// `get_storage_ttl` to `get_ttl_policy` to match what it returns.
+    ///
+    /// For live TTLs, read the ledger entries over Soroban RPC
+    /// `getLedgerEntries` and compare `liveUntilLedgerSeq` against the current
+    /// ledger sequence. See `docs/STORAGE_TTL_DOCTOR.md` and
+    /// `scripts/storage-ttl-doctor.ts`.
+    pub fn get_ttl_policy(env: Env) -> Vec<TtlPolicy> {
         let mut result = Vec::new(&env);
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                use soroban_sdk::testutils::storage::Instance as _;
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                BUMP_AMOUNT
-            }
-        };
-        result.push_back(StorageEntryTtl {
+        result.push_back(TtlPolicy {
             category: String::from_str(&env, "Instance"),
             key_desc: String::from_str(&env, "Instance"),
             storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
             threshold: LIFETIME_THRESHOLD,
             bump_amount: BUMP_AMOUNT,
         });
@@ -869,6 +1145,7 @@ impl RevenuePool {
     /// [`PendingEmergencyDrain`] snapshot as data.
     pub fn propose_emergency_drain(env: Env, caller: Address, treasury: Address, amount: i128) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
         if amount <= 0 {
             env.panic_with_error(RevenuePoolError::AmountNotPositive);
@@ -919,6 +1196,7 @@ impl RevenuePool {
     /// `(to, amount, proposed_at, executed_at)` as data.
     pub fn execute_emergency_drain(env: Env, caller: Address) {
         caller.require_auth();
+        Self::require_not_emergency_paused(&env);
         Self::require_admin(&env, &caller);
 
         let inst = env.storage().instance();
@@ -991,6 +1269,7 @@ impl RevenuePool {
     /// Off-chain monitors and the admin can poll this to verify or cancel a
     /// pending drain before the timelock expires.
     pub fn get_pending_emergency_drain(env: Env) -> Option<PendingEmergencyDrain> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, EMERGENCY_DRAIN_KEY))
@@ -1068,6 +1347,9 @@ mod test_proptest;
 
 #[cfg(test)]
 mod test_reentrancy;
+
+#[cfg(test)]
+mod test_storage_migration;
 
 #[cfg(test)]
 extern crate std;
