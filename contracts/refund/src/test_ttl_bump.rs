@@ -205,6 +205,16 @@ fn test_approve_refund_bumps_instance_ttl() {
             .persistent()
             .extend_ttl(&key, INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
     });
+    // approve_refund also reads and rewrites the global pending index, so keep
+    // that entry live across the ledger advance exercised by this test.
+    let index_key = crate::types::StorageKey::PendingIndex;
+    env.as_contract(&client.address, || {
+        env.storage().persistent().extend_ttl(
+            &index_key,
+            INSTANCE_BUMP_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
+    });
 
     let seq = env.ledger().sequence();
     env.ledger()
@@ -232,6 +242,16 @@ fn test_reject_refund_bumps_instance_ttl() {
         env.storage()
             .persistent()
             .extend_ttl(&key, INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    });
+    // reject_refund also reads and rewrites the global pending index, so keep
+    // that entry live across the ledger advance exercised by this test.
+    let index_key = crate::types::StorageKey::PendingIndex;
+    env.as_contract(&client.address, || {
+        env.storage().persistent().extend_ttl(
+            &index_key,
+            INSTANCE_BUMP_THRESHOLD,
+            INSTANCE_BUMP_AMOUNT,
+        );
     });
 
     let seq = env.ledger().sequence();
