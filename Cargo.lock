@@ -250,6 +250,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "callora-access-matrix"
+version = "0.0.0"
+dependencies = [
+ "callora-distribute",
+ "callora-revenue-pool",
+ "callora-settlement",
+ "callora-vault",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "callora-admin"
 version = "0.0.0"
 dependencies = [

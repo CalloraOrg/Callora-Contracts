@@ -180,8 +180,7 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 > state-changing entrypoint below was verified to call `require_auth` on its
 > acting `Address` before touching storage or emitting events.  No gaps were
 > found.  Focused per-entrypoint tests are maintained in
-> `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit`
-> module) and `contracts/revenue_pool/tests/auth_snap.rs`.
+> `contracts/tests/tests/auth_matrix.rs` (revenue pool cases) and `contracts/revenue_pool/tests/auth_snap.rs`.
 
 | Function | `require_auth` on | Admin | Pending Admin | Pause Guardian | Others |
 |----------|-------------------|-------|---------------|----------------|--------|
@@ -220,7 +219,7 @@ The current admin can call `set_pause_guardian` to delegate emergency pause auth
 
 | Date | Issue | Scope | Outcome |
 |------|-------|-------|---------|
-| 2026-07-28 | [#730](https://github.com/CalloraOrg/Callora-Contracts/issues/730) | All 18 state-changing entrypoints on `callora-revenue-pool` | ✅ All entrypoints call `require_auth`; no gaps found. Focused tests added to `revenue_pool_audit` module in `grant_fox_fwc26_auth_matrix.rs`. |
+| 2026-07-28 | [#730](https://github.com/CalloraOrg/Callora-Contracts/issues/730) | All 18 state-changing entrypoints on `callora-revenue-pool` | ✅ All entrypoints call `require_auth`; no gaps found. Focused tests added to `contracts/tests/tests/auth_matrix.rs`. |
 
 ---
 
@@ -291,7 +290,7 @@ TTL is refreshed on every write and on every authorized read by a mutation.
 The implementation includes comprehensive tests covering:
 - ✅ **Issue #730 — Revenue Pool auth audit (FWC26 Stellar Wave)**: every state-changing
   entrypoint audited; focused three-variant tests (`_no_auth`, `_wrong_role`, `_authorized`)
-  added to `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit` module).
+  added to `contracts/tests/tests/auth_matrix.rs`.
   Existing per-entrypoint coverage in `contracts/revenue_pool/tests/auth_snap.rs` and
   `contracts/revenue_pool/tests/emergency_auth_snap.rs` confirmed complete.
 - ✅ `set_authorized_caller` default nonce is `0` before first rotation
