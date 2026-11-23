@@ -11,7 +11,7 @@ pub mod events;
 pub use errors::RegistryError;
 
 use catalog::OfferingCatalogClient;
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec};
 
 /// Maximum length of an offering identifier (matches vault offering id limits).
 pub const MAX_OFFERING_ID_LEN: u32 = 64;
@@ -38,6 +38,9 @@ pub const OFFERING_TTL_EXTENSION: u32 = OFFERING_TTL_THRESHOLD;
 /// Target TTL extension (closing ledgers) for the contract instance.
 pub const INSTANCE_TTL_EXTENSION: u32 = INSTANCE_TTL_THRESHOLD;
 
+/// Maximum number of offerings returned by a single `get_offerings_by_developer` page.
+pub const MAX_PAGE_LIMIT: u32 = 50;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
@@ -49,6 +52,8 @@ pub enum StorageKey {
     /// by the developer [`Address`] so that different developers have
     /// independent cooldown windows.
     DeveloperCooldown(Address),
+    /// Per-developer index of offering ids, in registration order.
+    DeveloperOfferings(Address),
 }
 
 #[contracttype]
@@ -146,7 +151,8 @@ impl CalloraRegistry {
     ///
     /// Validates inputs, checks for duplicates, publishes to the catalog, then
     /// atomically writes the offering record, increments the registered count,
-    /// emits the registration event, and records the developer cooldown timestamp.
+    /// appends the id to the developer index, emits the registration event, and
+    /// records the developer cooldown timestamp.
     ///
     /// Callers are responsible for authentication, admin-equality checks, the
     /// cooldown gate, and any pre-conditions specific to their variant (e.g.
@@ -179,6 +185,17 @@ impl CalloraRegistry {
         };
         env.storage().persistent().set(&key, &record);
         Self::extend_offering_ttl(env, &key);
+
+        // Append to the developer index after the catalog call has succeeded.
+        let index_key = StorageKey::DeveloperOfferings(developer.clone());
+        let mut ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(offering_id.clone());
+        env.storage().persistent().set(&index_key, &ids);
+        Self::extend_offering_ttl(env, &index_key);
 
         let count: u32 = env
             .storage()
@@ -295,5 +312,50 @@ impl CalloraRegistry {
             .ok_or(RegistryError::OfferingNotFound)?;
         Self::extend_offering_ttl(&env, &key);
         Ok(record)
+    }
+
+    /// Return a page of offerings registered by `developer`, in registration order.
+    ///
+    /// `limit` is clamped to `MAX_PAGE_LIMIT`; a `limit` of 0 or a `start` at or
+    /// past the end of the index yields an empty page.
+    pub fn get_offerings_by_developer(
+        env: Env,
+        developer: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<OfferingRecord>, RegistryError> {
+        Self::extend_instance_ttl(&env);
+        if Self::admin(&env).is_err() {
+            return Err(RegistryError::NotInitialized);
+        }
+
+        let mut out: Vec<OfferingRecord> = Vec::new(&env);
+        let index_key = StorageKey::DeveloperOfferings(developer);
+        let ids: Option<Vec<String>> = env.storage().persistent().get(&index_key);
+        let ids = match ids {
+            Some(ids) => {
+                Self::extend_offering_ttl(&env, &index_key);
+                ids
+            }
+            None => return Ok(out),
+        };
+
+        let take = limit.min(MAX_PAGE_LIMIT);
+        let total = ids.len();
+        let end = start.saturating_add(take).min(total);
+        let mut i = start;
+        while i < end {
+            let id = ids.get(i).ok_or(RegistryError::OfferingNotFound)?;
+            let key = StorageKey::Offering(id);
+            let record: OfferingRecord = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(RegistryError::OfferingNotFound)?;
+            Self::extend_offering_ttl(&env, &key);
+            out.push_back(record);
+            i += 1;
+        }
+        Ok(out)
     }
 }
