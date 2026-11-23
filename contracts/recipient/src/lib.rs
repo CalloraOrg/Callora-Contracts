@@ -37,6 +37,12 @@ pub const MAX_NAME_LEN: u32 = 64;
 /// Maximum number of entries returned by a single [`CalloraRecipient::list_recipients`] call.
 pub const MAX_PAGE_SIZE: u32 = 50;
 
+/// Maximum number of entries accepted by [`CalloraRecipient::batch_register_recipients`].
+///
+/// Matches [`MAX_PAGE_SIZE`] so a single page can enumerate everything a single
+/// batch can register.
+pub const MAX_BATCH_SIZE: u32 = MAX_PAGE_SIZE;
+
 /// Approximate number of ledgers per day on Stellar (5 seconds per ledger).
 pub const LEDGERS_PER_DAY: u32 = 17_280;
 
@@ -238,6 +244,81 @@ impl CalloraRecipient {
     ) -> Result<(), RecipientError> {
         Self::bump_instance(&env);
         Self::require_admin(&env, &caller)?;
+        Self::register_inner(&env, name, address)
+    }
+
+    /// Register many named recipients in a single atomic call (admin only).
+    ///
+    /// Every entry is validated before anything is written: names must be
+    /// non-empty, at most [`MAX_NAME_LEN`] bytes, and unique both against
+    /// existing recipients and within the batch. A duplicate is reported as
+    /// [`RecipientError::AlreadyRegistered`]. If any entry is invalid the whole
+    /// call fails and no storage is modified.
+    ///
+    /// # Parameters
+    /// * `caller` — Must be the current admin; must authorize.
+    /// * `entries` — `(name, address)` pairs to register, in order. Must contain
+    ///   between `1` and [`MAX_BATCH_SIZE`] entries.
+    ///
+    /// # Errors
+    /// * [`RecipientError::Unauthorized`] — caller is not the admin.
+    /// * [`RecipientError::EmptyBatch`] — `entries` is empty.
+    /// * [`RecipientError::BatchTooLarge`] — `entries` exceeds [`MAX_BATCH_SIZE`].
+    /// * [`RecipientError::InvalidName`] — a name is empty or too long.
+    /// * [`RecipientError::AlreadyRegistered`] — a name is already registered or
+    ///   appears more than once in the batch.
+    /// * [`RecipientError::Overflow`] — the recipient count would overflow.
+    ///
+    /// # Events
+    /// Emits one `"recipient_registered"` event per entry, in input order.
+    pub fn batch_register_recipients(
+        env: Env,
+        caller: Address,
+        entries: Vec<(String, Address)>,
+    ) -> Result<(), RecipientError> {
+        Self::bump_instance(&env);
+        Self::require_admin(&env, &caller)?;
+
+        let len = entries.len();
+        if len == 0 {
+            return Err(RecipientError::EmptyBatch);
+        }
+        if len > MAX_BATCH_SIZE {
+            return Err(RecipientError::BatchTooLarge);
+        }
+
+        // Validate the whole batch before mutating storage so a bad entry
+        // cannot leave a partially registered set behind.
+        let mut seen: Vec<String> = Vec::new(&env);
+        for entry in entries.iter() {
+            let (entry_name, _) = entry;
+            Self::validate_name(&entry_name)?;
+            if env
+                .storage()
+                .persistent()
+                .has(&StorageKey::Recipient(entry_name.clone()))
+                || seen.contains(&entry_name)
+            {
+                return Err(RecipientError::AlreadyRegistered);
+            }
+            seen.push_back(entry_name);
+        }
+
+        for entry in entries.iter() {
+            let (entry_name, entry_address) = entry;
+            Self::register_inner(&env, entry_name, entry_address)?;
+        }
+        Ok(())
+    }
+
+    /// Shared registration path used by [`Self::register_recipient`] and
+    /// [`Self::batch_register_recipients`].
+    ///
+    /// The caller is responsible for authorization and for bumping the instance
+    /// TTL; this helper validates, detects duplicates, writes the record and
+    /// index entries, updates the count, bumps persistent TTLs, and emits the
+    /// `recipient_registered` event.
+    fn register_inner(env: &Env, name: String, address: Address) -> Result<(), RecipientError> {
         Self::validate_name(&name)?;
 
         let key = StorageKey::Recipient(name.clone());
@@ -271,10 +352,10 @@ impl CalloraRecipient {
             &count.checked_add(1).ok_or(RecipientError::Overflow)?,
         );
 
-        Self::bump_recipient_persistent(&env, &name, new_pos);
+        Self::bump_recipient_persistent(env, &name, new_pos);
 
         env.events()
-            .publish((events::event_recipient_registered(&env), name), record);
+            .publish((events::event_recipient_registered(env), name), record);
         Ok(())
     }
 
