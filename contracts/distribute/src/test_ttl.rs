@@ -247,11 +247,14 @@ fn ttl_read_never_shortens_an_external_extension() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn ttl_instances_are_isolated() {
     let f = Fixture::new(false);
     let second = f.env.register(Distribute, ());
+    // Fixture::new cleared auths so views run unauthenticated; init still
+    // requires the admin's authorization for the second instance.
+    f.env.mock_all_auths();
     DistributeClient::new(&f.env, &second).init(&f.admin, &f.token);
+    f.env.set_auths(&[]);
     f.advance(INSTANCE_BUMP_AMOUNT - 1);
     f.read(View::Admin);
     assert_eq!(f.ttl(), INSTANCE_BUMP_AMOUNT);
