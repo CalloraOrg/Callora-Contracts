@@ -310,6 +310,7 @@ dependencies = [
 name = "callora-emergency"
 version = "0.1.0"
 dependencies = [
+ "callora-storage-migration",
  "soroban-sdk",
 ]
 
@@ -418,6 +419,7 @@ name = "callora-stake"
 version = "0.1.0"
 dependencies = [
  "callora-stake",
+ "callora-storage-migration",
  "soroban-sdk",
 ]
 
@@ -426,8 +428,10 @@ name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
  "callora-checkpoint",
+ "callora-emergency",
  "callora-migrate",
  "callora-revenue-pool",
+ "callora-stake",
  "callora-yield",
  "proptest",
  "soroban-sdk",
