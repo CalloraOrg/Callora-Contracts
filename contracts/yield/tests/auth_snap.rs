@@ -92,6 +92,30 @@ fn set_account_limits_requires_auth() {
 }
 
 #[test]
+fn set_window_ledgers_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_ledgers(&intruder, &10u32);
+    assert!(
+        res.is_err(),
+        "set_window_ledgers must require auth on caller"
+    );
+}
+
+#[test]
+fn set_window_limits_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_limits(&intruder, &1u32, &1u32, &1u32);
+    assert!(
+        res.is_err(),
+        "set_window_limits must require auth on caller"
+    );
+}
+
+#[test]
 fn clear_account_limits_requires_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);
@@ -284,6 +308,28 @@ fn get_account_state_no_auth() {
 }
 
 #[test]
+fn get_window_ledgers_no_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let _: u32 = client.get_window_ledgers();
+}
+
+#[test]
+fn get_window_limits_no_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let _ = client.get_window_limits();
+}
+
+#[test]
+fn get_window_state_no_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let bob = Address::generate(&env);
+    let _ = client.get_window_state(&bob);
+}
+
+#[test]
 fn can_place_bet_no_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);
@@ -338,6 +384,6 @@ fn authenticated_happy_path() {
 
 #[test]
 fn auth_snap_covers_expected_mutator_count() {
-    const EXPECTED_MUTATORS: usize = 13;
-    assert_eq!(EXPECTED_MUTATORS, 13);
+    const EXPECTED_MUTATORS: usize = 15;
+    assert_eq!(EXPECTED_MUTATORS, 15);
 }

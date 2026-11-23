@@ -15,6 +15,9 @@
 //! | 7    | SubscriptionsAtCap    | Account's active subscription count is at the configured cap |
 //! | 8    | CounterUnderflow      | `clear_*` was called when the corresponding counter was zero  |
 //! | 9    | Overflow              | `checked_add` overflow detected on a counter increment        |
+//! | 11   | BetsWindowCap         | Account has opened the maximum bets allowed in this window    |
+//! | 12   | PositionsWindowCap    | Account has opened the maximum positions allowed this window  |
+//! | 13   | SubscriptionsWindowCap| Account has added the maximum subscriptions allowed this window|
 //!
 //! All variants implement [`Copy`] + [`PartialEq`] so they can be returned by
 //! value or pinned in arrays without allocation.
@@ -33,12 +36,13 @@ pub enum YieldLimitError {
     AlreadyInitialized = 2,
     /// Caller is not authorized for the requested operation (code 3).
     Unauthorized = 3,
-    /// One or more per-account caps are negative or otherwise invalid (code 4).
+    /// One or more per-account or per-window caps are invalid (code 4).
     ///
-    /// Returned by [`crate::limits::set_account_limits`] and
-    /// [`crate::limits::set_default_limits`] when any of `max_bets`,
-    /// `max_positions`, or `max_subscriptions` is negative, or when an
-    /// `AccountLimits` struct is otherwise invalid for storage.
+    /// Returned by [`crate::limits::set_account_limits`],
+    /// [`crate::limits::set_default_limits`], and
+    /// [`crate::limits::set_window_limits`] when any cap is negative or above
+    /// `MAX_CAP`, and by [`crate::limits::set_window_ledgers`] when the window
+    /// length is neither `0` nor within the documented bounds.
     InvalidLimit = 4,
     /// Account's open bet count is already at the configured cap (code 5).
     ///
@@ -63,4 +67,23 @@ pub enum YieldLimitError {
     /// counter arithmetic saturates `u32::MAX` — surfaces a stable error
     /// rather than panicking so callers cannot rely on undefined behaviour.
     Overflow = 9,
+    /// Account has opened the maximum bets allowed in the current window
+    /// (code 11).
+    ///
+    /// Returned by [`crate::limits::place_bet`] when the rolling window is
+    /// enabled and the per-window bet cap has been reached. Decrements do not
+    /// refund window capacity — only the window rolling over does.
+    BetsWindowCap = 11,
+    /// Account has opened the maximum positions allowed in the current window
+    /// (code 12).
+    ///
+    /// Returned by [`crate::limits::open_position`] when the rolling window
+    /// is enabled and the per-window position cap has been reached.
+    PositionsWindowCap = 12,
+    /// Account has added the maximum subscriptions allowed in the current
+    /// window (code 13).
+    ///
+    /// Returned by [`crate::limits::subscribe`] when the rolling window is
+    /// enabled and the per-window subscription cap has been reached.
+    SubscriptionsWindowCap = 13,
 }

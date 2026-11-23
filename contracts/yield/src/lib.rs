@@ -16,6 +16,8 @@
 //!   `max_subscriptions`).
 //! - [`limits::AccountState`] — the live counters (`bets`, `positions`,
 //!   `subscriptions`).
+//! - [`limits::WindowLimits`] / [`limits::WindowState`] — optional rolling
+//!   window caps and the per-window counters added for issue #1522.
 //! - [`errors::YieldLimitError`] — stable `u32` error codes returned by the
 //!   contract.
 //!
@@ -33,7 +35,10 @@ pub mod limits;
 pub mod views;
 
 pub use errors::YieldLimitError;
-pub use limits::{AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient};
+pub use limits::{
+    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, WindowLimits,
+    WindowState,
+};
 
 #[cfg(test)]
 mod test_limits;
