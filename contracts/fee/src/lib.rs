@@ -281,7 +281,7 @@ impl FeeContract {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
-        events::admin_nominated(&env, new_admin);
+        events::admin_nominated(&env, stored_admin, new_admin);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -290,6 +290,11 @@ impl FeeContract {
     pub fn accept_admin(env: Env, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
+        let old_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
         let pending: Address = env
             .storage()
             .instance()
@@ -301,7 +306,7 @@ impl FeeContract {
 
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
-        events::admin_accepted(&env, pending);
+        events::admin_accepted(&env, old_admin, pending);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -318,12 +323,14 @@ impl FeeContract {
         if caller != stored_admin {
             return Err(ContractError::Unauthorized);
         }
-        if !env.storage().instance().has(&DataKey::PendingAdmin) {
-            return Err(ContractError::NoPendingAdmin);
-        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingAdmin)?;
 
         env.storage().instance().remove(&DataKey::PendingAdmin);
-        events::admin_cancelled(&env);
+        events::admin_cancelled(&env, stored_admin, pending);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
