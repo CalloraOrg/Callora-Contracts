@@ -4,7 +4,8 @@
 set -euo pipefail
 
 MAX_SIZE_BYTES="${WASM_SIZE_LIMIT_BYTES:-102400}"
-TARGET_DIR="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
+WASM_TARGET="${WASM_TARGET:-wasm32v1-none}"
+TARGET_DIR="${CARGO_TARGET_DIR:-target}/${WASM_TARGET}/release"
 
 contract_manifests=()
 contract_packages=()
@@ -96,12 +97,12 @@ check_wasm() {
 
 discover_contract_packages
 
-echo "Building publishable contracts for wasm32-unknown-unknown (release)..."
+echo "Building publishable contracts for ${WASM_TARGET} (release)..."
 if [ "${SKIP_WASM_BUILD:-0}" = "1" ]; then
   echo "Skipping cargo build because SKIP_WASM_BUILD=1"
 else
   for crate in "${contract_packages[@]}"; do
-    "$CARGO_BIN" build --target wasm32-unknown-unknown --release -p "$crate"
+    "$CARGO_BIN" build --target "$WASM_TARGET" --release -p "$crate"
   done
 fi
 

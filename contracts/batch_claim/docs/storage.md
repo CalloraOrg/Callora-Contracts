@@ -12,6 +12,10 @@ This document outlines the storage keys used by the BatchClaim smart contract, d
 
 ## Storage Keys
 
+### Batch-claim expiry and record migration
+
+`ClaimRecord` includes `expires_at: u64` (Unix ledger timestamp); `0` means no expiry. Existing serialized records created before this field was introduced may not decode under the new contract type layout. Before upgrading, pause claim traffic and migrate each live `Claim(Address)` record through an upgrade migration that reads the legacy four-field record and writes the new record with `expires_at = 0`, preserving `claimant`, `pending_amount`, `settled`, and `claim_id`. Do not remove `ClaimIdOwner` or `ClaimConsumed` entries during migration: they preserve replay protection. If legacy records cannot be enumerated in the deployed instance, keep the old WASM active until a migration path is deployed; merely adding the field is not a safe in-place storage migration.
+
 ### `DataKey::Admin`
 - **Tier**: **Instance**
 - **Data Type**: `Address`
