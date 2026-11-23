@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
+mod events;
+
 pub mod errors;
 pub use errors::ContractError;
 
@@ -27,6 +29,7 @@ pub enum DataKey {
     Admin,
     FeeBps,
     Accumulated,
+    PendingAdmin,
 }
 
 /// Fee contract configuration stored on-chain.
@@ -99,7 +102,9 @@ impl FeeContract {
             return Err(ContractError::FeeTooHigh);
         }
 
+        let old_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        events::fee_set(&env, old_bps, fee_bps);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -255,6 +260,77 @@ impl FeeContract {
             .ok_or(ContractError::NotInitialized)?;
         Self::bump_instance_ttl(&env);
         Ok(admin)
+    }
+
+    /// Nominate a new admin. The nominee must call `accept_admin` to take over.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if new_admin == stored_admin {
+            return Err(ContractError::SameAdmin);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        events::admin_nominated(&env, new_admin);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Accept a pending admin nomination. Only the nominee may call this.
+    pub fn accept_admin(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingAdmin)?;
+        if caller != pending {
+            return Err(ContractError::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        events::admin_accepted(&env, pending);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Cancel a pending admin nomination. Only the current admin may call this.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if !env.storage().instance().has(&DataKey::PendingAdmin) {
+            return Err(ContractError::NoPendingAdmin);
+        }
+
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        events::admin_cancelled(&env);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the pending admin nominee, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PendingAdmin)
     }
 }
 
