@@ -279,6 +279,156 @@ compares the canonical `ScVal` XDR encoding of every key.
 
 # callora-rescue: Per-token `TotalRescued` counter (v0.2.0)
 
+*Issue #1511* — `rescue_many`.
+
+## Background
+
+(The original v0.2.0 background applies; see the previous sections for the
+per-token counter, self-transfer rejection, cap validation and CEI
+changes.)
+
+## What changed
+
+| Area | Before (v0.1.x) | After (v0.2.0) |
+|------|-----------------|----------------|
+| Storage key | `DataKey::TotalRescued` (single `i128`) | `DataKey::TotalRescued(Address)` (per-token `i128`) |
+| View function | `total_rescued() -> i128` | `total_rescued_for(token: Address) -> i128` |
+| Self-transfer | Allowed; incremented counter | Rejected with `RescueError::InvalidRecipient` (code 8) |
+| `cap <= 0` in `rescue_capped` | `ExceedsCap` | `InvalidCap` (code 9) |
+| CEI ordering | Counter updated **after** transfer | Counter updated **before** transfer |
+| Instance TTL | Never bumped | Bumped on every entrypoint |
+
+## New error codes ([#1511])
+
+| Code | Variant | Trigger |
+|------|---------|---------|
+| 10 | `BatchEmpty` | `rescue_many` is called with an empty `items` list |
+| 11 | `BatchTooLarge` | `rescue_many` is called with more than [`MAX_RESCUE_BATCH`]
+    ((20) tokens |
+| 12 | `DuplicateToken` | `rescue_many` lists the same token address twice |
+
+These are append-only; all existing codes are unchanged.
+
+## `rescue_many`
+
+`rescue_many` moves up to [`MAX_RESCUE_BATCH`] tokens to the same recipient
+in one atomic call:
+
+```rust
+// 1 to MAX_RESCUE_BATCH distinct (token, amount) pairs.
+// Each pair is validated and counted before any state is changed, so a
+// failure on any item leaves everything else untouched.
+client.rescue_many(&admin, &to, &items);
+```
+
+* Admin auth is required once for the whole batch.
+* `to` must not be this contract (rejected with `InvalidRecipient`).
+* Zero/negative amounts (any item) are rejected with
+  `AmountNotPositive`.
+* Duplicate token addresses are rejected with `DuplicateToken` — each item
+  maps to exactly one balance check, one counter update and one event; the
+  tokens are **not** summed.
+* Any item that exceeds the contract's on-ledger balance of that token
+  (or any other validation failure) rolls back the entire batch: no
+  counter is incremented, no event is emitted, no tokens move.
+* One `rescue` event is emitted per item with the running cumulative
+  total for that token; a rejected batch emits no events.
+* `bump_instance` runs once after the batch commits.
+
+```rust
+if let Err(e) = client.try_rescue_many(&admin, &to, &items) {
+    // batch failed; no state was changed
+}
+```
+
+## Deprecated API
+
+`total_rescued()` is kept for backwards compatibility but **always returns 0**.
+It will be removed in a future major version.  Migrate callers to
+`total_rescued_for(token)`.
+
+```rust
+// Before
+let total = client.total_rescued();
+
+// After
+let total = client.total_rescued_for(&token_address);
+```
+
+## On-chain state migration
+
+There is **no automatic on-chain state migration**.  The old single-key
+`DataKey::TotalRescued` entry (if any exists from a v0.1.x deployment) is
+simply ignored after the upgrade; it will eventually expire with the instance
+TTL.  Per-token entries start from zero.
+
+If you need to preserve historical totals, read the old value via any v0.1.x
+client before upgrading and record it off-chain.
+
+## Invariant changes
+
+The balance-sync invariant used in property tests now reads:
+
+```
+total_rescued_for(token) + on_ledger_balance(contract, token) == initial_mint(token)
+```
+
+(Previously: `total_rescued() + on_ledger_balance == initial_mint`, which was
+incorrect when multiple tokens were involved.)
+
+## Vault Typed Recovery Errors (Issue #1396)
+
+### Summary
+
+The Callora Vault recovery paths (`withdraw`, `withdraw_to`) and several admin
+and config entrypoints (`pause`, `unpause`, `set_max_deduct`, `set_settlement`,
+`get_owner`, `get_usdc_token`, `get_settlement`) previously used `panic!`,
+`assert!`, `.unwrap()`, and `.expect()` on error. Integrators received opaque
+`HostError` traps instead of stable `VaultError` codes. This change converts
+those paths to return `Result<_, VaultError>`.
+
+### Public Signature Changes
+
+| Function | Before | After |
+|----------|--------|-------|
+| `withdraw(env, amount)` | `-> i128` | `-> Result<i128, VaultError>` |
+| `withdraw_to(env, to, amount)` | `-> i128` | `-> Result<i128, VaultError>` |
+| `get_owner(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `get_usdc_token(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `get_settlement(env)` | `-> Address` | `-> Result<Address, VaultError>` |
+| `pause(env, caller)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `unpause(env, caller)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `set_max_deduct(env, caller, max)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+| `set_settlement(env, caller, addr)` | panicked on uninit | `Err(NotInitialized)` on uninit |
+
+### New Error Codes
+
+| Code | Variant | Meaning |
+|------|---------|---------|
+| 45 | `InvalidRecipient` | Withdrawal recipient is the vault address or USDC token address |
+| 46 | `ZeroAddressRecipient` | Withdrawal recipient is the zero address |
+
+### Client Integration Notes
+
+- Use `try_withdraw` / `try_withdraw_to` (generated by the Soroban SDK
+  client) to receive `Result<i128, VaultError>` instead of trapping on a host
+  error.
+- Use `try_get_owner`, `try_get_usdc_token`, `try_get_settlement` to receive
+  `Result<Address, VaultError>`.
+- Distinguish user errors (`AmountNotPositive`, `InsufficientBalance`,
+  `InvalidRecipient`, `ZeroAddressRecipient`) from misconfiguration
+  (`NotInitialized`, `SettlementNotSet`) by matching on the `VaultError`
+  variant.
+- Error precedence for `withdraw_to`: owner lookup → auth → amount → recipient
+  → balance.
+- All existing `VaultError` codes keep their values; new codes are appended.
+
+### Error Stability
+
+`tests/err_stab.rs` verifies all discriminant values are stable and new codes
+are appended only. `docs/ERROR_CODES.md` is updated accordingly.
+
+
 ## Background
 
 The original rescue contract kept a single global `TotalRescued` counter in
