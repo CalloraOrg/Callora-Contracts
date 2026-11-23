@@ -5,7 +5,7 @@ use crate::{
     RefundContractClient, RefundError, RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
     MAX_REQUESTER_REFUNDS,
 };
-use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, IntoVal, Symbol};
 
 fn create_token<'a>(
@@ -1173,4 +1173,290 @@ fn test_request_refund_overflow() {
 
     let res = client.try_request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
     assert_eq!(res.unwrap_err().unwrap(), RefundError::Overflow);
+}
+
+// ---------------------------------------------------------------------------
+// Partial approvals & dispute flow tests (#1525)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_partial_approval_edge_amounts() {
+    let (env, admin, client) = setup_with_config(250, 1);
+    let requester = Address::generate(&env);
+    let (token_addr, token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &10_000);
+
+    // Approved amount = 0 -> ApprovedAmountInvalid
+    let id1 = client.request_refund(&requester, &token_addr, &1000, &Symbol::new(&env, "r1"));
+    assert_eq!(
+        client
+            .try_approve_refund_partial(&admin, &id1, &0)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::ApprovedAmountInvalid
+    );
+    // Above requested -> ApprovedAmountInvalid
+    assert_eq!(
+        client
+            .try_approve_refund_partial(&admin, &id1, &1001)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::ApprovedAmountInvalid
+    );
+    // Approved amount = 1 -> valid
+    client.approve_refund_partial(&admin, &id1, &1);
+    assert_eq!(client.get_approved_amount(&id1), 1);
+    client.process_refund(&admin, &id1);
+    assert_eq!(token_client.balance(&requester), 1);
+    assert_eq!(client.get_total_refunds(), 1);
+
+    // Approved amount equal to requested
+    let id2 = client.request_refund(&requester, &token_addr, &1000, &Symbol::new(&env, "r2"));
+    client.approve_refund_partial(&admin, &id2, &1000);
+    assert_eq!(client.get_approved_amount(&id2), 1000);
+    client.process_refund(&admin, &id2);
+    // 1000 * 250 / 10_000 = 25 fee, 975 net
+    assert_eq!(token_client.balance(&requester), 1 + 975);
+    assert_eq!(client.get_total_refunds(), 1001);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 25);
+}
+
+#[test]
+fn test_partial_approval_fee_rounding_small_amounts() {
+    let (env, admin, client) = setup_with_config(250, 1);
+    let requester = Address::generate(&env);
+    let (token_addr, token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &1000);
+
+    // 39 * 250 / 10_000 = 0
+    let id1 = client.request_refund(&requester, &token_addr, &100, &Symbol::new(&env, "s1"));
+    client.approve_refund_partial(&admin, &id1, &39);
+    client.process_refund(&admin, &id1);
+    assert_eq!(token_client.balance(&requester), 39);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 0);
+
+    // 40 * 250 / 10_000 = 1
+    let id2 = client.request_refund(&requester, &token_addr, &100, &Symbol::new(&env, "s2"));
+    client.approve_refund_partial(&admin, &id2, &40);
+    client.process_refund(&admin, &id2);
+    assert_eq!(token_client.balance(&requester), 39 + 39);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 1);
+}
+
+#[test]
+fn test_dispute_outside_window_rejected() {
+    let (env, admin, client) = setup();
+    client.set_dispute_window(&admin, &100);
+    assert_eq!(client.get_dispute_window(), 100);
+
+    let requester = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+    let id = client.request_refund(&requester, &token_addr, &500, &Symbol::new(&env, "req"));
+    client.reject_refund(&admin, &id);
+
+    // 1 second past deadline (1000 + 100 = 1100)
+    env.ledger().set_timestamp(1_101);
+    assert_eq!(
+        client
+            .try_dispute_refund(&requester, &id, &Symbol::new(&env, "late"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::DisputeWindowClosed
+    );
+}
+
+#[test]
+fn test_dispute_twice_rejected_with_already_disputed() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+    env.ledger().set_timestamp(1_000);
+
+    let id = client.request_refund(&requester, &token_addr, &500, &Symbol::new(&env, "req"));
+    client.reject_refund(&admin, &id);
+    client.dispute_refund(&requester, &id, &Symbol::new(&env, "appeal"));
+    assert_eq!(
+        client.get_refund_request(&id).status,
+        RefundStatus::Disputed
+    );
+
+    // Admin finalizes rejection
+    client.reject_refund(&admin, &id);
+    assert_eq!(
+        client.get_refund_request(&id).status,
+        RefundStatus::Rejected
+    );
+
+    // Second dispute is blocked even within window
+    assert_eq!(
+        client
+            .try_dispute_refund(&requester, &id, &Symbol::new(&env, "again"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::AlreadyDisputed
+    );
+}
+
+#[test]
+fn test_dispute_by_non_requester_unauthorized() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let other = Address::generate(&env);
+    let token_addr = Address::generate(&env);
+
+    let id = client.request_refund(&requester, &token_addr, &500, &Symbol::new(&env, "req"));
+    client.reject_refund(&admin, &id);
+
+    assert_eq!(
+        client
+            .try_dispute_refund(&other, &id, &Symbol::new(&env, "hijack"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::Unauthorized
+    );
+}
+
+#[test]
+fn test_dispute_invalid_status_transitions() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let (token_addr, _token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &5000);
+
+    let id = client.request_refund(&requester, &token_addr, &500, &Symbol::new(&env, "req"));
+    // Pending -> dispute fails
+    assert_eq!(
+        client
+            .try_dispute_refund(&requester, &id, &Symbol::new(&env, "early"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+    client.approve_refund(&admin, &id);
+    // Approved -> dispute fails
+    assert_eq!(
+        client
+            .try_dispute_refund(&requester, &id, &Symbol::new(&env, "appr"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+    client.process_refund(&admin, &id);
+    // Processed -> dispute fails
+    assert_eq!(
+        client
+            .try_dispute_refund(&requester, &id, &Symbol::new(&env, "done"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+}
+
+#[test]
+fn test_reapprove_after_dispute_then_process() {
+    let (env, admin, client) = setup_with_config(500, 100);
+    let requester = Address::generate(&env);
+    let (token_addr, token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &2000);
+
+    let id = client.request_refund(&requester, &token_addr, &1000, &Symbol::new(&env, "req"));
+    client.reject_refund(&admin, &id);
+    client.dispute_refund(&requester, &id, &Symbol::new(&env, "evidence"));
+    client.approve_refund_partial(&admin, &id, &600);
+    client.process_refund(&admin, &id);
+
+    // 600 * 500 / 10_000 = 30 fee, 570 net, 400 untouched
+    assert_eq!(token_client.balance(&requester), 570);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 30);
+    assert_eq!(client.get_total_refunds(), 600);
+    assert_eq!(token_client.balance(&client.address), 2000 - 570);
+}
+
+#[test]
+fn test_partial_approval_insufficient_contract_balance() {
+    let (env, admin, client) = setup_with_config(0, 100);
+    let requester = Address::generate(&env);
+    let (token_addr, _token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &399);
+
+    let id = client.request_refund(&requester, &token_addr, &1000, &Symbol::new(&env, "req"));
+    client.approve_refund_partial(&admin, &id, &400);
+    assert_eq!(
+        client
+            .try_process_refund(&admin, &id)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InsufficientBalance
+    );
+    assert_eq!(
+        client.get_refund_request(&id).status,
+        RefundStatus::Approved
+    );
+}
+
+#[test]
+fn test_withdraw_fees_after_mixed_partial_and_full_refunds() {
+    let (env, admin, client) = setup_with_config(1000, 100); // 10%
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (token_addr, token_client, token_admin) = create_token(&env, &admin);
+    token_admin.mint(&client.address, &2000);
+
+    // Full refund: 1000 -> fee 100, net 900
+    let id1 = client.request_refund(&r1, &token_addr, &1000, &Symbol::new(&env, "full"));
+    client.approve_refund(&admin, &id1);
+    client.process_refund(&admin, &id1);
+
+    // Partial refund: requested 1000, approved 500 -> fee 50, net 450
+    let id2 = client.request_refund(&r2, &token_addr, &1000, &Symbol::new(&env, "part"));
+    client.approve_refund_partial(&admin, &id2, &500);
+    client.process_refund(&admin, &id2);
+
+    assert_eq!(client.get_total_refunds(), 1500);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 150);
+
+    client.withdraw_fees(&admin, &token_addr, &treasury, &150);
+    assert_eq!(token_client.balance(&treasury), 150);
+    assert_eq!(client.get_accumulated_fees(&token_addr), 0);
+    assert_eq!(token_client.balance(&client.address), 2000 - 900 - 450 - 150);
+}
+
+proptest::proptest! {
+    #[test]
+    fn prop_refund_conservation(
+        fee_bps in 0_u32..=2500_u32,
+        req_a in 100_i128..=10_000_i128,
+        req_b in 100_i128..=10_000_i128,
+        part_ratio_bps in 1_i128..=10_000_i128,
+    ) {
+        let (env, admin, client) = setup_with_config(fee_bps, 1);
+        let r1 = Address::generate(&env);
+        let r2 = Address::generate(&env);
+        let (token_addr, token_client, token_admin) = create_token(&env, &admin);
+
+        let total_requested = req_a + req_b;
+        token_admin.mint(&client.address, &total_requested);
+
+        let id1 = client.request_refund(&r1, &token_addr, &req_a, &Symbol::new(&env, "a"));
+        let id2 = client.request_refund(&r2, &token_addr, &req_b, &Symbol::new(&env, "b"));
+
+        let approved_a = core::cmp::max(1, (req_a * part_ratio_bps) / 10_000);
+        client.approve_refund_partial(&admin, &id1, &approved_a);
+        client.approve_refund(&admin, &id2);
+
+        client.process_refund(&admin, &id1);
+        client.process_refund(&admin, &id2);
+
+        let payouts = token_client.balance(&r1) + token_client.balance(&r2);
+        let fees = client.get_accumulated_fees(&token_addr);
+        let untouched = token_client.balance(&client.address) - fees;
+
+        proptest::prop_assert_eq!(payouts + fees + untouched, total_requested);
+        proptest::prop_assert_eq!(
+            client.get_total_refunds(),
+            approved_a + req_b
+        );
+    }
 }

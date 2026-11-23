@@ -179,3 +179,23 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+## Refund
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `AlreadyInitialized` | Refund | Contract has already been initialized |
+| 2 | `NotInitialized` | Refund | Contract has not been initialized |
+| 3 | `Unauthorized` | Refund | Caller is not authorized to perform this action |
+| 4 | `NotFound` | Refund | Requested refund not found |
+| 5 | `FeeTooHigh` | Refund | Fee basis points exceeds maximum (`10000`) |
+| 6 | `InvalidAmount` | Refund | Amount is not positive or minimum amount is negative |
+| 7 | `AmountTooLow` | Refund | Amount is below minimum refund amount |
+| 8 | `Overflow` | Refund | Arithmetic overflow would occur |
+| 9 | `InvalidStatus` | Refund | Refund request is not in the expected status |
+| 10 | `InsufficientBalance` | Refund | Contract balance or accumulated fees are insufficient |
+| 11 | `InvalidRecipient` | Refund | Recipient address is invalid (self or token address) |
+| 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open requests |
+| 13 | `ApprovedAmountInvalid` | Refund | Partial approved amount is `<= 0` or `> request.amount` |
+| 14 | `DisputeWindowClosed` | Refund | Dispute was submitted after the configured dispute window elapsed |
+| 15 | `AlreadyDisputed` | Refund | Request has already been disputed once |
