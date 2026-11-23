@@ -59,8 +59,10 @@ pub fn event_init(env: &Env) -> Symbol {
 
 /// Returns the Symbol for the `"admin_changed"` event topic.
 ///
-/// Emitted during `set_admin` alongside `admin_transfer_started` to record the
-/// before/after admin intent explicitly for indexers and audit trails.
+/// Emitted by `accept_admin` (step 2 of the two-step rotation) once the admin
+/// slot has been updated, carrying `(previous_admin, new_admin)` so indexers
+/// record the change only when it actually happens. It is deliberately not
+/// published by `set_admin`, which only nominates a successor.
 pub fn event_admin_changed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_changed")
 }
@@ -108,6 +110,13 @@ pub fn event_pause_guardian_cleared(env: &Env) -> Symbol {
 /// to signal a change in the pool's pause state.
 pub fn event_pause_set(env: &Env) -> Symbol {
     Symbol::new(env, "pause_set")
+}
+
+/// Returns the Symbol for the `"emergency_pause_set"` event topic.
+///
+/// Emitted when recovery-only emergency mode is entered or cleared.
+pub fn event_emergency_pause_set(env: &Env) -> Symbol {
+    Symbol::new(env, "emergency_pause_set")
 }
 
 /// Returns the Symbol for the `"receive_payment"` event topic.
@@ -246,6 +255,11 @@ pub fn event_emergency_drain_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "emergency_drain_cancelled")
 }
 
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +337,15 @@ mod tests {
     fn test_event_pause_set_bytes() {
         let env = Env::default();
         assert_eq!(event_pause_set(&env), Symbol::new(&env, "pause_set"));
+    }
+
+    #[test]
+    fn test_event_emergency_pause_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_emergency_pause_set(&env),
+            Symbol::new(&env, "emergency_pause_set")
+        );
     }
 
     /// Snapshot: proves event_receive_payment still maps to exactly the bytes for "receive_payment".

@@ -17,6 +17,9 @@ use soroban_sdk::contracterror;
 /// | 7    | AmountNegative       | Snapshot balance must not be negative                |
 /// | 8    | InvalidPageSize      | Page size must be greater than zero                  |
 /// | 9    | Overflow             | Arithmetic overflow detected                         |
+/// | 10   | NoAdminTransferPending | No admin nomination is in progress                |
+/// | 11   | MigrationPending     | An authorized upgrade must be finalized first       |
+/// | 12-19 | (migration errors)  | Mapped from `StorageMigrationError`; see variants   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -39,4 +42,24 @@ pub enum CheckpointError {
     InvalidPageSize = 8,
     /// Arithmetic overflow detected (code 9).
     Overflow = 9,
+    /// No admin nomination is in progress (code 10).
+    NoAdminTransferPending = 10,
+    /// An authorized upgrade must be finalized first (code 11).
+    MigrationPending = 11,
+    /// The target version skipped one or more migration steps (code 12).
+    VersionSkip = 12,
+    /// The recorded storage layout does not match the expected schema (code 13).
+    SchemaMismatch = 13,
+    /// A same-version upgrade changed the layout without a version bump (code 14).
+    SilentLayoutChange = 14,
+    /// The supplied WASM hash is all-zero (code 15).
+    WasmHashZero = 15,
+    /// A rollback was attempted without authorization (code 16).
+    RollbackNotAllowed = 16,
+    /// A rollback was attempted without a backup marker (code 17).
+    BackupMissing = 17,
+    /// Migration finalization has no matching upgrade authorization (code 18).
+    UnauthorizedUpgradeState = 18,
+    /// Storage could not be validated after the upgrade (code 19).
+    StorageUnreadable = 19,
 }

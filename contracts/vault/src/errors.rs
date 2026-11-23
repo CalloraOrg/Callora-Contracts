@@ -46,8 +46,18 @@ use soroban_sdk::contracterror;
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
 /// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
 /// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
+/// | 45   | InvalidRecipient               | Withdrawal recipient is the vault address or USDC token  |
 /// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
 /// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
+/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
+/// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
+/// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
+/// | 51   | ProposalNotFound               | No pending timelock proposal for the requested action    |
+/// | 52   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
+/// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
+/// | 54   | InvalidTimelockWindow          | Proposed timelock window is outside allowed bounds       |
+/// | 55   | BelowMinTransferAmount         | Amount is below the minimum transfer unit                |
+/// | 59   | SettlementEqualsRevenuePool    | Settlement and revenue pool must be distinct addresses   |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -95,7 +105,9 @@ pub enum VaultError {
     BatchEmpty = 21,
     /// Batch size exceeds maximum allowed (code 22).
     BatchTooLarge = 22,
-    // codes 23-24 reserved (were NewOwnerSameAsCurrent, NoOwnershipTransferPending)
+    // code 23 reserved (was NewOwnerSameAsCurrent)
+    /// No ownership transfer is pending (code 24).
+    NoOwnershipTransferPending = 24,
     /// No admin transfer is pending (code 25).
     NoAdminTransferPending = 25,
     // codes 26-27 reserved (were OfferingIdTooLong, MetadataTooLong)
@@ -123,16 +135,17 @@ pub enum VaultError {
     InvalidHotBps = 38,
     /// Rebalance threshold must be between 1 and 10000 (code 39).
     InvalidRebalanceThreshold = 39,
-    /// Cold signer set cannot be empty (code 40).
-    ColdSignersEmpty = 40,
-    /// Cold threshold must be between 1 and signer count (code 41).
-    InvalidColdThreshold = 41,
-    /// Duplicate address found in cold signer set (code 42).
-    DuplicateColdSigner = 42,
+    // codes 40-42 reserved (were ColdSignersEmpty, InvalidColdThreshold,
+    // DuplicateColdSigner; never returned by the vault). Retired to keep the
+    // enum within Soroban's 50-case limit for contract error specs.
     /// Deposit would exceed the configured reserve cap (code 43).
     ExceedsReserveCap = 43,
     /// Caller is not in the allowlist and is not the owner (code 44).
     CallerNotInAllowlist = 44,
+    /// Withdrawal recipient is the vault address or the USDC token address (code 45).
+    InvalidRecipient = 45,
+    /// Withdrawal recipient is the zero address (code 46).
+    ZeroAddressRecipient = 46,
     /// A critical admin action is still inside the global cool-off window (code 49).
     AdminCooldownActive = 49,
     /// Admin cool-off window is outside the accepted bounds (code 50).
@@ -147,4 +160,12 @@ pub enum VaultError {
     InvalidTimelockWindow = 54,
     /// Amount is below the minimum transfer unit (code 55).
     BelowMinTransferAmount = 55,
+    /// Settlement address cannot be the vault contract itself (code 56).
+    SettlementCannotBeVault = 56,
+    /// Settlement address cannot be the USDC token contract (code 57).
+    SettlementCannotBeToken = 57,
+    /// Proposal has passed its grace period and is no longer executable (code 58).
+    ProposalExpired = 58,
+    /// Settlement and revenue pool addresses must be distinct (code 59).
+    SettlementEqualsRevenuePool = 59,
 }

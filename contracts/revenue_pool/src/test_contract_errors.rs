@@ -121,6 +121,67 @@ fn pause_state_errors_are_typed() {
 }
 
 #[test]
+fn emergency_pause_errors_are_typed() {
+    let env = Env::default();
+    let (admin, _, client, _, _) = setup_pool(&env);
+    let attacker = Address::generate(&env);
+
+    assert_eq!(
+        client.try_recover_from_emergency(&admin),
+        Err(Ok(RevenuePoolError::NotEmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_emergency_pause(&attacker),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+
+    client.emergency_pause(&admin);
+    assert_eq!(
+        client.try_emergency_pause(&admin),
+        Err(Ok(RevenuePoolError::AlreadyEmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_recover_from_emergency(&attacker),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
+    assert_eq!(
+        client.try_unpause(&admin),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+}
+
+#[test]
+fn emergency_pause_blocks_sensitive_mutations_without_transfer_or_state_change() {
+    let env = Env::default();
+    let (admin, pool, client, usdc, usdc_admin) = setup_pool(&env);
+    let recipient = Address::generate(&env);
+    let source = Symbol::new(&env, "fees");
+
+    usdc_admin.mint(&pool, &100);
+    usdc_admin.mint(&admin, &100);
+    client.emergency_pause(&admin);
+
+    assert_eq!(
+        client.try_set_max_distribute(&admin, &50),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_deposit_yield(&admin, &10, &source),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+    assert_eq!(
+        client.try_distribute(&admin, &recipient, &10),
+        Err(Ok(RevenuePoolError::EmergencyPaused.into()))
+    );
+
+    assert_eq!(usdc.balance(&pool), 100);
+    assert_eq!(usdc.balance(&admin), 100);
+    assert_eq!(usdc.balance(&recipient), 0);
+    assert_eq!(client.get_max_distribute(), DEFAULT_MAX_DISTRIBUTE);
+    assert!(client.is_emergency_paused());
+}
+
+#[test]
 fn single_distribution_errors_are_typed() {
     let env = Env::default();
     let (admin, pool, client, _, _) = setup_pool(&env);
@@ -194,6 +255,74 @@ fn batch_distribution_errors_are_typed_and_atomic() {
     );
     assert_eq!(usdc.balance(&pool), 100);
     assert_eq!(usdc.balance(&recipient), recipient_balance);
+}
+
+#[test]
+fn distribute_by_shares_errors_and_remainder_are_typed() {
+    let env = Env::default();
+    let (admin, pool, client, usdc, usdc_admin) = setup_pool(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let third = Address::generate(&env);
+
+    let empty: Vec<(Address, u32)> = Vec::new(&env);
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &empty),
+        Err(Ok(RevenuePoolError::SharesEmpty))
+    );
+
+    let mut bad_sum = Vec::new(&env);
+    bad_sum.push_back((first.clone(), 5_000));
+    bad_sum.push_back((second.clone(), 4_999));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &bad_sum),
+        Err(Ok(RevenuePoolError::InvalidShareSum))
+    );
+
+    let mut bad_sum_high = Vec::new(&env);
+    bad_sum_high.push_back((first.clone(), 5_001));
+    bad_sum_high.push_back((second.clone(), 5_000));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &bad_sum_high),
+        Err(Ok(RevenuePoolError::InvalidShareSum))
+    );
+
+    let mut zero_share = Vec::new(&env);
+    zero_share.push_back((first.clone(), 0));
+    zero_share.push_back((second.clone(), 10_000));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &zero_share),
+        Err(Ok(RevenuePoolError::InvalidShare))
+    );
+
+    let mut duplicate = Vec::new(&env);
+    duplicate.push_back((first.clone(), 5_000));
+    duplicate.push_back((first.clone(), 5_000));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &duplicate),
+        Err(Ok(RevenuePoolError::DuplicateRecipient))
+    );
+
+    usdc_admin.mint(&pool, &100);
+    let mut three_way = Vec::new(&env);
+    three_way.push_back((first.clone(), 3_333));
+    three_way.push_back((second.clone(), 3_333));
+    three_way.push_back((third.clone(), 3_334));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &100, &three_way),
+        Ok(Ok(()))
+    );
+    assert_eq!(usdc.balance(&first), 34);
+    assert_eq!(usdc.balance(&second), 33);
+    assert_eq!(usdc.balance(&third), 33);
+    assert_eq!(usdc.balance(&pool), 0);
+
+    let mut overflow_shares = Vec::new(&env);
+    overflow_shares.push_back((first.clone(), 10_000));
+    assert_eq!(
+        client.try_distribute_by_shares(&admin, &i128::MAX, &overflow_shares),
+        Err(Ok(RevenuePoolError::Overflow))
+    );
 }
 
 #[test]

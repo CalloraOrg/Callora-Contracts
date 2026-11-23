@@ -1,11 +1,15 @@
 extern crate std;
 
-use crate::{CalloraVault, CalloraVaultClient, DeductItem};
+use crate::{CalloraVault, CalloraVaultClient};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, Symbol, Vec};
 
 // ---------------------------------------------------------------------------
-// Malicious Token Mock
+// Malicious token mock
+//
+// `transfer` tries to call back into the vault's `deduct` while the vault is
+// already executing. It records whether it tried and whether the vault
+// blocked the re-entry.
 // ---------------------------------------------------------------------------
 
 #[contract]
@@ -40,8 +44,15 @@ impl MaliciousToken {
                     .unwrap();
                 let client = CalloraVaultClient::new(&env, &vault);
 
-                // Attempt re-entry into deduct
-                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_token")));
+                // Attempt re-entry into deduct while the vault is mid-call.
+                let res = client.try_deduct(&caller, &1, &999u64);
+
+                env.storage()
+                    .instance()
+                    .set(&Symbol::new(&env, "attempted"), &true);
+                env.storage()
+                    .instance()
+                    .set(&Symbol::new(&env, "blocked"), &res.is_err());
             }
         }
     }
@@ -61,310 +72,191 @@ impl MaliciousToken {
             .instance()
             .set(&Symbol::new(&env, "attack_active"), &active);
     }
-}
 
-// ---------------------------------------------------------------------------
-// Malicious Settlement Mock
-// ---------------------------------------------------------------------------
-
-#[contract]
-pub struct MaliciousSettlement;
-
-#[contractimpl]
-impl MaliciousSettlement {
-    pub fn receive_payment(
-        env: Env,
-        _caller: Address,
-        _amount: i128,
-        _to_pool: bool,
-        _developer: Option<Address>,
-        _token: Address,
-    ) {
-        let vault_addr: Option<Address> = env
-            .storage()
+    /// True once the mock has tried to re-enter the vault.
+    pub fn attack_attempted(env: Env) -> bool {
+        env.storage()
             .instance()
-            .get(&Symbol::new(&env, "vault_addr"));
-        let attack_active: bool = env
-            .storage()
-            .instance()
-            .get(&Symbol::new(&env, "attack_active"))
-            .unwrap_or(false);
-
-        if attack_active {
-            if let Some(vault) = vault_addr {
-                env.storage()
-                    .instance()
-                    .set(&Symbol::new(&env, "attack_active"), &false);
-                let caller: Address = env
-                    .storage()
-                    .instance()
-                    .get(&Symbol::new(&env, "attack_caller"))
-                    .unwrap();
-                let client = CalloraVaultClient::new(&env, &vault);
-
-                // Attempt re-entry into deduct
-                let _ = client.try_deduct(&caller, &1, &Some(Symbol::new(&env, "reentry_settle")));
-            }
-        }
+            .get(&Symbol::new(&env, "attempted"))
+            .unwrap_or(false)
     }
 
-    pub fn set_settle_attack_config(env: Env, vault: Address, caller: Address, active: bool) {
+    /// True if the vault rejected the re-entrant call.
+    pub fn reentry_blocked(env: Env) -> bool {
         env.storage()
             .instance()
-            .set(&Symbol::new(&env, "vault_addr"), &vault);
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, "attack_caller"), &caller);
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, "attack_active"), &active);
+            .get(&Symbol::new(&env, "blocked"))
+            .unwrap_or(false)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Reentrancy Tests
+// Helpers
 // ---------------------------------------------------------------------------
 
-fn setup_reentrancy_test(env: &Env) -> (Address, CalloraVaultClient, Address, Address, Address) {
+/// Returns `(vault_addr, vault_client, token_addr, owner)`.
+/// `authorized` is the authorized deduct caller; defaults to the owner.
+fn setup_reentrancy_test(
+    env: &Env,
+    authorized: Option<Address>,
+) -> (Address, CalloraVaultClient<'_>, Address, Address) {
     let owner = Address::generate(env);
     let vault_addr = env.register(CalloraVault, ());
     let vault_client = CalloraVaultClient::new(env, &vault_addr);
 
     let token_addr = env.register(MaliciousToken, ());
-    let settlement_addr = env.register(MaliciousSettlement, ());
+    // The settlement client is a no-op stub in native builds, so any address works.
+    let settlement_addr = env.register(callora_settlement::CalloraSettlement, ());
+    let settlement_client = callora_settlement::CalloraSettlementClient::new(env, &settlement_addr);
+    let authorized_caller = authorized.unwrap_or_else(|| owner.clone());
 
     env.mock_all_auths();
+    settlement_client.init(&owner, &vault_addr);
 
-    // Init vault with the malicious token
-    vault_client.init(&owner, &token_addr, &Some(1000), &None, &None, &None, &None);
+    // Init the vault with the malicious token as its USDC token.
+    vault_client.init(
+        &owner,
+        &token_addr,
+        &Some(1000),
+        &Some(authorized_caller),
+        &Some(1),
+        &None,
+        &None,
+        &Some(settlement_addr),
+    );
 
-    (vault_addr, vault_client, token_addr, settlement_addr, owner)
+    (vault_addr, vault_client, token_addr, owner)
 }
+
+/// Number of `deduct` events the vault has emitted.
+fn deduct_event_count(env: &Env, vault: &Address) -> u32 {
+    let deduct = crate::events::event_deduct(env);
+    let mut count = 0;
+    for e in env.events().all().iter() {
+        if e.0 != *vault {
+            continue;
+        }
+        let topic0: Symbol = e.1.get(0).unwrap().into_val(env);
+        if topic0 == deduct {
+            count += 1;
+        }
+    }
+    count
+}
+
+// ---------------------------------------------------------------------------
+// Reentrancy tests
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_reentrancy_via_token_transfer_is_blocked_by_auth() {
     let env = Env::default();
-    let (vault_addr, vault_client, token_addr, _settlement_addr, owner) =
-        setup_reentrancy_test(&env);
+    let (vault_addr, vault_client, token_addr, owner) = setup_reentrancy_test(&env, None);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
     token_mock.set_token_attack_config(&vault_addr, &owner, &true);
 
-    let initial_balance = vault_client.balance();
-    assert_eq!(initial_balance, 1000);
+    assert_eq!(vault_client.balance(), 1000);
 
-    // Trigger deduct -> calls token.transfer -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
+    // deduct -> token.transfer -> vault.deduct (re-entry)
+    let result = vault_client.try_deduct(&owner, &100, &1u64);
+    let deduct_events = deduct_event_count(&env, &vault_addr);
 
     assert!(result.is_ok(), "First deduct should succeed");
+    assert!(token_mock.attack_attempted(), "The attack must have run");
+    assert!(
+        token_mock.reentry_blocked(),
+        "The vault must block re-entry"
+    );
     assert_eq!(
         vault_client.balance(),
         900,
         "Balance should only be deducted once"
     );
-
-    // Check if the re-entry event was published (it shouldn't be if it failed)
-    let events = env.events().all();
-    let mut reentry_count = 0;
-    for e in events.iter() {
-        if e.0 != vault_addr {
-            continue;
-        }
-        let topics = &e.1;
-        if topics.len() < 3 {
-            continue;
-        }
-        let rid: Symbol = topics.get(2).unwrap().into_val(&env);
-        if rid == Symbol::new(&env, "reentry_token") {
-            reentry_count += 1;
-        }
-    }
-
-    assert_eq!(reentry_count, 0, "Re-entry should not have succeeded");
-}
-
-#[test]
-fn test_reentrancy_via_settlement_callback_is_blocked() {
-    let env = Env::default();
-    let (vault_addr, vault_client, _token_addr, settlement_addr, owner) =
-        setup_reentrancy_test(&env);
-
-    let settlement_mock = MaliciousSettlementClient::new(&env, &settlement_addr);
-    settlement_mock.set_settle_attack_config(&vault_addr, &owner, &true);
-
-    let initial_balance = vault_client.balance();
-    assert_eq!(initial_balance, 1000);
-
-    // Trigger deduct -> calls settlement.receive_payment -> calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&owner, &100, &Some(Symbol::new(&env, "first_call")));
-
-    assert!(result.is_ok(), "First deduct should succeed");
-    assert_eq!(
-        vault_client.balance(),
-        900,
-        "Balance should only be deducted once"
-    );
-
-    let events = env.events().all();
-    let mut reentry_count = 0;
-    for e in events.iter() {
-        if e.0 != vault_addr {
-            continue;
-        }
-        let topics = &e.1;
-        if topics.len() < 3 {
-            continue;
-        }
-        let rid: Symbol = topics.get(2).unwrap().into_val(&env);
-        if rid == Symbol::new(&env, "reentry_settle") {
-            reentry_count += 1;
-        }
-    }
-
-    assert_eq!(
-        reentry_count, 0,
-        "Re-entry via settlement should not have succeeded"
-    );
+    assert_eq!(deduct_events, 1, "Only the outer deduct may emit an event");
 }
 
 #[test]
 fn test_batch_deduct_reentrancy_via_token() {
     let env = Env::default();
-    let (vault_addr, vault_client, token_addr, _settlement_addr, owner) =
-        setup_reentrancy_test(&env);
+    let (vault_addr, vault_client, token_addr, owner) = setup_reentrancy_test(&env, None);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
     token_mock.set_token_attack_config(&vault_addr, &owner, &true);
 
-    let items = Vec::from_array(
-        &env,
-        [
-            DeductItem {
-                amount: 50,
-                request_id: Some(Symbol::new(&env, "item1")),
-            },
-            DeductItem {
-                amount: 50,
-                request_id: Some(Symbol::new(&env, "item2")),
-            },
-        ],
-    );
+    let items = Vec::from_array(&env, [(50i128, 1u64), (50i128, 2u64)]);
 
     let result = vault_client.try_batch_deduct(&owner, &items);
+    let deduct_events = deduct_event_count(&env, &vault_addr);
 
     assert!(result.is_ok(), "Batch deduct should succeed");
+    assert!(token_mock.attack_attempted(), "The attack must have run");
+    assert!(
+        token_mock.reentry_blocked(),
+        "The vault must block re-entry"
+    );
     assert_eq!(
         vault_client.balance(),
         900,
-        "Balance should only be deducted by batch amount"
+        "Balance should only be deducted by the batch amount"
     );
-
-    let events = env.events().all();
-    let mut reentry_count = 0;
-    for e in events.iter() {
-        if e.0 != vault_addr {
-            continue;
-        }
-        let topics = &e.1;
-        if topics.len() < 3 {
-            continue;
-        }
-        let rid: Symbol = topics.get(2).unwrap().into_val(&env);
-        if rid == Symbol::new(&env, "reentry_token") {
-            reentry_count += 1;
-        }
-    }
-
-    assert_eq!(
-        reentry_count, 0,
-        "Re-entry during batch should not have succeeded"
-    );
+    // One event per batch item, none from the re-entrant call.
+    assert_eq!(deduct_events, 2);
 }
 
 #[test]
 fn test_reentrancy_by_authorized_attacker() {
     let env = Env::default();
-    let (vault_addr, vault_client, token_addr, _settlement_addr, _owner) =
-        setup_reentrancy_test(&env);
-
     let attacker = Address::generate(&env);
-    vault_client.set_authorized_caller(&Some(attacker.clone()), &0u64);
+    let (vault_addr, vault_client, token_addr, _owner) =
+        setup_reentrancy_test(&env, Some(attacker.clone()));
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
     token_mock.set_token_attack_config(&vault_addr, &attacker, &true);
 
-    let initial_balance = vault_client.balance();
-    assert_eq!(initial_balance, 1000);
+    assert_eq!(vault_client.balance(), 1000);
 
-    // Attacker calls deduct -> token.transfer -> attacker calls vault.deduct (re-entry)
-    let result = vault_client.try_deduct(&attacker, &100, &Some(Symbol::new(&env, "first_call")));
+    // The attacker is the authorized caller: deduct -> token.transfer ->
+    // attacker calls vault.deduct again.
+    let result = vault_client.try_deduct(&attacker, &100, &1u64);
+    let deduct_events = deduct_event_count(&env, &vault_addr);
 
     assert!(result.is_ok(), "First deduct should succeed");
+    assert!(token_mock.attack_attempted(), "The attack must have run");
+    assert!(
+        token_mock.reentry_blocked(),
+        "Re-entry by an authorized caller must still be blocked"
+    );
     assert_eq!(
         vault_client.balance(),
         900,
         "Balance should only be deducted once"
     );
-
-    let events = env.events().all();
-    let mut reentry_count = 0;
-    for e in events.iter() {
-        if e.0 != vault_addr {
-            continue;
-        }
-        let topics = &e.1;
-        if topics.len() < 3 {
-            continue;
-        }
-        let rid: Symbol = topics.get(2).unwrap().into_val(&env);
-        if rid == Symbol::new(&env, "reentry_token") {
-            reentry_count += 1;
-        }
-    }
-
-    assert_eq!(
-        reentry_count, 0,
-        "Re-entry by authorized attacker should still fail or be blocked"
-    );
+    assert_eq!(deduct_events, 1);
 }
 
 #[test]
 fn test_withdraw_reentrancy_via_token() {
     let env = Env::default();
-    let (vault_addr, vault_client, token_addr, _settlement_addr, owner) =
-        setup_reentrancy_test(&env);
+    let (vault_addr, vault_client, token_addr, owner) = setup_reentrancy_test(&env, None);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    // Withdraw calls token.transfer. We attempt to call deduct() during withdraw's transfer.
+    // withdraw calls token.transfer; the mock tries to call deduct() during it.
     token_mock.set_token_attack_config(&vault_addr, &owner, &true);
 
     let result = vault_client.try_withdraw(&100);
+    let deduct_events = deduct_event_count(&env, &vault_addr);
 
     assert!(result.is_ok(), "Withdraw should succeed");
+    assert!(token_mock.attack_attempted(), "The attack must have run");
+    assert!(
+        token_mock.reentry_blocked(),
+        "The vault must block re-entry"
+    );
     assert_eq!(
         vault_client.balance(),
         900,
-        "Balance should only be deducted by withdraw amount"
+        "Balance should only be deducted by the withdraw amount"
     );
-
-    let events = env.events().all();
-    let mut reentry_count = 0;
-    for e in events.iter() {
-        if e.0 != vault_addr {
-            continue;
-        }
-        let topics = &e.1;
-        if topics.len() < 3 {
-            continue;
-        }
-        let rid: Symbol = topics.get(2).unwrap().into_val(&env);
-        if rid == Symbol::new(&env, "reentry_token") {
-            reentry_count += 1;
-        }
-    }
-
-    assert_eq!(
-        reentry_count, 0,
-        "Re-entry during withdraw should not have succeeded"
-    );
+    assert_eq!(deduct_events, 0, "No deduct may occur during a withdraw");
 }

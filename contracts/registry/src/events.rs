@@ -23,6 +23,23 @@ pub fn event_offering_registered(env: &Env) -> Symbol {
     Symbol::new(env, "offering_registered")
 }
 
+pub fn event_offering_updated(env: &Env) -> Symbol {
+    Symbol::new(env, "offering_updated")
+}
+
+pub fn event_offering_deprecated(env: &Env) -> Symbol {
+    Symbol::new(env, "offering_deprecated")
+}
+
+pub fn event_offering_transferred(env: &Env) -> Symbol {
+    Symbol::new(env, "offering_transferred")
+}
+
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +59,33 @@ mod tests {
         assert_eq!(
             event_offering_registered(&env),
             Symbol::new(&env, "offering_registered")
+        );
+    }
+
+    #[test]
+    fn test_event_offering_updated_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_offering_updated(&env),
+            Symbol::new(&env, "offering_updated")
+        );
+    }
+
+    #[test]
+    fn test_event_offering_deprecated_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_offering_deprecated(&env),
+            Symbol::new(&env, "offering_deprecated")
+        );
+    }
+
+    #[test]
+    fn test_event_offering_transferred_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_offering_transferred(&env),
+            Symbol::new(&env, "offering_transferred")
         );
     }
 }

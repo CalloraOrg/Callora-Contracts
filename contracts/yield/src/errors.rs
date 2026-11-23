@@ -15,9 +15,7 @@
 //! | 7    | SubscriptionsAtCap    | Account's active subscription count is at the configured cap |
 //! | 8    | CounterUnderflow      | `clear_*` was called when the corresponding counter was zero  |
 //! | 9    | Overflow              | `checked_add` overflow detected on a counter increment        |
-//! | 11   | BetsWindowCap         | Account has opened the maximum bets allowed in this window    |
-//! | 12   | PositionsWindowCap    | Account has opened the maximum positions allowed this window  |
-//! | 13   | SubscriptionsWindowCap| Account has added the maximum subscriptions allowed this window|
+//! | 10   | UpgradeRejected       | Storage-migration validator rejected the pending upgrade      |
 //!
 //! All variants implement [`Copy`] + [`PartialEq`] so they can be returned by
 //! value or pinned in arrays without allocation.
@@ -67,23 +65,10 @@ pub enum YieldLimitError {
     /// counter arithmetic saturates `u32::MAX` — surfaces a stable error
     /// rather than panicking so callers cannot rely on undefined behaviour.
     Overflow = 9,
-    /// Account has opened the maximum bets allowed in the current window
-    /// (code 11).
+    /// The storage-migration validator rejected the pending upgrade (code 10).
     ///
-    /// Returned by [`crate::limits::place_bet`] when the rolling window is
-    /// enabled and the per-window bet cap has been reached. Decrements do not
-    /// refund window capacity — only the window rolling over does.
-    BetsWindowCap = 11,
-    /// Account has opened the maximum positions allowed in the current window
-    /// (code 12).
-    ///
-    /// Returned by [`crate::limits::open_position`] when the rolling window
-    /// is enabled and the per-window position cap has been reached.
-    PositionsWindowCap = 12,
-    /// Account has added the maximum subscriptions allowed in the current
-    /// window (code 13).
-    ///
-    /// Returned by [`crate::limits::subscribe`] when the rolling window is
-    /// enabled and the per-window subscription cap has been reached.
-    SubscriptionsWindowCap = 13,
+    /// Returned by [`crate::limits::CalloraYieldLimits::upgrade`] when the
+    /// pre-upgrade guard rejects an all-zero WASM hash, a version skip, an
+    /// unsanctioned rollback, or a silent storage-layout change.
+    UpgradeRejected = 10,
 }

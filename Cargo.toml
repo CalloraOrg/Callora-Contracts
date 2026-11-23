@@ -11,31 +11,26 @@ members = [
     "contracts/admin",
     "contracts/allowlist",
     "contracts/batch_claim",
-    "contracts/batch_distribute/fuzz",
     "contracts/checkpoint",
-    "contracts/checkpoint/fuzz",
     "contracts/cold",
     "contracts/distribute",
-    "contracts/distribute/fuzz",
+    "contracts/emergency",
     "contracts/errors",
     "contracts/escrow",
     "contracts/fee",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/hot",
-    "contracts/hot/fuzz",
     "contracts/limits",
     "contracts/migrate",
     "contracts/recipient",
-    "contracts/recipient/fuzz",
     "contracts/registry",
+    "contracts/refund",
     "contracts/rescue",
     "contracts/revenue_pool",
-    "contracts/revenue_pool/fuzz",
     "contracts/settlement",
-    "contracts/settlement/fuzz",
     "contracts/stake",
-    "contracts/tests",
+    "contracts/storage_migration",
     "contracts/topics",
     "contracts/upgrade",
     "contracts/validators",
@@ -45,9 +40,11 @@ members = [
 ]
 
 default-members = [
+    "contracts/batch_claim",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
+    "contracts/emergency",
     "contracts/escrow",
     "contracts/freeze",
     "contracts/helpers",
@@ -55,10 +52,12 @@ default-members = [
     "contracts/limits",
     "contracts/migrate",
     "contracts/registry",
+    "contracts/refund",
     "contracts/rescue",
     "contracts/revenue_pool",
     "contracts/settlement",
     "contracts/stake",
+    "contracts/storage_migration",
     "contracts/topics",
     "contracts/upgrade",
     "contracts/validators",
@@ -74,6 +73,7 @@ soroban-sdk = "22"
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
 callora-distribute = { path = "contracts/distribute" }
+callora-vault = { path = "contracts/vault" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
@@ -89,4 +89,3 @@ debug-assertions = false  # Disable debug assertions in release
 panic = "abort"           # Smaller panic handler (no unwinding)
 codegen-units = 1         # Better optimization (slower compile, smaller binary)
 lto = true                # Link-time optimization across all crates
-

@@ -1,8 +1,8 @@
-# Per-Account Yield Limits (Issue #842 / task b#017)
+# Per-Account Yield Limits (Issue #842 / task b#017, #1414)
 
-This document describes the new per-account state-cap surface added to the
-`callora-yield` crate for the GrantFox FWC26 audit metric campaign (Issue #842,
-task b#017).
+This document describes the per-account state-cap surface of the
+`callora-yield` crate (Issue #842, task b#017) and the operator-gated
+enforcement model introduced by Issue #1414.
 
 ## Problem
 
@@ -29,11 +29,19 @@ pub use errors::YieldLimitError;
 
 | Entrypoint                              | Auth          | Notes                                                                 |
 |-----------------------------------------|---------------|-----------------------------------------------------------------------|
-| `init(admin)`                           | 1-shot        | One-time setup; rejects with `AlreadyInitialized` after first call.   |
+| `init(admin)`                           | `admin` signs | One-time setup; rejects with `AlreadyInitialized` after first call.   |
 | `set_admin(caller, new_admin)`          | admin         | Two-step transfer, step 1.                                             |
 | `accept_admin(caller)`                  | pending-admin | Two-step transfer, step 2.                                            |
 | `cancel_admin_transfer(caller)`         | admin         | Drops a pending transfer.                                              |
 | `upgrade(caller, new_wasm_hash)`        | admin         | Admin-only WASM swap.                                                  |
+| `set_operator(caller, operator)`        | admin         | Register an address that may mutate per-account counters.             |
+| `remove_operator(caller, operator)`     | admin         | Revoke a registration; unknown operators are a no-op.                 |
+
+`init` calls `admin.require_auth()` **before** inspecting or writing storage.
+Without that check the first caller between deploy and initialization could
+install itself as admin and take over every admin entrypoint, `upgrade`
+included. `init` therefore fails with an auth error (leaving no admin stored)
+when the admin address has not signed.
 
 ### Limits configuration (admin only)
 
@@ -45,16 +53,29 @@ pub use errors::YieldLimitError;
 | `set_window_ledgers(caller, window_ledgers)`                  | Set the rolling-window length in ledgers (`0` disables).|
 | `set_window_limits(caller, max_b, max_p, max_s)`             | Set the per-window open caps.                           |
 
-### User counter mutators (caller-authenticated)
+### Counter mutators (operator-gated)
 
-| Entrypoint                  | Effect                                                          |
-|-----------------------------|-----------------------------------------------------------------|
-| `place_bet(caller)`         | Increment caller's open-bet counter; rejects at cap.            |
-| `clear_bet(caller)`         | Decrement caller's open-bet counter; rejects on zero.           |
-| `open_position(caller)`     | Increment caller's open-position counter; rejects at cap.       |
-| `close_position(caller)`    | Decrement caller's open-position counter; rejects on zero.      |
-| `subscribe(caller)`         | Increment caller's active-subscription counter; rejects at cap. |
-| `unsubscribe(caller)`       | Decrement caller's active-subscription counter; rejects on zero.|
+| Entrypoint                        | Effect                                                            |
+|-----------------------------------|-------------------------------------------------------------------|
+| `place_bet(operator, account)`    | Increment `account`'s open-bet counter; rejects at cap.           |
+| `clear_bet(operator, account)`    | Decrement `account`'s open-bet counter; rejects on zero.          |
+| `open_position(operator, account)`| Increment `account`'s open-position counter; rejects at cap.      |
+| `close_position(operator, account)`| Decrement `account`'s open-position counter; rejects on zero.     |
+| `subscribe(operator, account)`    | Increment `account`'s active-subscription counter; rejects at cap.|
+| `unsubscribe(operator, account)`  | Decrement `account`'s active-subscription counter; rejects on zero.|
+
+`operator` must sign the call and be registered with `set_operator`. The cap is
+always enforced on `account`, which the operator names explicitly. Error
+precedence is fixed: operator `require_auth`, then operator registration
+(`Unauthorized`), then the cap (`BetsAtCap` / `PositionsAtCap` /
+`SubscriptionsAtCap`), then the counter-underflow check.
+
+Why this changed: counters used to be incremented by the account itself, so a
+capped account could call `clear_bet` and then `place_bet` again forever — the
+caps limited only honest accounts. With the operator model an account cannot
+reset (or fake) its own counters: only a trusted, admin-registered backend that
+observes real bets/positions/subscriptions can move them. `clear_*` is
+decrement-only, so it cannot be used to mint headroom either.
 
 ### Read-only views (no auth)
 
@@ -64,6 +85,7 @@ pub use errors::YieldLimitError;
 | `get_default_limits()`                                    | Global cap defaults (fallback to `DEFAULT_LIMITS`).             |
 | `get_account_limits(account)`                             | Effective caps for the account (per-account override → default). |
 | `get_account_state(account)`                              | Live counters for the account (zeroed if absent).               |
+| `get_operator(operator)`                                  | `true` when the address is a registered operator.                |
 | `can_place_bet(account)` / `can_open_position(account)` / |                                                              |
 | `can_subscribe(account)`                                  | Dry-run gate checks (concurrent **and** window aware).         |
 | `get_window_ledgers()`                                    | Rolling-window length in ledgers (`0` = disabled).             |
@@ -108,29 +130,30 @@ opens at:           2     1         3         1
 
 ## Storage layout
 
-- `DefaultLimits` and `AccountLimits(Address)` are stored in **instance**
-  storage so they participate in the same TTL extension window as the rest of
-  the contract's configuration.
+- `Admin`, `PendingAdmin`, `DefaultLimits` and the migration markers stay in
+  **instance** storage — they are read by every admin call and bounded in size.
+- `AccountLimits(Address)` overrides live in **persistent** storage and are
+  bumped with `CAPS_BUMP_THRESHOLD` / `CAPS_BUMP_AMOUNT` (≈7 days / ≈30 days)
+  on every read and write. Per-account caps used to share the instance entry,
+  which is loaded on every call and size-capped; configuring caps for many
+  accounts grew that entry without bound and could evict other accounts' caps.
 - `AccountState(Address)` is stored in **persistent** storage and bumped to
   `STATE_BUMP_AMOUNT` (≈30 days) on every read / write so accounts that go
   quiet do not silently archive.
-- `WindowLedgers` and `DefaultWindowLimits` are new **instance** storage keys
-  using the existing `INSTANCE_BUMP_*` TTL policy.
-- `WindowState(Address)` is a new **persistent** key using the existing
-  `STATE_BUMP_*` TTL policy. It is written only while windows are enabled and
-  the account successfully opens something.
+- `Operator(Address)` is a **persistent** `bool` flag with the same
+  `CAPS_BUMP_*` policy, refreshed whenever it is written or read by an
+  authorized mutation.
 
-### Migration note (Issue #1522)
+### Storage migration (v1 → v2)
 
-The window feature is **purely additive** at the storage level: no existing
-key was reused or reshaped, and `AccountState` / `AccountLimits` are byte-for-
-byte unchanged. An upgraded contract therefore reads all pre-existing accounts
-without migration. Windows are disabled by default (`window_ledgers == 0`), so
-the behaviour and gas profile of an upgraded-but-unconfigured contract match
-the previous version. Because this crate has no on-chain layout descriptor or
-`STORAGE_MIGRATION_VERSION` constant, none needed bumping; this note is the
-migration record. Operators that later enable windows should expect one extra
-persistent read/write for accounts that open bets, positions, or subscriptions.
+`STORAGE_MIGRATION_VERSION` is `2` and `STORAGE_LAYOUT_DESCRIPTOR` includes
+`Operator`. Moving `AccountLimits` from instance to persistent storage does not
+need a dedicated entrypoint: `read_account_limits` still checks the legacy
+instance slot and, when the persistent slot is missing but the legacy one is
+present, copies the value to persistent storage, extends its TTL, and removes
+the instance copy. Writes and `clear_account_limits` remove both slots, so the
+two layouts can never disagree. `set_default_limits`, `AccountState` and the
+admin keys are unchanged.
 
 ### Defaults (`DEFAULT_LIMITS`)
 
@@ -179,11 +202,14 @@ returns the existing `InvalidLimit` (code 4).
 
 `contracts/yield/src/events.rs` centralizes every topic as a `Symbol::new`
 call and pins each to its byte representation in `#[cfg(test)]` snapshot
-tests. Topic vocabulary (`init`, `admin_*`, `default_limits_set`,
-`account_limits_set`, `account_limits_cleared`, `bet_placed`, `bet_cleared`,
-`position_opened`, `position_closed`, `subscription_added`,
-`subscription_removed`, `upgraded`) follows the past-tense-verb pattern
-documented in `CONTRIBUTING.md`.
+tests. Topic vocabulary (`init`, `admin_*`, `operator_set`, `operator_removed`,
+`default_limits_set`, `account_limits_set`, `account_limits_cleared`,
+`bet_placed`, `bet_cleared`, `position_opened`, `position_closed`,
+`subscription_added`, `subscription_removed`, `upgraded`) follows the
+past-tense-verb pattern documented in `CONTRIBUTING.md`.
+
+Counter events carry `(topic, operator, account)` as the first topic element so
+indexers can attribute every counter change to the operator that signed it.
 
 Rolling windows add three topics, each with a byte-snapshot test:
 
@@ -199,33 +225,34 @@ Existing event topics and payload shapes are unchanged by this feature.
 
 - `contracts/yield/src/lib.rs` continues to re-export
   `RevenuePool` / `RevenuePoolClient` unchanged.
-- No prior type, storage key, or event topic was renamed.
-- No prior `callora-yield` consumer is broken (only additive additions to the
-  public surface).
+- No prior type, storage key, or event topic was renamed. `StorageKey::Operator`
+  was appended last, so every pre-existing discriminant is stable.
+- The counter mutators are a **breaking signature change** on purpose (#1414):
+  they now take `(operator, account)` instead of `(caller)`. A consumer that
+  calls them must be registered as an operator; the old caller-only form is
+  gone because it allowed self-reset of the caps.
+- Existing instance-stored caps keep working through the read-time fallback
+  described above, so an upgrade does not drop configured overrides.
 
 ## Verification
 
 ```bash
 # Format, build, run unit tests & auth-snap integration suite.
 cargo fmt  -p callora-yield
-cargo test -p callora-yield --lib              # 40+ unit tests
-cargo test -p callora-yield --test auth_snap   # 15 mutator + 10 view assertions
+cargo test -p callora-yield --lib              # 70+ unit tests
+cargo test -p callora-yield --test auth_snap   # operator, admin and view assertions
 
 # Build for the wasm32 target so WASM-bound assets do compile.
 cargo build -p callora-yield --target wasm32-unknown-unknown --release
 ```
 
-All unit tests must pass, all 15 mutator assertions in `auth_snap.rs` must
-report `res.is_err()`, and all 10 view assertions in `auth_snap.rs` must run
-without `require_auth`.
+All unit tests must pass, every mutator assertion in `auth_snap.rs` must report
+`res.is_err()`, and the view assertions must run without `require_auth`.
 
 ## Coverage summary
 
-- 60+ unit tests for caps, defaults, storage helpers, dry-run checks, admin
-  rotation, and rolling windows (boundary/exact-ledger/skipped-window/
-  per-account/decrement-no-refund/overflow cases).
-- A proptest comparing randomised open/close/ledger-advance sequences against
-  a simple model of the concurrent and window caps.
-- 15 authentication-snapshot mutator tests (`require_auth` enforcement).
-- 10 authentication-snapshot view tests (no-auth callability).
-- 16 byte-snapshot tests pinning event-topic symbol identity.
+- ~80 unit tests for caps, defaults, storage helpers, dry-run checks, admin
+  rotation, operator registration and the instance → persistent cap fallback.
+- Authentication-snapshot tests covering `init`, the admin setters, the
+  operator registry, every counter mutator, `upgrade`, and the no-auth views.
+- Byte-snapshot tests pinning event-topic symbol identity.

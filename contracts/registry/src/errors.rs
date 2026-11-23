@@ -23,4 +23,11 @@ pub enum RegistryError {
     OfferingNotFound = 8,
     /// Admin action cooldown has not yet expired (code 9).
     AdminCooldownActive = 9,
+    /// Metadata is empty, exceeds the byte bound, or contains invalid
+    /// (non-visible-ASCII / control / whitespace-delimited) encodings (code 10).
+    InvalidMetadata = 10,
+    OfferingDeprecated = 11,
+    OfferingAlreadyDeprecated = 12,
+    InvalidTransferTarget = 13,
+    NoPendingTransfer = 14,
 }

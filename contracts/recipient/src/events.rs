@@ -25,6 +25,10 @@ pub fn event_recipient_registered(env: &Env) -> Symbol {
 pub fn event_recipient_updated(env: &Env) -> Symbol {
     Symbol::new(env, "recipient_updated")
 }
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
+}
 
 /// Returns the Symbol for the `"recipient_removed"` event topic.
 ///

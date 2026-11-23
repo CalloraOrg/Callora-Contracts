@@ -30,6 +30,16 @@ pub fn event_action(env: &Env) -> Symbol {
     Symbol::new(env, "action")
 }
 
+/// Returns the Symbol for the `"signer_rotated"` event topic.
+///
+/// Emitted when the admin rotates the signer via
+/// [`crate::CalloraHot::rotate_signer`]. The event data carries the
+/// `(old_signer, new_signer)` tuple so monitors can alert on unexpected
+/// signer values without reading storage.
+pub fn event_signer_rotated(env: &Env) -> Symbol {
+    Symbol::new(env, "signer_rotated")
+}
+
 /// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via
@@ -47,6 +57,15 @@ pub fn event_admin_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "admin_accepted")
 }
 
+/// Returns the Symbol for the `"admin_cancelled"` event topic.
+///
+/// Emitted when the current admin cancels a pending admin nomination via
+/// [`crate::CalloraHot::cancel_admin_transfer`]. The data contains the
+/// address of the pending admin that was cancelled.
+pub fn event_admin_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "admin_cancelled")
+}
+
 /// Returns the Symbol for the `"paused"` event topic.
 ///
 /// Emitted by [`crate::pause::do_pause`] when the circuit-breaker is
@@ -61,6 +80,11 @@ pub fn event_paused(env: &Env) -> Symbol {
 /// deactivated. Topic carries the `caller` address; data is `()`.
 pub fn event_unpaused(env: &Env) -> Symbol {
     Symbol::new(env, "unpaused")
+}
+
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
 }
 
 #[cfg(test)]
@@ -87,6 +111,16 @@ mod tests {
     fn test_event_action_bytes() {
         let env = Env::default();
         assert_eq!(event_action(&env), Symbol::new(&env, "action"));
+    }
+
+    /// Snapshot: proves event_signer_rotated still maps to exactly the bytes for "signer_rotated".
+    #[test]
+    fn test_event_signer_rotated_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_signer_rotated(&env),
+            Symbol::new(&env, "signer_rotated")
+        );
     }
 
     /// Snapshot: proves event_admin_nominated still maps to exactly the bytes for "admin_nominated".

@@ -88,7 +88,7 @@ fn withdraw_to_valid_address_succeeds() {
     fund_vault(&usdc_admin, &vault_address, 1000);
     client.init(&owner, &usdc, &Some(1000), &None, &None, &None, &None);
 
-    let remaining = client.withdraw_to(&recipient, &100);
+    let remaining = client.withdraw_to(&recipient, &100).unwrap();
 
     assert_eq!(remaining, 900);
     assert_eq!(client.balance(), 900);
@@ -175,7 +175,7 @@ fn withdraw_to_valid_after_zero_address_rejection() {
     assert_eq!(client.balance(), 1000);
 
     // Now try valid recipient (should succeed)
-    let remaining = client.withdraw_to(&recipient, &100);
+    let remaining = client.withdraw_to(&recipient, &100).unwrap();
     assert_eq!(remaining, 900);
     assert_eq!(usdc_client.balance(&recipient), 100);
 }

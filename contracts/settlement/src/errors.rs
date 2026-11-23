@@ -22,7 +22,7 @@ use soroban_sdk::contracterror;
 /// | 12   | InsufficientContractBalance  | Contract USDC balance is lower than requested amount |
 /// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
 /// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
-/// | 15   | ReasonTooLong                | Reason `Symbol` exceeds the allowed length           |
+/// | 15   | _reserved_ (was ReasonTooLong) | Retired; never returned                            |
 /// | 16   | MigrationSameAddress         | Migration source and target are identical            |
 /// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
 /// | 18   | NoDeveloperBalance           | Migration source has no positive balance             |
@@ -41,6 +41,24 @@ use soroban_sdk::contracterror;
 /// | 31   | DeveloperNotFrozen            | Developer is not frozen; cannot unfreeze             |
 /// | 32   | FreezeUnauthorized            | Caller is not authorized to freeze/unfreeze           |
 /// | 33   | WriteRateLimitExceeded       | Admin wrote prices too frequently                    |
+/// | 34   | InvalidConfigDistinct        | Init config requires distinct admin and vault        |
+/// | 35   | InvalidConfigAdminContract   | Init config forbids the admin being the contract     |
+/// | 36   | InvalidConfigVaultContract   | Init config forbids the vault being the contract     |
+/// | 37   | InvalidUsdcToken             | USDC token address is invalid                        |
+/// | 38   | InvalidRecipient             | Withdrawal recipient cannot be the contract          |
+/// | 39   | NoAdminTransferPending       | No admin transfer is pending                         |
+/// | 40   | InvalidVault                 | Vault address is invalid                             |
+/// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
+/// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
+/// | 43   | CrossTenantBatch             | Batch settlement mixes developers from different tenants |
+/// | 44   | NoUpgradePending             | No upgrade proposal is currently pending             |
+/// | 45   | ZeroWasmHash                 | Proposed WASM hash is all-zero (rejected)            |
+/// | 46   | UpgradeTimelockNotExpired    | Upgrade timelock delay has not yet elapsed           |
+/// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
+/// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
+/// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
+/// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
+/// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -59,7 +77,8 @@ pub enum SettlementError {
     InsufficientContractBalance = 12,
     DailyWithdrawCapExceeded = 13,
     GasExhaustionRisk = 14,
-    ReasonTooLong = 15,
+    // code 15 reserved (was ReasonTooLong; never returned). Retired so the
+    // enum stays within Soroban's 50-case limit for contract error specs.
     MigrationSameAddress = 16,
     InvalidMigrationTarget = 17,
     NoDeveloperBalance = 18,
@@ -82,4 +101,33 @@ pub enum SettlementError {
     FreezeUnauthorized = 32,
     /// Admin attempted a price write before the minimum interval elapsed.
     WriteRateLimitExceeded = 33,
+    InvalidConfigDistinct = 34,
+    InvalidConfigAdminContract = 35,
+    InvalidConfigVaultContract = 36,
+    InvalidUsdcToken = 37,
+    InvalidRecipient = 38,
+    NoAdminTransferPending = 39,
+    InvalidVault = 40,
+    NoVaultRotationPending = 41,
+    /// Admin broadcast message exceeds the maximum allowed length.
+    BroadcastMessageTooLong = 42,
+    /// Batch settlement mixes developers from different tenants.
+    CrossTenantBatch = 43,
+    /// No upgrade proposal is currently pending.
+    NoUpgradePending = 44,
+    /// Proposed WASM hash is all-zero bytes (rejected as invalid).
+    ZeroWasmHash = 45,
+    /// Upgrade timelock delay has not yet elapsed.
+    UpgradeTimelockNotExpired = 46,
+    /// Token is not enabled for settlement payments.
+    UnsupportedToken = 47,
+    /// Deduction request ID has already been recorded.
+    DuplicateRequestId = 48,
+    /// #1135: `developers.len() != amounts.len()` in a paired batch.
+    LengthMismatch = 49,
+    /// #1135: `cursor > developers.len()` or `limit == 0`.
+    InvalidCursor = 50,
+    /// `get_all_developer_balances` index exceeds
+    /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
+    TooManyResults = 51,
 }

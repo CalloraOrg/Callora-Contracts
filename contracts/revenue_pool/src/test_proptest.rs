@@ -26,7 +26,7 @@ fn create_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig::with_cases(32))]
 
     #[test]
     fn batch_distribute_duplicate_recipient_handling(

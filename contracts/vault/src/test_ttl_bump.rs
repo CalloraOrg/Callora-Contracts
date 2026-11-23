@@ -104,8 +104,8 @@ fn buffer5_instance_ttl_extended_by_read_path_between_ledger_advances() {
 
     // Step 3: VIEW CALL — this is the buffer #5 bump.
     // With the bump, new TTL from current seq is INSTANCE_BUMP_AMOUNT ledgers.
-    let _ = client.get_owner();
-    let _ = client.get_admin();
+    let _ = client.get_owner().unwrap();
+    let _ = client.get_admin().unwrap();
     let _ = client.is_paused();
 
     // Step 4: advance PAST where the original init bump would have ended
@@ -126,7 +126,7 @@ fn buffer5_instance_ttl_extended_by_read_path_between_ledger_advances() {
         "buffer #5 failed: instance archived after view-path bump"
     );
     assert_eq!(
-        client.get_owner(),
+        client.get_owner().unwrap(),
         owner,
         "buffer #5 failed: owner unreadable after view-path bump"
     );
@@ -194,11 +194,11 @@ fn every_view_call_bumps_instance_ttl() {
     }
 
     check_view_bumps!(client.balance(), "balance");
-    check_view_bumps!(client.get_owner(), "get_owner");
+    check_view_bumps!(client.get_owner().unwrap(), "get_owner");
     check_view_bumps!(client.get_admin(), "get_admin");
-    check_view_bumps!(client.get_usdc_token(), "get_usdc_token");
+    check_view_bumps!(client.get_usdc_token().unwrap(), "get_usdc_token");
     check_view_bumps!(client.get_max_deduct(), "get_max_deduct");
-    check_view_bumps!(client.get_settlement(), "get_settlement");
+    check_view_bumps!(client.get_settlement().unwrap(), "get_settlement");
     check_view_bumps!(client.get_revenue_pool(), "get_revenue_pool");
     check_view_bumps!(client.get_timelock_window(), "get_timelock_window");
     check_view_bumps!(client.is_paused(), "is_paused");

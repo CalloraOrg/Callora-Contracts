@@ -21,6 +21,11 @@
 //! - [`errors::YieldLimitError`] — stable `u32` error codes returned by the
 //!   contract.
 //!
+//! Counter mutations are operator-gated (#1414): the caller must be a
+//! registered operator and the cap is enforced on the account named in the
+//! call. The surface is otherwise backward compatible with prior versions: the
+//! existing `RevenuePool` re-exports remain unchanged and no prior storage key
+//! discriminant was reused.
 //! The surface is fully backward compatible with prior versions: the existing
 //! `RevenuePool` re-exports remain unchanged, no prior symbol was renamed,
 //! and no prior storage key was reused.

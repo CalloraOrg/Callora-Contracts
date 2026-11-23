@@ -11,9 +11,8 @@ use crate::limits::{
     WindowState, DEFAULT_LIMITS, DEFAULT_WINDOW_LIMITS, MAX_CAP, MAX_WINDOW_LEDGERS,
 };
 use crate::YieldLimitError;
-use proptest::prelude::*;
-use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, Val};
+use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, TryFromVal, Val};
 
 // ---------------------------------------------------------------------
 // helpers
@@ -26,6 +25,9 @@ fn setup_admin<'a>(env: &'a Env) -> (Address, Address, CalloraYieldLimitsClient<
     let client = CalloraYieldLimitsClient::new(env, &contract);
     let admin = Address::generate(env);
     client.init(&admin);
+    // Counters are operator-gated (#1414). The admin doubles as the operator
+    // for every test that is not specifically about the operator registry.
+    client.set_operator(&admin, &admin);
     (contract, admin, client)
 }
 
@@ -78,7 +80,14 @@ fn get_admin_before_init_fails() {
 fn init_emits_event_with_admin_topic() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_contract, admin, _) = setup_admin(&env);
+    // `init` is the last invocation here so `events().all()` still contains its
+    // event (the helper would register an operator afterwards, replacing the
+    // per-invocation event buffer).
+    let contract = env.register(CalloraYieldLimits, ());
+    let client = CalloraYieldLimitsClient::new(&env, &contract);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+    let _ = &client;
 
     // The contract publishes `(Symbol("init"), admin)` as the topic list and
     // `()` as the data side.  Iterate the topic list, decode the first slot
@@ -272,12 +281,12 @@ fn place_bet_increments_then_clear_decrements() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &5u32);
 
-    client.place_bet(&alice);
-    client.place_bet(&alice);
+    client.place_bet(&admin, &alice);
+    client.place_bet(&admin, &alice);
     let state = client.get_account_state(&alice);
     assert_eq!(state.bets, 2);
 
-    client.clear_bet(&alice);
+    client.clear_bet(&admin, &alice);
     let state = client.get_account_state(&alice);
     assert_eq!(state.bets, 1);
 }
@@ -288,11 +297,11 @@ fn place_bet_respects_per_account_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &3u32, &3u32, &3u32);
 
-    client.place_bet(&alice);
-    client.place_bet(&alice);
-    client.place_bet(&alice);
+    client.place_bet(&admin, &alice);
+    client.place_bet(&admin, &alice);
+    client.place_bet(&admin, &alice);
     assert_eq!(
-        client.try_place_bet(&alice),
+        client.try_place_bet(&admin, &alice),
         Err(Ok(YieldLimitError::BetsAtCap))
     );
     let state = client.get_account_state(&alice);
@@ -305,10 +314,10 @@ fn open_position_respects_per_account_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &3u32, &2u32, &3u32);
 
-    client.open_position(&alice);
-    client.open_position(&alice);
+    client.open_position(&admin, &alice);
+    client.open_position(&admin, &alice);
     assert_eq!(
-        client.try_open_position(&alice),
+        client.try_open_position(&admin, &alice),
         Err(Ok(YieldLimitError::PositionsAtCap))
     );
     let state = client.get_account_state(&alice);
@@ -321,10 +330,10 @@ fn subscribe_respects_per_account_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &3u32, &3u32, &2u32);
 
-    client.subscribe(&alice);
-    client.subscribe(&alice);
+    client.subscribe(&admin, &alice);
+    client.subscribe(&admin, &alice);
     assert_eq!(
-        client.try_subscribe(&alice),
+        client.try_subscribe(&admin, &alice),
         Err(Ok(YieldLimitError::SubscriptionsAtCap))
     );
     let state = client.get_account_state(&alice);
@@ -334,9 +343,9 @@ fn subscribe_respects_per_account_cap() {
 #[test]
 fn clear_bet_underflow_returns_typed_error() {
     let env = Env::default();
-    let (_, _, client, alice) = setup_with_user(&env);
+    let (_, admin, client, alice) = setup_with_user(&env);
     assert_eq!(
-        client.try_clear_bet(&alice),
+        client.try_clear_bet(&admin, &alice),
         Err(Ok(YieldLimitError::CounterUnderflow))
     );
 }
@@ -344,9 +353,9 @@ fn clear_bet_underflow_returns_typed_error() {
 #[test]
 fn close_position_underflow_returns_typed_error() {
     let env = Env::default();
-    let (_, _, client, alice) = setup_with_user(&env);
+    let (_, admin, client, alice) = setup_with_user(&env);
     assert_eq!(
-        client.try_close_position(&alice),
+        client.try_close_position(&admin, &alice),
         Err(Ok(YieldLimitError::CounterUnderflow))
     );
 }
@@ -354,9 +363,9 @@ fn close_position_underflow_returns_typed_error() {
 #[test]
 fn unsubscribe_underflow_returns_typed_error() {
     let env = Env::default();
-    let (_, _, client, alice) = setup_with_user(&env);
+    let (_, admin, client, alice) = setup_with_user(&env);
     assert_eq!(
-        client.try_unsubscribe(&alice),
+        client.try_unsubscribe(&admin, &alice),
         Err(Ok(YieldLimitError::CounterUnderflow))
     );
 }
@@ -370,12 +379,12 @@ fn state_independent_across_accounts() {
     client.set_account_limits(&admin, &alice, &2u32, &2u32, &2u32);
     client.set_account_limits(&admin, &bob, &4u32, &4u32, &4u32);
 
-    client.place_bet(&alice);
-    client.place_bet(&alice);
-    client.place_bet(&bob);
-    client.place_bet(&bob);
-    client.place_bet(&bob);
-    client.place_bet(&bob);
+    client.place_bet(&admin, &alice);
+    client.place_bet(&admin, &alice);
+    client.place_bet(&admin, &bob);
+    client.place_bet(&admin, &bob);
+    client.place_bet(&admin, &bob);
+    client.place_bet(&admin, &bob);
     assert_eq!(client.get_account_state(&alice).bets, 2);
     assert_eq!(client.get_account_state(&bob).bets, 4);
 }
@@ -386,15 +395,15 @@ fn place_bet_with_cap_zero_rejects() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &0u32, &0u32, &0u32);
     assert_eq!(
-        client.try_place_bet(&alice),
+        client.try_place_bet(&admin, &alice),
         Err(Ok(YieldLimitError::BetsAtCap))
     );
     assert_eq!(
-        client.try_open_position(&alice),
+        client.try_open_position(&admin, &alice),
         Err(Ok(YieldLimitError::PositionsAtCap))
     );
     assert_eq!(
-        client.try_subscribe(&alice),
+        client.try_subscribe(&admin, &alice),
         Err(Ok(YieldLimitError::SubscriptionsAtCap))
     );
 }
@@ -409,9 +418,9 @@ fn can_place_bet_true_until_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &2u32, &2u32, &2u32);
     assert!(client.can_place_bet(&alice));
-    client.place_bet(&alice);
+    client.place_bet(&admin, &alice);
     assert!(client.can_place_bet(&alice));
-    client.place_bet(&alice);
+    client.place_bet(&admin, &alice);
     assert!(!client.can_place_bet(&alice));
 }
 
@@ -421,7 +430,7 @@ fn can_open_position_true_until_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &5u32, &1u32, &5u32);
     assert!(client.can_open_position(&alice));
-    client.open_position(&alice);
+    client.open_position(&admin, &alice);
     assert!(!client.can_open_position(&alice));
 }
 
@@ -431,7 +440,7 @@ fn can_subscribe_true_until_cap() {
     let (_, admin, client, alice) = setup_with_user(&env);
     client.set_account_limits(&admin, &alice, &5u32, &5u32, &1u32);
     assert!(client.can_subscribe(&alice));
-    client.subscribe(&alice);
+    client.subscribe(&admin, &alice);
     assert!(!client.can_subscribe(&alice));
 }
 
@@ -579,6 +588,70 @@ fn new_admin_takes_over_authority() {
     assert_eq!(client.get_default_limits().max_bets, 7);
 }
 
+// ---------------------------------------------------------------------
+// Upgrade version marker + storage-migration guard (Issue #1223)
+// ---------------------------------------------------------------------
+
+#[test]
+fn get_version_is_none_before_upgrade() {
+    let env = Env::default();
+    let (_, _, client) = setup_admin(&env);
+    assert_eq!(
+        client.get_version(),
+        None,
+        "no WASM hash must be recorded before the first upgrade"
+    );
+}
+
+#[test]
+fn upgrade_rejects_zero_wasm_hash() {
+    let env = Env::default();
+    let (_, admin, client) = setup_admin(&env);
+    let zero = BytesN::from_array(&env, &[0u8; 32]);
+
+    assert_eq!(
+        client.try_upgrade(&admin, &zero),
+        Err(Ok(YieldLimitError::UpgradeRejected)),
+        "all-zero upgrade hash must be rejected by the migration guard"
+    );
+    assert_eq!(
+        client.get_version(),
+        None,
+        "a rejected upgrade must not record a version marker"
+    );
+}
+
+#[test]
+fn upgrade_persists_wasm_hash_for_get_version() {
+    let env = Env::default();
+    let (_, admin, client) = setup_admin(&env);
+    // `upgrade` swaps the installed code, so the target hash must correspond
+    // to WASM uploaded to the test ledger (same pattern as the revenue pool
+    // and settlement upgrade tests).
+    let new_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+
+    client.upgrade(&admin, &new_hash);
+
+    assert_eq!(client.get_version(), Some(new_hash));
+}
+
+#[test]
+fn storage_layout_hash_is_real_and_deterministic() {
+    let env = Env::default();
+    let contract = env.register(CalloraYieldLimits, ());
+    let first = env.as_contract(&contract, || crate::limits::storage_layout_hash(&env));
+    let second = env.as_contract(&contract, || crate::limits::storage_layout_hash(&env));
+
+    assert_eq!(first, second, "layout hash must be deterministic");
+    assert_ne!(
+        first,
+        BytesN::from_array(&env, &[0u8; 32]),
+        "the guard must be invoked with a real layout hash, not the zero sentinel"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Documentation invariant — fail loudly if the mutator count drifts
 // ---------------------------------------------------------------------------
@@ -591,15 +664,15 @@ fn new_admin_takes_over_authority() {
 ///   admin trio (`set_admin`, `accept_admin`, `cancel_admin_transfer`) (3) +
 ///   limits trio (`set_default_limits`, `set_account_limits`,
 ///               `clear_account_limits`) (3) +
-///   window pair (`set_window_ledgers`, `set_window_limits`) (2) +
-///   user counter sextet (`place_bet`, `clear_bet`, `open_position`,
-///                        `close_position`, `subscribe`, `unsubscribe`) (6) +
+///   operator pair (`set_operator`, `remove_operator`) (2) +
+///   operator-gated counter sextet (`place_bet`, `clear_bet`, `open_position`,
+///                                 `close_position`, `subscribe`,
+///                                 `unsubscribe`) (6) +
 ///   `upgrade` (1) = 15.
 ///
-/// Excludes `init` because it is the deployment boundary (no `caller`
-/// parameter) and is treated separately via
-/// `init_twice_fails` / `get_admin_before_init_fails` plus the constructor
-/// exemption documented at the top of `tests/auth_snap.rs`.
+/// Excludes `init` because it takes no `caller` parameter, but note that `init`
+/// now authenticates `admin` directly (#1414) and is covered by
+/// `tests/auth_snap.rs::init_requires_admin_auth`.
 #[test]
 fn mutator_count_matches_documented_surface() {
     const DOCUMENTED_MUTATOR_COUNT: usize = 15;
@@ -610,522 +683,302 @@ fn mutator_count_matches_documented_surface() {
 }
 
 // ---------------------------------------------------------------------
-// Rolling windows (Issue #1522)
+// Issue #1414 — operator-gated counters + persistent caps
 // ---------------------------------------------------------------------
 
-/// Advance the mocked ledger sequence by `delta` ledgers.
-fn advance_ledger(env: &Env, delta: u32) {
-    env.ledger()
-        .with_mut(|li| li.sequence_number = li.sequence_number.saturating_add(delta));
-}
+mod operator_gating {
+    extern crate std;
 
-#[test]
-fn window_disabled_by_default_preserves_old_behaviour() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &2u32, &2u32, &2u32);
+    use crate::limits::{
+        AccountLimits, CalloraYieldLimits, CalloraYieldLimitsClient, StorageKey, CAPS_BUMP_AMOUNT,
+        CAPS_BUMP_THRESHOLD,
+    };
+    use crate::YieldLimitError;
+    use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+    use soroban_sdk::{Address, Env};
 
-    assert_eq!(client.get_window_ledgers(), 0);
-    assert_eq!(
-        client.get_window_limits(),
-        WindowLimits::uniform(MAX_CAP),
-        "per-window caps default to MAX_CAP (permissive)"
-    );
-
-    advance_ledger(&env, 50);
-    client.place_bet(&alice);
-    client.place_bet(&alice);
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsAtCap))
-    );
-
-    let window_state = client.get_window_state(&alice);
-    assert_eq!(
-        window_state,
-        WindowState::zero(),
-        "disabled windows must not allocate window state"
-    );
-}
-
-#[test]
-fn window_default_limits_match_constant() {
-    assert_eq!(DEFAULT_WINDOW_LIMITS, WindowLimits::uniform(MAX_CAP));
-    assert!(DEFAULT_WINDOW_LIMITS.is_valid());
-    assert_eq!(WindowLimits::uniform(7).max_subscriptions, 7);
-    assert!(!WindowLimits {
-        max_bets: MAX_CAP + 1,
-        ..WindowLimits::uniform(1)
-    }
-    .is_valid());
-}
-
-#[test]
-fn set_window_ledgers_requires_admin() {
-    let env = Env::default();
-    let (_, _, client) = setup_admin(&env);
-    let intruder = Address::generate(&env);
-    assert_eq!(
-        client.try_set_window_ledgers(&intruder, &10u32),
-        Err(Ok(YieldLimitError::Unauthorized))
-    );
-}
-
-#[test]
-fn set_window_ledgers_rejects_out_of_bounds() {
-    let env = Env::default();
-    let (_, admin, client) = setup_admin(&env);
-    assert_eq!(
-        client.try_set_window_ledgers(&admin, &(MAX_WINDOW_LEDGERS + 1)),
-        Err(Ok(YieldLimitError::InvalidLimit))
-    );
-    client.set_window_ledgers(&admin, &MAX_WINDOW_LEDGERS);
-    assert_eq!(client.get_window_ledgers(), MAX_WINDOW_LEDGERS);
-    client.set_window_ledgers(&admin, &1u32);
-    assert_eq!(client.get_window_ledgers(), 1);
-    // Zero explicitly disables windows and is always valid.
-    client.set_window_ledgers(&admin, &0u32);
-    assert_eq!(client.get_window_ledgers(), 0);
-}
-
-#[test]
-fn set_window_limits_requires_admin_and_validates() {
-    let env = Env::default();
-    let (_, admin, client) = setup_admin(&env);
-    let intruder = Address::generate(&env);
-    assert_eq!(
-        client.try_set_window_limits(&intruder, &1u32, &1u32, &1u32),
-        Err(Ok(YieldLimitError::Unauthorized))
-    );
-    assert_eq!(
-        client.try_set_window_limits(&admin, &(MAX_CAP + 1), &1u32, &1u32),
-        Err(Ok(YieldLimitError::InvalidLimit))
-    );
-    client.set_window_limits(&admin, &3u32, &4u32, &5u32);
-    let caps = client.get_window_limits();
-    assert_eq!(
-        caps,
-        WindowLimits {
-            max_bets: 3,
-            max_positions: 4,
-            max_subscriptions: 5,
-        }
-    );
-}
-
-#[test]
-fn window_cap_blocks_until_the_window_rolls_over() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-    client.set_window_ledgers(&admin, &10u32);
-    client.set_window_limits(&admin, &2u32, &2u32, &2u32);
-
-    let start = env.ledger().sequence();
-    client.place_bet(&alice);
-    client.place_bet(&alice);
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsWindowCap))
-    );
-    // The failing call must not consume window capacity or concurrent state.
-    let state = client.get_account_state(&alice);
-    assert_eq!(state.bets, 2);
-    assert_eq!(client.get_window_state(&alice).bets_opened, 2);
-
-    // One ledger before the boundary the window is still exhausted.
-    advance_ledger(&env, 9);
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsWindowCap))
-    );
-
-    // Exactly at window_start + W the window rolls and capacity returns.
-    advance_ledger(&env, 1);
-    client.place_bet(&alice);
-    let window_state = client.get_window_state(&alice);
-    assert_eq!(window_state.bets_opened, 1);
-    assert_eq!(window_state.window_start, start + 10);
-    assert_eq!(client.get_account_state(&alice).bets, 3);
-}
-
-#[test]
-fn window_roll_skips_multiple_windows() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-    client.set_window_ledgers(&admin, &5u32);
-    client.set_window_limits(&admin, &1u32, &1u32, &1u32);
-
-    client.place_bet(&alice);
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsWindowCap))
-    );
-
-    // Jump three full windows at once; a single lazy roll is sufficient.
-    let before = env.ledger().sequence();
-    advance_ledger(&env, 17);
-    client.place_bet(&alice);
-    let window_state = client.get_window_state(&alice);
-    assert_eq!(window_state.window_start, before + 17);
-    assert_eq!(window_state.bets_opened, 1);
-}
-
-#[test]
-fn decrements_do_not_refund_window_counts() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-    client.set_window_ledgers(&admin, &20u32);
-    client.set_window_limits(&admin, &2u32, &2u32, &2u32);
-
-    client.place_bet(&alice);
-    client.place_bet(&alice);
-    client.clear_bet(&alice);
-    client.clear_bet(&alice);
-    assert_eq!(client.get_account_state(&alice).bets, 0);
-    assert_eq!(client.get_window_state(&alice).bets_opened, 2);
-
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsWindowCap))
-    );
-    advance_ledger(&env, 20);
-    client.place_bet(&alice);
-    assert_eq!(client.get_window_state(&alice).bets_opened, 1);
-}
-
-#[test]
-fn window_caps_apply_to_positions_and_subscriptions() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-    client.set_window_ledgers(&admin, &10u32);
-    client.set_window_limits(&admin, &1u32, &1u32, &1u32);
-
-    client.open_position(&alice);
-    assert_eq!(
-        client.try_open_position(&alice),
-        Err(Ok(YieldLimitError::PositionsWindowCap))
-    );
-    client.subscribe(&alice);
-    assert_eq!(
-        client.try_subscribe(&alice),
-        Err(Ok(YieldLimitError::SubscriptionsWindowCap))
-    );
-
-    let window_state = client.get_window_state(&alice);
-    assert_eq!(window_state.positions_opened, 1);
-    assert_eq!(window_state.subscriptions_added, 1);
-}
-
-#[test]
-fn windows_are_independent_per_account() {
-    let env = Env::default();
-    let (_, admin, client) = setup_admin(&env);
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    client.set_window_ledgers(&admin, &10u32);
-    client.set_window_limits(&admin, &1u32, &1u32, &1u32);
-
-    client.place_bet(&alice);
-    assert_eq!(
-        client.try_place_bet(&alice),
-        Err(Ok(YieldLimitError::BetsWindowCap))
-    );
-    // Bob has his own window and is unaffected by Alice's exhaustion.
-    client.place_bet(&bob);
-    assert_eq!(client.get_window_state(&bob).bets_opened, 1);
-}
-
-#[test]
-fn can_views_account_for_window_caps_and_expiry() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-    client.set_window_ledgers(&admin, &10u32);
-    client.set_window_limits(&admin, &1u32, &1u32, &1u32);
-
-    assert!(client.can_place_bet(&alice));
-    client.place_bet(&alice);
-    client.open_position(&alice);
-    client.subscribe(&alice);
-    assert!(
-        !client.can_place_bet(&alice),
-        "window exhaustion must be visible through the dry-run view"
-    );
-    assert!(!client.can_open_position(&alice));
-    assert!(!client.can_subscribe(&alice));
-
-    // Views must not mutate storage: the stored window is still at start.
-    let stored = client.get_window_state(&alice);
-
-    advance_ledger(&env, 10);
-    assert!(client.can_place_bet(&alice));
-    assert!(client.can_open_position(&alice));
-    assert!(client.can_subscribe(&alice));
-    assert_eq!(
-        client.get_window_state(&alice),
-        stored,
-        "get_window_state is a pure read; rolling happens on mutation"
-    );
-}
-
-#[test]
-fn can_views_still_respect_concurrent_caps_with_windows_enabled() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &1u32, &1u32, &1u32);
-    client.set_window_ledgers(&admin, &10u32);
-    client.set_window_limits(&admin, &100u32, &100u32, &100u32);
-
-    client.place_bet(&alice);
-    assert!(!client.can_place_bet(&alice));
-    advance_ledger(&env, 100);
-    assert!(
-        !client.can_place_bet(&alice),
-        "window roll must not bypass the concurrent cap"
-    );
-}
-
-#[test]
-fn window_sequence_overflow_is_safe() {
-    // `window_start + window_ledgers` must saturate rather than wrap: a
-    // window near `u32::MAX` must not appear expired immediately.
-    let state = WindowState::started_at(u32::MAX - 5);
-    // The end of the window saturates at `u32::MAX`; the window is still open
-    // on the ledgers before that point rather than wrapping to a tiny value.
-    assert!(!state.is_expired(u32::MAX - 4, 10));
-    // At the saturated boundary the window rolls instead of wrapping around
-    // and appearing freshly started.
-    assert!(state.is_expired(u32::MAX, 10));
-    assert!(!WindowState::started_at(u32::MAX - 1).is_expired(u32::MAX - 1, 10));
-}
-
-/// Return `true` when the most recent invocation emitted `topic`.
-fn last_invocation_emitted(env: &Env, topic: &str) -> bool {
-    let wanted = Symbol::new(env, topic);
-    for event in env.events().all().iter() {
-        if event.1.is_empty() {
-            continue;
-        }
-        if let Ok(first) = Symbol::try_from_val(env, &event.1.get(0).unwrap()) {
-            if first == wanted {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-#[test]
-fn window_events_are_emitted() {
-    let env = Env::default();
-    let (_, admin, client, alice) = setup_with_user(&env);
-    client.set_account_limits(&admin, &alice, &100u32, &100u32, &100u32);
-
-    client.set_window_ledgers(&admin, &10u32);
-    assert!(last_invocation_emitted(&env, "window_ledgers_set"));
-
-    client.set_window_limits(&admin, &1u32, &1u32, &1u32);
-    assert!(last_invocation_emitted(&env, "window_limits_set"));
-
-    client.place_bet(&alice);
-    advance_ledger(&env, 10);
-    client.place_bet(&alice);
-    assert!(last_invocation_emitted(&env, "window_rolled"));
-}
-
-// ---------------------------------------------------------------------
-// Proptest: random operation sequences against a simple model
-// ---------------------------------------------------------------------
-
-/// A deliberately simple model of the concurrent and window caps. It mirrors
-/// the contract's documented semantics rather than its implementation: caps
-/// gate opens, decrements never refund window counts, and a window rolls when
-/// `sequence >= window_start + window_ledgers`.
-#[derive(Default)]
-struct LimitsModel {
-    bets: u32,
-    positions: u32,
-    subscriptions: u32,
-    window_start: Option<u32>,
-    bets_opened: u32,
-    positions_opened: u32,
-    subscriptions_added: u32,
-    sequence: u32,
-}
-
-impl LimitsModel {
-    const CONCURRENT_CAP: u32 = 6;
-    const WINDOW_CAP: u32 = 3;
-    const WINDOW_LEDGERS: u32 = 7;
-
-    /// Effective window counters at the current sequence, rolling lazily
-    /// without committing anything to the model yet. The contract only
-    /// persists a roll when the mutation succeeds, so failed opens must leave
-    /// the model's window untouched too.
-    fn effective_window(&self) -> (u32, u32, u32, u32) {
-        match self.window_start {
-            Some(start) if self.sequence < start.saturating_add(Self::WINDOW_LEDGERS) => (
-                start,
-                self.bets_opened,
-                self.positions_opened,
-                self.subscriptions_added,
-            ),
-            _ => (self.sequence, 0, 0, 0),
-        }
-    }
-
-    fn open(&mut self, kind: u8) -> Result<(), YieldLimitError> {
-        let (concurrent, cap, err_concurrent) = match kind {
-            0 => (self.bets, Self::CONCURRENT_CAP, YieldLimitError::BetsAtCap),
-            1 => (
-                self.positions,
-                Self::CONCURRENT_CAP,
-                YieldLimitError::PositionsAtCap,
-            ),
-            _ => (
-                self.subscriptions,
-                Self::CONCURRENT_CAP,
-                YieldLimitError::SubscriptionsAtCap,
-            ),
-        };
-        // Concurrent caps are checked before the window, mirroring the
-        // contract: a concurrent-cap rejection must not roll the window.
-        if concurrent >= cap {
-            return Err(err_concurrent);
-        }
-
-        let (window_start, bets_opened, positions_opened, subscriptions_added) =
-            self.effective_window();
-        let (window, err_window) = match kind {
-            0 => (bets_opened, YieldLimitError::BetsWindowCap),
-            1 => (positions_opened, YieldLimitError::PositionsWindowCap),
-            _ => (subscriptions_added, YieldLimitError::SubscriptionsWindowCap),
-        };
-        if window >= Self::WINDOW_CAP {
-            return Err(err_window);
-        }
-
-        // Commit the (possibly rolled) window alongside the open.
-        self.window_start = Some(window_start);
-        self.bets_opened = bets_opened;
-        self.positions_opened = positions_opened;
-        self.subscriptions_added = subscriptions_added;
-
-        match kind {
-            0 => {
-                self.bets += 1;
-                self.bets_opened += 1;
-            }
-            1 => {
-                self.positions += 1;
-                self.positions_opened += 1;
-            }
-            _ => {
-                self.subscriptions += 1;
-                self.subscriptions_added += 1;
-            }
-        }
-        Ok(())
-    }
-
-    fn close(&mut self, kind: u8) -> Result<(), YieldLimitError> {
-        let counter = match kind {
-            0 => &mut self.bets,
-            1 => &mut self.positions,
-            _ => &mut self.subscriptions,
-        };
-        if *counter == 0 {
-            return Err(YieldLimitError::CounterUnderflow);
-        }
-        *counter -= 1;
-        Ok(())
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
-
-    /// Compare the contract against the model across randomised open/close
-    /// sequences interleaved with ledger advancement (including ledger jumps
-    /// that skip multiple windows).
-    #[test]
-    fn proptest_window_ops_match_model(ops in prop::collection::vec((0u8..6, 0u8..12), 1..40)) {
-        let env = Env::default();
+    /// Deploy + init with full auth mocking. Returns `(admin, client)`.
+    fn setup<'a>(env: &'a Env) -> (Address, CalloraYieldLimitsClient<'a>) {
         env.mock_all_auths();
+        let contract = env.register(CalloraYieldLimits, ());
+        let client = CalloraYieldLimitsClient::new(env, &contract);
+        let admin = Address::generate(env);
+        client.init(&admin);
+        (admin, client)
+    }
+
+    fn persistent_has(env: &Env, client: &CalloraYieldLimitsClient, key: &StorageKey) -> bool {
+        env.as_contract(&client.address, || env.storage().persistent().has(key))
+    }
+
+    fn instance_has(env: &Env, client: &CalloraYieldLimitsClient, key: &StorageKey) -> bool {
+        env.as_contract(&client.address, || env.storage().instance().has(key))
+    }
+
+    fn persistent_ttl(env: &Env, client: &CalloraYieldLimitsClient, key: &StorageKey) -> u32 {
+        env.as_contract(&client.address, || env.storage().persistent().get_ttl(key))
+    }
+
+    // ── Row 1: init auth ───────────────────────────────────────────────
+
+    #[test]
+    fn init_requires_admin_auth_and_stores_no_admin() {
+        let env = Env::default();
         let contract = env.register(CalloraYieldLimits, ());
         let client = CalloraYieldLimitsClient::new(&env, &contract);
         let admin = Address::generate(&env);
-        let user = Address::generate(&env);
-        client.init(&admin);
-        client.set_window_ledgers(&admin, &LimitsModel::WINDOW_LEDGERS);
-        client.set_window_limits(
-            &admin,
-            &LimitsModel::WINDOW_CAP,
-            &LimitsModel::WINDOW_CAP,
-            &LimitsModel::WINDOW_CAP,
+
+        // No auth is mocked, so `admin.require_auth()` fails.
+        assert!(
+            client.try_init(&admin).is_err(),
+            "init must require the admin signature"
         );
-        client.set_account_limits(
-            &admin,
-            &user,
-            &LimitsModel::CONCURRENT_CAP,
-            &LimitsModel::CONCURRENT_CAP,
-            &LimitsModel::CONCURRENT_CAP,
+        assert_eq!(
+            client.try_get_admin(),
+            Err(Ok(YieldLimitError::NotInitialized)),
+            "a failed init must not store an admin"
+        );
+    }
+
+    // ── Row 2: self-service mutation is rejected ───────────────────────
+
+    #[test]
+    fn account_calling_place_bet_directly_is_unauthorized() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let account = Address::generate(&env);
+        client.set_account_limits(&admin, &account, &1u32, &1u32, &1u32);
+
+        assert_eq!(
+            client.try_place_bet(&account, &account),
+            Err(Ok(YieldLimitError::Unauthorized))
+        );
+        assert_eq!(client.get_account_state(&account).bets, 0);
+    }
+
+    // ── Row 3: registered operator reaches the cap ─────────────────────
+
+    #[test]
+    fn registered_operator_places_bets_up_to_the_cap() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let operator = Address::generate(&env);
+        let account = Address::generate(&env);
+        client.set_operator(&admin, &operator);
+        client.set_account_limits(&admin, &account, &2u32, &2u32, &2u32);
+
+        client.place_bet(&operator, &account);
+        client.place_bet(&operator, &account);
+        assert_eq!(
+            client.try_place_bet(&operator, &account),
+            Err(Ok(YieldLimitError::BetsAtCap))
+        );
+        assert_eq!(client.get_account_state(&account).bets, 2);
+    }
+
+    // ── Row 4: no self-reset of the cap ───────────────────────────────
+
+    #[test]
+    fn account_cannot_clear_its_own_bet() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let operator = Address::generate(&env);
+        let account = Address::generate(&env);
+        client.set_operator(&admin, &operator);
+        client.place_bet(&operator, &account);
+
+        assert_eq!(
+            client.try_clear_bet(&account, &account),
+            Err(Ok(YieldLimitError::Unauthorized)),
+            "an account must not be able to reset its own counter"
+        );
+        assert_eq!(client.get_account_state(&account).bets, 1);
+    }
+
+    // ── Row 5: removed operators stop working ──────────────────────────
+
+    #[test]
+    fn removed_operator_is_rejected() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let operator = Address::generate(&env);
+        let account = Address::generate(&env);
+        client.set_operator(&admin, &operator);
+        client.place_bet(&operator, &account);
+        assert!(client.get_operator(&operator));
+
+        client.remove_operator(&admin, &operator);
+        assert!(!client.get_operator(&operator));
+        assert_eq!(
+            client.try_place_bet(&operator, &account),
+            Err(Ok(YieldLimitError::Unauthorized))
+        );
+        assert_eq!(client.get_account_state(&account).bets, 1);
+    }
+
+    // ── Row 6: only the admin manages the registry ─────────────────────
+
+    #[test]
+    fn set_and_remove_operator_require_admin() {
+        let env = Env::default();
+        let (_admin, client) = setup(&env);
+        let intruder = Address::generate(&env);
+        let operator = Address::generate(&env);
+
+        assert_eq!(
+            client.try_set_operator(&intruder, &operator),
+            Err(Ok(YieldLimitError::Unauthorized))
+        );
+        assert!(!client.get_operator(&operator));
+
+        assert_eq!(
+            client.try_remove_operator(&intruder, &operator),
+            Err(Ok(YieldLimitError::Unauthorized))
+        );
+    }
+
+    // ── Row 7: caps no longer live in instance storage ─────────────────
+
+    #[test]
+    fn account_caps_are_stored_in_persistent_storage() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+
+        let mut first = Address::generate(&env);
+        let mut last = first.clone();
+        for i in 0..500u32 {
+            let account = Address::generate(&env);
+            client.set_account_limits(&admin, &account, &(i + 1), &1u32, &1u32);
+            if i == 0 {
+                first = account.clone();
+            }
+            last = account;
+        }
+
+        for account in [first, last] {
+            let key = StorageKey::AccountLimits(account);
+            assert!(persistent_has(&env, &client, &key));
+            assert!(
+                !instance_has(&env, &client, &key),
+                "caps must not grow the shared instance entry"
+            );
+        }
+    }
+
+    // ── Row 8: caps TTL extended on write and read ──────────────────────
+
+    #[test]
+    fn caps_ttl_is_extended_on_write_and_read() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let account = Address::generate(&env);
+        let key = StorageKey::AccountLimits(account.clone());
+
+        client.set_account_limits(&admin, &account, &3u32, &3u32, &3u32);
+        assert_eq!(persistent_ttl(&env, &client, &key), CAPS_BUMP_AMOUNT);
+
+        // Age the entry below the threshold, then read it back.
+        let step = CAPS_BUMP_AMOUNT - CAPS_BUMP_THRESHOLD + 10;
+        let seq = env.ledger().sequence();
+        env.ledger().set_sequence_number(seq + step);
+        assert!(persistent_ttl(&env, &client, &key) < CAPS_BUMP_THRESHOLD);
+
+        assert_eq!(client.get_account_limits(&account).max_bets, 3);
+        assert_eq!(
+            persistent_ttl(&env, &client, &key),
+            CAPS_BUMP_AMOUNT,
+            "read must re-extend the caps TTL"
         );
 
-        let mut model = LimitsModel {
-            sequence: env.ledger().sequence(),
-            ..LimitsModel::default()
+        // A write below the threshold re-extends it too.
+        let seq = env.ledger().sequence();
+        env.ledger()
+            .set_sequence_number(seq + CAPS_BUMP_AMOUNT - CAPS_BUMP_THRESHOLD + 10);
+        assert!(persistent_ttl(&env, &client, &key) < CAPS_BUMP_THRESHOLD);
+        client.set_account_limits(&admin, &account, &4u32, &4u32, &4u32);
+        assert_eq!(persistent_ttl(&env, &client, &key), CAPS_BUMP_AMOUNT);
+    }
+
+    // ── Row 9: one operator, independent accounts ──────────────────────
+
+    #[test]
+    fn operator_mutates_two_accounts_independently() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let operator = Address::generate(&env);
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        client.set_operator(&admin, &operator);
+        client.set_account_limits(&admin, &alice, &2u32, &2u32, &2u32);
+        client.set_account_limits(&admin, &bob, &4u32, &4u32, &4u32);
+
+        for _ in 0..2 {
+            client.place_bet(&operator, &alice);
+        }
+        for _ in 0..4 {
+            client.place_bet(&operator, &bob);
+        }
+
+        assert_eq!(client.get_account_state(&alice).bets, 2);
+        assert_eq!(client.get_account_state(&bob).bets, 4);
+        assert_eq!(
+            client.try_place_bet(&operator, &alice),
+            Err(Ok(YieldLimitError::BetsAtCap))
+        );
+        assert_eq!(client.get_account_state(&bob).bets, 4);
+    }
+
+    // ── Migration: legacy instance caps are read through ───────────────
+
+    #[test]
+    fn legacy_instance_caps_are_migrated_on_first_read() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let account = Address::generate(&env);
+        let legacy = AccountLimits {
+            max_bets: 1,
+            max_positions: 1,
+            max_subscriptions: 1,
         };
 
-        for (op, advance) in ops {
-            if advance > 0 {
-                env.ledger()
-                    .with_mut(|li| li.sequence_number = li.sequence_number.saturating_add(advance as u32));
-                model.sequence = model.sequence.saturating_add(advance as u32);
-            }
+        let key = StorageKey::AccountLimits(account.clone());
+        env.as_contract(&client.address, || {
+            env.storage().instance().set(&key, &legacy);
+        });
 
-            let (actual, expected) = match op {
-                0..=2 => {
-                    let actual = match op {
-                        0 => client.try_place_bet(&user),
-                        1 => client.try_open_position(&user),
-                        _ => client.try_subscribe(&user),
-                    };
-                    (actual, model.open(op))
-                }
-                3..=5 => {
-                    let actual = match op {
-                        3 => client.try_clear_bet(&user),
-                        4 => client.try_close_position(&user),
-                        _ => client.try_unsubscribe(&user),
-                    };
-                    (actual, model.close(op - 3))
-                }
-                _ => unreachable!(),
-            };
+        // Reading migrates the entry to persistent storage.
+        assert_eq!(client.get_account_limits(&account), legacy);
+        assert!(!instance_has(&env, &client, &key));
+        assert!(persistent_has(&env, &client, &key));
 
-            let actual = match actual {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(_)) => panic!("unexpected conversion error"),
-                Err(Ok(err)) => Err(err),
-                Err(Err(_)) => panic!("unexpected invocation error"),
-            };
-            prop_assert_eq!(actual, expected);
+        // The migrated override is the one enforced.
+        client.set_operator(&admin, &admin);
+        client.place_bet(&admin, &account);
+        assert_eq!(
+            client.try_place_bet(&admin, &account),
+            Err(Ok(YieldLimitError::BetsAtCap))
+        );
+    }
 
-            let state = client.get_account_state(&user);
-            prop_assert_eq!(state.bets, model.bets);
-            prop_assert_eq!(state.positions, model.positions);
-            prop_assert_eq!(state.subscriptions, model.subscriptions);
+    #[test]
+    fn clearing_account_limits_removes_both_layouts() {
+        let env = Env::default();
+        let (admin, client) = setup(&env);
+        let account = Address::generate(&env);
+        let key = StorageKey::AccountLimits(account.clone());
 
-            let window = client.get_window_state(&user);
-            prop_assert_eq!(window.window_start, model.window_start.unwrap_or(0));
-            prop_assert_eq!(window.bets_opened, model.bets_opened);
-            prop_assert_eq!(window.positions_opened, model.positions_opened);
-            prop_assert_eq!(window.subscriptions_added, model.subscriptions_added);
-        }
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&key, &AccountLimits::uniform(1));
+        });
+        client.set_account_limits(&admin, &account, &2u32, &2u32, &2u32);
+        assert!(!instance_has(&env, &client, &key));
+        assert!(persistent_has(&env, &client, &key));
+
+        client.clear_account_limits(&admin, &account);
+        assert!(!instance_has(&env, &client, &key));
+        assert!(!persistent_has(&env, &client, &key));
     }
 }

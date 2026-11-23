@@ -1,0 +1,26 @@
+[package]
+name = "callora-storage-migration"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Deterministic storage-migration validation that runs before upgraded contract code executes."
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = "1.4"
+# Workspace hosts that embed StorageMigrationValidator. Used by the
+# cross-host key-collision regression test.
+callora-checkpoint = { path = "../checkpoint" }
+callora-migrate = { path = "../migrate" }
+callora-revenue-pool = { path = "../revenue_pool" }
+callora-yield = { path = "../yield" }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

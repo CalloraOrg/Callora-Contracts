@@ -35,6 +35,11 @@ pub fn event_claim_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "claim_cancelled")
 }
 
+/// Returns the Symbol for the `"claim_expired"` event topic.
+pub fn event_claim_expired(env: &Env) -> Symbol {
+    Symbol::new(env, "claim_expired")
+}
+
 /// Returns the Symbol for the `"claim_consumed"` event topic.
 ///
 /// Emitted when a claim identifier is permanently consumed (marked spent) by
@@ -42,4 +47,9 @@ pub fn event_claim_cancelled(env: &Env) -> Symbol {
 /// event to track which identifiers are no longer replayable.
 pub fn event_claim_consumed(env: &Env) -> Symbol {
     Symbol::new(env, "claim_consumed")
+}
+
+/// Returns the Symbol for the canonical event version marker used by Callora.
+pub fn event_version_v1(env: &Env) -> Symbol {
+    Symbol::new(env, "callora.v1")
 }

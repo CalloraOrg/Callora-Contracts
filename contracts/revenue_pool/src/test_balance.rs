@@ -1,19 +1,20 @@
-use crate::{RevenuePool, RevenuePoolClient};
+use crate::{RevenuePool, RevenuePoolClient, RevenuePoolError};
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 #[test]
-#[should_panic(expected = "revenue pool not initialized")]
 fn test_balance_uninitialized_panics() {
     let env = Env::default();
     let addr = env.register(RevenuePool, ());
     let client = RevenuePoolClient::new(&env, &addr);
 
-    // Calling balance before init should panic
-    client.balance();
+    // Calling balance before init should return a typed error.
+    assert_eq!(
+        client.try_balance(),
+        Err(Ok(RevenuePoolError::NotInitialized.into()))
+    );
 }
 
 #[test]
-#[should_panic(expected = "unauthorized: caller is not admin")]
 fn test_receive_payment_unauthorized_panics() {
     let env = Env::default();
     env.mock_all_auths();
@@ -27,6 +28,9 @@ fn test_receive_payment_unauthorized_panics() {
 
     client.init(&admin, &usdc);
 
-    // Call from unauthorized address should panic
-    client.receive_payment(&attacker, &100, &false);
+    // Calling from an unauthorized address should return a typed error.
+    assert_eq!(
+        client.try_receive_payment(&attacker, &100, &false),
+        Err(Ok(RevenuePoolError::Unauthorized.into()))
+    );
 }
