@@ -87,4 +87,10 @@ pub enum RevenuePoolError {
     AlreadyEmergencyPaused = 24,
     /// Emergency recovery was requested while inactive (code 25).
     NotEmergencyPaused = 25,
+    /// Share distribution received no recipients (code 26).
+    SharesEmpty = 26,
+    /// Share distribution basis points did not sum to 10_000 (code 27).
+    InvalidShareSum = 27,
+    /// A share was zero or exceeded 10_000 basis points (code 28).
+    InvalidShare = 28,
 }

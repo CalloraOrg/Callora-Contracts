@@ -33,8 +33,8 @@ pub const MAX_REQUESTER_REFUNDS: u32 = 100;
 /// Maximum page size for requester refund index reads.
 pub const MAX_REQUESTER_REFUNDS_PAGE_SIZE: u32 = 50;
 
-/// Default dispute window in seconds (7 days) when not explicitly configured.
-pub const DEFAULT_DISPUTE_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+/// Maximum page size for the global pending index reads.
+pub const MAX_PENDING_REFUNDS_PAGE_SIZE: u32 = 50;
 
 #[contract]
 pub struct RefundContract;
@@ -212,6 +212,22 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        // Global pending index: ids are appended in strictly increasing order,
+        // so the index stays sorted and `get_pending_refunds` can binary-search it.
+        let pending_key = StorageKey::PendingIndex;
+        let mut pending_index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&pending_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        pending_index.push_back(request_id);
+        env.storage().persistent().set(&pending_key, &pending_index);
+        env.storage().persistent().extend_ttl(
+            &pending_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
         env.storage()
             .instance()
             .set(&StorageKey::RefundCounter, &request_id);
@@ -317,6 +333,8 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        Self::remove_from_pending_index(&env, request_id);
+
         Self::emit_refund_processed(
             env,
             request_id,
@@ -370,6 +388,8 @@ impl RefundContract {
             PERSISTENT_BUMP_THRESHOLD,
             PERSISTENT_BUMP_AMOUNT,
         );
+
+        Self::remove_from_pending_index(&env, request_id);
 
         Self::emit_refund_processed(
             &env,
@@ -554,6 +574,9 @@ impl RefundContract {
         }
 
         // CEI: Persist state updates before external transfer.
+        // Invariant: only `Approved` requests reach here, and `approve_refund`
+        // already removed the id from the pending index, so no index update is
+        // needed for the `Approved -> Processed` transition.
         request.status = RefundStatus::Processed;
         request.processed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &request);
@@ -909,6 +932,97 @@ impl RefundContract {
             }
         }
         Ok(page)
+    }
+
+    /// Return a bounded page of IDs of refund requests still in `Pending` status.
+    ///
+    /// `cursor` is exclusive: only IDs strictly greater than `cursor` are
+    /// considered, so pass `0` for the first page. The returned tuple is the
+    /// ascending page of IDs and the cursor to pass for the next page, or
+    /// `None` when the page reached the end of the index.
+    ///
+    /// `limit` is clamped to [`MAX_PENDING_REFUNDS_PAGE_SIZE`]; a `limit` of `0`
+    /// returns an empty page. The pending index is a sorted `Vec<u64>`, so the
+    /// first eligible ID is located with a binary search (O(log n)) and at most
+    /// [`MAX_PENDING_REFUNDS_PAGE_SIZE`] entries are read afterwards, keeping
+    /// per-call cost bounded. The index and returned request records receive
+    /// TTL bumps.
+    pub fn get_pending_refunds(
+        env: Env,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<(soroban_sdk::Vec<u64>, Option<u64>), RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+
+        let index_key = StorageKey::PendingIndex;
+        let index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if env.storage().persistent().has(&index_key) {
+            env.storage().persistent().extend_ttl(
+                &index_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let effective_limit = limit.min(MAX_PENDING_REFUNDS_PAGE_SIZE);
+        // First index whose ID is strictly greater than `cursor`: an exact match
+        // sits at the returned position, so start one past it.
+        let start = match index.binary_search(cursor) {
+            Ok(pos) => pos.saturating_add(1),
+            Err(pos) => pos,
+        };
+        let end = start.saturating_add(effective_limit).min(index.len());
+
+        let mut page = soroban_sdk::Vec::new(&env);
+        for offset in start..end {
+            let request_id = index.get(offset).unwrap();
+            let key = StorageKey::PendingRefund(request_id);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                page.push_back(request_id);
+            }
+        }
+
+        let next_cursor = if end < index.len() && end > start {
+            Some(index.get(end - 1).unwrap())
+        } else {
+            None
+        };
+
+        Ok((page, next_cursor))
+    }
+
+    /// Remove `request_id` from the global pending index if it is present.
+    ///
+    /// Shared by [`Self::approve_refund`] and [`Self::reject_refund`] so that
+    /// any future terminal transition (e.g. an `Expired` status) can reuse the
+    /// same helper to keep the index consistent. The index is sorted, so the
+    /// entry is located with a binary search.
+    fn remove_from_pending_index(env: &Env, request_id: u64) {
+        let key = StorageKey::PendingIndex;
+        let mut index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if let Ok(pos) = index.binary_search(request_id) {
+            index.remove(pos);
+            env.storage().persistent().set(&key, &index);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
     }
 
     /// Internal helper to get admin without TTL bump (for internal use).

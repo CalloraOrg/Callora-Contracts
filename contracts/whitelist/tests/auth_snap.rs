@@ -86,6 +86,19 @@ fn add_address_requires_auth() {
 }
 
 #[test]
+fn add_address_until_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    client.set_admin_cooldown(&admin, &1);
+
+    env.set_auths(&[]);
+    let addr = Address::generate(&env);
+    let res = client.try_add_address_until(&admin, &addr, &1_000_100);
+    assert!(res.is_err(), "add_address_until must require auth");
+}
+
+#[test]
 fn remove_address_requires_auth() {
     let env = Env::default();
     let (admin, client) = setup(&env);

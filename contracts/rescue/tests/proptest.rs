@@ -640,3 +640,196 @@ fn rescue_self_transfer_returns_invalid_recipient() {
     assert_eq!(client.total_rescued_for(&token_addr), 0);
     assert_eq!(token_client.balance(&contract_id), 1000);
 }
+
+// ---------------------------------------------------------------------------
+// `rescue_many` conservation property
+// ---------------------------------------------------------------------------
+
+/// Token balance minted to the rescue contract for each batch trace.
+const BATCH_INITIAL_BALANCE: i128 = 10_000_000;
+
+/// Maximum amount moved by a single batch item.
+const BATCH_MAX_RESCUE: i128 = 50_000;
+
+const BATCH_TRACE_LEN: u32 = 24;
+
+/// Register `count` Stellar Asset Contracts, each pre-funded with
+/// [`BATCH_INITIAL_BALANCE`], and return their addresses.
+fn setup_batch_tokens(env: &Env, contract_id: &Address, count: u32) -> std::vec::Vec<Address> {
+    let token_admin = Address::generate(env);
+    let mut tokens = std::vec::Vec::new();
+    for _ in 0..count {
+        let token_addr = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        token::StellarAssetClient::new(env, &token_addr).mint(contract_id, &BATCH_INITIAL_BALANCE);
+        tokens.push(token_addr);
+    }
+    tokens
+}
+
+/// Assert that contract balances, recipient balances and per-token counters
+/// all agree with `expected`.
+fn assert_batch_invariant(
+    env: &Env,
+    client: &CalloraRescueClient<'_>,
+    tokens: &[Address],
+    expected: &[i128],
+    recipient: &Address,
+    seed: u64,
+    step: u32,
+) {
+    for (i, token_addr) in tokens.iter().enumerate() {
+        let token_client = token::Client::new(env, token_addr);
+        let want = expected[i];
+
+        assert_eq!(
+            client.total_rescued_for(token_addr),
+            want,
+            "seed={seed} step={step}: total_rescued_for(token {i}) mismatch"
+        );
+        assert_eq!(
+            token_client.balance(&client.address),
+            BATCH_INITIAL_BALANCE - want,
+            "seed={seed} step={step}: contract balance for token {i} mismatch"
+        );
+        assert_eq!(
+            token_client.balance(recipient),
+            want,
+            "seed={seed} step={step}: recipient received wrong amount of token {i}"
+        );
+    }
+}
+
+fn run_batch_trace(seed: u64) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(CalloraRescue, ());
+    let client = CalloraRescueClient::new(&env, &contract_id);
+    client.init(&admin);
+
+    let recipient = Address::generate(&env);
+    let tokens = setup_batch_tokens(&env, &contract_id, 2);
+    let mut expected = [0_i128, 0_i128];
+
+    let mut rng = Prng::new(seed ^ 0x0B47_C0DE);
+
+    for step in 1..=BATCH_TRACE_LEN {
+        let total_before = client.total_rescued_for(&tokens[0]);
+
+        match rng.next_u64() % 5 {
+            // --- Valid batch of one or two distinct tokens ------------------
+            0 | 1 => {
+                let k = 1 + (rng.next_u64() as usize % tokens.len());
+                let first = rng.next_u64() as usize % tokens.len();
+                let mut picks = std::vec![first];
+                if k == 2 {
+                    picks.push((first + 1) % tokens.len());
+                }
+
+                let mut batch = soroban_sdk::Vec::new(&env);
+                let mut moved = std::vec::Vec::new();
+                for &i in picks.iter() {
+                    let remaining = BATCH_INITIAL_BALANCE - expected[i];
+                    let amount = rng.range_i128(1, remaining.min(BATCH_MAX_RESCUE));
+                    batch.push_back((tokens[i].clone(), amount));
+                    moved.push((i, amount));
+                }
+
+                client.rescue_many(&admin, &recipient, &batch);
+                for (i, amount) in moved {
+                    expected[i] += amount;
+                }
+            }
+
+            // --- One insufficient item rolls the whole batch back -----------
+            2 => {
+                let good = rng.next_u64() as usize % tokens.len();
+                let bad = (good + 1) % tokens.len();
+
+                let good_remaining = BATCH_INITIAL_BALANCE - expected[good];
+                let good_amount = rng.range_i128(1, good_remaining.min(BATCH_MAX_RESCUE));
+                let bad_balance = BATCH_INITIAL_BALANCE - expected[bad];
+                let bad_amount = bad_balance + rng.range_i128(1, 1_000);
+
+                let mut batch = soroban_sdk::Vec::new(&env);
+                batch.push_back((tokens[good].clone(), good_amount));
+                batch.push_back((tokens[bad].clone(), bad_amount));
+
+                assert_eq!(
+                    client
+                        .try_rescue_many(&admin, &recipient, &batch)
+                        .unwrap_err()
+                        .unwrap(),
+                    RescueError::InsufficientBalance,
+                    "seed={seed} step={step}: batch with an unbacked item must fail"
+                );
+            }
+
+            // --- Zero amount --------------------------------------------------
+            3 => {
+                let i = rng.next_u64() as usize % tokens.len();
+                let mut batch = soroban_sdk::Vec::new(&env);
+                batch.push_back((tokens[i].clone(), 0_i128));
+
+                assert_eq!(
+                    client
+                        .try_rescue_many(&admin, &recipient, &batch)
+                        .unwrap_err()
+                        .unwrap(),
+                    RescueError::AmountNotPositive,
+                    "seed={seed} step={step}: zero-amount item must fail"
+                );
+            }
+
+            // --- Duplicate token ---------------------------------------------
+            4 => {
+                let i = rng.next_u64() as usize % tokens.len();
+                let mut batch = soroban_sdk::Vec::new(&env);
+                batch.push_back((tokens[i].clone(), 1_i128));
+                batch.push_back((tokens[i].clone(), 2_i128));
+
+                assert_eq!(
+                    client
+                        .try_rescue_many(&admin, &recipient, &batch)
+                        .unwrap_err()
+                        .unwrap(),
+                    RescueError::DuplicateToken,
+                    "seed={seed} step={step}: duplicate tokens must be rejected"
+                );
+            }
+
+            _ => {
+                let empty: soroban_sdk::Vec<(Address, i128)> = soroban_sdk::Vec::new(&env);
+                assert_eq!(
+                    client
+                        .try_rescue_many(&admin, &recipient, &empty)
+                        .unwrap_err()
+                        .unwrap(),
+                    RescueError::BatchEmpty,
+                    "seed={seed} step={step}: empty batch must be rejected"
+                );
+            }
+        }
+
+        assert_batch_invariant(&env, &client, &tokens, &expected, &recipient, seed, step);
+
+        assert!(
+            client.total_rescued_for(&tokens[0]) >= total_before,
+            "seed={seed} step={step}: per-token counter decreased"
+        );
+    }
+}
+
+/// Conservation: across seeded traces of valid and rejected batches,
+/// `contract balance + rescued == initial balance` and
+/// `recipient balance == rescued` for every token, while rejected batches
+/// leave both untouched.
+#[test]
+fn rescue_many_conservation_holds_across_seeded_batches() {
+    for seed in 0..SEED_COUNT {
+        run_batch_trace(seed);
+    }
+}

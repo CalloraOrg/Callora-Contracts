@@ -391,8 +391,7 @@ fn set_admin_by_non_admin_fails() {
 }
 
 #[test]
-#[should_panic(expected = "caller is not pending admin")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
+#[should_panic(expected = "unauthorized: caller is not pending admin")]
 fn accept_admin_wrong_caller_panics() {
     let (env, contract, admin) = setup();
     let c = client(&env, &contract);
