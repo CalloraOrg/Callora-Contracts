@@ -10,6 +10,7 @@
 //!
 //! | Category | Entrypoints |
 //! |----------|-------------|
+//! | Vault reserve caps | `set_reserve_cap`, `get_reserve_cap` |
 //! | Settlement min-balance limits | `set_developer_min_balance`, `set_minimum_balance`, `get_developer_min_balance`, `get_minimum_balance` |
 //! | Settlement daily withdraw caps | `set_daily_withdraw_cap`, `get_daily_withdraw_cap`, `get_withdrawal_today` |
 //! | Revenue-pool distribute caps | `set_max_distribute`, `get_max_distribute` |
@@ -20,8 +21,22 @@ extern crate std;
 
 use callora_revenue_pool::{RevenuePool, RevenuePoolClient};
 use callora_settlement::{CalloraSettlement, CalloraSettlementClient};
+use callora_vault::{CalloraVault, CalloraVaultClient};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env};
+
+// ---------------------------------------------------------------------------
+// Vault helpers
+// ---------------------------------------------------------------------------
+
+fn setup_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
+    env.mock_all_auths();
+    let owner = Address::generate(env);
+    let addr = env.register(CalloraVault, ());
+    let client = CalloraVaultClient::new(env, &addr);
+    client.init(&owner);
+    (owner, client)
+}
 
 // ---------------------------------------------------------------------------
 // Settlement helpers
@@ -51,6 +66,48 @@ fn setup_pool(env: &Env) -> (Address, RevenuePoolClient<'_>) {
     let client = RevenuePoolClient::new(env, &addr);
     client.init(&admin, &usdc);
     (admin, client)
+}
+
+// ===========================================================================
+// Vault — reserve cap limits
+// ===========================================================================
+
+/// Snapshot: `set_reserve_cap` requires owner auth on `caller`.
+#[test]
+fn set_reserve_cap_requires_auth() {
+    let env = Env::default();
+    let (owner, client) = setup_vault(&env);
+    let token = Address::generate(&env);
+
+    env.set_auths(&[]);
+    let res = client.try_set_reserve_cap(&owner, &token, &1_000);
+    assert!(
+        res.is_err(),
+        "set_reserve_cap must require auth on caller"
+    );
+}
+
+/// With owner auth mocked, `set_reserve_cap` succeeds and reads back.
+#[test]
+fn set_reserve_cap_succeeds_with_owner_auth() {
+    let env = Env::default();
+    let (owner, client) = setup_vault(&env);
+    let token = Address::generate(&env);
+
+    env.mock_all_auths();
+    client.set_reserve_cap(&owner, &token, &1_000);
+    assert_eq!(client.get_reserve_cap(&token), 1_000);
+}
+
+/// Snapshot: `get_reserve_cap` is callable without auth; unset reads `i128::MAX`.
+#[test]
+fn get_reserve_cap_no_auth() {
+    let env = Env::default();
+    let (_, client) = setup_vault(&env);
+    let token = Address::generate(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(client.get_reserve_cap(&token), i128::MAX);
 }
 
 // ===========================================================================
@@ -230,13 +287,14 @@ fn set_max_distribute_succeeds_with_auth() {
 #[test]
 fn auth_snap_covers_expected_mutating_entrypoint_count() {
     // Mutators asserted above:
-    // 1. set_developer_min_balance
-    // 2. set_minimum_balance
-    // 3. set_daily_withdraw_cap
-    // 4. set_max_distribute
-    const EXPECTED_MUTATING_LIMITS_ENTRYPOINTS: usize = 4;
+    // 1. set_reserve_cap
+    // 2. set_developer_min_balance
+    // 3. set_minimum_balance
+    // 4. set_daily_withdraw_cap
+    // 5. set_max_distribute
+    const EXPECTED_MUTATING_LIMITS_ENTRYPOINTS: usize = 5;
     assert_eq!(
-        EXPECTED_MUTATING_LIMITS_ENTRYPOINTS, 4,
+        EXPECTED_MUTATING_LIMITS_ENTRYPOINTS, 5,
         "update auth_snap.rs when adding/removing limits mutators"
     );
 }

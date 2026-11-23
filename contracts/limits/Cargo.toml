@@ -16,3 +16,4 @@ doctest = false
 soroban-sdk = { workspace = true, features = ["testutils"] }
 callora-settlement = { path = "../settlement" }
 callora-revenue-pool = { path = "../revenue_pool" }
+callora-vault = { path = "../vault" }
