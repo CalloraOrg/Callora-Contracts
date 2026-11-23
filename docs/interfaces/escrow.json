@@ -1,0 +1,377 @@
+{
+  "contract": "callora-escrow",
+  "version": "0.1.0",
+  "description": "Fund-holding escrow contract for approved payment assets. Admins create and release escrows, with per-action cooldowns, a circuit breaker, signer rotation, and two-step admin transfer.",
+  "crate": "callora-escrow",
+  "source": "contracts/escrow/src/lib.rs",
+
+  "errors": {
+    "description": "Stable EscrowError codes returned by contract entrypoints. Callers should match on the numeric code rather than parsing messages.",
+    "codes": [
+      { "code": 1, "name": "NotInitialized", "description": "Contract has not been initialized." },
+      { "code": 2, "name": "AlreadyInitialized", "description": "init was called more than once." },
+      { "code": 3, "name": "Unauthorized", "description": "Caller is not authorized for this operation." },
+      { "code": 4, "name": "CooldownActive", "description": "The action is still inside its cool-off window." },
+      { "code": 5, "name": "InvalidCooldown", "description": "Cooldown is outside the accepted range of 1 second to 30 days." },
+      { "code": 6, "name": "NoPendingAdmin", "description": "No admin transfer is currently pending." },
+      { "code": 7, "name": "Overflow", "description": "Arithmetic overflow was detected." },
+      { "code": 8, "name": "AssetNotApproved", "description": "Payment asset is not approved for escrow creation." },
+      { "code": 9, "name": "InvalidInput", "description": "An input is malformed or forbidden, including a self-address or non-positive amount." },
+      { "code": 10, "name": "EscrowExists", "description": "An escrow already exists for the payment asset and recipient pair." },
+      { "code": 11, "name": "Paused", "description": "The contract is paused and the operation is blocked." },
+      { "code": 12, "name": "NotFound", "description": "No escrow record exists for the payment asset and recipient pair." }
+    ]
+  },
+
+  "types": {
+    "EscrowRecord": "Recorded escrow keyed by payment_asset and recipient.",
+    "EscrowReleasedEvent": "Payload emitted when an escrow is released."
+  },
+
+  "functions": [
+    {
+      "name": "init",
+      "description": "Initialize the contract once with an admin, signer, and optional cooldown. If cooldown_secs is omitted, the one-hour default is used.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "admin", "type": "Address", "optional": false, "description": "Initial admin address; must authorize the call." },
+        { "name": "signer", "type": "Address", "optional": false, "description": "Initial escrow signer address." },
+        { "name": "cooldown_secs", "type": "Option<u64>", "optional": true, "description": "Cooldown in seconds, from 1 second through 30 days; None selects the one-hour default." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::AlreadyInitialized (code 2) — init was already called.",
+        "EscrowError::InvalidCooldown (code 5) — explicit cooldown_secs is outside the accepted range."
+      ],
+      "events": [
+        { "topics": ["\"init\"", "admin (Address)"], "data": "cooldown_secs (u64; default applied if omitted)" }
+      ]
+    },
+    {
+      "name": "get_cooldown",
+      "description": "Return the configured global cool-off window in seconds.",
+      "access": "any",
+      "params": [],
+      "returns": "u64",
+      "panics": ["EscrowError::NotInitialized (code 1) — called before init."],
+      "events": []
+    },
+    {
+      "name": "set_cooldown",
+      "description": "Update the global cool-off window. The accepted range is 1 second through 30 days.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "secs", "type": "u64", "optional": false, "description": "New cooldown in seconds, from 1 through 2,592,000." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::InvalidCooldown (code 5) — secs is outside the accepted range."
+      ],
+      "events": [
+        { "topics": ["\"cooldown_set\"", "caller (Address)"], "data": "secs (u64)" }
+      ]
+    },
+    {
+      "name": "cooldown_remaining",
+      "description": "Return seconds remaining before the named action can run again, or zero when it is ready. Does not require initialization.",
+      "access": "any",
+      "params": [
+        { "name": "action", "type": "Symbol", "optional": false, "description": "Cool-off action tag, such as release, unpause, or rotate." }
+      ],
+      "returns": "u64",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "is_ready",
+      "description": "Return whether the named action may run now.",
+      "access": "any",
+      "params": [
+        { "name": "action", "type": "Symbol", "optional": false, "description": "Cool-off action tag." }
+      ],
+      "returns": "bool",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "get_admin",
+      "description": "Return the current admin address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": ["EscrowError::NotInitialized (code 1) — called before init."],
+      "events": []
+    },
+    {
+      "name": "get_pending_admin",
+      "description": "Return the nominated admin address, or null when no two-step admin transfer is pending.",
+      "access": "any",
+      "params": [],
+      "returns": "Option<Address>",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "get_signer",
+      "description": "Return the current escrow signer address.",
+      "access": "any",
+      "params": [],
+      "returns": "Address",
+      "panics": ["EscrowError::NotInitialized (code 1) — called before init."],
+      "events": []
+    },
+    {
+      "name": "is_paused",
+      "description": "Return whether the contract is paused. Defaults to false before the first pause call.",
+      "access": "any",
+      "params": [],
+      "returns": "bool",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "release",
+      "description": "Release an escrow to its designated recipient. The record is removed before the token transfer to prevent replay; this critical action is cooldown-guarded.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "payment_asset", "type": "Address", "optional": false, "description": "Payment asset contract of the escrow." },
+        { "name": "recipient", "type": "Address", "optional": false, "description": "Designated recipient of the funds." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Paused (code 11) — contract is paused.",
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::CooldownActive (code 4) — release is inside its cool-off window.",
+        "EscrowError::NotFound (code 12) — no record exists for the payment_asset and recipient pair."
+      ],
+      "events": [
+        { "topics": ["\"escrow_released\"", "caller (Address)"], "data": "EscrowReleasedEvent { payment_asset, recipient, amount }" }
+      ]
+    },
+    {
+      "name": "pause",
+      "description": "Activate the circuit breaker immediately. This admin action is not cooldown-guarded.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized."
+      ],
+      "events": [
+        { "topics": ["\"action\"", "caller (Address)"], "data": "\"pause\" (Symbol)" }
+      ]
+    },
+    {
+      "name": "unpause",
+      "description": "Deactivate the circuit breaker. This critical action is cooldown-guarded.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::CooldownActive (code 4) — unpause is inside its cool-off window."
+      ],
+      "events": [
+        { "topics": ["\"action\"", "caller (Address)"], "data": "\"unpause\" (Symbol)" }
+      ]
+    },
+    {
+      "name": "rotate_signer",
+      "description": "Replace the current escrow signer. This critical action is cooldown-guarded using the rotate tag.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_signer", "type": "Address", "optional": false, "description": "Replacement escrow signer; must differ from the current signer." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::CooldownActive (code 4) — rotate is inside its cool-off window.",
+        "EscrowError::InvalidInput (code 9) — new_signer equals the current signer."
+      ],
+      "events": [
+        { "topics": ["\"signer_rotated\"", "caller (Address)"], "data": "(old_signer: Address, new_signer: Address)" }
+      ]
+    },
+    {
+      "name": "is_asset_approved",
+      "description": "Return whether an asset is approved for future escrow creation. Approval is deny-by-default.",
+      "access": "any",
+      "params": [
+        { "name": "asset", "type": "Address", "optional": false, "description": "Payment asset contract address." }
+      ],
+      "returns": "bool",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "get_escrow",
+      "description": "Return the escrow record for a payment_asset and recipient pair, or null if no record exists.",
+      "access": "any",
+      "params": [
+        { "name": "payment_asset", "type": "Address", "optional": false, "description": "Payment asset contract address." },
+        { "name": "recipient", "type": "Address", "optional": false, "description": "Designated recipient address." }
+      ],
+      "returns": "Option<EscrowRecord>",
+      "panics": [],
+      "events": []
+    },
+    {
+      "name": "add_approved_asset",
+      "description": "Approve a payment asset for future escrow creation. Approving an already-approved asset is idempotent.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "asset", "type": "Address", "optional": false, "description": "Payment asset contract to approve; cannot be this contract." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::InvalidInput (code 9) — asset resolves to the escrow contract address."
+      ],
+      "events": [
+        { "topics": ["\"asset_approved\"", "caller (Address)"], "data": "asset (Address)" }
+      ]
+    },
+    {
+      "name": "remove_approved_asset",
+      "description": "Revoke a payment asset's approval for new escrows. Existing escrow records are unchanged; removing an unapproved asset is a no-op.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "asset", "type": "Address", "optional": false, "description": "Payment asset contract to revoke; cannot be this contract." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::InvalidInput (code 9) — asset resolves to the escrow contract address."
+      ],
+      "events": [
+        { "topics": ["\"asset_removed\"", "caller (Address)"], "data": "asset (Address)" }
+      ]
+    },
+    {
+      "name": "create_escrow",
+      "description": "Transfer funds from the admin caller into the contract and record a new escrow for an approved payment asset and recipient. The pair cannot be reused, and the contract must not be paused.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin and funder; must authorize." },
+        { "name": "payment_asset", "type": "Address", "optional": false, "description": "Approved payment asset contract; cannot be this contract." },
+        { "name": "recipient", "type": "Address", "optional": false, "description": "Designated recipient; cannot be this contract." },
+        { "name": "amount", "type": "i128", "optional": false, "description": "Escrow amount in asset micro-units; must be positive." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Paused (code 11) — contract is paused.",
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::InvalidInput (code 9) — asset or recipient is the contract itself, or amount is not positive.",
+        "EscrowError::AssetNotApproved (code 8) — payment_asset is not approved.",
+        "EscrowError::EscrowExists (code 10) — record already exists for the payment_asset and recipient pair."
+      ],
+      "events": [
+        { "topics": ["\"escrow_created\"", "caller (Address)"], "data": "EscrowRecord { payment_asset, recipient, amount, created_at }" }
+      ]
+    },
+    {
+      "name": "set_admin",
+      "description": "Nominate a new admin. The current admin retains authority until the nominee accepts the transfer.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." },
+        { "name": "new_admin", "type": "Address", "optional": false, "description": "Address of the nominated admin." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized."
+      ],
+      "events": [
+        { "topics": ["\"admin_nominated\"", "caller (Address)"], "data": "new_admin (Address)" }
+      ]
+    },
+    {
+      "name": "accept_admin",
+      "description": "Complete the two-step admin transfer. Must be called and authorized by the nominated admin.",
+      "access": "pending admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must equal the pending admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::NoPendingAdmin (code 6) — no admin transfer is pending.",
+        "EscrowError::Unauthorized (code 3) — caller is not the pending admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized."
+      ],
+      "events": [
+        { "topics": ["\"admin_accepted\"", "old_admin (Address)"], "data": "new_admin (Address)" }
+      ]
+    },
+    {
+      "name": "cancel_admin_transfer",
+      "description": "Cancel a pending admin nomination. Only the current admin may call.",
+      "access": "admin (must sign)",
+      "params": [
+        { "name": "caller", "type": "Address", "optional": false, "description": "Must be the current admin; must authorize." }
+      ],
+      "returns": "void",
+      "panics": [
+        "EscrowError::Unauthorized (code 3) — caller is not the current admin.",
+        "EscrowError::NotInitialized (code 1) — contract is not initialized.",
+        "EscrowError::NoPendingAdmin (code 6) — no admin transfer is pending."
+      ],
+      "events": [
+        { "topics": ["\"admin_cancelled\"", "caller (Address)"], "data": "cancelled_pending_admin (Address)" }
+      ]
+    }
+  ],
+
+  "event_topics": [
+    { "topic": "init", "emitted_by": ["init"], "topics": ["topic symbol", "admin (Address)"], "data": "cooldown_secs (u64)" },
+    { "topic": "cooldown_set", "emitted_by": ["set_cooldown"], "topics": ["topic symbol", "caller (Address)"], "data": "secs (u64)" },
+    { "topic": "action", "emitted_by": ["pause", "unpause"], "topics": ["topic symbol", "caller (Address)"], "data": "action tag (Symbol): pause or unpause" },
+    { "topic": "signer_rotated", "emitted_by": ["rotate_signer"], "topics": ["topic symbol", "caller (Address)"], "data": "(old_signer: Address, new_signer: Address)" },
+    { "topic": "admin_nominated", "emitted_by": ["set_admin"], "topics": ["topic symbol", "caller (Address)"], "data": "new_admin (Address)" },
+    { "topic": "admin_accepted", "emitted_by": ["accept_admin"], "topics": ["topic symbol", "old_admin (Address)"], "data": "new_admin (Address)" },
+    { "topic": "admin_cancelled", "emitted_by": ["cancel_admin_transfer"], "topics": ["topic symbol", "caller (Address)"], "data": "cancelled_pending_admin (Address)" },
+    { "topic": "asset_approved", "emitted_by": ["add_approved_asset"], "topics": ["topic symbol", "caller (Address)"], "data": "asset (Address)" },
+    { "topic": "asset_removed", "emitted_by": ["remove_approved_asset"], "topics": ["topic symbol", "caller (Address)"], "data": "asset (Address)" },
+    { "topic": "escrow_created", "emitted_by": ["create_escrow"], "topics": ["topic symbol", "caller (Address)"], "data": "EscrowRecord { payment_asset, recipient, amount, created_at }" },
+    { "topic": "escrow_released", "emitted_by": ["release"], "topics": ["topic symbol", "caller (Address)"], "data": "EscrowReleasedEvent { payment_asset, recipient, amount }" },
+    { "topic": "callora.v1", "emitted_by": [], "topics": ["canonical event version marker symbol"], "data": "Not emitted by the current contract entrypoints; provided by event_version_v1 in events.rs." }
+  ],
+
+  "types_detail": {
+    "EscrowRecord": {
+      "description": "Persistent record for funds escrowed under a payment asset and recipient pair.",
+      "fields": {
+        "payment_asset": { "type": "Address", "description": "Payment asset contract bound to the escrow." },
+        "recipient": { "type": "Address", "description": "Designated recipient of the escrowed funds." },
+        "amount": { "type": "i128", "description": "Escrow amount in payment asset micro-units." },
+        "created_at": { "type": "u64", "description": "Ledger timestamp in seconds when the escrow was created." }
+      }
+    },
+    "EscrowReleasedEvent": {
+      "description": "Payload emitted after an escrow is released.",
+      "fields": {
+        "payment_asset": { "type": "Address", "description": "Payment asset contract released." },
+        "recipient": { "type": "Address", "description": "Recipient of the released funds." },
+        "amount": { "type": "i128", "description": "Released amount in payment asset micro-units." }
+      }
+    }
+  }
+}

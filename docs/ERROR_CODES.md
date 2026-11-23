@@ -159,6 +159,9 @@ must not be reassigned once released.
 | 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |
 | 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |
 | 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |
+| 26 | `SharesEmpty` | Revenue Pool | Share distribution received no recipients |
+| 27 | `InvalidShareSum` | Revenue Pool | Share distribution basis points did not sum to 10_000 |
+| 28 | `InvalidShare` | Revenue Pool | A share was zero or exceeded 10_000 basis points |
 
 ## Upgrade
 

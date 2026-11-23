@@ -808,20 +808,15 @@ impl CalloraEscrow {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Test modules
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod test;
-
 #[cfg(test)]
 mod rustdoc_tests {
     #[test]
     fn every_public_fn_in_lib_has_rustdoc() {
         let source = include_str!("lib.rs")
-            .split("// ---------------------------------------------------------------------------\n// Test modules")
+            .split(
+                "// ---------------------------------------------------------------------------
+// Test modules",
+            )
             .next()
             .expect("lib.rs contains test module marker");
         let lines: std::vec::Vec<&str> = source.lines().collect();

@@ -527,3 +527,92 @@ fn cooldown_rejection_leaves_no_partial_state() {
     assert!(!client.is_offering_registered(&bad_oid));
     assert!(client.is_offering_registered(&oid(&env, "ok")));
 }
+
+#[test]
+fn update_inside_cooldown_is_rejected_and_allowed_after() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let dev = Address::generate(&env);
+    let id = oid(&env, "update");
+    client.register_offering(&admin, &dev, &id, &meta(&env));
+
+    advance(&env, admin::COOLDOWN_SECONDS - 1);
+    let new_meta = String::from_str(&env, "ipfs://QmUpdated");
+    assert_eq!(
+        client.try_update_offering(&dev, &id, &new_meta),
+        Err(Ok(RegistryError::AdminCooldownActive))
+    );
+    assert_eq!(client.get_offering(&id).metadata, meta(&env));
+
+    advance(&env, 1);
+    client.update_offering(&dev, &id, &new_meta);
+    assert_eq!(client.get_offering(&id).metadata, new_meta);
+}
+
+#[test]
+fn update_consumes_the_developer_cooldown() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let dev = Address::generate(&env);
+    let id = oid(&env, "update-first");
+    client.register_offering(&admin, &dev, &id, &meta(&env));
+    advance(&env, admin::COOLDOWN_SECONDS);
+
+    client.update_offering(&dev, &id, &String::from_str(&env, "ipfs://QmUpdated"));
+
+    assert_eq!(
+        client.try_register_offering(&admin, &dev, &oid(&env, "next"), &meta(&env)),
+        Err(Ok(RegistryError::AdminCooldownActive))
+    );
+}
+
+#[test]
+fn transfer_proposal_consumes_cooldown_and_accept_keeps_previous_owner_cooldown() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let registry_id = client.address.clone();
+    let dev = Address::generate(&env);
+    let new_dev = Address::generate(&env);
+    let id = oid(&env, "transfer");
+    client.register_offering(&admin, &dev, &id, &meta(&env));
+
+    advance(&env, admin::COOLDOWN_SECONDS - 1);
+    assert_eq!(
+        client.try_propose_offering_transfer(&dev, &id, &new_dev),
+        Err(Ok(RegistryError::AdminCooldownActive))
+    );
+
+    advance(&env, 1);
+    client.propose_offering_transfer(&dev, &id, &new_dev);
+    let proposed_at = env.ledger().timestamp();
+
+    advance(&env, 10);
+    client.accept_offering_transfer(&new_dev, &id);
+
+    env.as_contract(&registry_id, || {
+        assert_eq!(admin::last_developer_action(&env, &dev), Some(proposed_at));
+        assert_eq!(admin::last_developer_action(&env, &new_dev), None);
+    });
+    client.register_offering(&admin, &new_dev, &oid(&env, "new-dev"), &meta(&env));
+}
+
+#[test]
+fn deprecation_does_not_consume_cooldown() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let registry_id = client.address.clone();
+    let dev = Address::generate(&env);
+    let id = oid(&env, "deprecate");
+    client.register_offering(&admin, &dev, &id, &meta(&env));
+    let registered_at = env.ledger().timestamp();
+
+    advance(&env, 10);
+    client.deprecate_offering(&dev, &id);
+
+    env.as_contract(&registry_id, || {
+        assert_eq!(
+            admin::last_developer_action(&env, &dev),
+            Some(registered_at)
+        );
+    });
+}

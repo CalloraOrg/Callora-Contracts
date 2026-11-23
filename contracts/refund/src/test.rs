@@ -3,7 +3,7 @@
 use crate::{
     FeesWithdrawnEvent, InitializedEvent, RefundConfigUpdatedEvent, RefundContract,
     RefundContractClient, RefundError, RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
-    MAX_REQUESTER_REFUNDS,
+    MAX_PENDING_REFUNDS_PAGE_SIZE, MAX_REQUESTER_REFUNDS,
 };
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{Address, Env, IntoVal, Symbol};
@@ -1173,4 +1173,131 @@ fn test_request_refund_overflow() {
 
     let res = client.try_request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
     assert_eq!(res.unwrap_err().unwrap(), RefundError::Overflow);
+}
+
+#[test]
+fn test_get_pending_refunds_empty_list() {
+    let (_env, _admin, client) = setup();
+
+    let (page, cursor) = client.get_pending_refunds(&0, &10);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn test_get_pending_refunds_paginates_across_pages_in_id_order() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    for _ in 0..5 {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    let (page1, cursor1) = client.get_pending_refunds(&0, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap(), 1);
+    assert_eq!(page1.get(1).unwrap(), 2);
+    assert_eq!(cursor1, Some(2));
+
+    let (page2, cursor2) = client.get_pending_refunds(&cursor1.unwrap(), &2);
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2.get(0).unwrap(), 3);
+    assert_eq!(page2.get(1).unwrap(), 4);
+    assert_eq!(cursor2, Some(4));
+
+    let (page3, cursor3) = client.get_pending_refunds(&cursor2.unwrap(), &2);
+    assert_eq!(page3.len(), 1);
+    assert_eq!(page3.get(0).unwrap(), 5);
+    assert_eq!(cursor3, None);
+}
+
+#[test]
+fn test_get_pending_refunds_ids_vanish_after_approve_and_reject() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let first = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "one"));
+    let second = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "two"));
+    let third = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "three"));
+
+    client.approve_refund(&admin, &first);
+    client.reject_refund(&admin, &second);
+
+    let (page, cursor) = client.get_pending_refunds(&0, &10);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap(), third);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn test_get_pending_refunds_limit_clamped_to_page_size() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    for _ in 0..(MAX_PENDING_REFUNDS_PAGE_SIZE + 10) {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    let (page, cursor) = client.get_pending_refunds(&0, &u32::MAX);
+    assert_eq!(page.len(), MAX_PENDING_REFUNDS_PAGE_SIZE);
+    assert_eq!(page.get(0).unwrap(), 1);
+    assert_eq!(
+        page.get(page.len() - 1).unwrap(),
+        MAX_PENDING_REFUNDS_PAGE_SIZE as u64
+    );
+    assert_eq!(cursor, Some(MAX_PENDING_REFUNDS_PAGE_SIZE as u64));
+}
+
+#[test]
+fn test_get_pending_refunds_limit_zero_returns_empty_page() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    for _ in 0..3 {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    let (page, cursor) = client.get_pending_refunds(&0, &0);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn test_get_pending_refunds_cursor_past_the_end() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    client.request_refund(&requester, &token, &500, &Symbol::new(&env, "one"));
+    let last = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "two"));
+
+    // Cursor equal to the last id yields nothing further.
+    let (page, cursor) = client.get_pending_refunds(&last, &10);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+
+    // Cursor beyond the last id also yields nothing.
+    let (page, cursor) = client.get_pending_refunds(&999, &10);
+    assert_eq!(page.len(), 0);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn test_get_pending_refunds_after_reject_then_new_request() {
+    let (env, admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let first = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "one"));
+    client.reject_refund(&admin, &first);
+    let second = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "two"));
+
+    let (page, cursor) = client.get_pending_refunds(&0, &10);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap(), second);
+    assert_eq!(cursor, None);
 }

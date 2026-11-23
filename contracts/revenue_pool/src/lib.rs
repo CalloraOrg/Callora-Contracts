@@ -836,6 +836,133 @@ impl RevenuePool {
         Ok(())
     }
 
+    /// Distribute a total amount according to basis-point shares.
+    ///
+    /// Recipients and shares are paired by position. Every share must be
+    /// greater than zero and the complete share sum must equal 10_000. Rounded
+    /// amounts are assigned floor-wise using `total * bps / 10_000`; any
+    /// remainder is added deterministically to the first recipient.
+    ///
+    /// All validation completes before the first USDC transfer, so this
+    /// entrypoint is atomic and uses the same batch lifecycle events and
+    /// maximum recipient count as [`batch_distribute`].
+    pub fn distribute_by_shares(
+        env: Env,
+        caller: Address,
+        total: i128,
+        shares: Vec<(Address, u32)>,
+    ) -> Result<(), RevenuePoolError> {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+
+        if total <= 0 {
+            return Err(RevenuePoolError::AmountNotPositive);
+        }
+        if total > Self::get_max_distribute(env.clone()) {
+            return Err(RevenuePoolError::AmountExceedsMaxDistribute);
+        }
+
+        let n = shares.len();
+        if n == 0 {
+            return Err(RevenuePoolError::SharesEmpty);
+        }
+        if n > MAX_BATCH_SIZE {
+            return Err(RevenuePoolError::BatchTooLarge);
+        }
+
+        let mut seen: Map<Address, bool> = Map::new(&env);
+        let mut share_sum: u32 = 0;
+        let mut amounts: Vec<(Address, i128)> = Vec::new(&env);
+        let contract_address = env.current_contract_address();
+        let mut distributed: i128 = 0;
+
+        for share_leg in shares.iter() {
+            let (recipient, bps) = share_leg;
+            if bps == 0 || bps > 10_000 {
+                return Err(RevenuePoolError::InvalidShare);
+            }
+            share_sum = match share_sum.checked_add(bps) {
+                Some(value) => value,
+                None => return Err(RevenuePoolError::Overflow),
+            };
+            if seen.contains_key(recipient.clone()) {
+                return Err(RevenuePoolError::DuplicateRecipient);
+            }
+            seen.set(recipient.clone(), true);
+            if recipient == contract_address {
+                return Err(RevenuePoolError::InvalidRecipient);
+            }
+
+            let amount = total
+                .checked_mul(bps as i128)
+                .and_then(|value| value.checked_div(10_000))
+                .ok_or(RevenuePoolError::Overflow)?;
+            distributed = distributed
+                .checked_add(amount)
+                .ok_or(RevenuePoolError::Overflow)?;
+            amounts.push_back((recipient, amount));
+        }
+
+        if share_sum != 10_000 {
+            return Err(RevenuePoolError::InvalidShareSum);
+        }
+        if distributed < 0 || distributed > total {
+            return Err(RevenuePoolError::Overflow);
+        }
+
+        let remainder = total
+            .checked_sub(distributed)
+            .ok_or(RevenuePoolError::Overflow)?;
+        if remainder > 0 {
+            let (first_recipient, first_amount) = amounts.get(0).ok_or(RevenuePoolError::SharesEmpty)?;
+            amounts.set(
+                0,
+                (
+                    first_recipient,
+                    first_amount
+                        .checked_add(remainder)
+                        .ok_or(RevenuePoolError::Overflow)?,
+                ),
+            );
+        }
+
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(RevenuePoolError::NotInitialized));
+        let usdc = token::Client::new(&env, &usdc_address);
+
+        if usdc.balance(&contract_address) < total {
+            return Err(RevenuePoolError::InsufficientBalance);
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let mut batch_index = 0_u32;
+        for payment in amounts.iter() {
+            let (to, amount) = payment;
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                amount,
+                events::DistributionMode::Batch,
+                batch_index,
+                n,
+            );
+            events::emit_distribute_started(&env, &caller, &to, &lifecycle);
+            usdc.transfer(&contract_address, &to, &amount);
+            env.events()
+                .publish((events::event_batch_distribute(&env), to.clone()), amount);
+            events::emit_distribute_completed(&env, &caller, &to, &lifecycle);
+            batch_index = batch_index.saturating_add(1);
+        }
+
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Balance view
     // -----------------------------------------------------------------------
