@@ -24,11 +24,21 @@
 //!
 //! Both the owner and admin can manage the whitelist, but the cool-off window
 //! applies regardless of which role performs the action.
+//!
+//! ## Temporary Grants
+//!
+//! `add_address` grants a permanent entry. `add_address_until` grants a
+//! temporary entry that lapses on its own: the address is whitelisted strictly
+//! before `expires_at` and is no longer whitelisted at or after it. Expired
+//! entries are filtered from `get_whitelist` and may be re-added (which
+//! replaces the stale entry). `remove_address` and `clear_all` delete any
+//! associated expiry data.
 
 mod errors;
 pub use errors::WhitelistError;
 
 pub mod admin;
+pub mod events;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
@@ -48,6 +58,10 @@ pub enum StorageKey {
     WhitelistAdminCooldown,
     /// Audit record for the most recently executed critical whitelist admin action.
     WhitelistLastCriticalAction,
+    /// Optional expiry timestamp for an address added with `add_address_until`.
+    ///
+    /// Appended at the end so every pre-existing discriminant stays stable.
+    WhitelistExpiry(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +101,8 @@ impl CalloraWhitelist {
     /// # Errors
     /// - [`WhitelistError::AlreadyInitialized`] if `init` has already been called.
     pub fn init(env: Env, admin: Address) -> Result<(), WhitelistError> {
+        admin.require_auth();
+
         if env.storage().instance().has(&StorageKey::WhitelistOwner) {
             return Err(WhitelistError::AlreadyInitialized);
         }
@@ -192,7 +208,8 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
     pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
-        caller.require_auth();
+        // `require_admin` performs `caller.require_auth()`; authorizing twice
+        // in the same frame fails with `Auth, ExistingValue` on Soroban.
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -203,8 +220,16 @@ impl CalloraWhitelist {
             .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
             .unwrap_or_else(|| Vec::new(&env));
 
-        if list.contains(&address) {
-            return Err(WhitelistError::AddressAlreadyInWhitelist);
+        if let Some(index) = list.iter().position(|a| a == address) {
+            // An expired temporary grant is treated as absent: re-adding it
+            // permanently replaces the stale entry and drops its expiry.
+            if !Self::is_expired(&env, &address) {
+                return Err(WhitelistError::AddressAlreadyInWhitelist);
+            }
+            list.remove(index as u32);
+            env.storage()
+                .instance()
+                .remove(&StorageKey::WhitelistExpiry(address.clone()));
         }
 
         list.push_back(address);
@@ -213,6 +238,77 @@ impl CalloraWhitelist {
             .set(&StorageKey::WhitelistList, &list);
 
         Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Add an address to the whitelist until `expires_at` (admin only,
+    /// cooldown-gated).
+    ///
+    /// The address is whitelisted strictly before `expires_at` and is no
+    /// longer whitelisted at or after it. `expires_at` must be strictly in the
+    /// future. Re-adding an expired address is allowed and replaces the stale
+    /// entry; re-adding a live entry returns
+    /// [`WhitelistError::AddressAlreadyInWhitelist`].
+    ///
+    /// Expired entries are omitted from [`Self::get_whitelist`] but remain in
+    /// storage until re-added, removed with [`Self::remove_address`], or
+    /// cleared with [`Self::clear_all`].
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    /// - `address` — Address to add.
+    /// - `expires_at` — Ledger timestamp at which the grant lapses.
+    ///
+    /// # Errors
+    /// - [`WhitelistError::Unauthorized`] if `caller` is not the admin.
+    /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
+    /// - [`WhitelistError::InvalidExpiry`] if `expires_at <= now`.
+    /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
+    /// - [`WhitelistError::AddressAlreadyInWhitelist`] if a live entry exists.
+    pub fn add_address_until(
+        env: Env,
+        caller: Address,
+        address: Address,
+        expires_at: u64,
+    ) -> Result<(), WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+
+        if expires_at <= env.ledger().timestamp() {
+            return Err(WhitelistError::InvalidExpiry);
+        }
+
+        admin::guard(&env, Symbol::new(&env, "add_address_until"))?;
+
+        let mut list = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if let Some(index) = list.iter().position(|a| a == address) {
+            if !Self::is_expired(&env, &address) {
+                return Err(WhitelistError::AddressAlreadyInWhitelist);
+            }
+            list.remove(index as u32);
+        }
+
+        list.push_back(address.clone());
+        env.storage()
+            .instance()
+            .set(&StorageKey::WhitelistList, &list);
+        env.storage()
+            .instance()
+            .set(&StorageKey::WhitelistExpiry(address.clone()), &expires_at);
+
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_address_added_until(&env),
+                caller,
+                address.clone(),
+            ),
+            expires_at,
+        );
         Ok(())
     }
 
@@ -250,6 +346,10 @@ impl CalloraWhitelist {
             None => return Err(WhitelistError::AddressNotInWhitelist),
         }
 
+        env.storage()
+            .instance()
+            .remove(&StorageKey::WhitelistExpiry(address.clone()));
+
         if list.is_empty() {
             env.storage().instance().remove(&StorageKey::WhitelistList);
         } else {
@@ -279,43 +379,69 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
+        // Remove each address's optional expiry before dropping the list so no
+        // orphaned expiry entries survive a clear.
+        if let Some(list) = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
+        {
+            for address in list.iter() {
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::WhitelistExpiry(address));
+            }
+        }
         env.storage().instance().remove(&StorageKey::WhitelistList);
 
         Self::bump_instance_ttl(&env);
         Ok(())
     }
 
-    /// Check whether an address is in the whitelist.
+    /// Check whether an address is in the whitelist and not expired.
     ///
     /// No authentication required — this is a public read-only view function.
+    /// Entries added with `add_address` never expire. Entries added with
+    /// `add_address_until(T)` are whitelisted strictly before `T` and are not
+    /// whitelisted at or after `T`.
     ///
     /// # Returns
-    /// `true` if the address is present in the whitelist, `false` otherwise.
+    /// `true` if the address is present and unexpired, `false` otherwise.
     pub fn is_whitelisted(env: Env, address: Address) -> bool {
         match env
             .storage()
             .instance()
             .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
         {
-            Some(list) => list.contains(&address),
+            Some(list) => list.contains(&address) && !Self::is_expired(&env, &address),
             None => false,
         }
     }
 
-    /// Return the current whitelist.
+    /// Return the current whitelist, excluding expired entries.
     ///
     /// No authentication required — this is a public read-only view function.
-    /// Addresses are returned in insertion order.
+    /// Addresses are returned in insertion order. Expired temporary grants are
+    /// filtered out (and may be re-added or removed by the admin).
     ///
     /// # Returns
-    /// `Vec<Address>` containing all addresses currently in the whitelist.
+    /// `Vec<Address>` containing all unexpired addresses in the whitelist.
     /// Returns an empty vector if no whitelist has been configured.
     pub fn get_whitelist(env: Env) -> Vec<Address> {
         Self::bump_instance_ttl(&env);
-        env.storage()
+        let mut active = Vec::new(&env);
+        if let Some(list) = env
+            .storage()
             .instance()
             .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .unwrap_or_else(|| Vec::new(&env))
+        {
+            for address in list.iter() {
+                if !Self::is_expired(&env, &address) {
+                    active.push_back(address);
+                }
+            }
+        }
+        active
     }
 
     // -----------------------------------------------------------------------
@@ -390,6 +516,20 @@ impl CalloraWhitelist {
         Ok(())
     }
 
+    /// Return `true` when `address` has a recorded expiry that has been reached.
+    ///
+    /// An address with no `WhitelistExpiry` entry never expires.
+    fn is_expired(env: &Env, address: &Address) -> bool {
+        match env
+            .storage()
+            .instance()
+            .get::<_, u64>(&StorageKey::WhitelistExpiry(address.clone()))
+        {
+            Some(expires_at) => env.ledger().timestamp() >= expires_at,
+            None => false,
+        }
+    }
+
     /// Extend instance storage TTL to `INSTANCE_BUMP_AMOUNT` when the remaining
     /// TTL falls below `INSTANCE_BUMP_THRESHOLD`.
     #[inline]
@@ -461,6 +601,7 @@ mod tests {
     #[test]
     fn test_non_admin_cannot_set_admin() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let intruder = Address::generate(&env);
         let new_admin = Address::generate(&env);
@@ -492,7 +633,10 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::NoAdminTransferPending)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -600,6 +744,227 @@ mod tests {
         assert!(client.get_whitelist().is_empty());
     }
 
+    /// Return whether the contract has a stored expiry for `address`.
+    fn has_expiry(env: &Env, client: &CalloraWhitelistClient<'_>, address: &Address) -> bool {
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .has(&StorageKey::WhitelistExpiry(address.clone()))
+        })
+    }
+
+    #[test]
+    fn test_add_address_until_boundaries() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr, &1_000_100);
+
+        // Strictly before T: whitelisted.
+        env.ledger().set_timestamp(1_000_099);
+        assert!(client.is_whitelisted(&addr));
+        assert_eq!(client.get_whitelist().len(), 1);
+
+        // Exactly at T: expired.
+        env.ledger().set_timestamp(1_000_100);
+        assert!(!client.is_whitelisted(&addr));
+        assert!(client.get_whitelist().is_empty());
+    }
+
+    #[test]
+    fn test_add_address_until_rejects_non_future_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        for expires_at in [999_999u64, 1_000_000] {
+            assert_eq!(
+                client.try_add_address_until(&admin, &addr, &expires_at),
+                Err(Ok(WhitelistError::InvalidExpiry))
+            );
+        }
+        assert!(!client.is_whitelisted(&addr));
+        // Invalid input must not arm the cool-off window.
+        assert!(client.is_admin_action_ready());
+    }
+
+    #[test]
+    fn test_readd_expired_address_replaces_stale_entry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr, &1_000_010);
+
+        env.ledger().set_timestamp(1_000_011);
+        assert!(!client.is_whitelisted(&addr));
+
+        // Re-adding an expired temporary grant is allowed and refreshes it.
+        client.add_address_until(&admin, &addr, &1_000_100);
+        assert!(client.is_whitelisted(&addr));
+        assert_eq!(client.get_whitelist().len(), 1);
+
+        let contract_id = client.address.clone();
+        env.as_contract(&contract_id, || {
+            assert_eq!(
+                env.storage()
+                    .instance()
+                    .get::<_, u64>(&StorageKey::WhitelistExpiry(addr.clone())),
+                Some(1_000_100)
+            );
+        });
+    }
+
+    #[test]
+    fn test_add_address_permanently_after_expiry_clears_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr, &1_000_010);
+
+        env.ledger().set_timestamp(1_000_011);
+        client.add_address(&admin, &addr);
+
+        assert!(client.is_whitelisted(&addr));
+        assert!(!has_expiry(&env, &client, &addr));
+
+        // Permanent entries never expire.
+        env.ledger().set_timestamp(9_000_000);
+        assert!(client.is_whitelisted(&addr));
+        assert_eq!(client.get_whitelist().len(), 1);
+    }
+
+    #[test]
+    fn test_duplicate_live_entry_rejected_for_both_adders() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr, &1_000_100);
+        env.ledger().set_timestamp(1_000_001);
+
+        assert_eq!(
+            client.try_add_address(&admin, &addr),
+            Err(Ok(WhitelistError::AddressAlreadyInWhitelist))
+        );
+        env.ledger().set_timestamp(1_000_002);
+        assert_eq!(
+            client.try_add_address_until(&admin, &addr, &1_000_200),
+            Err(Ok(WhitelistError::AddressAlreadyInWhitelist))
+        );
+    }
+
+    #[test]
+    fn test_add_address_until_is_cooldown_gated() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+        let addr2 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &10);
+        client.add_address_until(&admin, &addr1, &1_000_100);
+
+        assert_eq!(
+            client.try_add_address_until(&admin, &addr2, &1_000_100),
+            Err(Ok(WhitelistError::AdminCooldownActive))
+        );
+
+        env.ledger().set_timestamp(1_000_010);
+        client.add_address_until(&admin, &addr2, &1_000_100);
+        assert!(client.is_whitelisted(&addr2));
+    }
+
+    #[test]
+    fn test_remove_address_deletes_expiry() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr, &1_000_100);
+        assert!(has_expiry(&env, &client, &addr));
+
+        env.ledger().set_timestamp(1_000_001);
+        client.remove_address(&admin, &addr);
+        assert!(!client.is_whitelisted(&addr));
+        assert!(!has_expiry(&env, &client, &addr));
+    }
+
+    #[test]
+    fn test_clear_all_deletes_all_expiries() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let addr1 = Address::generate(&env);
+        let addr2 = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address_until(&admin, &addr1, &1_000_100);
+        env.ledger().set_timestamp(1_000_001);
+        client.add_address_until(&admin, &addr2, &1_000_200);
+
+        env.ledger().set_timestamp(1_000_002);
+        client.clear_all(&admin);
+
+        assert!(client.get_whitelist().is_empty());
+        assert!(!has_expiry(&env, &client, &addr1));
+        assert!(!has_expiry(&env, &client, &addr2));
+    }
+
+    #[test]
+    fn test_get_whitelist_filters_expired_entries() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1_000_000);
+        let admin = Address::generate(&env);
+        let permanent = Address::generate(&env);
+        let temporary = Address::generate(&env);
+
+        let client = deploy_whitelist(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+        client.add_address(&admin, &permanent);
+        env.ledger().set_timestamp(1_000_001);
+        client.add_address_until(&admin, &temporary, &1_000_100);
+
+        env.ledger().set_timestamp(1_000_100);
+        let list = client.get_whitelist();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.get(0).unwrap(), permanent);
+        assert!(!client.is_whitelisted(&temporary));
+    }
+
     #[test]
     fn test_is_whitelisted_returns_false_for_uninit() {
         let env = Env::default();
@@ -616,6 +981,7 @@ mod tests {
     #[test]
     fn test_non_admin_cannot_add_address() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let intruder = Address::generate(&env);
         let addr = Address::generate(&env);
@@ -834,5 +1200,6 @@ mod tests {
         assert_eq!(WhitelistError::InvalidAdminCooldown as u32, 50);
         assert_eq!(WhitelistError::NoAdminTransferPending as u32, 51);
         assert_eq!(WhitelistError::NewAdminSameAsCurrent as u32, 52);
+        assert_eq!(WhitelistError::InvalidExpiry as u32, 53);
     }
 }

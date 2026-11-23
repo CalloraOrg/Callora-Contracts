@@ -242,12 +242,104 @@ fn benchmark_scenarios_execute_successfully() {
     assert!(client.get_whitelist().is_empty());
 }
 
+/// Invariant: an address whose expiry has been reached is never reported as
+/// whitelisted, never appears in `get_whitelist`, and can be re-added once the
+/// stale entry has lapsed.
+#[test]
+fn expired_addresses_are_never_reported_whitelisted() {
+    for seed in 0..SEED_COUNT {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(START_TIMESTAMP);
+
+        let admin = Address::generate(&env);
+        let pool: std::vec::Vec<Address> = (0..ADDRESS_POOL_SIZE)
+            .map(|_| Address::generate(&env))
+            .collect();
+        let client = deploy(&env, &admin);
+        client.set_admin_cooldown(&admin, &1);
+
+        // Modelled temporary grants: (address, expires_at).
+        let mut grants: std::vec::Vec<(Address, u64)> = std::vec::Vec::new();
+        let mut rng = Prng::new(seed ^ 0xA5A5_5A5A_1234_5678);
+
+        for step in 1..=TRACE_LENGTH {
+            // Cooldown is 1 second, so every mutation advances the clock.
+            advance_timestamp(&env);
+            let now = env.ledger().timestamp();
+
+            let address = pool[rng.index(pool.len())].clone();
+            let live = grants
+                .iter()
+                .any(|(a, expires_at)| a == &address && now < *expires_at);
+            let expired_grant = grants
+                .iter()
+                .any(|(a, expires_at)| a == &address && now >= *expires_at);
+
+            if expired_grant {
+                // Re-adding an expired grant is allowed and replaces it.
+                let retry_at = now.saturating_add(10);
+                client.add_address_until(&admin, &address, &retry_at);
+                grants.retain(|(a, _)| a != &address);
+                grants.push((address.clone(), retry_at));
+            } else if !live {
+                let expires_at = now.saturating_add((rng.next_u64() % 25) + 1);
+                client.add_address_until(&admin, &address, &expires_at);
+                grants.retain(|(a, _)| a != &address);
+                grants.push((address.clone(), expires_at));
+            }
+
+            // Occasionally jump the clock far enough to expire everything.
+            if rng.next_u64().is_multiple_of(7) {
+                env.ledger()
+                    .set_timestamp(env.ledger().timestamp().saturating_add(40));
+            }
+            let now = env.ledger().timestamp();
+
+            let mut expected = std::vec::Vec::new();
+            for (address, expires_at) in &grants {
+                if now >= *expires_at {
+                    assert!(
+                        !client.is_whitelisted(address),
+                        "expired address reported whitelisted at seed={seed}, step={step}"
+                    );
+                } else {
+                    expected.push(address.clone());
+                }
+            }
+
+            for address in &pool {
+                assert_eq!(
+                    client.is_whitelisted(address),
+                    expected.contains(address),
+                    "membership mismatch at seed={seed}, step={step}"
+                );
+            }
+
+            let listed = to_std_vec(client.get_whitelist());
+            assert_eq!(
+                listed.len(),
+                expected.len(),
+                "get_whitelist leaked an expired entry at seed={seed}, step={step}"
+            );
+            for address in &listed {
+                assert!(
+                    expected.contains(address),
+                    "get_whitelist returned an expired address at seed={seed}, step={step}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn add_address_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let client = deploy(&env, &admin);
+    env.set_auths(&[]);
 
     assert!(client.try_add_address(&admin, &address).is_err());
     assert!(client.get_whitelist().is_empty());
@@ -256,10 +348,12 @@ fn add_address_requires_auth() {
 #[test]
 fn remove_address_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let (contract_id, client) = deploy_with_id(&env, &admin);
     seed_member(&env, &contract_id, &address);
+    env.set_auths(&[]);
 
     assert!(client.is_whitelisted(&address));
     assert!(client.try_remove_address(&admin, &address).is_err());
@@ -269,10 +363,12 @@ fn remove_address_requires_auth() {
 #[test]
 fn clear_all_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let (contract_id, client) = deploy_with_id(&env, &admin);
     seed_member(&env, &contract_id, &address);
+    env.set_auths(&[]);
 
     assert!(client.is_whitelisted(&address));
     assert!(client.try_clear_all(&admin).is_err());
