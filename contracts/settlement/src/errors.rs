@@ -59,6 +59,8 @@ use soroban_sdk::contracterror;
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
 /// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
+/// | 52   | InvalidOfferingId            | Offering ID failed `callora-validators` validation   |
+/// | 53   | InvalidPrice                 | Price string failed validation                       |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -130,4 +132,20 @@ pub enum SettlementError {
     /// `get_all_developer_balances` index exceeds
     /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
     TooManyResults = 51,
+}
+
+/// Additional price-registry error codes (`52..=53`).
+///
+/// Defined as a separate `#[contracterror]` enum because Soroban's XDR
+/// `ScSpecUdtErrorEnumV0` caps each enum at 50 cases (`SettlementError`
+/// already has 50 active variants). On-chain and in `try_*` client calls,
+/// these emit the exact same `u32` contract error codes `52` and `53`.
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum PriceRegistryError {
+    /// Offering ID failed `callora-validators::normalize_offering_id`.
+    InvalidOfferingId = 52,
+    /// Price string is empty, non-visible ASCII, or not a valid decimal number.
+    InvalidPrice = 53,
 }

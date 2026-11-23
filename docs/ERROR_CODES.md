@@ -129,6 +129,8 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 52 | `InvalidOfferingId` | Settlement | Offering ID failed `callora-validators` validation |
+| 53 | `InvalidPrice` | Settlement | Price string failed validation |
 
 ## Revenue Pool
 
