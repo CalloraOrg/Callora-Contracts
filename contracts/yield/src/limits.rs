@@ -76,6 +76,7 @@
 //! | `set_admin`, `accept_admin`, `upgrade`           | admin (`caller == admin`)                |
 //! | `cancel_admin_transfer`                          | admin (`caller == admin`)                |
 //! | `set_default_limits`, `set_account_limits`, `clear_account_limits` | admin (`caller == admin`) |
+//! | `reset_account_state`, `batch_clear_accounts`     | admin (`caller == admin`)                |
 //! | `set_operator`, `remove_operator`                | admin (`caller == admin`)                |
 //! | `place_bet`, `clear_bet`, `open_position`,       | registered operator; cap enforced on the |
 //! | `close_position`, `subscribe`, `unsubscribe`     | account named in the call                |
@@ -95,7 +96,7 @@
 //! production code paths never invoke `unwrap()`.
 
 use callora_storage_migration::StorageMigrationValidator;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Vec};
 
 use crate::errors::YieldLimitError;
 use crate::events;
@@ -193,6 +194,15 @@ pub const DEFAULT_LIMITS: AccountLimits = AccountLimits {
 /// cap itself is never compared against `u32::MAX` so this is a conservative
 /// sanity ceiling rather than the absolute type ceiling.
 pub const MAX_CAP: u32 = 1_000_000;
+
+/// Maximum number of accounts accepted by
+/// [`CalloraYieldLimits::batch_clear_accounts`].
+///
+/// The cap bounds the CPU and ledger-entry budget of a single transaction.
+/// Duplicate addresses are permitted; each occurrence is processed in order
+/// and emits its own event, so a repeated address simply resets an already
+/// zeroed counter.
+pub const MAX_BATCH_CLEAR: u32 = 50;
 
 /// Smallest non-zero rolling-window length, in ledgers.
 pub const MIN_WINDOW_LEDGERS: u32 = 1;
@@ -708,6 +718,19 @@ pub fn write_account_state(env: &Env, account: &Address, state: &AccountState) {
         .extend_ttl(&key, STATE_BUMP_THRESHOLD, STATE_BUMP_AMOUNT);
 }
 
+/// Zero `account`'s counters and return the previous state.
+///
+/// An account with no recorded state is left untouched (no ledger entry is
+/// created) and reports an all-zero previous state.
+pub fn reset_account_counters(env: &Env, account: &Address) -> AccountState {
+    let key = StorageKey::AccountState(account.clone());
+    let previous = read_account_state(env, account);
+    if env.storage().persistent().has(&key) {
+        write_account_state(env, account, &AccountState::zero());
+    }
+    previous
+}
+
 // ---------------------------------------------------------------------
 // Free functions — gate checks
 // ---------------------------------------------------------------------
@@ -960,6 +983,84 @@ impl CalloraYieldLimits {
         Ok(())
     }
 
+    /// Reset a single account's counters to zero (admin only).
+    ///
+    /// This is a recovery tool for the case where an operator misses a
+    /// decrement and leaves an account pinned at its cap. All three counters
+    /// (`bets`, `positions`, `subscriptions`) are zeroed and the previous
+    /// counters are published in the `account_state_reset` event.
+    ///
+    /// Resetting an account with no recorded state performs no storage write;
+    /// the event is still emitted with an all-zero previous state so indexers
+    /// observe every reset attempt.
+    ///
+    /// # Errors
+    /// - [`YieldLimitError::Unauthorized`] — caller is not the admin.
+    /// - [`YieldLimitError::NotInitialized`] — `init` has not been called.
+    pub fn reset_account_state(
+        env: Env,
+        caller: Address,
+        account: Address,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
+        let previous = reset_account_counters(&env, &account);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_account_state_reset(&env), caller, account),
+            previous,
+        );
+        Ok(())
+    }
+
+    /// Reset many accounts' counters to zero in one atomic call (admin only).
+    ///
+    /// `accounts` must contain between `1` and [`MAX_BATCH_CLEAR`] entries;
+    /// the bounds are checked before any counter is touched, so a rejected
+    /// batch modifies nothing. Each account emits its own
+    /// `account_state_reset` event with its previous counters. Duplicate
+    /// addresses are processed in order: the first occurrence resets the
+    /// counters and later occurrences reset the already-zeroed state.
+    ///
+    /// # Errors
+    /// - [`YieldLimitError::Unauthorized`] — caller is not the admin.
+    /// - [`YieldLimitError::NotInitialized`] — `init` has not been called.
+    /// - [`YieldLimitError::EmptyBatch`] — `accounts` is empty.
+    /// - [`YieldLimitError::BatchTooLarge`] — `accounts` exceeds [`MAX_BATCH_CLEAR`].
+    pub fn batch_clear_accounts(
+        env: Env,
+        caller: Address,
+        accounts: Vec<Address>,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
+
+        let len = accounts.len();
+        if len == 0 {
+            return Err(YieldLimitError::EmptyBatch);
+        }
+        if len > MAX_BATCH_CLEAR {
+            return Err(YieldLimitError::BatchTooLarge);
+        }
+
+        for account in accounts.iter() {
+            let previous = reset_account_counters(&env, &account);
+            env.events().publish(
+                (
+                    events::event_account_state_reset(&env),
+                    caller.clone(),
+                    account,
+                ),
+                previous,
+            );
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Ok(())
+    }
+
     /// Set the global rolling-window length in ledgers (admin only).
     ///
     /// `0` disables rolling windows and restores the pre-#1522 behaviour
@@ -969,17 +1070,11 @@ impl CalloraYieldLimits {
     /// Existing window counters are left untouched; the next mutation rolls
     /// them lazily against the new length.
     pub fn set_window_ledgers(
-        env: Env,
-        caller: Address,
         window_ledgers: u32,
-    ) -> Result<(), YieldLimitError> {
-        require_admin(&env, &caller)?;
         write_window_ledgers(&env, window_ledgers)?;
-        env.events().publish(
             (events::event_window_ledgers_set(&env), caller),
             window_ledgers,
         );
-        Ok(())
     }
 
     /// Set the global per-window caps (admin only).
@@ -987,24 +1082,18 @@ impl CalloraYieldLimits {
     /// Window caps apply only while [`Self::set_window_ledgers`] is non-zero.
     /// A cap of `0` blocks all opens of that kind inside a window.
     pub fn set_window_limits(
-        env: Env,
-        caller: Address,
         max_bets: u32,
         max_positions: u32,
         max_subscriptions: u32,
-    ) -> Result<(), YieldLimitError> {
-        require_admin(&env, &caller)?;
         let caps = WindowLimits {
             max_bets,
             max_positions,
             max_subscriptions,
         };
         write_window_limits(&env, &caps)?;
-        env.events().publish(
             (events::event_window_limits_set(&env), caller, caps.clone()),
             caps,
         );
-        Ok(())
     }
 
     // -----------------------------------------------------------------

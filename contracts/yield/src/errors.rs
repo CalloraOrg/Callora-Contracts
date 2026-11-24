@@ -16,6 +16,8 @@
 //! | 8    | CounterUnderflow      | `clear_*` was called when the corresponding counter was zero  |
 //! | 9    | Overflow              | `checked_add` overflow detected on a counter increment        |
 //! | 10   | UpgradeRejected       | Storage-migration validator rejected the pending upgrade      |
+//! | 11   | EmptyBatch            | `batch_clear_accounts` was called with no accounts            |
+//! | 12   | BatchTooLarge         | `batch_clear_accounts` exceeded the batch size cap            |
 //!
 //! All variants implement [`Copy`] + [`PartialEq`] so they can be returned by
 //! value or pinned in arrays without allocation.
@@ -71,4 +73,8 @@ pub enum YieldLimitError {
     /// pre-upgrade guard rejects an all-zero WASM hash, a version skip, an
     /// unsanctioned rollback, or a silent storage-layout change.
     UpgradeRejected = 10,
+    /// `batch_clear_accounts` was called with no accounts (code 11).
+    EmptyBatch = 11,
+    /// `batch_clear_accounts` exceeded [`crate::limits::MAX_BATCH_CLEAR`] (code 12).
+    BatchTooLarge = 12,
 }

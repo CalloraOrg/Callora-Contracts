@@ -41,17 +41,21 @@ Settlement deploy transaction: [be8f4184...](https://stellar.expert/explorer/tes
 ## Reproducing
 
 ```bash
+# Generate and fund a deployer key (first time only).
 stellar keys generate my-deployer --network testnet --fund
-stellar contract build --package callora-vault
-stellar contract build --package callora-settlement
-stellar contract build --package callora-revenue-pool
-stellar contract asset deploy --asset USDC:<deployer-address> --network testnet --source my-deployer
-stellar contract deploy --wasm target/wasm32v1-none/release/callora_settlement.wasm --network testnet --source my-deployer
-# ... then init each contract as in the table above.
-# The vault owner must sign, so use the owner key as `--source`.
-stellar contract invoke --id <vault> --network testnet --source my-deployer -- init \
-  --owner <deployer> --usdc_token <usdc> --initial_balance 0 --authorized_caller '"<deployer>"' \
-  --min_deposit 1 --revenue_pool '"<pool>"' --max_deduct 1000000000 --settlement '"<settlement>"'
+
+# Preview every build, deploy and init command without network access.
+./scripts/deploy-testnet.sh --source my-deployer --network testnet --dry-run
+
+# Deploy and wire the contracts. This deploys USDC:my-deployer automatically.
+./scripts/deploy-testnet.sh --source my-deployer --network testnet
+
+# Or reuse an existing USDC SAC contract ID.
+./scripts/deploy-testnet.sh --source my-deployer --network testnet --usdc <usdc-contract-id>
 ```
 
-Note: `Option<Address>` arguments must be passed as JSON strings (quoted). Only the three core contracts are deployed; the other crates in the workspace (escrow, refund, registry, ...) are libraries/contracts that can be deployed the same way.
+The script requires the Stellar CLI and `jq`, builds the three core contracts for
+`wasm32v1-none`, deploys settlement, vault and revenue pool, initializes them in
+dependency order, verifies the vault wiring, and prints a contract ID table.
+It never accepts or writes a secret key. `Option<Address>` values are passed as
+quoted JSON strings automatically.

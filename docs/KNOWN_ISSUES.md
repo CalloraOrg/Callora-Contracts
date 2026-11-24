@@ -19,8 +19,8 @@ The remaining ~1850 tests pass.
 
 - `cargo-fuzz` crates (`contracts/*/fuzz`) and criterion-style benches for hot/registry/whitelist, which no longer compiled.
 - `contracts/tests` (cross-contract and access-control matrix crate): duplicate `#[contractimpl]` function names and stale vault APIs.
-- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, `test_simulate_parity.rs`, and allowlist integration tests written against a removed API.
-- Node/TypeScript TTL doctor tooling and the coverage/Kani/TTL workflows.
+- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, and `test_simulate_parity.rs`.
+- Node/TypeScript TTL doctor tooling and the Kani/TTL workflows.
 
 ## Other notes
 

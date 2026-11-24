@@ -13,6 +13,10 @@ pub enum StorageKey {
     TotalRefundsLegacy,
     AccumulatedFees(Address),
     RefundCounter,
+    ApprovedAmount(u64),
+    DisputeUsed(u64),
+    DisputeReason(u64),
+    DisputeWindow,
 }
 
 /// Refund configuration.
@@ -31,6 +35,7 @@ pub enum RefundStatus {
     Approved = 1,
     Rejected = 2,
     Processed = 3,
+    Disputed = 4,
 }
 
 /// Refund request data.

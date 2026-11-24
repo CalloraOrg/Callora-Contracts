@@ -121,6 +121,10 @@
       "cpu": 600000,
       "mem": 55000
     },
+    "batch_settle": {
+      "cpu": 600000,
+      "mem": 55000
+    },
     "withdraw_developer_balance": {
       "cpu": 420000,
       "mem": 40000
