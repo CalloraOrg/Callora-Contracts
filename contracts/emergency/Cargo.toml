@@ -3,17 +3,20 @@ name = "callora-emergency"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Emergency migration contract — data reshape + upgrade guard for the GrantFox FWC26 campaign."
+description = "Emergency pause coordinator for Callora contracts."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-distribute = { path = "../distribute" }
+callora-revenue-pool = { path = "../revenue_pool" }
 
 [features]
-testutils = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils", "callora-storage-migration/testutils"]

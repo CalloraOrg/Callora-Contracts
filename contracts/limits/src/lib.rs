@@ -15,7 +15,7 @@
 //! | Settlement | `set_minimum_balance` | admin (`caller`) — alias path into `limits` |
 //! | Settlement | `set_daily_withdraw_cap` | admin (`caller`) |
 //! | Revenue pool | `set_max_distribute` | admin (`caller`) |
-//! | Vault | `set_reserve_cap` | owner (`caller`) — covered when vault builds |
+//! | Vault | `set_reserve_cap` | owner (`caller`) |
 //!
 //! # Read-only entrypoints (must NOT require auth)
 //!
@@ -26,4 +26,4 @@
 //! | Settlement | `get_daily_withdraw_cap` |
 //! | Settlement | `get_withdrawal_today` |
 //! | Revenue pool | `get_max_distribute` |
-//! | Vault | `get_reserve_cap` — covered when vault builds |
+//! | Vault | `get_reserve_cap` |

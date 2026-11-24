@@ -53,3 +53,13 @@ pub fn event_claim_consumed(env: &Env) -> Symbol {
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
 }
+
+/// Returns the Symbol for the `"token_set"` event topic.
+pub fn event_token_set(env: &Env) -> Symbol {
+    Symbol::new(env, "token_set")
+}
+
+/// Returns the Symbol for the `"funded"` event topic.
+pub fn event_funded(env: &Env) -> Symbol {
+    Symbol::new(env, "funded")
+}

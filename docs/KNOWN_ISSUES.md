@@ -23,8 +23,8 @@ The remaining ~1850 tests pass.
   duplicate `#[contractimpl]` symbols and its tests targeted stale vault APIs.
   It has since been rebuilt as the `rlib`-only `callora-access-matrix` crate
   (`contracts/tests/tests/auth_matrix.rs`).
-- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, `test_simulate_parity.rs`, and allowlist integration tests written against a removed API.
-- Node/TypeScript TTL doctor tooling and the coverage/Kani/TTL workflows.
+- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, and `test_simulate_parity.rs`.
+- Node/TypeScript TTL doctor tooling and the Kani/TTL workflows.
 
 ## Other notes
 

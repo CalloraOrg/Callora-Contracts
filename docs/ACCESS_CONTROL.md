@@ -326,3 +326,35 @@ cargo build --workspace --release --target=wasm32-unknown-unknown
 +| `clear_all` | ✅ | ❌ | ❌ | ❌ | ❌ |
 +| `get_allowlist` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
 +| `is_authorized_depositor` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
+## Allowlist Contract Access Control
+
+The shared `callora-allowlist` contract stores one persistent entry per
+allowed address plus a dense index for pagination.
+
+### Roles
+- **Admin**: set at `init`; may add, remove or clear addresses and nominate a successor.
+- **Pending Admin**: nominee awaiting `accept_admin`.
+
+### Authorization Matrix
+
+| Function | Admin | Pending Admin | Others |
+|----------|-------|---------------|--------|
+| `init` | ✅ (first caller) | ❌ | ❌ |
+| `get_admin`, `get_pending_admin`, `is_allowed`, `is_authorized_depositor`, `allowlist_count`, `get_allowlist`, `get_allowlist_page` (views) | ✅ | ✅ | ✅ |
+| `set_admin` | ✅ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ |
+| `add_address` | ✅ | ❌ | ❌ |
+| `remove_address` | ✅ | ❌ | ❌ |
+| `clear_all` | ✅ | ❌ | ❌ |
+
+### Security Model
+- **Two-step admin rotation**: `set_admin` nominates, `accept_admin` completes
+  the transfer and `cancel_admin_transfer` aborts a pending nomination.
+- **Signature on every mutation**: each mutator calls `require_auth` on the
+  caller before touching storage.
+- **Per-address persistent storage**: entries live under
+  `StorageKey::Entry(Address)` and their TTL is extended on every touch, so the
+  list never grows instance storage.
+- **Bounded clear**: `clear_all` walks the dense index exactly once
+  (`0 .. allowlist_count()`).
