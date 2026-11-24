@@ -15,8 +15,9 @@
 //! | Initialisation       | `init` |
 //! | Admin rotation        | `set_admin`, `accept_admin`, `cancel_admin_transfer` |
 //! | Checkpoint creation | `create_checkpoint`, `batch_create_checkpoints` |
+//! | Pruning                | `prune_before` |
 //! | Upgrade                | `upgrade` |
-//! | Read-only views     | `get_admin`, `get_pending_admin`, `get_checkpoint`, `get_checkpoints_range`, `get_checkpoint_count`, `get_latest_checkpoint_id`, `get_latest_checkpoint` |
+//! | Read-only views     | `get_admin`, `get_pending_admin`, `get_checkpoint`, `get_checkpoints_range`, `get_checkpoint_count`, `get_latest_checkpoint_id`, `get_latest_checkpoint`, `get_digest_head`, `get_digest_at_boundary`, `get_pruned_before`, `get_chain_start_id` |
 
 extern crate std;
 
@@ -131,6 +132,17 @@ fn batch_create_checkpoints_requires_auth() {
     assert!(res.is_err(), "batch_create_checkpoints must require auth");
 }
 
+/// Verify that `prune_before` requires auth on `caller`.
+#[test]
+fn prune_before_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let res = client.try_prune_before(&admin, &1u64, &10u32);
+    assert!(res.is_err(), "prune_before must require auth");
+}
+
 /// Verify that `upgrade` requires auth on `caller`.
 #[test]
 fn upgrade_requires_auth() {
@@ -226,6 +238,52 @@ fn get_latest_checkpoint_does_not_require_auth() {
     assert_eq!(client.get_latest_checkpoint(), None);
 }
 
+/// `get_digest_head` is a view — it must not require auth.
+#[test]
+fn get_digest_head_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(
+        client.get_digest_head(),
+        BytesN::from_array(&env, &[0u8; 32])
+    );
+}
+
+/// `get_digest_at_boundary` is a view — it must not require auth.
+#[test]
+fn get_digest_at_boundary_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(
+        client.get_digest_at_boundary(),
+        BytesN::from_array(&env, &[0u8; 32])
+    );
+}
+
+/// `get_pruned_before` is a view — it must not require auth.
+#[test]
+fn get_pruned_before_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(client.get_pruned_before(), 1);
+}
+
+/// `get_chain_start_id` is a view — it must not require auth.
+#[test]
+fn get_chain_start_id_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(client.get_chain_start_id(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Canonical smoke test — admin **with** auth can call every gated entrypoint.
 // ---------------------------------------------------------------------------
@@ -247,8 +305,10 @@ fn admin_with_auth_can_call_all_entrypoints() {
     let meta = Symbol::new(&env, "smoke");
     client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
 
-    let items = Vec::from_array(&env, [(subject, token, 200i128, meta)]);
+    let items = Vec::from_array(&env, [(subject, token, 200i128, meta.clone())]);
     client.batch_create_checkpoints(&admin, &items);
+
+    client.prune_before(&admin, &1u64, &10u32);
 
     let new_admin = Address::generate(&env);
     client.set_admin(&admin, &new_admin);

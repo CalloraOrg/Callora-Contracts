@@ -18,7 +18,7 @@ extern crate std;
 
 use callora_checkpoint::{CalloraCheckpoint, CalloraCheckpointClient, CheckpointRecord};
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env, IntoVal, Symbol, Vec};
+use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, Vec};
 
 /// Deploy and initialise a fresh checkpoint contract, returning `(env, admin, client)`.
 fn setup() -> (Env, Address, CalloraCheckpointClient<'static>) {
@@ -185,4 +185,34 @@ fn cancel_admin_transfer_emits_admin_cancelled_event() {
 
     let payload: () = data.into_val(&env);
     assert_eq!(payload, ());
+}
+
+#[test]
+fn prune_before_emits_checkpoints_pruned_event() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    for i in 0..3u32 {
+        client.create_checkpoint(
+            &admin,
+            &subject,
+            &token,
+            &((i + 1) as i128),
+            &Symbol::new(&env, "event"),
+        );
+    }
+
+    client.prune_before(&admin, &3u64, &10u32);
+
+    let (topics, data) = last_event(&env, &client.address);
+    assert_eq!(topics.len(), 3);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    let topic1: u64 = topics.get(1).unwrap().into_val(&env);
+    let topic2: u64 = topics.get(2).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "checkpoints_pruned"));
+    assert_eq!(topic1, 1);
+    assert_eq!(topic2, 3);
+
+    let boundary: BytesN<32> = data.into_val(&env);
+    assert_eq!(boundary, client.get_digest_at_boundary());
 }

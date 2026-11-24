@@ -1,11 +1,12 @@
 extern crate std;
 
 use callora_checkpoint::{
-    CalloraCheckpoint, CalloraCheckpointClient, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+    CalloraCheckpoint, CalloraCheckpointClient, CheckpointRecord, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+    MAX_PRUNE_BATCH,
 };
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, Env, Symbol, Vec as SorobanVec};
+use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol, Vec as SorobanVec};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,31 @@ fn checkpoint_action_strategy() -> impl Strategy<Value = CheckpointAction> {
             .prop_map(|(start_id, limit)| CheckpointAction::QueryRange { start_id, limit }),
         1 => Just(CheckpointAction::QueryLatest),
     ]
+}
+
+#[derive(Clone, Debug)]
+enum ChainAction {
+    Create { balance: i128 },
+    CreateBatch { count: u32, balance: i128 },
+    Prune { id: u64, max_remove: u32 },
+}
+
+fn chain_action_strategy() -> impl Strategy<Value = ChainAction> {
+    prop_oneof![
+        5 => (0_i128..=10_000_i128).prop_map(|balance| ChainAction::Create { balance }),
+        3 => (1_u32..=8, 0_i128..=10_000_i128)
+            .prop_map(|(count, balance)| ChainAction::CreateBatch { count, balance }),
+        2 => (0_u64..=80_u64, 1_u32..=MAX_PRUNE_BATCH)
+            .prop_map(|(id, max_remove)| ChainAction::Prune { id, max_remove }),
+    ]
+}
+
+/// Test-side fold of one record: `sha256(prev || xdr(record))`.
+fn hash_step(env: &Env, prev: &BytesN<32>, record: &CheckpointRecord) -> BytesN<32> {
+    let mut preimage = Bytes::new(env);
+    preimage.append(&Bytes::from(prev));
+    preimage.append(&record.clone().to_xdr(env));
+    env.crypto().sha256(&preimage).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +513,90 @@ proptest! {
                 client.get_latest_checkpoint_id(),
                 client.get_checkpoint_count(),
                 "latest_id != count"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Property: the retained digest chain is reproducible off-chain after
+    // any mix of creation, batch creation, and (possibly partial) pruning.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn digest_chain_matches_offchain_recomputation(
+        actions in prop::collection::vec(chain_action_strategy(), 1..=48)
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(CalloraCheckpoint, ());
+        let client = CalloraCheckpointClient::new(&env, &contract_id);
+        let subject = Address::generate(&env);
+        let token = Address::generate(&env);
+        let meta = Symbol::new(&env, "chain");
+        client.init(&admin);
+
+        let zero = BytesN::from_array(&env, &[0u8; 32]);
+        let mut head = zero.clone();
+        let mut boundary = zero.clone();
+        let mut retained: std::vec::Vec<(u64, CheckpointRecord)> = std::vec::Vec::new();
+
+        for action in actions {
+            match action {
+                ChainAction::Create { balance } => {
+                    let id = client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+                    let record = client.get_checkpoint(&id);
+                    head = hash_step(&env, &head, &record);
+                    retained.push((id, record));
+                }
+                ChainAction::CreateBatch { count, balance } => {
+                    let mut items = SorobanVec::new(&env);
+                    for _ in 0..count {
+                        items.push_back((subject.clone(), token.clone(), balance, meta.clone()));
+                    }
+                    let ids = client.batch_create_checkpoints(&admin, &items);
+                    for id in ids.iter() {
+                        let record = client.get_checkpoint(&id);
+                        head = hash_step(&env, &head, &record);
+                        retained.push((id, record));
+                    }
+                }
+                ChainAction::Prune { id, max_remove } => {
+                    let before = client.get_pruned_before();
+                    if client.try_prune_before(&admin, &id, &max_remove).is_ok() {
+                        let after = client.get_pruned_before();
+                        prop_assert!(after >= before, "prune boundary must be monotonic");
+                        for pruned_id in before..after {
+                            if let Some(pos) = retained.iter().position(|(id, _)| *id == pruned_id)
+                            {
+                                let (_, record) = retained.remove(pos);
+                                boundary = hash_step(&env, &boundary, &record);
+                            }
+                        }
+                    }
+                }
+            }
+
+            prop_assert_eq!(client.get_digest_head(), head.clone(), "head drifted from model");
+            prop_assert_eq!(
+                client.get_digest_at_boundary(),
+                boundary.clone(),
+                "boundary drifted from model"
+            );
+
+            let mut recomputed = client.get_digest_at_boundary();
+            for (_, record) in retained.iter() {
+                recomputed = hash_step(&env, &recomputed, record);
+            }
+            prop_assert_eq!(
+                recomputed,
+                head.clone(),
+                "boundary plus retained records must reproduce the head"
+            );
+            prop_assert_eq!(
+                client.get_checkpoint_count(),
+                client.get_latest_checkpoint_id(),
+                "pruning must not change counters"
             );
         }
     }

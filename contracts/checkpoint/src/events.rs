@@ -21,6 +21,16 @@ pub fn event_checkpoint_created(env: &Env) -> Symbol {
     Symbol::new(env, "checkpoint_created")
 }
 
+/// Returns the Symbol for the `"checkpoints_pruned"` event topic.
+///
+/// Emitted when an admin prunes old checkpoint records via
+/// [`crate::CalloraCheckpoint::prune_before`]. Topics carry the inclusive
+/// `from_id` and exclusive `to_id` of the pruned range; data carries the
+/// retained digest chain head at the new boundary.
+pub fn event_checkpoints_pruned(env: &Env) -> Symbol {
+    Symbol::new(env, "checkpoints_pruned")
+}
+
 /// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via
@@ -78,6 +88,16 @@ mod tests {
         assert_eq!(
             event_checkpoint_created(&env),
             Symbol::new(&env, "checkpoint_created")
+        );
+    }
+
+    /// Snapshot: proves event_checkpoints_pruned still maps to exactly the bytes for "checkpoints_pruned".
+    #[test]
+    fn test_event_checkpoints_pruned_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_checkpoints_pruned(&env),
+            Symbol::new(&env, "checkpoints_pruned")
         );
     }
 
