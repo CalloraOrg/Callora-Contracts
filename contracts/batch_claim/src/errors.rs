@@ -18,6 +18,9 @@ use soroban_sdk::contracterror;
 /// | 12   | BatchEmpty           | Batch input must not be empty                     |
 /// | 13   | ClaimExpired         | Claim expiry timestamp has been reached          |
 /// | 14   | ClaimNotExpired      | Claim expiry timestamp has not been reached      |
+/// | 15   | TokenNotConfigured   | Payout token has not been configured             |
+/// | 16   | InvalidToken         | Token address cannot be the contract itself      |
+/// | 17   | InsufficientFunding  | Contract token balance is below batch total      |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -67,4 +70,10 @@ pub enum BatchClaimError {
     ClaimExpired = 13,
     /// Claim has not reached its expiry timestamp (code 14).
     ClaimNotExpired = 14,
+    /// Payout token has not been configured (code 15).
+    TokenNotConfigured = 15,
+    /// Token address cannot be the contract itself (code 16).
+    InvalidToken = 16,
+    /// Contract token balance is less than the batch total (code 17).
+    InsufficientFunding = 17,
 }

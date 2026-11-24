@@ -48,4 +48,12 @@ pub enum EscrowError {
     Paused = 11,
     /// Escrow record not found for the given payment asset and recipient (code 12).
     NotFound = 12,
+    /// A `batch_release` was called with an empty `entries` list (code 13).
+    BatchEmpty = 13,
+    /// A `batch_release` was called with more than `MAX_BATCH_RELEASE`
+    /// entries (code 14).
+    BatchTooLarge = 14,
+    /// A `batch_release` lists the same `(payment_asset, recipient)` pair
+    /// twice (code 15).
+    DuplicateEntry = 15,
 }

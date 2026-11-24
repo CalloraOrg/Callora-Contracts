@@ -129,6 +129,8 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 52 | `InvalidOfferingId` | Settlement | Offering ID failed `callora-validators` validation |
+| 53 | `InvalidPrice` | Settlement | Price string failed validation |
 | 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
 | 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
 
@@ -161,6 +163,9 @@ must not be reassigned once released.
 | 23 | `EmergencyPaused` | Revenue Pool | Recovery-only emergency mode is active |
 | 24 | `AlreadyEmergencyPaused` | Revenue Pool | Emergency pause was already active |
 | 25 | `NotEmergencyPaused` | Revenue Pool | Emergency recovery was requested while inactive |
+| 26 | `SharesEmpty` | Revenue Pool | Share distribution received no recipients |
+| 27 | `InvalidShareSum` | Revenue Pool | Share distribution basis points did not sum to 10_000 |
+| 28 | `InvalidShare` | Revenue Pool | A share was zero or exceeded 10_000 basis points |
 
 ## Upgrade
 
@@ -181,3 +186,23 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+## Refund
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `AlreadyInitialized` | Refund | Contract has already been initialized |
+| 2 | `NotInitialized` | Refund | Contract has not been initialized |
+| 3 | `Unauthorized` | Refund | Caller is not authorized to perform this action |
+| 4 | `NotFound` | Refund | Requested refund not found |
+| 5 | `FeeTooHigh` | Refund | Fee basis points exceeds maximum (`10000`) |
+| 6 | `InvalidAmount` | Refund | Amount is not positive or minimum amount is negative |
+| 7 | `AmountTooLow` | Refund | Amount is below minimum refund amount |
+| 8 | `Overflow` | Refund | Arithmetic overflow would occur |
+| 9 | `InvalidStatus` | Refund | Refund request is not in the expected status |
+| 10 | `InsufficientBalance` | Refund | Contract balance or accumulated fees are insufficient |
+| 11 | `InvalidRecipient` | Refund | Recipient address is invalid (self or token address) |
+| 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open requests |
+| 13 | `ApprovedAmountInvalid` | Refund | Partial approved amount is `<= 0` or `> request.amount` |
+| 14 | `DisputeWindowClosed` | Refund | Dispute was submitted after the configured dispute window elapsed |
+| 15 | `AlreadyDisputed` | Refund | Request has already been disputed once |

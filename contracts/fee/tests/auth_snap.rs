@@ -43,7 +43,7 @@ fn set_fee_requires_auth() {
 #[test]
 fn deposit_requires_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let caller = Address::generate(&env);
@@ -69,7 +69,7 @@ fn withdraw_requires_auth() {
 #[test]
 fn get_fee_config_does_not_require_auth() {
     let env = Env::default();
-    let (admin, client) = setup(&env);
+    let (_admin, client) = setup(&env);
 
     env.set_auths(&[]);
     let config = client.get_fee_config();

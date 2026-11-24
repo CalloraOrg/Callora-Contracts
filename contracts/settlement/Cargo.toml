@@ -11,6 +11,7 @@ doctest = false
 [dependencies]
 callora-recipient = { path = "../recipient" }
 soroban-sdk = { workspace = true }
+callora-validators = { path = "../validators" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

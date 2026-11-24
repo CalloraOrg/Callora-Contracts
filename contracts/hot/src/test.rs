@@ -237,14 +237,14 @@ fn test_rotate_signer_rejects_same_signer() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_rotate_signer_emits_old_and_new_signer() {
     let (env, admin, old_signer, client) = setup(Some(60));
     let new_signer = Address::generate(&env);
 
     client.rotate_signer(&admin, &new_signer);
-    assert_eq!(client.get_signer(), new_signer);
 
+    // Read events before any other contract call: the test host only exposes
+    // events from the most recent invocation, and a view call clears them.
     let events = env.events().all();
     let (_, topics, data) = events.last().unwrap();
     let topic: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
@@ -252,6 +252,8 @@ fn test_rotate_signer_emits_old_and_new_signer() {
     let (emitted_old, emitted_new): (Address, Address) = data.try_into_val(&env).unwrap();
     assert_eq!(emitted_old, old_signer);
     assert_eq!(emitted_new, new_signer);
+
+    assert_eq!(client.get_signer(), new_signer);
 }
 
 #[test]

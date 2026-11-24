@@ -15,3 +15,11 @@ fn test_fee_error_stability() {
     assert_eq!(ContractError::InsufficientBalance as u32, 7);
     assert_eq!(ContractError::InvalidRecipient as u32, 8);
 }
+
+/// Asserts that the admin-rotation error codes added after the original set
+/// are pinned to their declared u32 values.
+#[test]
+fn test_fee_admin_rotation_error_stability() {
+    assert_eq!(ContractError::NoPendingAdmin as u32, 9);
+    assert_eq!(ContractError::SameAdmin as u32, 10);
+}

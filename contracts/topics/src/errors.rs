@@ -13,6 +13,7 @@ use soroban_sdk::contracterror;
 /// | 7    | InvalidDescription   | Description is empty, too long (> 256 bytes), or contains non-visible-ASCII bytes |
 /// | 8    | TopicAlreadyInactive | Topic is already deactivated                     |
 /// | 9    | SameOwner            | New topic owner equals the current owner         |
+/// | 10   | InvalidPageLimit     | Requested page exceeds the maximum page size     |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -38,4 +39,6 @@ pub enum TopicsError {
     TopicAlreadyInactive = 8,
     /// `set_topic_owner` was called with the current owner (code 9).
     SameOwner = 9,
+    /// Requested topic page exceeds the maximum page size (code 10).
+    InvalidPageLimit = 10,
 }
