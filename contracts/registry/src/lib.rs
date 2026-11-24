@@ -11,7 +11,7 @@ pub mod events;
 pub use errors::RegistryError;
 
 use catalog::OfferingCatalogClient;
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec};
 
 /// Maximum length of an offering identifier (matches vault offering id limits).
 pub const MAX_OFFERING_ID_LEN: u32 = 64;
@@ -38,6 +38,9 @@ pub const OFFERING_TTL_EXTENSION: u32 = OFFERING_TTL_THRESHOLD;
 /// Target TTL extension (closing ledgers) for the contract instance.
 pub const INSTANCE_TTL_EXTENSION: u32 = INSTANCE_TTL_THRESHOLD;
 
+/// Maximum number of offerings returned by a single `get_offerings_by_developer` page.
+pub const MAX_PAGE_LIMIT: u32 = 50;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StorageKey {
@@ -49,6 +52,10 @@ pub enum StorageKey {
     /// by the developer [`Address`] so that different developers have
     /// independent cooldown windows.
     DeveloperCooldown(Address),
+    Deprecated(String),
+    PendingDeveloper(String),
+    /// Per-developer index of offering ids, in registration order.
+    DeveloperOfferings(Address),
 }
 
 #[contracttype]
@@ -146,7 +153,8 @@ impl CalloraRegistry {
     ///
     /// Validates inputs, checks for duplicates, publishes to the catalog, then
     /// atomically writes the offering record, increments the registered count,
-    /// emits the registration event, and records the developer cooldown timestamp.
+    /// appends the id to the developer index, emits the registration event, and
+    /// records the developer cooldown timestamp.
     ///
     /// Callers are responsible for authentication, admin-equality checks, the
     /// cooldown gate, and any pre-conditions specific to their variant (e.g.
@@ -179,6 +187,17 @@ impl CalloraRegistry {
         };
         env.storage().persistent().set(&key, &record);
         Self::extend_offering_ttl(env, &key);
+
+        // Append to the developer index after the catalog call has succeeded.
+        let index_key = StorageKey::DeveloperOfferings(developer.clone());
+        let mut ids: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(offering_id.clone());
+        env.storage().persistent().set(&index_key, &ids);
+        Self::extend_offering_ttl(env, &index_key);
 
         let count: u32 = env
             .storage()
@@ -280,6 +299,192 @@ impl CalloraRegistry {
             .ok_or(RegistryError::NotInitialized)?)
     }
 
+    fn load_offering(
+        env: &Env,
+        offering_id: &String,
+    ) -> Result<(StorageKey, OfferingRecord), RegistryError> {
+        Self::validate_offering_id(offering_id)?;
+        Self::admin(env)?;
+        let key = StorageKey::Offering(offering_id.clone());
+        let record = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RegistryError::OfferingNotFound)?;
+        Ok((key, record))
+    }
+
+    fn is_deprecated(env: &Env, offering_id: &String) -> bool {
+        env.storage()
+            .persistent()
+            .has(&StorageKey::Deprecated(offering_id.clone()))
+    }
+
+    fn require_active_owner(
+        env: &Env,
+        record: &OfferingRecord,
+        developer: &Address,
+    ) -> Result<(), RegistryError> {
+        if record.developer != *developer {
+            return Err(RegistryError::Unauthorized);
+        }
+        if Self::is_deprecated(env, &record.offering_id) {
+            return Err(RegistryError::OfferingDeprecated);
+        }
+        Ok(())
+    }
+
+    pub fn update_offering(
+        env: Env,
+        developer: Address,
+        offering_id: String,
+        new_metadata: String,
+    ) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        developer.require_auth();
+        let (key, mut record) = Self::load_offering(&env, &offering_id)?;
+        Self::require_active_owner(&env, &record, &developer)?;
+        Self::validate_metadata(&new_metadata)?;
+        admin::require_cooldown(&env, &developer)?;
+
+        let catalog = Self::catalog(&env)?;
+        OfferingCatalogClient::new(&env, &catalog).put_offering(
+            &env.current_contract_address(),
+            &offering_id,
+            &new_metadata,
+        );
+
+        let old_metadata = record.metadata.clone();
+        record.metadata = new_metadata.clone();
+        env.storage().persistent().set(&key, &record);
+        Self::extend_offering_ttl(&env, &key);
+
+        env.events().publish(
+            (events::event_offering_updated(&env), offering_id),
+            (old_metadata, new_metadata),
+        );
+        admin::update_cooldown(&env, &developer);
+        Ok(())
+    }
+
+    pub fn deprecate_offering(
+        env: Env,
+        caller: Address,
+        offering_id: String,
+    ) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        caller.require_auth();
+        let (key, record) = Self::load_offering(&env, &offering_id)?;
+        if caller != record.developer && caller != Self::admin(&env)? {
+            return Err(RegistryError::Unauthorized);
+        }
+        if Self::is_deprecated(&env, &offering_id) {
+            return Err(RegistryError::OfferingAlreadyDeprecated);
+        }
+
+        let deprecated_key = StorageKey::Deprecated(offering_id.clone());
+        env.storage().persistent().set(&deprecated_key, &true);
+        Self::extend_offering_ttl(&env, &deprecated_key);
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::PendingDeveloper(offering_id.clone()));
+        Self::extend_offering_ttl(&env, &key);
+
+        env.events().publish(
+            (events::event_offering_deprecated(&env), offering_id),
+            caller,
+        );
+        Ok(())
+    }
+
+    pub fn is_offering_deprecated(env: Env, offering_id: String) -> Result<bool, RegistryError> {
+        Self::extend_instance_ttl(&env);
+        Self::validate_offering_id(&offering_id)?;
+        Self::admin(&env)?;
+        let key = StorageKey::Deprecated(offering_id);
+        if env.storage().persistent().has(&key) {
+            Self::extend_offering_ttl(&env, &key);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn propose_offering_transfer(
+        env: Env,
+        developer: Address,
+        offering_id: String,
+        new_developer: Address,
+    ) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        developer.require_auth();
+        let (_, record) = Self::load_offering(&env, &offering_id)?;
+        Self::require_active_owner(&env, &record, &developer)?;
+        if new_developer == developer {
+            return Err(RegistryError::InvalidTransferTarget);
+        }
+        admin::require_cooldown(&env, &developer)?;
+
+        let pending_key = StorageKey::PendingDeveloper(offering_id);
+        env.storage().persistent().set(&pending_key, &new_developer);
+        Self::extend_offering_ttl(&env, &pending_key);
+        admin::update_cooldown(&env, &developer);
+        Ok(())
+    }
+
+    pub fn accept_offering_transfer(
+        env: Env,
+        new_developer: Address,
+        offering_id: String,
+    ) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        new_developer.require_auth();
+        let (key, mut record) = Self::load_offering(&env, &offering_id)?;
+        let pending_key = StorageKey::PendingDeveloper(offering_id.clone());
+        let pending: Address = env
+            .storage()
+            .persistent()
+            .get(&pending_key)
+            .ok_or(RegistryError::NoPendingTransfer)?;
+        if pending != new_developer {
+            return Err(RegistryError::Unauthorized);
+        }
+        if Self::is_deprecated(&env, &offering_id) {
+            return Err(RegistryError::OfferingDeprecated);
+        }
+
+        let previous_developer = record.developer.clone();
+        record.developer = new_developer.clone();
+        env.storage().persistent().set(&key, &record);
+        Self::extend_offering_ttl(&env, &key);
+        env.storage().persistent().remove(&pending_key);
+
+        env.events().publish(
+            (events::event_offering_transferred(&env), offering_id),
+            (previous_developer, new_developer),
+        );
+        Ok(())
+    }
+
+    pub fn cancel_offering_transfer(
+        env: Env,
+        developer: Address,
+        offering_id: String,
+    ) -> Result<(), RegistryError> {
+        Self::extend_instance_ttl(&env);
+        developer.require_auth();
+        let (_, record) = Self::load_offering(&env, &offering_id)?;
+        if record.developer != developer {
+            return Err(RegistryError::Unauthorized);
+        }
+        let pending_key = StorageKey::PendingDeveloper(offering_id);
+        if !env.storage().persistent().has(&pending_key) {
+            return Err(RegistryError::NoPendingTransfer);
+        }
+        env.storage().persistent().remove(&pending_key);
+        Ok(())
+    }
+
     /// Fetch a registered offering record.
     pub fn get_offering(env: Env, offering_id: String) -> Result<OfferingRecord, RegistryError> {
         Self::extend_instance_ttl(&env);
@@ -295,5 +500,50 @@ impl CalloraRegistry {
             .ok_or(RegistryError::OfferingNotFound)?;
         Self::extend_offering_ttl(&env, &key);
         Ok(record)
+    }
+
+    /// Return a page of offerings registered by `developer`, in registration order.
+    ///
+    /// `limit` is clamped to `MAX_PAGE_LIMIT`; a `limit` of 0 or a `start` at or
+    /// past the end of the index yields an empty page.
+    pub fn get_offerings_by_developer(
+        env: Env,
+        developer: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<OfferingRecord>, RegistryError> {
+        Self::extend_instance_ttl(&env);
+        if Self::admin(&env).is_err() {
+            return Err(RegistryError::NotInitialized);
+        }
+
+        let mut out: Vec<OfferingRecord> = Vec::new(&env);
+        let index_key = StorageKey::DeveloperOfferings(developer);
+        let ids: Option<Vec<String>> = env.storage().persistent().get(&index_key);
+        let ids = match ids {
+            Some(ids) => {
+                Self::extend_offering_ttl(&env, &index_key);
+                ids
+            }
+            None => return Ok(out),
+        };
+
+        let take = limit.min(MAX_PAGE_LIMIT);
+        let total = ids.len();
+        let end = start.saturating_add(take).min(total);
+        let mut i = start;
+        while i < end {
+            let id = ids.get(i).ok_or(RegistryError::OfferingNotFound)?;
+            let key = StorageKey::Offering(id);
+            let record: OfferingRecord = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .ok_or(RegistryError::OfferingNotFound)?;
+            Self::extend_offering_ttl(&env, &key);
+            out.push_back(record);
+            i += 1;
+        }
+        Ok(out)
     }
 }

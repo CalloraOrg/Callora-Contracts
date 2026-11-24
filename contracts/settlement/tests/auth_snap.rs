@@ -276,6 +276,63 @@ fn force_credit_developer_requires_auth() {
 }
 
 #[test]
+fn set_recipient_registry_requires_auth() {
+    let env = Env::default();
+    let (admin, _vault, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let registry = Address::generate(&env);
+    let res = client.try_set_recipient_registry(&admin, &registry);
+    assert!(res.is_err(), "set_recipient_registry must require auth");
+}
+
+#[test]
+fn set_payout_name_requires_auth() {
+    let env = Env::default();
+    let (_admin, _vault, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let dev = Address::generate(&env);
+    let name = String::from_str(&env, "payout");
+    let res = client.try_set_payout_name(&dev, &name);
+    assert!(res.is_err(), "set_payout_name must require auth");
+}
+
+#[test]
+fn clear_payout_name_requires_auth() {
+    let env = Env::default();
+    let (_admin, _vault, client) = setup(&env);
+
+    env.mock_all_auths();
+    let dev = Address::generate(&env);
+    let name = String::from_str(&env, "payout");
+    client.set_payout_name(&dev, &name);
+
+    env.set_auths(&[]);
+    let res = client.try_clear_payout_name(&dev);
+    assert!(res.is_err(), "clear_payout_name must require auth");
+}
+
+#[test]
+fn get_payout_name_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, _vault, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let dev = Address::generate(&env);
+    assert_eq!(client.get_payout_name(&dev), None);
+}
+
+#[test]
+fn get_recipient_registry_does_not_require_auth() {
+    let env = Env::default();
+    let (_admin, _vault, client) = setup(&env);
+
+    env.set_auths(&[]);
+    assert_eq!(client.get_recipient_registry(), None);
+}
+
+#[test]
 fn get_admin_does_not_require_auth() {
     let env = Env::default();
     let (admin, _vault, client) = setup(&env);

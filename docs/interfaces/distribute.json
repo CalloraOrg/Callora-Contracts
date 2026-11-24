@@ -1,0 +1,52 @@
+{
+  "contract": "callora-distribute",
+  "source": "contracts/distribute/src/lib.rs",
+  "functions": [
+    {
+      "name": "set_admin",
+      "params": [
+        { "name": "caller", "type": "Address" },
+        { "name": "new_admin", "type": "Address" }
+      ],
+      "access": "current admin only",
+      "panics_or_errors": ["Unauthorized"],
+      "events": ["admin_transfer_proposed"]
+    },
+    {
+      "name": "accept_admin",
+      "params": [
+        { "name": "caller", "type": "Address" }
+      ],
+      "access": "pending admin only",
+      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
+      "events": ["admin_transfer_accepted"]
+    },
+    {
+      "name": "claim_admin",
+      "params": [
+        { "name": "caller", "type": "Address" }
+      ],
+      "access": "pending admin only",
+      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
+      "events": ["admin_transfer_accepted"]
+    },
+    {
+      "name": "cancel_admin_transfer",
+      "params": [
+        { "name": "caller", "type": "Address" }
+      ],
+      "access": "current admin only",
+      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
+      "events": ["admin_transfer_cancelled"]
+    }
+  ],
+  "errors": [
+    { "name": "Unauthorized", "code": 1, "description": "Caller is not authorized for this operation" },
+    { "name": "NoPendingAdmin", "code": 2, "description": "No pending admin transfer exists" }
+  ],
+  "events": [
+    { "name": "admin_transfer_proposed", "source": "contracts/distribute/src/events.rs" },
+    { "name": "admin_transfer_accepted", "source": "contracts/distribute/src/events.rs" },
+    { "name": "admin_transfer_cancelled", "source": "contracts/distribute/src/events.rs" }
+  ]
+}

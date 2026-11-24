@@ -59,3 +59,16 @@ and tested, and any shared behavioural fix must be applied to both copies with
 - **Legacy / compatibility contract:** `callora-revenue-pool`
 - **Freeze target:** `callora-distribute` (with the revenue pool frozen only if still active)
 - **New features:** go into `callora-distribute` only
+
+## Revenue pool share distributions
+
+`callora-revenue-pool` exposes `distribute_by_shares(total, shares)`, where
+`shares` is an ordered list of `(recipient, basis_points)` pairs. All shares
+must be positive and sum exactly to `10_000`. Recipient amounts are calculated
+with floor division: `total * bps / 10_000`.
+
+Any remainder from rounding is added to the first recipient. This rule makes
+the distribution deterministic and ensures the final payment amounts sum exactly
+to `total`. The entrypoint is limited to `MAX_BATCH_SIZE` (50) recipients,
+preserves duplicate-recipient, pause, emergency-pause, admin, cap and balance
+checks, and emits the existing batch distribution lifecycle events per recipient.

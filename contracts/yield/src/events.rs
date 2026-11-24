@@ -150,6 +150,16 @@ pub fn event_account_limits_cleared(env: &Env) -> Symbol {
     Symbol::new(env, "account_limits_cleared")
 }
 
+/// Returns the Symbol for the `"account_state_reset"` event topic.
+///
+/// Emitted when the admin zeroes an account's live counters via
+/// [`crate::CalloraYieldLimits::reset_account_state`] or
+/// [`crate::CalloraYieldLimits::batch_clear_accounts`]. The previous counters
+/// travel in the data payload.
+pub fn event_account_state_reset(env: &Env) -> Symbol {
+    Symbol::new(env, "account_state_reset")
+}
+
 /// Returns the Symbol for the `"operator_set"` event topic.
 ///
 /// Emitted when the admin registers an operator that may mutate per-account
@@ -212,6 +222,33 @@ pub fn event_subscription_added(env: &Env) -> Symbol {
 /// counter via [`crate::CalloraYieldLimits::unsubscribe`].
 pub fn event_subscription_removed(env: &Env) -> Symbol {
     Symbol::new(env, "subscription_removed")
+}
+
+/// Returns the Symbol for the `"window_ledgers_set"` event topic.
+///
+/// Emitted when the admin updates the global rolling-window length via
+/// [`crate::CalloraYieldLimits::set_window_ledgers`]. The payload is the new
+/// window length in ledgers (`0` = windows disabled).
+pub fn event_window_ledgers_set(env: &Env) -> Symbol {
+    Symbol::new(env, "window_ledgers_set")
+}
+
+/// Returns the Symbol for the `"window_limits_set"` event topic.
+///
+/// Emitted when the admin updates the global per-window caps via
+/// [`crate::CalloraYieldLimits::set_window_limits`]. The payload is the new
+/// [`crate::WindowLimits`] struct.
+pub fn event_window_limits_set(env: &Env) -> Symbol {
+    Symbol::new(env, "window_limits_set")
+}
+
+/// Returns the Symbol for the `"window_rolled"` event topic.
+///
+/// Emitted lazily on the first mutation after a rolling window expires. The
+/// topic list carries the account; the payload is
+/// `(new_window_start, window_ledgers)`.
+pub fn event_window_rolled(env: &Env) -> Symbol {
+    Symbol::new(env, "window_rolled")
 }
 
 /// Returns the Symbol for the `"upgraded"` event topic.
@@ -372,6 +409,17 @@ mod tests {
         );
     }
 
+    /// Snapshot: proves `event_account_state_reset` maps to exactly the bytes
+    /// for `"account_state_reset"`.
+    #[test]
+    fn test_event_account_state_reset_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_account_state_reset(&env),
+            Symbol::new(&env, "account_state_reset")
+        );
+    }
+
     /// Snapshot: proves `event_operator_set` still maps to exactly the bytes
     /// for `"operator_set"`.
     #[test]
@@ -442,6 +490,36 @@ mod tests {
         assert_eq!(
             event_subscription_removed(&env),
             Symbol::new(&env, "subscription_removed")
+        );
+    }
+
+    /// Snapshot: proves `event_window_ledgers_set` maps to `"window_ledgers_set"`.
+    #[test]
+    fn test_event_window_ledgers_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_window_ledgers_set(&env),
+            Symbol::new(&env, "window_ledgers_set")
+        );
+    }
+
+    /// Snapshot: proves `event_window_limits_set` maps to `"window_limits_set"`.
+    #[test]
+    fn test_event_window_limits_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_window_limits_set(&env),
+            Symbol::new(&env, "window_limits_set")
+        );
+    }
+
+    /// Snapshot: proves `event_window_rolled` maps to `"window_rolled"`.
+    #[test]
+    fn test_event_window_rolled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_window_rolled(&env),
+            Symbol::new(&env, "window_rolled")
         );
     }
 

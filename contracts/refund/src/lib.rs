@@ -33,6 +33,9 @@ pub const MAX_REQUESTER_REFUNDS: u32 = 100;
 /// Maximum page size for requester refund index reads.
 pub const MAX_REQUESTER_REFUNDS_PAGE_SIZE: u32 = 50;
 
+/// Maximum page size for the global pending index reads.
+pub const MAX_PENDING_REFUNDS_PAGE_SIZE: u32 = 50;
+
 #[contract]
 pub struct RefundContract;
 
@@ -209,6 +212,22 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        // Global pending index: ids are appended in strictly increasing order,
+        // so the index stays sorted and `get_pending_refunds` can binary-search it.
+        let pending_key = StorageKey::PendingIndex;
+        let mut pending_index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&pending_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        pending_index.push_back(request_id);
+        env.storage().persistent().set(&pending_key, &pending_index);
+        env.storage().persistent().extend_ttl(
+            &pending_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
         env.storage()
             .instance()
             .set(&StorageKey::RefundCounter, &request_id);
@@ -218,7 +237,7 @@ impl RefundContract {
         Ok(request_id)
     }
 
-    /// Approve a pending refund request (admin only).
+    /// Approve a pending or disputed refund request for the full requested amount (admin only).
     ///
     /// # Arguments
     /// * `admin` - Admin address; must authorize and match stored admin.
@@ -228,14 +247,47 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Pending status.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
     pub fn approve_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
-        admin.require_auth();
-        Self::ensure_initialized(&env)?;
-        Self::bump_instance_ttl(&env);
+        Self::approve_refund_internal(&env, &admin, request_id, None)
+    }
 
-        let stored_admin: Address = Self::get_admin_internal(&env)?;
-        if admin != stored_admin {
+    /// Approve a pending or disputed refund request for a partial (or full) amount (admin only).
+    ///
+    /// Validates `0 < approved_amount <= request.amount` and stores the approved
+    /// amount under `StorageKey::ApprovedAmount(request_id)`. `process_refund`
+    /// uses this approved amount for fee, net payout, and totals accounting.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `Unauthorized` - Caller is not the admin.
+    /// * `NotFound` - Refund request not found.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
+    /// * `ApprovedAmountInvalid` - `approved_amount <= 0` or `> request.amount`.
+    pub fn approve_refund_partial(
+        env: Env,
+        admin: Address,
+        request_id: u64,
+        approved_amount: i128,
+    ) -> Result<(), RefundError> {
+        if approved_amount <= 0 {
+            return Err(RefundError::ApprovedAmountInvalid);
+        }
+        Self::approve_refund_internal(&env, &admin, request_id, Some(approved_amount))
+    }
+
+    fn approve_refund_internal(
+        env: &Env,
+        admin: &Address,
+        request_id: u64,
+        partial_amount: Option<i128>,
+    ) -> Result<(), RefundError> {
+        admin.require_auth();
+        Self::ensure_initialized(env)?;
+        Self::bump_instance_ttl(env);
+
+        let stored_admin: Address = Self::get_admin_internal(env)?;
+        if *admin != stored_admin {
             return Err(RefundError::Unauthorized);
         }
 
@@ -246,9 +298,32 @@ impl RefundContract {
             .get(&key)
             .ok_or(RefundError::NotFound)?;
 
-        if request.status != RefundStatus::Pending {
+        if request.status != RefundStatus::Pending && request.status != RefundStatus::Disputed {
             return Err(RefundError::InvalidStatus);
         }
+
+        let effective_amount = match partial_amount {
+            Some(amt) => {
+                if amt <= 0 || amt > request.amount {
+                    return Err(RefundError::ApprovedAmountInvalid);
+                }
+                let amt_key = StorageKey::ApprovedAmount(request_id);
+                env.storage().persistent().set(&amt_key, &amt);
+                env.storage().persistent().extend_ttl(
+                    &amt_key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                amt
+            }
+            None => {
+                let amt_key = StorageKey::ApprovedAmount(request_id);
+                if env.storage().persistent().has(&amt_key) {
+                    env.storage().persistent().remove(&amt_key);
+                }
+                request.amount
+            }
+        };
 
         request.status = RefundStatus::Approved;
         env.storage().persistent().set(&key, &request);
@@ -258,11 +333,13 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        Self::remove_from_pending_index(&env, request_id);
+
         Self::emit_refund_processed(
-            &env,
+            env,
             request_id,
-            &admin,
-            request.amount,
+            admin,
+            effective_amount,
             &request.token,
             0,
             0,
@@ -272,17 +349,16 @@ impl RefundContract {
         Ok(())
     }
 
-    /// Reject a pending refund request (admin only).
+    /// Reject a pending or disputed refund request (admin only).
     ///
-    /// # Arguments
-    /// * `admin` - Admin address; must authorize and match stored admin.
-    /// * `request_id` - ID of the refund request to reject.
+    /// Rejecting a `Disputed` request finalises the rejection; because
+    /// `DisputeUsed(request_id)` is already set, no second dispute is allowed.
     ///
     /// # Errors
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Pending status.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
     pub fn reject_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
@@ -300,7 +376,7 @@ impl RefundContract {
             .get(&key)
             .ok_or(RefundError::NotFound)?;
 
-        if request.status != RefundStatus::Pending {
+        if request.status != RefundStatus::Pending && request.status != RefundStatus::Disputed {
             return Err(RefundError::InvalidStatus);
         }
 
@@ -313,6 +389,8 @@ impl RefundContract {
             PERSISTENT_BUMP_AMOUNT,
         );
 
+        Self::remove_from_pending_index(&env, request_id);
+
         Self::emit_refund_processed(
             &env,
             request_id,
@@ -322,6 +400,103 @@ impl RefundContract {
             0,
             0,
             RefundStatus::Rejected,
+        );
+
+        Ok(())
+    }
+
+    /// Dispute a rejected refund request once within the configured dispute window.
+    ///
+    /// # Arguments
+    /// * `requester` - Original requester; must authorize.
+    /// * `request_id` - ID of the rejected refund request.
+    /// * `reason` - Reason symbol for the dispute.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `NotFound` - Refund request not found.
+    /// * `Unauthorized` - Caller is not the original requester.
+    /// * `AlreadyDisputed` - Request was already disputed once.
+    /// * `InvalidStatus` - Request is not in Rejected status.
+    /// * `DisputeWindowClosed` - Current timestamp is past `rejected_at + dispute_window`.
+    pub fn dispute_refund(
+        env: Env,
+        requester: Address,
+        request_id: u64,
+        reason: Symbol,
+    ) -> Result<(), RefundError> {
+        requester.require_auth();
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let key = StorageKey::PendingRefund(request_id);
+        let mut request: RefundRequest = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RefundError::NotFound)?;
+
+        if requester != request.requester {
+            return Err(RefundError::Unauthorized);
+        }
+
+        let dispute_used_key = StorageKey::DisputeUsed(request_id);
+        if env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&dispute_used_key)
+            .unwrap_or(false)
+        {
+            return Err(RefundError::AlreadyDisputed);
+        }
+
+        if request.status != RefundStatus::Rejected {
+            return Err(RefundError::InvalidStatus);
+        }
+
+        let rejected_at = request.processed_at.ok_or(RefundError::InvalidStatus)?;
+        let window: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::DisputeWindow)
+            .unwrap_or(DEFAULT_DISPUTE_WINDOW_SECS);
+        let deadline = rejected_at.saturating_add(window);
+        if env.ledger().timestamp() > deadline {
+            return Err(RefundError::DisputeWindowClosed);
+        }
+
+        env.storage().persistent().set(&dispute_used_key, &true);
+        env.storage().persistent().extend_ttl(
+            &dispute_used_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        let dispute_reason_key = StorageKey::DisputeReason(request_id);
+        env.storage().persistent().set(&dispute_reason_key, &reason);
+        env.storage().persistent().extend_ttl(
+            &dispute_reason_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        request.status = RefundStatus::Disputed;
+        env.storage().persistent().set(&key, &request);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::emit_refund_processed(
+            &env,
+            request_id,
+            &requester,
+            request.amount,
+            &request.token,
+            0,
+            0,
+            RefundStatus::Disputed,
         );
 
         Ok(())
@@ -372,17 +547,22 @@ impl RefundContract {
             .get(&StorageKey::RefundConfig)
             .ok_or(RefundError::NotInitialized)?;
 
-        // Fee computation: fee = (amount * fee_bps) / 10_000
+        // Use approved amount when partially approved, else full requested amount.
+        let effective_amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::ApprovedAmount(request_id))
+            .unwrap_or(request.amount);
+
+        // Fee computation: fee = (effective_amount * fee_bps) / 10_000
         // Integer division truncates towards zero (rounds down in protocol's favour).
-        let fee = request
-            .amount
+        let fee = effective_amount
             .checked_mul(config.fee_bps as i128)
             .ok_or(RefundError::Overflow)?
             .checked_div(10_000)
             .ok_or(RefundError::Overflow)?;
 
-        let net = request
-            .amount
+        let net = effective_amount
             .checked_sub(fee)
             .ok_or(RefundError::Overflow)?;
 
@@ -394,6 +574,9 @@ impl RefundContract {
         }
 
         // CEI: Persist state updates before external transfer.
+        // Invariant: only `Approved` requests reach here, and `approve_refund`
+        // already removed the id from the pending index, so no index update is
+        // needed for the `Approved -> Processed` transition.
         request.status = RefundStatus::Processed;
         request.processed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &request);
@@ -407,7 +590,7 @@ impl RefundContract {
         let token_key = StorageKey::TotalRefunds(request.token.clone());
         let total: i128 = env.storage().instance().get(&token_key).unwrap_or(0);
         let new_total = total
-            .checked_add(request.amount)
+            .checked_add(effective_amount)
             .ok_or(RefundError::Overflow)?;
         env.storage().instance().set(&token_key, &new_total);
 
@@ -418,7 +601,7 @@ impl RefundContract {
             .get(&StorageKey::TotalRefundsLegacy)
             .unwrap_or(0);
         let new_legacy_total = legacy_total
-            .checked_add(request.amount)
+            .checked_add(effective_amount)
             .ok_or(RefundError::Overflow)?;
         env.storage()
             .instance()
@@ -436,7 +619,7 @@ impl RefundContract {
             &env,
             request_id,
             &admin,
-            request.amount,
+            effective_amount,
             &request.token,
             fee,
             net,
@@ -561,6 +744,54 @@ impl RefundContract {
         Self::emit_config_updated(&env, &admin, fee_bps, min_refund_amount);
 
         Ok(())
+    }
+
+    /// Set the dispute window duration in seconds (admin only).
+    pub fn set_dispute_window(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), RefundError> {
+        admin.require_auth();
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let stored_admin: Address = Self::get_admin_internal(&env)?;
+        if admin != stored_admin {
+            return Err(RefundError::Unauthorized);
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::DisputeWindow, &window_secs);
+        Ok(())
+    }
+
+    /// Get the configured dispute window duration in seconds.
+    pub fn get_dispute_window(env: Env) -> Result<u64, RefundError> {
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+        Ok(env
+            .storage()
+            .instance()
+            .get(&StorageKey::DisputeWindow)
+            .unwrap_or(DEFAULT_DISPUTE_WINDOW_SECS))
+    }
+
+    /// Get the approved amount for a refund request (falls back to `request.amount`).
+    pub fn get_approved_amount(env: Env, request_id: u64) -> Result<i128, RefundError> {
+        Self::bump_instance_ttl(&env);
+        let key = StorageKey::PendingRefund(request_id);
+        let request: RefundRequest = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RefundError::NotFound)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&StorageKey::ApprovedAmount(request_id))
+            .unwrap_or(request.amount))
     }
 
     /// Get the stored admin address.
@@ -701,6 +932,97 @@ impl RefundContract {
             }
         }
         Ok(page)
+    }
+
+    /// Return a bounded page of IDs of refund requests still in `Pending` status.
+    ///
+    /// `cursor` is exclusive: only IDs strictly greater than `cursor` are
+    /// considered, so pass `0` for the first page. The returned tuple is the
+    /// ascending page of IDs and the cursor to pass for the next page, or
+    /// `None` when the page reached the end of the index.
+    ///
+    /// `limit` is clamped to [`MAX_PENDING_REFUNDS_PAGE_SIZE`]; a `limit` of `0`
+    /// returns an empty page. The pending index is a sorted `Vec<u64>`, so the
+    /// first eligible ID is located with a binary search (O(log n)) and at most
+    /// [`MAX_PENDING_REFUNDS_PAGE_SIZE`] entries are read afterwards, keeping
+    /// per-call cost bounded. The index and returned request records receive
+    /// TTL bumps.
+    pub fn get_pending_refunds(
+        env: Env,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<(soroban_sdk::Vec<u64>, Option<u64>), RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+
+        let index_key = StorageKey::PendingIndex;
+        let index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if env.storage().persistent().has(&index_key) {
+            env.storage().persistent().extend_ttl(
+                &index_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let effective_limit = limit.min(MAX_PENDING_REFUNDS_PAGE_SIZE);
+        // First index whose ID is strictly greater than `cursor`: an exact match
+        // sits at the returned position, so start one past it.
+        let start = match index.binary_search(cursor) {
+            Ok(pos) => pos.saturating_add(1),
+            Err(pos) => pos,
+        };
+        let end = start.saturating_add(effective_limit).min(index.len());
+
+        let mut page = soroban_sdk::Vec::new(&env);
+        for offset in start..end {
+            let request_id = index.get(offset).unwrap();
+            let key = StorageKey::PendingRefund(request_id);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                page.push_back(request_id);
+            }
+        }
+
+        let next_cursor = if end < index.len() && end > start {
+            Some(index.get(end - 1).unwrap())
+        } else {
+            None
+        };
+
+        Ok((page, next_cursor))
+    }
+
+    /// Remove `request_id` from the global pending index if it is present.
+    ///
+    /// Shared by [`Self::approve_refund`] and [`Self::reject_refund`] so that
+    /// any future terminal transition (e.g. an `Expired` status) can reuse the
+    /// same helper to keep the index consistent. The index is sorted, so the
+    /// entry is located with a binary search.
+    fn remove_from_pending_index(env: &Env, request_id: u64) {
+        let key = StorageKey::PendingIndex;
+        let mut index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if let Ok(pos) = index.binary_search(request_id) {
+            index.remove(pos);
+            env.storage().persistent().set(&key, &index);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
     }
 
     /// Internal helper to get admin without TTL bump (for internal use).

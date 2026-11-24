@@ -68,7 +68,6 @@ fn setup(env: &Env) -> (Address, Address, CalloraSettlementClient<'_>) {
 // ─── batch_receive_payment ──────────────────────────────────────────────────
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn batch_receive_payment_single_item_within_budget() {
     let env = Env::default();
     let (_admin, vault, client) = setup(&env);
@@ -95,7 +94,6 @@ fn batch_receive_payment_single_item_within_budget() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn batch_receive_payment_max_batch_within_budget() {
     let env = Env::default();
     let (_admin, vault, client) = setup(&env);
@@ -197,7 +195,6 @@ fn batch_receive_payment_invalid_amount_leaves_no_partial_state() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn batch_receive_payment_storage_growth_is_bounded() {
     let env = Env::default();
     let (_admin, vault, client) = setup(&env);
@@ -272,7 +269,6 @@ fn batch_settle_single_item_within_budget() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn batch_settle_over_cap_rejected_within_budget() {
     let env = Env::default();
     let (_admin, _vault, client) = setup(&env);

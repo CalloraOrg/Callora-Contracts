@@ -7,8 +7,8 @@
 
 extern crate std;
 
-use crate::{CalloraTopics, CalloraTopicsClient, TopicsError};
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol};
+use crate::{CalloraTopics, CalloraTopicsClient, TopicsError, MAX_PAGE_SIZE};
+use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, String, Symbol};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -270,4 +270,145 @@ fn reactivate_nonexistent_returns_not_found() {
         .unwrap_err()
         .unwrap();
     assert_eq!(err, TopicsError::TopicNotFound);
+}
+
+// ---------------------------------------------------------------------------
+// Topic listing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_topics_empty_contract_returns_empty_page() {
+    let f = Fixture::new();
+    let (_, client) = f.client();
+
+    assert!(client.list_topics(&0, &MAX_PAGE_SIZE).is_empty());
+    assert!(client.list_topics(&0, &0).is_empty());
+}
+
+#[test]
+fn list_topics_returns_registration_order_in_capped_pages() {
+    let f = Fixture::new();
+    let (_, client) = f.client();
+    let description = String::from_str(&f.env, "page test");
+    let owner = Address::generate(&f.env);
+
+    for index in 0..53 {
+        let name = Symbol::new(&f.env, &std::format!("topic_{index}"));
+        client.register_topic(&f.admin, &name, &description, &owner);
+    }
+
+    let first_page = client.list_topics(&0, &MAX_PAGE_SIZE);
+    assert_eq!(first_page.len(), MAX_PAGE_SIZE);
+    for index in 0..MAX_PAGE_SIZE {
+        assert_eq!(
+            first_page.get(index).unwrap().name,
+            Symbol::new(&f.env, &std::format!("topic_{index}"))
+        );
+    }
+
+    let last_page = client.list_topics(&MAX_PAGE_SIZE, &MAX_PAGE_SIZE);
+    assert_eq!(last_page.len(), 3);
+    for (page_index, index) in (MAX_PAGE_SIZE..53).enumerate() {
+        assert_eq!(
+            last_page.get(page_index as u32).unwrap().name,
+            Symbol::new(&f.env, &std::format!("topic_{index}"))
+        );
+    }
+    assert!(client.list_topics(&53, &MAX_PAGE_SIZE).is_empty());
+    assert!(client.list_topics(&100, &MAX_PAGE_SIZE).is_empty());
+}
+
+#[test]
+fn list_topics_rejects_limit_above_page_cap() {
+    let f = Fixture::new();
+    let (_, client) = f.client();
+    let err = client
+        .try_list_topics(&0, &(MAX_PAGE_SIZE + 1))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TopicsError::InvalidPageLimit);
+}
+
+// ---------------------------------------------------------------------------
+// Topic description updates
+// ---------------------------------------------------------------------------
+
+#[test]
+fn update_topic_description_is_admin_only_and_requires_existing_topic() {
+    let f = Fixture::new();
+    let (_, client) = f.client();
+    let name = Symbol::new(&f.env, "desc_auth");
+    register(&f.env, &client, &f.admin, &name);
+    let description = String::from_str(&f.env, "updated");
+
+    let intruder = Address::generate(&f.env);
+    let err = client
+        .try_update_topic_description(&intruder, &name, &description)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TopicsError::Unauthorized);
+
+    let missing = Symbol::new(&f.env, "missing_desc");
+    let err = client
+        .try_update_topic_description(&f.admin, &missing, &description)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, TopicsError::TopicNotFound);
+}
+
+#[test]
+fn update_topic_description_rejects_invalid_descriptions() {
+    use std::string::String as StdString;
+
+    let f = Fixture::new();
+    let (_, client) = f.client();
+    let name = Symbol::new(&f.env, "desc_invalid");
+    register(&f.env, &client, &f.admin, &name);
+    let invalid_descriptions = [
+        String::from_str(&f.env, ""),
+        String::from_str(&f.env, &StdString::from("a").repeat(257)),
+        String::from_str(&f.env, "line\nbreak"),
+        String::from_str(&f.env, " leading"),
+        String::from_str(&f.env, "trailing "),
+    ];
+
+    for description in invalid_descriptions.iter() {
+        let err = client
+            .try_update_topic_description(&f.admin, &name, description)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, TopicsError::InvalidDescription);
+    }
+}
+
+#[test]
+fn update_topic_description_preserves_owner_and_inactive_state_and_emits_payload() {
+    let f = Fixture::new();
+    let (_, client) = f.client();
+    let name = Symbol::new(&f.env, "desc_inactive");
+    let owner = register(&f.env, &client, &f.admin, &name);
+    let old_description = String::from_str(&f.env, "original description");
+    // Replace the helper's initial description so the event can be checked
+    // against an exact old value.
+    client.update_topic_description(&f.admin, &name, &old_description);
+    client.deactivate(&f.admin, &name);
+
+    let new_description = String::from_str(&f.env, "corrected description");
+    client.update_topic_description(&f.admin, &name, &new_description);
+
+    let record = client.get_topic(&name);
+    assert_eq!(record.description, new_description);
+    assert_eq!(record.owner, owner);
+    assert!(!record.active);
+
+    let (_, topics, data) = f.env.events().all().last().unwrap();
+    assert_eq!(
+        topics,
+        soroban_sdk::vec![
+            &f.env,
+            Symbol::new(&f.env, "topic_description_updated").into_val(&f.env),
+            name.into_val(&f.env),
+        ]
+    );
+    assert_eq!(data, (old_description, new_description).into_val(&f.env));
 }

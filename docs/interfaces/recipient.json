@@ -1,0 +1,107 @@
+{
+  "contract": "callora-recipient",
+  "source": "contracts/recipient/src/lib.rs",
+  "types": [
+    {
+      "name": "RecipientRecord",
+      "fields": [
+        { "name": "address", "type": "Address" },
+        { "name": "metadata", "type": "String" }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "init",
+      "params": [
+        { "name": "admin", "type": "Address" }
+      ],
+      "access": "anyone, once",
+      "panics_or_errors": ["AlreadyInitialized"],
+      "events": []
+    },
+    {
+      "name": "register_recipient",
+      "params": [
+        { "name": "caller", "type": "Address" },
+        { "name": "recipient", "type": "Address" },
+        { "name": "metadata", "type": "String" }
+      ],
+      "access": "admin only",
+      "panics_or_errors": ["Unauthorized", "RecipientAlreadyExists"],
+      "events": ["recipient_registered"]
+    },
+    {
+      "name": "update_recipient",
+      "params": [
+        { "name": "caller", "type": "Address" },
+        { "name": "recipient", "type": "Address" },
+        { "name": "metadata", "type": "String" }
+      ],
+      "access": "admin only",
+      "panics_or_errors": ["Unauthorized", "RecipientNotFound"],
+      "events": ["recipient_updated"]
+    },
+    {
+      "name": "remove_recipient",
+      "params": [
+        { "name": "caller", "type": "Address" },
+        { "name": "recipient", "type": "Address" }
+      ],
+      "access": "admin only",
+      "panics_or_errors": ["Unauthorized", "RecipientNotFound"],
+      "events": ["recipient_removed"]
+    },
+    {
+      "name": "get_admin",
+      "params": [],
+      "access": "public",
+      "panics_or_errors": ["NotInitialized"],
+      "events": []
+    },
+    {
+      "name": "get_recipient",
+      "params": [
+        { "name": "recipient", "type": "Address" }
+      ],
+      "access": "public",
+      "panics_or_errors": ["RecipientNotFound"],
+      "events": []
+    },
+    {
+      "name": "has_recipient",
+      "params": [
+        { "name": "recipient", "type": "Address" }
+      ],
+      "access": "public",
+      "panics_or_errors": [],
+      "events": []
+    },
+    {
+      "name": "get_recipient_count",
+      "params": [],
+      "access": "public",
+      "panics_or_errors": [],
+      "events": []
+    },
+    {
+      "name": "list_recipients",
+      "params": [],
+      "access": "public",
+      "panics_or_errors": [],
+      "events": []
+    }
+  ],
+  "errors": [
+    { "name": "AlreadyInitialized", "code": 1, "description": "Contract has already been initialized" },
+    { "name": "NotInitialized", "code": 2, "description": "Contract has not been initialized" },
+    { "name": "Unauthorized", "code": 3, "description": "Caller is not the admin" },
+    { "name": "RecipientAlreadyExists", "code": 4, "description": "Recipient is already registered" },
+    { "name": "RecipientNotFound", "code": 5, "description": "Recipient is not registered" }
+  ],
+  "events": [
+    { "name": "recipient_registered", "source": "contracts/recipient/src/events.rs" },
+    { "name": "recipient_updated", "source": "contracts/recipient/src/events.rs" },
+    { "name": "recipient_removed", "source": "contracts/recipient/src/events.rs" }
+  ]
+}

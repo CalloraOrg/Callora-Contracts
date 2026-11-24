@@ -310,7 +310,8 @@ dependencies = [
 name = "callora-emergency"
 version = "0.1.0"
 dependencies = [
- "callora-storage-migration",
+ "callora-distribute",
+ "callora-revenue-pool",
  "soroban-sdk",
 ]
 
@@ -346,6 +347,15 @@ name = "callora-hot"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "callora-limits"
+version = "0.0.1"
+dependencies = [
+ "callora-revenue-pool",
+ "callora-settlement",
  "soroban-sdk",
 ]
 
@@ -410,6 +420,7 @@ dependencies = [
 name = "callora-settlement"
 version = "0.1.0"
 dependencies = [
+ "callora-recipient",
  "proptest",
  "soroban-sdk",
 ]
@@ -419,7 +430,6 @@ name = "callora-stake"
 version = "0.1.0"
 dependencies = [
  "callora-stake",
- "callora-storage-migration",
  "soroban-sdk",
 ]
 
@@ -428,10 +438,8 @@ name = "callora-storage-migration"
 version = "0.1.0"
 dependencies = [
  "callora-checkpoint",
- "callora-emergency",
  "callora-migrate",
  "callora-revenue-pool",
- "callora-stake",
  "callora-yield",
  "proptest",
  "soroban-sdk",

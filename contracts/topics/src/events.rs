@@ -54,6 +54,14 @@ pub fn event_topic_owner_changed(env: &Env) -> Symbol {
     Symbol::new(env, "topic_owner_chg")
 }
 
+/// Returns the Symbol for the `"topic_description_updated"` event topic.
+///
+/// Emitted after a topic description is updated by
+/// [`crate::CalloraTopics::update_topic_description`].
+pub fn event_topic_description_updated(env: &Env) -> Symbol {
+    Symbol::new(env, "topic_description_updated")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
