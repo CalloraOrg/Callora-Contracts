@@ -23,4 +23,8 @@ pub enum RecipientError {
     InvalidName = 6,
     /// Arithmetic overflow detected (code 7).
     Overflow = 7,
+    /// `batch_register_recipients` was called with no entries (code 8).
+    EmptyBatch = 8,
+    /// `batch_register_recipients` exceeded [`crate::MAX_BATCH_SIZE`] (code 9).
+    BatchTooLarge = 9,
 }

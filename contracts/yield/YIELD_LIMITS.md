@@ -50,6 +50,8 @@ when the admin address has not signed.
 | `set_default_limits(caller, max_b, max_p, max_s)`             | Replace the global defaults.                             |
 | `set_account_limits(caller, account, max_b, max_p, max_s)`   | Override the defaults for a single account.             |
 | `clear_account_limits(caller, account)`                      | Revert the account to the global defaults.              |
+| `reset_account_state(caller, account)`                       | Zero one account's counters (admin recovery tool).      |
+| `batch_clear_accounts(caller, accounts)`                     | Zero up to `MAX_BATCH_CLEAR` accounts atomically.       |
 
 ### Counter mutators (operator-gated)
 

@@ -150,6 +150,16 @@ pub fn event_account_limits_cleared(env: &Env) -> Symbol {
     Symbol::new(env, "account_limits_cleared")
 }
 
+/// Returns the Symbol for the `"account_state_reset"` event topic.
+///
+/// Emitted when the admin zeroes an account's live counters via
+/// [`crate::CalloraYieldLimits::reset_account_state`] or
+/// [`crate::CalloraYieldLimits::batch_clear_accounts`]. The previous counters
+/// travel in the data payload.
+pub fn event_account_state_reset(env: &Env) -> Symbol {
+    Symbol::new(env, "account_state_reset")
+}
+
 /// Returns the Symbol for the `"operator_set"` event topic.
 ///
 /// Emitted when the admin registers an operator that may mutate per-account
@@ -369,6 +379,17 @@ mod tests {
         assert_eq!(
             event_account_limits_cleared(&env),
             Symbol::new(&env, "account_limits_cleared")
+        );
+    }
+
+    /// Snapshot: proves `event_account_state_reset` maps to exactly the bytes
+    /// for `"account_state_reset"`.
+    #[test]
+    fn test_event_account_state_reset_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_account_state_reset(&env),
+            Symbol::new(&env, "account_state_reset")
         );
     }
 
