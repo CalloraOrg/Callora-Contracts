@@ -43,6 +43,24 @@
 //! - Registered operators are stored as a persistent flag under
 //!   [`StorageKey::Operator`]`(Address)` with the same TTL policy.
 //!
+//! # Rolling windows (Issue #1522)
+//!
+//! The concurrent caps above never reset, so an account that opens and
+//! closes bets repeatedly can still churn unbounded activity. An optional
+//! rolling window adds a second, time-scoped layer:
+//!
+//! - [`WindowLimits`] caps how many bets / positions / subscriptions may be
+//!   **opened** inside one window.
+//! - `window_ledgers` (global, admin-set) is the window length in ledgers;
+//!   `0` disables windows and restores the pre-#1522 behaviour exactly.
+//! - [`WindowState`] stores `{ window_start, bets_opened, positions_opened,
+//!   subscriptions_added }` under [`StorageKey::WindowState`]`(Address)` in
+//!   persistent storage. The window rolls lazily on the next mutation when
+//!   `ledger.sequence() >= window_start + window_ledgers`, so no keeper is
+//!   required.
+//! - Decrements (`clear_bet`, `close_position`, `unsubscribe`) never refund
+//!   window counts; the window caps only bound activity *inside* a window.
+//!
 //! # Auth Model
 //!
 //! Counter mutations are **operator-gated**, not caller-gated (#1414). An
@@ -186,6 +204,28 @@ pub const MAX_CAP: u32 = 1_000_000;
 /// zeroed counter.
 pub const MAX_BATCH_CLEAR: u32 = 50;
 
+/// Smallest non-zero rolling-window length, in ledgers.
+pub const MIN_WINDOW_LEDGERS: u32 = 1;
+
+/// Largest allowable rolling-window length, in ledgers.
+///
+/// `1_000_000` ledgers is roughly 58 days at a 5-second close cadence — a
+/// conservative sanity ceiling that keeps a mistaken admin from configuring
+/// windows that effectively never roll.
+pub const MAX_WINDOW_LEDGERS: u32 = 1_000_000;
+
+/// Per-window caps applied when the admin enables windows but does not set
+/// explicit [`WindowLimits`].
+///
+/// The default is deliberately permissive (every dimension at [`MAX_CAP`]) so
+/// merely enabling a window does not change behaviour until the admin also
+/// configures window caps.
+pub const DEFAULT_WINDOW_LIMITS: WindowLimits = WindowLimits {
+    max_bets: MAX_CAP,
+    max_positions: MAX_CAP,
+    max_subscriptions: MAX_CAP,
+};
+
 // ---------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------
@@ -262,6 +302,128 @@ impl AccountLimits {
             && self.max_positions <= MAX_CAP
             && self.max_subscriptions <= MAX_CAP
     }
+}
+
+/// Per-account per-window caps configured by the admin.
+///
+/// Each field caps how many of that kind may be **opened** during a single
+/// rolling window. Decrements never reduce these counters, so closing a bet
+/// does not free up window capacity. A value of `0` blocks all opens of that
+/// kind for the duration of the window.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowLimits {
+    /// Maximum bets opened per window.
+    pub max_bets: u32,
+    /// Maximum positions opened per window.
+    pub max_positions: u32,
+    /// Maximum subscriptions added per window.
+    pub max_subscriptions: u32,
+}
+
+impl WindowLimits {
+    /// Construct a uniform [`WindowLimits`] with all three caps at `count`.
+    pub const fn uniform(count: u32) -> Self {
+        Self {
+            max_bets: count,
+            max_positions: count,
+            max_subscriptions: count,
+        }
+    }
+
+    /// Return `true` when every cap is within [`MAX_CAP`].
+    pub fn is_valid(&self) -> bool {
+        self.max_bets <= MAX_CAP
+            && self.max_positions <= MAX_CAP
+            && self.max_subscriptions <= MAX_CAP
+    }
+}
+
+/// Per-account rolling-window counters.
+///
+/// `window_start` is the ledger sequence at which the current window began.
+/// All three counters are monotonically increasing within a window and reset
+/// together when the window rolls over.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct WindowState {
+    /// Ledger sequence at which the current window started (`0` = absent).
+    pub window_start: u32,
+    /// Bets opened in the current window.
+    pub bets_opened: u32,
+    /// Positions opened in the current window.
+    pub positions_opened: u32,
+    /// Subscriptions added in the current window.
+    pub subscriptions_added: u32,
+}
+
+impl WindowState {
+    /// Return a zeroed [`WindowState`] (no window recorded).
+    pub const fn zero() -> Self {
+        Self {
+            window_start: 0,
+            bets_opened: 0,
+            positions_opened: 0,
+            subscriptions_added: 0,
+        }
+    }
+
+    /// Return a zeroed [`WindowState`] that starts at `window_start`.
+    pub const fn started_at(window_start: u32) -> Self {
+        Self {
+            window_start,
+            bets_opened: 0,
+            positions_opened: 0,
+            subscriptions_added: 0,
+        }
+    }
+
+    /// Reset the counters and anchor the window at `window_start`.
+    pub fn roll(&mut self, window_start: u32) {
+        self.window_start = window_start;
+        self.bets_opened = 0;
+        self.positions_opened = 0;
+        self.subscriptions_added = 0;
+    }
+
+    /// Return `true` when `current` has reached or passed the end of this
+    /// window. Uses saturating arithmetic so a sequence near `u32::MAX`
+    /// cannot panic or wrap into a spurious roll.
+    pub fn is_expired(&self, current: u32, window_ledgers: u32) -> bool {
+        window_ledgers == 0 || current >= self.window_start.saturating_add(window_ledgers)
+    }
+
+    /// Record one opened bet using `checked_add`.
+    pub fn add_bet(&mut self) -> Result<(), YieldLimitError> {
+        self.bets_opened = self
+            .bets_opened
+            .checked_add(1)
+            .ok_or(YieldLimitError::Overflow)?;
+        Ok(())
+    }
+
+    /// Record one opened position using `checked_add`.
+    pub fn add_position(&mut self) -> Result<(), YieldLimitError> {
+        self.positions_opened = self
+            .positions_opened
+            .checked_add(1)
+            .ok_or(YieldLimitError::Overflow)?;
+        Ok(())
+    }
+
+    /// Record one added subscription using `checked_add`.
+    pub fn add_subscription(&mut self) -> Result<(), YieldLimitError> {
+        self.subscriptions_added = self
+            .subscriptions_added
+            .checked_add(1)
+            .ok_or(YieldLimitError::Overflow)?;
+        Ok(())
+    }
+}
+
+/// Return `true` when `window_ledgers` is a legal configuration value.
+pub fn is_valid_window_ledgers(window_ledgers: u32) -> bool {
+    window_ledgers == 0 || (MIN_WINDOW_LEDGERS..=MAX_WINDOW_LEDGERS).contains(&window_ledgers)
 }
 
 /// Per-account live state counters.
@@ -573,25 +735,54 @@ pub fn reset_account_counters(env: &Env, account: &Address) -> AccountState {
 // Free functions — gate checks
 // ---------------------------------------------------------------------
 
-/// Return `true` if `account` can place another bet without exceeding caps.
+/// Return `true` if `account` can place another bet without exceeding the
+/// concurrent cap or the current window cap (when windows are enabled).
 pub fn can_place_bet(env: &Env, account: &Address) -> bool {
     let caps = read_account_limits(env, account);
     let state = read_account_state(env, account);
-    state.bets < caps.max_bets
+    if state.bets >= caps.max_bets {
+        return false;
+    }
+    let window_ledgers = read_window_ledgers(env);
+    if window_ledgers == 0 {
+        return true;
+    }
+    let window_caps = read_window_limits(env);
+    effective_window_state(env, account, window_ledgers).bets_opened < window_caps.max_bets
 }
 
-/// Return `true` if `account` can open another position without exceeding caps.
+/// Return `true` if `account` can open another position without exceeding the
+/// concurrent cap or the current window cap (when windows are enabled).
 pub fn can_open_position(env: &Env, account: &Address) -> bool {
     let caps = read_account_limits(env, account);
     let state = read_account_state(env, account);
-    state.positions < caps.max_positions
+    if state.positions >= caps.max_positions {
+        return false;
+    }
+    let window_ledgers = read_window_ledgers(env);
+    if window_ledgers == 0 {
+        return true;
+    }
+    let window_caps = read_window_limits(env);
+    effective_window_state(env, account, window_ledgers).positions_opened
+        < window_caps.max_positions
 }
 
-/// Return `true` if `account` can subscribe again without exceeding caps.
+/// Return `true` if `account` can subscribe again without exceeding the
+/// concurrent cap or the current window cap (when windows are enabled).
 pub fn can_subscribe(env: &Env, account: &Address) -> bool {
     let caps = read_account_limits(env, account);
     let state = read_account_state(env, account);
-    state.subscriptions < caps.max_subscriptions
+    if state.subscriptions >= caps.max_subscriptions {
+        return false;
+    }
+    let window_ledgers = read_window_ledgers(env);
+    if window_ledgers == 0 {
+        return true;
+    }
+    let window_caps = read_window_limits(env);
+    effective_window_state(env, account, window_ledgers).subscriptions_added
+        < window_caps.max_subscriptions
 }
 
 // ---------------------------------------------------------------------
@@ -870,6 +1061,41 @@ impl CalloraYieldLimits {
         Ok(())
     }
 
+    /// Set the global rolling-window length in ledgers (admin only).
+    ///
+    /// `0` disables rolling windows and restores the pre-#1522 behaviour
+    /// exactly. Any non-zero value must lie within
+    /// [`MIN_WINDOW_LEDGERS`]`..=`[`MAX_WINDOW_LEDGERS`].
+    ///
+    /// Existing window counters are left untouched; the next mutation rolls
+    /// them lazily against the new length.
+    pub fn set_window_ledgers(
+        window_ledgers: u32,
+        write_window_ledgers(&env, window_ledgers)?;
+            (events::event_window_ledgers_set(&env), caller),
+            window_ledgers,
+        );
+    }
+
+    /// Set the global per-window caps (admin only).
+    ///
+    /// Window caps apply only while [`Self::set_window_ledgers`] is non-zero.
+    /// A cap of `0` blocks all opens of that kind inside a window.
+    pub fn set_window_limits(
+        max_bets: u32,
+        max_positions: u32,
+        max_subscriptions: u32,
+        let caps = WindowLimits {
+            max_bets,
+            max_positions,
+            max_subscriptions,
+        };
+        write_window_limits(&env, &caps)?;
+            (events::event_window_limits_set(&env), caller, caps.clone()),
+            caps,
+        );
+    }
+
     // -----------------------------------------------------------------
     // Operator registry (admin only)
     // -----------------------------------------------------------------
@@ -940,6 +1166,28 @@ impl CalloraYieldLimits {
         if state.bets >= caps.max_bets {
             return Err(YieldLimitError::BetsAtCap);
         }
+
+        // Rolling window: enforced in addition to the concurrent cap. A
+        // disabled window (`0`) skips all window reads/writes so behaviour
+        // and storage usage are identical to the pre-window contract.
+        let window_ledgers = read_window_ledgers(&env);
+        if window_ledgers != 0 {
+            let window_caps = read_window_limits(&env);
+            let (mut window_state, rolled) =
+                load_window_for_mutation(&env, &caller, window_ledgers);
+            if rolled {
+                env.events().publish(
+                    (events::event_window_rolled(&env), caller.clone()),
+                    (window_state.window_start, window_ledgers),
+                );
+            }
+            if window_state.bets_opened >= window_caps.max_bets {
+                return Err(YieldLimitError::BetsWindowCap);
+            }
+            window_state.add_bet()?;
+            write_window_state(&env, &caller, &window_state);
+        }
+
         state.add_bet()?;
         write_account_state(&env, &account, &state);
         env.events().publish(
@@ -975,6 +1223,25 @@ impl CalloraYieldLimits {
         if state.positions >= caps.max_positions {
             return Err(YieldLimitError::PositionsAtCap);
         }
+
+        let window_ledgers = read_window_ledgers(&env);
+        if window_ledgers != 0 {
+            let window_caps = read_window_limits(&env);
+            let (mut window_state, rolled) =
+                load_window_for_mutation(&env, &caller, window_ledgers);
+            if rolled {
+                env.events().publish(
+                    (events::event_window_rolled(&env), caller.clone()),
+                    (window_state.window_start, window_ledgers),
+                );
+            }
+            if window_state.positions_opened >= window_caps.max_positions {
+                return Err(YieldLimitError::PositionsWindowCap);
+            }
+            window_state.add_position()?;
+            write_window_state(&env, &caller, &window_state);
+        }
+
         state.add_position()?;
         write_account_state(&env, &account, &state);
         env.events().publish(
@@ -1018,6 +1285,25 @@ impl CalloraYieldLimits {
         if state.subscriptions >= caps.max_subscriptions {
             return Err(YieldLimitError::SubscriptionsAtCap);
         }
+
+        let window_ledgers = read_window_ledgers(&env);
+        if window_ledgers != 0 {
+            let window_caps = read_window_limits(&env);
+            let (mut window_state, rolled) =
+                load_window_for_mutation(&env, &caller, window_ledgers);
+            if rolled {
+                env.events().publish(
+                    (events::event_window_rolled(&env), caller.clone()),
+                    (window_state.window_start, window_ledgers),
+                );
+            }
+            if window_state.subscriptions_added >= window_caps.max_subscriptions {
+                return Err(YieldLimitError::SubscriptionsWindowCap);
+            }
+            window_state.add_subscription()?;
+            write_window_state(&env, &caller, &window_state);
+        }
+
         state.add_subscription()?;
         write_account_state(&env, &account, &state);
         env.events().publish(

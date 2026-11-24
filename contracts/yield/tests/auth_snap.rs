@@ -154,6 +154,30 @@ fn set_account_limits_requires_auth() {
 }
 
 #[test]
+fn set_window_ledgers_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_ledgers(&intruder, &10u32);
+    assert!(
+        res.is_err(),
+        "set_window_ledgers must require auth on caller"
+    );
+}
+
+#[test]
+fn set_window_limits_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_limits(&intruder, &1u32, &1u32, &1u32);
+    assert!(
+        res.is_err(),
+        "set_window_limits must require auth on caller"
+    );
+}
+
+#[test]
 fn clear_account_limits_requires_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);

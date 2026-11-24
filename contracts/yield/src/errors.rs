@@ -36,12 +36,13 @@ pub enum YieldLimitError {
     AlreadyInitialized = 2,
     /// Caller is not authorized for the requested operation (code 3).
     Unauthorized = 3,
-    /// One or more per-account caps are negative or otherwise invalid (code 4).
+    /// One or more per-account or per-window caps are invalid (code 4).
     ///
-    /// Returned by [`crate::limits::set_account_limits`] and
-    /// [`crate::limits::set_default_limits`] when any of `max_bets`,
-    /// `max_positions`, or `max_subscriptions` is negative, or when an
-    /// `AccountLimits` struct is otherwise invalid for storage.
+    /// Returned by [`crate::limits::set_account_limits`],
+    /// [`crate::limits::set_default_limits`], and
+    /// [`crate::limits::set_window_limits`] when any cap is negative or above
+    /// `MAX_CAP`, and by [`crate::limits::set_window_ledgers`] when the window
+    /// length is neither `0` nor within the documented bounds.
     InvalidLimit = 4,
     /// Account's open bet count is already at the configured cap (code 5).
     ///
