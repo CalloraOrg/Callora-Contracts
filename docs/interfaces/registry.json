@@ -8,7 +8,15 @@
     "catalog": "OfferingCatalog::put_offering — invoked before persisting registry state",
     "token_balance": "token::Client::balance — optional gate in register_offering_with_balance_gate"
   },
+  "entrypoints": {
+    "get_offerings_by_developer": {
+      "args": ["developer: Address", "start: u32", "limit: u32"],
+      "returns": "Vec<OfferingRecord>",
+      "description": "Paginated, registration-ordered list of offerings for a developer. limit is clamped to 50; limit 0 or start past the end returns an empty page. Index and records have their TTL extended on read."
+    }
+  },
   "testing": {
-    "xcontract": "contracts/registry/tests/xcontract.rs covers catalog and token callee panic/revert safety"
+    "xcontract": "contracts/registry/tests/xcontract.rs covers catalog and token callee panic/revert safety",
+    "developer_index": "contracts/registry/tests/developer_index.rs covers the per-developer index and pagination"
   }
 }

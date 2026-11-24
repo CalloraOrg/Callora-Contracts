@@ -8,20 +8,42 @@
 //! # Entrypoints
 //! | Function | Auth | Description |
 //! |----------|------|-------------|
-//! | [`CalloraRescue::init`]           | admin | One-time initialisation |
-//! | [`CalloraRescue::rescue`]         | admin | Transfer `amount` of any token to `to` |
-//! | [`CalloraRescue::rescue_capped`]  | admin | Like `rescue` but enforces a per-call cap |
-//! | [`CalloraRescue::total_rescued`]  | —     | View: cumulative rescued amount |
-//! | [`CalloraRescue::get_admin`]      | —     | View: current admin address |
+//! | [`CalloraRescue::init`]                | admin | One-time initialisation |
+//! | [`CalloraRescue::rescue`]              | admin | Transfer `amount` of any token to `to` |
+//! | [`CalloraRescue::rescue_capped`]       | admin | Like `rescue` but enforces a per-call cap |
+//! | [`CalloraRescue::rescue_many`]         | admin | Atomically rescue up to [`MAX_RESCUE_BATCH`] tokens |
+//! | [`CalloraRescue::total_rescued_for`]   | —     | View: per-token cumulative rescued amount |
+//! | [`CalloraRescue::total_rescued`]       | —     | **Deprecated** view: always returns 0 (see MIGRATION.md) |
+//! | [`CalloraRescue::get_admin`]           | —     | View: current admin address |
 //!
 //! # Security
 //! - `require_auth` on every state-changing entrypoint.
 //! - No `unwrap()` in production paths; all fallible ops return `Result`.
 //! - Overflow-safe: `checked_add`, `checked_sub` with explicit error variants.
+//! - Recipient must not be the contract itself (`to != current_contract_address()`).
+//! - CEI ordering: storage is updated before any token transfer.
 
 mod events;
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec};
+
+/// Maximum number of `(token, amount)` items accepted by
+/// [`CalloraRescue::rescue_many`] in a single call.
+///
+/// The bound keeps one invocation within predictable CPU/memory limits while
+/// covering the handful of stray tokens a post-incident sweep normally
+/// involves.  Larger sweeps must be split across several calls.
+pub const MAX_RESCUE_BATCH: u32 = 20;
+
+// ---------------------------------------------------------------------------
+// TTL constants
+// ---------------------------------------------------------------------------
+
+/// Ledger sequences to extend the instance TTL by on every entrypoint.
+///
+/// Soroban charges rent on instance storage; bumping it regularly ensures the
+/// contract stays live.  Approximately 30 days at ~5-second ledger times.
+const INSTANCE_TTL_BUMP: u32 = 518_400; // ~30 days (6 * 60 * 24 * 30)
 
 // ---------------------------------------------------------------------------
 // Error catalogue
@@ -46,6 +68,18 @@ pub enum RescueError {
     Overflow = 6,
     /// Requested amount exceeds the configured per-call rescue cap.
     ExceedsCap = 7,
+    /// Recipient address must not be this contract (self-transfer not allowed).
+    InvalidRecipient = 8,
+    /// `cap` must be strictly positive.
+    InvalidCap = 9,
+    /// `rescue_many` was called with an empty `items` vector.
+    BatchEmpty = 10,
+    /// `items` passed to `rescue_many` exceeds [`MAX_RESCUE_BATCH`].
+    BatchTooLarge = 11,
+    /// The same token address appears more than once in one `rescue_many`
+    /// batch.  Duplicates are rejected rather than summed so every item maps
+    /// to exactly one balance check, one counter update, and one event.
+    DuplicateToken = 12,
 }
 
 // ---------------------------------------------------------------------------
@@ -57,8 +91,12 @@ pub enum RescueError {
 pub enum DataKey {
     /// Stored admin [`Address`] (instance storage).
     Admin,
-    /// Running total of all tokens rescued across all calls (instance storage).
-    TotalRescued,
+    /// Per-token running total of tokens rescued (instance storage).
+    ///
+    /// Keyed by the token contract [`Address`] so rescues of different tokens
+    /// are tracked independently.  Replaces the deprecated single
+    /// `TotalRescued` counter.
+    TotalRescued(Address),
 }
 
 // ---------------------------------------------------------------------------
@@ -90,11 +128,8 @@ impl CalloraRescue {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        // Initialise total rescued counter to zero (overflow-safe baseline).
-        env.storage()
-            .instance()
-            .set(&DataKey::TotalRescued, &0_i128);
 
+        Self::bump_instance(&env);
         events::emit_initialized(&env, &admin);
         Ok(())
     }
@@ -106,18 +141,22 @@ impl CalloraRescue {
     /// Transfer `amount` units of `token` from this contract to `to`.
     ///
     /// The on-ledger balance of `token` held by this contract must be at
-    /// least `amount`.  The cumulative rescued counter is updated with
+    /// least `amount`.  The per-token rescued counter is updated with
     /// overflow protection.
     ///
     /// # Auth
     /// Requires `admin.require_auth()`.
     ///
+    /// # Error precedence
+    /// auth → admin → amount → recipient → balance → overflow
+    ///
     /// # Errors
     /// - [`RescueError::NotInitialized`] if `init` was not called.
     /// - [`RescueError::Unauthorized`] if `admin` does not match stored admin.
     /// - [`RescueError::AmountNotPositive`] if `amount <= 0`.
+    /// - [`RescueError::InvalidRecipient`] if `to == current_contract_address()`.
     /// - [`RescueError::InsufficientBalance`] if on-ledger balance < amount.
-    /// - [`RescueError::Overflow`] if cumulative counter would overflow i128.
+    /// - [`RescueError::Overflow`] if per-token counter would overflow i128.
     pub fn rescue(
         env: Env,
         admin: Address,
@@ -128,32 +167,28 @@ impl CalloraRescue {
         admin.require_auth();
 
         Self::assert_admin(&env, &admin)?;
-
-        if amount <= 0 {
-            return Err(RescueError::AmountNotPositive);
-        }
+        Self::assert_positive(amount)?;
+        Self::assert_recipient(&env, &to)?;
+        Self::assert_sufficient_balance(&env, &token, amount)?;
 
         let token_client = token::Client::new(&env, &token);
         let vault = env.current_contract_address();
-        let on_ledger = token_client.balance(&vault);
 
-        if on_ledger < amount {
-            return Err(RescueError::InsufficientBalance);
-        }
-
-        // Overflow-safe transfer execution.
-        token_client.transfer(&vault, &to, &amount);
-
-        // Update running total with overflow-safe addition.
+        // CEI: update storage BEFORE the external token transfer.
         let prev: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::TotalRescued)
+            .get(&DataKey::TotalRescued(token.clone()))
             .unwrap_or(0_i128);
-        let next = prev
-            .checked_add(amount)
-            .ok_or(RescueError::Overflow)?;
-        env.storage().instance().set(&DataKey::TotalRescued, &next);
+        let next = prev.checked_add(amount).ok_or(RescueError::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalRescued(token.clone()), &next);
+
+        // External call after storage update (CEI ordering).
+        token_client.transfer(&vault, &to, &amount);
+
+        Self::bump_instance(&env);
 
         let payload = events::RescueEvent::new(
             &env,
@@ -176,8 +211,12 @@ impl CalloraRescue {
     /// # Auth
     /// Requires `admin.require_auth()`.
     ///
+    /// # Error precedence
+    /// auth → admin → amount → recipient → cap → balance → overflow
+    ///
     /// # Errors
     /// All errors from [`rescue`], plus:
+    /// - [`RescueError::InvalidCap`] if `cap <= 0`.
     /// - [`RescueError::ExceedsCap`] if `amount > cap`.
     pub fn rescue_capped(
         env: Env,
@@ -190,35 +229,38 @@ impl CalloraRescue {
         admin.require_auth();
 
         Self::assert_admin(&env, &admin)?;
+        Self::assert_positive(amount)?;
+        Self::assert_recipient(&env, &to)?;
 
-        if amount <= 0 {
-            return Err(RescueError::AmountNotPositive);
+        // Validate cap is positive before comparing amount against it.
+        if cap <= 0 {
+            return Err(RescueError::InvalidCap);
         }
 
-        // cap must also be positive; use checked comparison.
-        if cap <= 0 || amount > cap {
+        if amount > cap {
             return Err(RescueError::ExceedsCap);
         }
 
+        Self::assert_sufficient_balance(&env, &token, amount)?;
+
         let token_client = token::Client::new(&env, &token);
         let vault = env.current_contract_address();
-        let on_ledger = token_client.balance(&vault);
 
-        if on_ledger < amount {
-            return Err(RescueError::InsufficientBalance);
-        }
-
-        token_client.transfer(&vault, &to, &amount);
-
+        // CEI: update storage BEFORE the external token transfer.
         let prev: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::TotalRescued)
+            .get(&DataKey::TotalRescued(token.clone()))
             .unwrap_or(0_i128);
-        let next = prev
-            .checked_add(amount)
-            .ok_or(RescueError::Overflow)?;
-        env.storage().instance().set(&DataKey::TotalRescued, &next);
+        let next = prev.checked_add(amount).ok_or(RescueError::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalRescued(token.clone()), &next);
+
+        // External call after storage update (CEI ordering).
+        token_client.transfer(&vault, &to, &amount);
+
+        Self::bump_instance(&env);
 
         let payload = events::RescueEvent::new(
             &env,
@@ -233,18 +275,138 @@ impl CalloraRescue {
         Ok(())
     }
 
+    /// Rescue several tokens to the same recipient in one atomic call.
+    ///
+    /// `items` is a list of `(token, amount)` pairs, each validated **before**
+    /// any storage write or token transfer, so a failure on any item leaves
+    /// balances, per-token counters, and the event stream untouched.  Each
+    /// item emits the same `rescue` event as [`rescue`] (one per token), so
+    /// existing indexers need no changes.
+    ///
+    /// Duplicate token addresses are rejected with
+    /// [`RescueError::DuplicateToken`] rather than summed: one item maps to
+    /// exactly one balance check, one counter update, and one event.
+    ///
+    /// # Auth
+    /// Requires `admin.require_auth()` **once** for the whole batch.
+    ///
+    /// # Parameters
+    /// * `admin` - Must be the stored admin and must authorize the call.
+    /// * `to` - Recipient of every rescued token; must not be this contract.
+    /// * `items` - 1 to [`MAX_RESCUE_BATCH`] distinct `(token, amount)` pairs.
+    ///
+    /// # Error precedence
+    /// auth → admin → batch size → recipient → amount → duplicates →
+    /// balance → overflow
+    ///
+    /// # Errors
+    /// - [`RescueError::NotInitialized`] / [`RescueError::Unauthorized`]
+    ///   exactly as in [`rescue`].
+    /// - [`RescueError::BatchEmpty`] if `items` is empty.
+    /// - [`RescueError::BatchTooLarge`] if `items.len() > MAX_RESCUE_BATCH`.
+    /// - [`RescueError::InvalidRecipient`] if `to == current_contract_address()`.
+    /// - [`RescueError::AmountNotPositive`] if any amount is `<= 0`.
+    /// - [`RescueError::DuplicateToken`] if any token appears twice.
+    /// - [`RescueError::InsufficientBalance`] if this contract does not hold
+    ///   enough of any listed token.
+    /// - [`RescueError::Overflow`] if a per-token counter would overflow i128.
+    ///
+    /// # Events
+    /// One `rescue` event per item, in `items` order, each carrying that
+    /// token's running cumulative total after the item.
+    pub fn rescue_many(
+        env: Env,
+        admin: Address,
+        to: Address,
+        items: Vec<(Address, i128)>,
+    ) -> Result<(), RescueError> {
+        admin.require_auth();
+
+        Self::assert_admin(&env, &admin)?;
+
+        let n = items.len();
+        if n == 0 {
+            return Err(RescueError::BatchEmpty);
+        }
+        if n > MAX_RESCUE_BATCH {
+            return Err(RescueError::BatchTooLarge);
+        }
+
+        Self::assert_recipient(&env, &to)?;
+
+        // ---- Pass 1: every amount must be positive -------------------------
+        for (_token, amount) in items.iter() {
+            Self::assert_positive(amount)?;
+        }
+
+        // ---- Pass 2: reject duplicate tokens -------------------------------
+        // Bounded by MAX_RESCUE_BATCH, so the quadratic scan is cheap and
+        // avoids allocating a map in `no_std`.
+        for (index, (token, _)) in items.iter().enumerate() {
+            for (other, _) in items.iter().skip(index + 1) {
+                if other == token {
+                    return Err(RescueError::DuplicateToken);
+                }
+            }
+        }
+
+        // ---- Pass 3: balances and per-token counter overflow ---------------
+        for (token, amount) in items.iter() {
+            Self::assert_sufficient_balance(&env, &token, amount)?;
+            Self::rescued_total(&env, &token)
+                .checked_add(amount)
+                .ok_or(RescueError::Overflow)?;
+        }
+
+        // ---- Commit: counters first (CEI), then transfers, then events -----
+        let vault = env.current_contract_address();
+        for (token, amount) in items.iter() {
+            let next = Self::rescued_total(&env, &token)
+                .checked_add(amount)
+                .ok_or(RescueError::Overflow)?;
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalRescued(token.clone()), &next);
+
+            token::Client::new(&env, &token).transfer(&vault, &to, &amount);
+
+            let payload = events::RescueEvent::new(
+                &env,
+                token.clone(),
+                to.clone(),
+                amount,
+                events::RescueCap::None,
+                next,
+            );
+            events::emit_rescue(&env, &admin, &payload);
+        }
+
+        Self::bump_instance(&env);
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // Read-only views (no auth required)
     // -----------------------------------------------------------------------
 
-    /// Return the cumulative amount rescued across all calls.
+    /// Return the cumulative amount rescued for `token` across all calls.
     ///
-    /// Returns `0` before `init` is called (no storage entry yet).
-    pub fn total_rescued(env: Env) -> i128 {
-        env.storage()
-            .instance()
-            .get(&DataKey::TotalRescued)
-            .unwrap_or(0_i128)
+    /// Returns `0` if no rescue has been performed for this token yet.
+    pub fn total_rescued_for(env: Env, token: Address) -> i128 {
+        Self::rescued_total(&env, &token)
+    }
+
+    /// **Deprecated** — always returns `0`.
+    ///
+    /// The previous global `TotalRescued` counter summed amounts of unrelated
+    /// tokens into a single meaningless number.  It has been replaced by
+    /// [`total_rescued_for`], which tracks totals per token.
+    ///
+    /// This function is kept for backwards-compatibility; it will be removed
+    /// in a future release.  See `docs/MIGRATION.md`.
+    #[deprecated(since = "0.2.0", note = "Use total_rescued_for(token) instead")]
+    pub fn total_rescued(_env: Env) -> i128 {
+        0_i128
     }
 
     /// Return the stored admin address.
@@ -261,6 +423,52 @@ impl CalloraRescue {
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
+
+    /// Extend the instance TTL on every entrypoint to prevent the contract
+    /// from expiring due to unpaid ledger rent.
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_BUMP, INSTANCE_TTL_BUMP);
+    }
+
+    /// Reject non-positive rescue amounts.
+    fn assert_positive(amount: i128) -> Result<(), RescueError> {
+        if amount <= 0 {
+            return Err(RescueError::AmountNotPositive);
+        }
+        Ok(())
+    }
+
+    /// Reject self-transfers, which are no-ops that inflate counters and
+    /// fabricate audit events.
+    fn assert_recipient(env: &Env, to: &Address) -> Result<(), RescueError> {
+        if to == &env.current_contract_address() {
+            return Err(RescueError::InvalidRecipient);
+        }
+        Ok(())
+    }
+
+    /// Reject rescues the contract cannot cover with its on-ledger balance.
+    fn assert_sufficient_balance(
+        env: &Env,
+        token: &Address,
+        amount: i128,
+    ) -> Result<(), RescueError> {
+        let vault = env.current_contract_address();
+        if token::Client::new(env, token).balance(&vault) < amount {
+            return Err(RescueError::InsufficientBalance);
+        }
+        Ok(())
+    }
+
+    /// Read the per-token cumulative rescued counter (0 if unset).
+    fn rescued_total(env: &Env, token: &Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalRescued(token.clone()))
+            .unwrap_or(0_i128)
+    }
 
     /// Assert that `caller` matches the stored admin.
     fn assert_admin(env: &Env, caller: &Address) -> Result<(), RescueError> {
@@ -282,9 +490,11 @@ impl CalloraRescue {
 
 #[cfg(test)]
 mod test {
+    extern crate std;
+
     use super::*;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{Address, Env};
+    use soroban_sdk::{token, Address, Env};
 
     // -----------------------------------------------------------------------
     // Helpers
@@ -300,6 +510,26 @@ mod test {
 
     fn client<'a>(env: &'a Env, contract_id: &'a Address) -> CalloraRescueClient<'a> {
         CalloraRescueClient::new(env, contract_id)
+    }
+
+    /// Register a Stellar Asset Contract and mint `amount` to `contract_id`.
+    fn mint_token(env: &Env, contract_id: &Address, amount: i128) -> Address {
+        let token_admin = Address::generate(env);
+        let token_addr = env
+            .register_stellar_asset_contract_v2(token_admin.clone())
+            .address();
+        let sac = token::StellarAssetClient::new(env, &token_addr);
+        sac.mint(contract_id, &amount);
+        token_addr
+    }
+
+    /// Shorthand for a `(token, amount)` batch item vector.
+    fn batch(env: &Env, raw: &[(Address, i128)]) -> Vec<(Address, i128)> {
+        let mut out = Vec::new(env);
+        for (token, amount) in raw.iter() {
+            out.push_back((token.clone(), *amount));
+        }
+        out
     }
 
     // -----------------------------------------------------------------------
@@ -336,11 +566,21 @@ mod test {
     }
 
     // -----------------------------------------------------------------------
-    // total_rescued view
+    // total_rescued_for view
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_total_rescued_starts_at_zero() {
+    fn test_total_rescued_for_starts_at_zero() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = Address::generate(&env);
+        assert_eq!(c.total_rescued_for(&token), 0);
+    }
+
+    /// Deprecated total_rescued() must always return 0.
+    #[test]
+    fn test_total_rescued_deprecated_returns_zero() {
         let (env, cid, admin) = setup();
         let c = client(&env, &cid);
         c.init(&admin);
@@ -382,8 +622,81 @@ mod test {
     }
 
     // -----------------------------------------------------------------------
-    // Validation: cap enforcement
+    // Validation: self-transfer guard  (test plan row 3)
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_to_contract_address_returns_invalid_recipient() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = mint_token(&env, &cid, 1000);
+        // `to` is the contract itself — must be rejected.
+        let err = c
+            .try_rescue(&admin, &token, &cid, &100_i128)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RescueError::InvalidRecipient);
+    }
+
+    #[test]
+    fn test_rescue_to_contract_does_not_mutate_counter() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = mint_token(&env, &cid, 1000);
+        // Attempt self-transfer.
+        let _ = c.try_rescue(&admin, &token, &cid, &100_i128);
+        // Counter must stay at zero.
+        assert_eq!(c.total_rescued_for(&token), 0);
+    }
+
+    #[test]
+    fn test_rescue_capped_to_contract_address_returns_invalid_recipient() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = mint_token(&env, &cid, 1000);
+        let err = c
+            .try_rescue_capped(&admin, &token, &cid, &100_i128, &500_i128)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RescueError::InvalidRecipient);
+    }
+
+    // -----------------------------------------------------------------------
+    // Validation: cap enforcement  (test plan rows 4 & 5)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_capped_zero_cap_returns_invalid_cap() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = Address::generate(&env);
+        let to = Address::generate(&env);
+        assert_eq!(
+            c.try_rescue_capped(&admin, &token, &to, &1_i128, &0_i128)
+                .unwrap_err()
+                .unwrap(),
+            RescueError::InvalidCap // not ExceedsCap
+        );
+    }
+
+    #[test]
+    fn test_rescue_capped_negative_cap_returns_invalid_cap() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let token = Address::generate(&env);
+        let to = Address::generate(&env);
+        assert_eq!(
+            c.try_rescue_capped(&admin, &token, &to, &1_i128, &-1_i128)
+                .unwrap_err()
+                .unwrap(),
+            RescueError::InvalidCap
+        );
+    }
 
     #[test]
     fn test_rescue_capped_exceeds_cap_returns_error() {
@@ -400,19 +713,48 @@ mod test {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Per-token accounting  (test plan rows 1 & 2)
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_rescue_capped_zero_cap_returns_error() {
+    fn test_rescue_token_a_accumulates_per_token() {
         let (env, cid, admin) = setup();
         let c = client(&env, &cid);
         c.init(&admin);
-        let token = Address::generate(&env);
         let to = Address::generate(&env);
+        let token_a = mint_token(&env, &cid, 1000);
+        let token_b = mint_token(&env, &cid, 1000);
+
+        // Rescue 10 of token A.
+        c.rescue(&admin, &token_a, &to, &10_i128);
+        assert_eq!(c.total_rescued_for(&token_a), 10);
         assert_eq!(
-            c.try_rescue_capped(&admin, &token, &to, &1_i128, &0_i128)
-                .unwrap_err()
-                .unwrap(),
-            RescueError::ExceedsCap
+            c.total_rescued_for(&token_b),
+            0,
+            "token B must be unaffected"
         );
+    }
+
+    #[test]
+    fn test_rescue_token_b_does_not_change_token_a_total() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let token_a = mint_token(&env, &cid, 1000);
+        let token_b = mint_token(&env, &cid, 1000);
+
+        // Rescue 10 of A, then 5 of B.
+        c.rescue(&admin, &token_a, &to, &10_i128);
+        c.rescue(&admin, &token_b, &to, &5_i128);
+
+        assert_eq!(
+            c.total_rescued_for(&token_a),
+            10,
+            "token A total must remain 10"
+        );
+        assert_eq!(c.total_rescued_for(&token_b), 5, "token B total must be 5");
     }
 
     // -----------------------------------------------------------------------
@@ -452,6 +794,291 @@ mod test {
             RescueError::NotInitialized
         );
     }
+
+    // -----------------------------------------------------------------------
+    // rescue_many: success paths and per-token accounting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_many_two_tokens_transfers_and_accounts_each() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+        let b = mint_token(&env, &cid, 2_000);
+
+        c.rescue_many(
+            &admin,
+            &to,
+            &batch(&env, &[(a.clone(), 300), (b.clone(), 700)]),
+        );
+
+        assert_eq!(c.total_rescued_for(&a), 300);
+        assert_eq!(c.total_rescued_for(&b), 700);
+
+        assert_eq!(token::Client::new(&env, &a).balance(&cid), 700);
+        assert_eq!(token::Client::new(&env, &b).balance(&cid), 1_300);
+        assert_eq!(token::Client::new(&env, &a).balance(&to), 300);
+        assert_eq!(token::Client::new(&env, &b).balance(&to), 700);
+    }
+
+    #[test]
+    fn test_rescue_many_three_tokens_accumulates_on_existing_totals() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+        let b = mint_token(&env, &cid, 1_000);
+        let d = mint_token(&env, &cid, 1_000);
+
+        // Seed the per-token counter through the single-token path.
+        c.rescue(&admin, &a, &to, &100_i128);
+
+        c.rescue_many(
+            &admin,
+            &to,
+            &batch(&env, &[(a.clone(), 50), (b.clone(), 60), (d.clone(), 70)]),
+        );
+
+        assert_eq!(c.total_rescued_for(&a), 150);
+        assert_eq!(c.total_rescued_for(&b), 60);
+        assert_eq!(c.total_rescued_for(&d), 70);
+    }
+
+    #[test]
+    fn test_rescue_many_accepts_exactly_max_batch() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = client(&env, &cid);
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let mut raw: std::vec::Vec<(Address, i128)> = std::vec::Vec::new();
+        for _ in 0..MAX_RESCUE_BATCH {
+            raw.push((mint_token(&env, &cid, 10), 5));
+        }
+
+        c.rescue_many(&admin, &to, &batch(&env, &raw));
+        for (token_addr, _) in raw.iter() {
+            assert_eq!(c.total_rescued_for(token_addr), 5);
+            assert_eq!(token::Client::new(&env, token_addr).balance(&to), 5);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // rescue_many: batch shape validation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_many_empty_batch_returns_batch_empty() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+
+        let empty: Vec<(Address, i128)> = Vec::new(&env);
+        assert_eq!(
+            c.try_rescue_many(&admin, &to, &empty).unwrap_err().unwrap(),
+            RescueError::BatchEmpty
+        );
+    }
+
+    #[test]
+    fn test_rescue_many_oversized_batch_returns_batch_too_large() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+
+        let mut extra: Vec<(Address, i128)> = Vec::new(&env);
+        for _ in 0..=MAX_RESCUE_BATCH {
+            extra.push_back((Address::generate(&env), 1));
+        }
+
+        assert_eq!(
+            c.try_rescue_many(&admin, &to, &extra).unwrap_err().unwrap(),
+            RescueError::BatchTooLarge
+        );
+    }
+
+    #[test]
+    fn test_rescue_many_duplicate_token_returns_duplicate_token() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+
+        let err = c
+            .try_rescue_many(
+                &admin,
+                &to,
+                &batch(&env, &[(a.clone(), 10), (a.clone(), 20)]),
+            )
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RescueError::DuplicateToken);
+
+        // Nothing moved, nothing counted.
+        assert_eq!(c.total_rescued_for(&a), 0);
+        assert_eq!(token::Client::new(&env, &a).balance(&cid), 1_000);
+        assert_eq!(token::Client::new(&env, &a).balance(&to), 0);
+    }
+
+    #[test]
+    fn test_rescue_many_recipient_is_contract_returns_invalid_recipient() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let a = mint_token(&env, &cid, 1_000);
+
+        assert_eq!(
+            c.try_rescue_many(&admin, &cid, &batch(&env, &[(a, 10)]))
+                .unwrap_err()
+                .unwrap(),
+            RescueError::InvalidRecipient
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // rescue_many: per-item validation and atomicity
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_many_zero_amount_rolls_back_whole_batch() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+        let b = mint_token(&env, &cid, 1_000);
+
+        let err = c
+            .try_rescue_many(
+                &admin,
+                &to,
+                &batch(&env, &[(a.clone(), 10), (b.clone(), 0)]),
+            )
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RescueError::AmountNotPositive);
+
+        // The valid first item must not have been transferred or counted.
+        assert_eq!(c.total_rescued_for(&a), 0);
+        assert_eq!(token::Client::new(&env, &a).balance(&cid), 1_000);
+        assert_eq!(token::Client::new(&env, &a).balance(&to), 0);
+        assert_eq!(token::Client::new(&env, &b).balance(&cid), 1_000);
+    }
+
+    #[test]
+    fn test_rescue_many_negative_amount_returns_amount_not_positive() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+
+        assert_eq!(
+            c.try_rescue_many(&admin, &to, &batch(&env, &[(a, -1)]))
+                .unwrap_err()
+                .unwrap(),
+            RescueError::AmountNotPositive
+        );
+    }
+
+    #[test]
+    fn test_rescue_many_insufficient_balance_rolls_back_whole_batch() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+        let b = mint_token(&env, &cid, 50);
+
+        let err = c
+            .try_rescue_many(
+                &admin,
+                &to,
+                &batch(&env, &[(a.clone(), 100), (b.clone(), 51)]),
+            )
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, RescueError::InsufficientBalance);
+
+        assert_eq!(c.total_rescued_for(&a), 0);
+        assert_eq!(c.total_rescued_for(&b), 0);
+        assert_eq!(token::Client::new(&env, &a).balance(&cid), 1_000);
+        assert_eq!(token::Client::new(&env, &a).balance(&to), 0);
+        assert_eq!(token::Client::new(&env, &b).balance(&cid), 50);
+    }
+
+    #[test]
+    fn test_rescue_many_counter_overflow_rejected_before_transfer() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+
+        // Pre-seed the per-token counter at the i128 ceiling.
+        env.as_contract(&cid, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::TotalRescued(a.clone()), &i128::MAX);
+        });
+
+        assert_eq!(
+            c.try_rescue_many(&admin, &to, &batch(&env, &[(a.clone(), 1)]))
+                .unwrap_err()
+                .unwrap(),
+            RescueError::Overflow
+        );
+
+        assert_eq!(token::Client::new(&env, &a).balance(&cid), 1_000);
+        assert_eq!(token::Client::new(&env, &a).balance(&to), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // rescue_many: authorisation and initialisation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_rescue_many_wrong_admin_returns_unauthorized() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        c.init(&admin);
+        let imposter = Address::generate(&env);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+
+        assert_eq!(
+            c.try_rescue_many(&imposter, &to, &batch(&env, &[(a, 10)]))
+                .unwrap_err()
+                .unwrap(),
+            RescueError::Unauthorized
+        );
+    }
+
+    #[test]
+    fn test_rescue_many_before_init_returns_not_initialized() {
+        let (env, cid, admin) = setup();
+        let c = client(&env, &cid);
+        let to = Address::generate(&env);
+        let a = mint_token(&env, &cid, 1_000);
+
+        assert_eq!(
+            c.try_rescue_many(&admin, &to, &batch(&env, &[(a, 10)]))
+                .unwrap_err()
+                .unwrap(),
+            RescueError::NotInitialized
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +1100,12 @@ mod test_events {
 
     /// Helper: register a Stellar Asset Contract token, mint `amount` to the
     /// rescue contract, and return the token address.
-    fn create_token(env: &Env, admin: &Address, rescue_addr: &Address, mint_amount: i128) -> Address {
+    fn create_token(
+        env: &Env,
+        admin: &Address,
+        rescue_addr: &Address,
+        mint_amount: i128,
+    ) -> Address {
         let token_addr = env
             .register_stellar_asset_contract_v2(admin.clone())
             .address();
@@ -541,7 +1173,11 @@ mod test_events {
                 t0 == Symbol::new(&env, "initialized")
             })
             .collect();
-        assert_eq!(init_events.len(), 0, "double init must not emit 'initialized'");
+        assert_eq!(
+            init_events.len(),
+            0,
+            "double init must not emit 'initialized'"
+        );
     }
 
     /// `rescue` emits exactly one `rescue` event with correct topics and
@@ -558,7 +1194,7 @@ mod test_events {
 
         let to = Address::generate(&env);
         let amount: i128 = 500;
-        let token_addr = create_token(&env, &admin, &cid, &amount);
+        let token_addr = create_token(&env, &admin, &cid, amount);
 
         // Clear init event.
         env.events().all();
@@ -588,7 +1224,7 @@ mod test_events {
         assert_eq!(payload.to, to);
         assert_eq!(payload.amount, amount);
         assert_eq!(payload.cap, RescueCap::None);
-        assert_eq!(payload.cumulative_rescued, amount);
+        assert_eq!(payload.cumulative_rescued, amount); // per-token total
         assert_eq!(payload.ledger_sequence, env.ledger().sequence());
         assert_eq!(payload.timestamp, env.ledger().timestamp());
     }
@@ -608,7 +1244,7 @@ mod test_events {
         let to = Address::generate(&env);
         let amount: i128 = 500;
         let cap: i128 = 1000;
-        let token_addr = create_token(&env, &admin, &cid, &amount);
+        let token_addr = create_token(&env, &admin, &cid, amount);
 
         env.events().all();
 
@@ -634,10 +1270,13 @@ mod test_events {
         assert_eq!(payload.version, events::RESCUE_EVENT_VERSION);
         assert_eq!(payload.amount, amount);
         assert_eq!(payload.cap, RescueCap::Some(cap));
-        assert_eq!(payload.cumulative_rescued, amount);
+        assert_eq!(payload.cumulative_rescued, amount); // per-token total
     }
 
-    /// `cumulative_rescued` must accumulate across multiple rescue calls.
+    /// `cumulative_rescued` in the event must reflect the per-token total
+    /// across multiple rescues of the same token (test plan row 8).
+    /// Previously marked #[ignore] due to SDK 22 event-snapshot behaviour;
+    /// now fixed by checking events individually per invocation.
     #[test]
     fn test_multiple_rescues_accumulate_cumulative_total() {
         let env = Env::default();
@@ -649,17 +1288,13 @@ mod test_events {
         c.init(&admin);
 
         let to = Address::generate(&env);
-        let token_addr = create_token(&env, &admin, &cid, &1000);
+        let token_addr = create_token(&env, &admin, &cid, 1000);
 
-        env.events().all();
-
-        // First rescue: 300
+        // First rescue: 300 — capture the event immediately after the call.
+        env.events().all(); // drain prior events
         c.rescue(&admin, &token_addr, &to, &300_i128);
-        // Second rescue: 200
-        c.rescue(&admin, &token_addr, &to, &200_i128);
-
-        let all_events = env.events().all();
-        let rescue_events: std::vec::Vec<_> = all_events
+        let events_after_first = env.events().all();
+        let rescue_events_1: std::vec::Vec<_> = events_after_first
             .iter()
             .filter(|e| {
                 if e.0 != cid || e.1.is_empty() {
@@ -669,14 +1304,41 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue")
             })
             .collect();
+        assert_eq!(
+            rescue_events_1.len(),
+            1,
+            "expected exactly one rescue event after first call"
+        );
+        let payload1: events::RescueEvent = rescue_events_1[0].2.into_val(&env);
+        assert_eq!(
+            payload1.cumulative_rescued, 300,
+            "first rescue: cumulative_rescued must be 300"
+        );
 
-        assert_eq!(rescue_events.len(), 2);
-
-        let payload1: events::RescueEvent = rescue_events[0].2.into_val(&env);
-        assert_eq!(payload1.cumulative_rescued, 300);
-
-        let payload2: events::RescueEvent = rescue_events[1].2.into_val(&env);
-        assert_eq!(payload2.cumulative_rescued, 500);
+        // Second rescue: 200 — capture the event immediately after the call.
+        env.events().all(); // drain
+        c.rescue(&admin, &token_addr, &to, &200_i128);
+        let events_after_second = env.events().all();
+        let rescue_events_2: std::vec::Vec<_> = events_after_second
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+        assert_eq!(
+            rescue_events_2.len(),
+            1,
+            "expected exactly one rescue event after second call"
+        );
+        let payload2: events::RescueEvent = rescue_events_2[0].2.into_val(&env);
+        assert_eq!(
+            payload2.cumulative_rescued, 500,
+            "second rescue: cumulative_rescued must be 500 (300 + 200)"
+        );
     }
 
     /// Failed rescue (invalid amount) must NOT emit a `rescue` event.
@@ -710,7 +1372,11 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue")
             })
             .collect();
-        assert_eq!(rescue_events.len(), 0, "failed rescue must not emit 'rescue'");
+        assert_eq!(
+            rescue_events.len(),
+            0,
+            "failed rescue must not emit 'rescue'"
+        );
     }
 
     /// Failed `rescue_capped` (amount exceeds cap) must NOT emit an event.
@@ -724,7 +1390,7 @@ mod test_events {
 
         c.init(&admin);
 
-        let token_addr = create_token(&env, &admin, &cid, &500);
+        let token_addr = create_token(&env, &admin, &cid, 500);
         let to = Address::generate(&env);
 
         // Clear init event.
@@ -745,6 +1411,136 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue_capped")
             })
             .collect();
-        assert_eq!(capped_events.len(), 0, "failed rescue_capped must not emit 'rescue_capped'");
+        assert_eq!(
+            capped_events.len(),
+            0,
+            "failed rescue_capped must not emit 'rescue_capped'"
+        );
+    }
+
+    /// Self-transfer attempt must NOT emit a rescue event (test plan row 3).
+    #[test]
+    fn test_rescue_self_transfer_emits_no_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+        let token_addr = create_token(&env, &admin, &cid, 500);
+
+        env.events().all(); // drain
+
+        let result = c.try_rescue(&admin, &token_addr, &cid, &100_i128);
+        assert!(result.is_err());
+
+        let all_events = env.events().all();
+        let rescue_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+        assert_eq!(
+            rescue_events.len(),
+            0,
+            "self-transfer must not emit a rescue event"
+        );
+    }
+
+    /// `rescue_many` emits one `rescue` event per item, in order, each with
+    /// that token's running cumulative total.
+    #[test]
+    fn test_rescue_many_emits_one_event_per_item() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let a = create_token(&env, &admin, &cid, 1_000);
+        let b = create_token(&env, &admin, &cid, 1_000);
+
+        env.events().all(); // drain
+
+        let mut items = soroban_sdk::Vec::new(&env);
+        items.push_back((a.clone(), 200_i128));
+        items.push_back((b.clone(), 300_i128));
+        c.rescue_many(&admin, &to, &items);
+
+        let all_events = env.events().all();
+        let rescue_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+
+        assert_eq!(rescue_events.len(), 2, "one rescue event per batch item");
+
+        let first: events::RescueEvent = rescue_events[0].2.into_val(&env);
+        assert_eq!(first.token, a);
+        assert_eq!(first.to, to);
+        assert_eq!(first.amount, 200);
+        assert_eq!(first.cap, RescueCap::None);
+        assert_eq!(first.cumulative_rescued, 200);
+
+        let second: events::RescueEvent = rescue_events[1].2.into_val(&env);
+        assert_eq!(second.token, b);
+        assert_eq!(second.amount, 300);
+        assert_eq!(second.cap, RescueCap::None);
+        assert_eq!(second.cumulative_rescued, 300);
+    }
+
+    /// A rejected batch must emit no events at all.
+    #[test]
+    fn test_failed_rescue_many_emits_no_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let cid = env.register(CalloraRescue, ());
+        let c = CalloraRescueClient::new(&env, &cid);
+
+        c.init(&admin);
+
+        let to = Address::generate(&env);
+        let a = create_token(&env, &admin, &cid, 10);
+
+        env.events().all(); // drain
+
+        let mut items = soroban_sdk::Vec::new(&env);
+        items.push_back((a.clone(), 5_i128));
+        items.push_back((a, 6_i128)); // duplicate -> whole batch rejected
+
+        assert!(c.try_rescue_many(&admin, &to, &items).is_err());
+
+        let all_events = env.events().all();
+        let rescue_events: std::vec::Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                if e.0 != cid || e.1.is_empty() {
+                    return false;
+                }
+                let t0: Symbol = e.1.get(0).unwrap().into_val(&env);
+                t0 == Symbol::new(&env, "rescue")
+            })
+            .collect();
+        assert_eq!(
+            rescue_events.len(),
+            0,
+            "failed batch must not emit any rescue event"
+        );
     }
 }

@@ -29,4 +29,12 @@ pub enum StorageMigrationError {
     UnauthorizedUpgradeState = 9,
     /// The live storage could not be read back under the new code's expectations.
     StorageUnreadable = 10,
+    /// The caller is not the administrator authorized to run or record an upgrade.
+    ///
+    /// Emitted by contract-level wrappers (for example
+    /// `EmergencyMigration::validate_before_upgrade`) after `require_auth`
+    /// succeeds but the authenticated caller does not match the stored admin.
+    Unauthorized = 12,
+    /// More than the documented maximum number of probe keys was supplied.
+    TooManyProbeKeys = 11,
 }

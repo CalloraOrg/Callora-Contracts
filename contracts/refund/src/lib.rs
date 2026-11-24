@@ -8,9 +8,7 @@ mod test;
 #[cfg(test)]
 mod test_ttl_bump;
 
-#[cfg(test)]
-use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
-use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, Symbol};
 
 pub use errors::RefundError;
 pub use types::*;
@@ -26,6 +24,17 @@ pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
 
 /// Number of ledgers to extend persistent storage TTL by.
 pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
+
+/// Maximum number of request IDs retained in each requester's index.
+/// Older entries remain addressable through `get_refund_request`; the index is
+/// bounded so a single requester cannot grow one persistent value forever.
+pub const MAX_REQUESTER_REFUNDS: u32 = 100;
+
+/// Maximum page size for requester refund index reads.
+pub const MAX_REQUESTER_REFUNDS_PAGE_SIZE: u32 = 50;
+
+/// Maximum page size for the global pending index reads.
+pub const MAX_PENDING_REFUNDS_PAGE_SIZE: u32 = 50;
 
 #[contract]
 pub struct RefundContract;
@@ -64,7 +73,7 @@ impl RefundContract {
         let inst = env.storage().instance();
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::RefundCounter, &0u64);
-        inst.set(&StorageKey::TotalRefunds, &0i128);
+        inst.set(&StorageKey::TotalRefundsLegacy, &0i128);
         inst.set(
             &StorageKey::RefundConfig,
             &RefundConfig {
@@ -72,6 +81,8 @@ impl RefundContract {
                 min_refund_amount,
             },
         );
+
+        Self::bump_instance_ttl(&env);
 
         Self::emit_initialized(&env, &admin, fee_bps, min_refund_amount);
 
@@ -93,7 +104,18 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `InvalidAmount` - Amount is not positive.
     /// * `AmountTooLow` - Amount is below minimum refund amount.
+    /// * `TooManyOpenRequests` - Requester's capped index contains only open requests.
     /// * `Overflow` - Refund counter would overflow.
+    ///
+    /// # Bounded Cost
+    /// When the requester's index reaches [`MAX_REQUESTER_REFUNDS`], eviction scans
+    /// at most [`MAX_REQUESTER_REFUNDS`] (100) records in index order (oldest first).
+    /// Only finished requests (`Rejected` or `Processed`) are eligible for eviction.
+    /// The scan inspects at most 100 persistent entries (O(N) with N <= 100), placing
+    /// a deterministic bound on CPU instructions and storage operations. If all slots
+    /// are occupied by open requests (`Pending` or `Approved`), the transaction aborts
+    /// with [`RefundError::TooManyOpenRequests`] before writing any state or advancing
+    /// [`StorageKey::RefundCounter`].
     pub fn request_refund(
         env: Env,
         requester: Address,
@@ -118,14 +140,48 @@ impl RefundContract {
             return Err(RefundError::AmountTooLow);
         }
 
+        let requester_key = StorageKey::RequesterRefunds(requester.clone());
+        let mut requester_refunds: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&requester_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        if requester_refunds.len() >= MAX_REQUESTER_REFUNDS {
+            let mut eviction_index: Option<u32> = None;
+            for i in 0..requester_refunds.len() {
+                let existing_id = requester_refunds.get(i).unwrap();
+                let existing_key = StorageKey::PendingRefund(existing_id);
+                if let Some(existing_req) = env
+                    .storage()
+                    .persistent()
+                    .get::<StorageKey, RefundRequest>(&existing_key)
+                {
+                    if existing_req.status == RefundStatus::Rejected
+                        || existing_req.status == RefundStatus::Processed
+                    {
+                        eviction_index = Some(i);
+                        break;
+                    }
+                }
+            }
+
+            match eviction_index {
+                Some(idx) => {
+                    requester_refunds.remove(idx);
+                }
+                None => {
+                    return Err(RefundError::TooManyOpenRequests);
+                }
+            }
+        }
+
         let counter: u64 = env
             .storage()
             .instance()
             .get(&StorageKey::RefundCounter)
             .unwrap_or(0);
-        let request_id = counter
-            .checked_add(1)
-            .ok_or(RefundError::Overflow)?;
+        let request_id = counter.checked_add(1).ok_or(RefundError::Overflow)?;
 
         let request = RefundRequest {
             id: request_id,
@@ -140,9 +196,37 @@ impl RefundContract {
 
         let key = StorageKey::PendingRefund(request_id);
         env.storage().persistent().set(&key, &request);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        requester_refunds.push_back(request_id);
         env.storage()
             .persistent()
-            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            .set(&requester_key, &requester_refunds);
+        env.storage().persistent().extend_ttl(
+            &requester_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        // Global pending index: ids are appended in strictly increasing order,
+        // so the index stays sorted and `get_pending_refunds` can binary-search it.
+        let pending_key = StorageKey::PendingIndex;
+        let mut pending_index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&pending_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        pending_index.push_back(request_id);
+        env.storage().persistent().set(&pending_key, &pending_index);
+        env.storage().persistent().extend_ttl(
+            &pending_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
 
         env.storage()
             .instance()
@@ -164,11 +248,7 @@ impl RefundContract {
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
     /// * `InvalidStatus` - Request is not in Pending status.
-    pub fn approve_refund(
-        env: Env,
-        admin: Address,
-        request_id: u64,
-    ) -> Result<(), RefundError> {
+    pub fn approve_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
         Self::bump_instance_ttl(&env);
@@ -191,15 +271,22 @@ impl RefundContract {
 
         request.status = RefundStatus::Approved;
         env.storage().persistent().set(&key, &request);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::remove_from_pending_index(&env, request_id);
 
         Self::emit_refund_processed(
             &env,
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            0,
+            0,
             RefundStatus::Approved,
         );
 
@@ -217,11 +304,7 @@ impl RefundContract {
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
     /// * `InvalidStatus` - Request is not in Pending status.
-    pub fn reject_refund(
-        env: Env,
-        admin: Address,
-        request_id: u64,
-    ) -> Result<(), RefundError> {
+    pub fn reject_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
         Self::bump_instance_ttl(&env);
@@ -245,15 +328,22 @@ impl RefundContract {
         request.status = RefundStatus::Rejected;
         request.processed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &request);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::remove_from_pending_index(&env, request_id);
 
         Self::emit_refund_processed(
             &env,
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            0,
+            0,
             RefundStatus::Rejected,
         );
 
@@ -262,7 +352,10 @@ impl RefundContract {
 
     /// Process an approved refund request (admin only).
     ///
-    /// This marks the refund as processed and updates the total refunds counter.
+    /// Validates request status, calculates fee and net payout using integer arithmetic
+    /// `(amount * fee_bps) / 10_000` (truncating towards zero / rounding down in the protocol's favour),
+    /// checks contract token balance against net payout, persists `Processed` state,
+    /// updates per-token totals and accumulated fees, and transfers net refund tokens to requester.
     ///
     /// # Arguments
     /// * `admin` - Admin address; must authorize and match stored admin.
@@ -273,12 +366,9 @@ impl RefundContract {
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
     /// * `InvalidStatus` - Request is not in Approved status.
-    /// * `Overflow` - Total refunds counter would overflow.
-    pub fn process_refund(
-        env: Env,
-        admin: Address,
-        request_id: u64,
-    ) -> Result<(), RefundError> {
+    /// * `Overflow` - Total refunds counter or fee calculation would overflow.
+    /// * `InsufficientBalance` - Contract token balance is below net payout amount.
+    pub fn process_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
         Self::bump_instance_ttl(&env);
@@ -299,32 +389,156 @@ impl RefundContract {
             return Err(RefundError::InvalidStatus);
         }
 
+        let config: RefundConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::RefundConfig)
+            .ok_or(RefundError::NotInitialized)?;
+
+        // Fee computation: fee = (amount * fee_bps) / 10_000
+        // Integer division truncates towards zero (rounds down in protocol's favour).
+        let fee = request
+            .amount
+            .checked_mul(config.fee_bps as i128)
+            .ok_or(RefundError::Overflow)?
+            .checked_div(10_000)
+            .ok_or(RefundError::Overflow)?;
+
+        let net = request
+            .amount
+            .checked_sub(fee)
+            .ok_or(RefundError::Overflow)?;
+
+        // Solvency check: ensure contract holds at least `net` tokens before mutating state.
+        let token_client = token::Client::new(&env, &request.token);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if contract_balance < net {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        // CEI: Persist state updates before external transfer.
+        // Invariant: only `Approved` requests reach here, and `approve_refund`
+        // already removed the id from the pending index, so no index update is
+        // needed for the `Approved -> Processed` transition.
         request.status = RefundStatus::Processed;
         request.processed_at = Some(env.ledger().timestamp());
         env.storage().persistent().set(&key, &request);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
 
-        let total: i128 = env
+        // Per-token total refunds
+        let token_key = StorageKey::TotalRefunds(request.token.clone());
+        let total: i128 = env.storage().instance().get(&token_key).unwrap_or(0);
+        let new_total = total
+            .checked_add(request.amount)
+            .ok_or(RefundError::Overflow)?;
+        env.storage().instance().set(&token_key, &new_total);
+
+        // Legacy total refunds
+        let legacy_total: i128 = env
             .storage()
             .instance()
-            .get(&StorageKey::TotalRefunds)
+            .get(&StorageKey::TotalRefundsLegacy)
             .unwrap_or(0);
-        let new_total = total
+        let new_legacy_total = legacy_total
             .checked_add(request.amount)
             .ok_or(RefundError::Overflow)?;
         env.storage()
             .instance()
-            .set(&StorageKey::TotalRefunds, &new_total);
+            .set(&StorageKey::TotalRefundsLegacy, &new_legacy_total);
+
+        // Retain fee
+        if fee > 0 {
+            let fee_key = StorageKey::AccumulatedFees(request.token.clone());
+            let accumulated: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+            let new_accumulated = accumulated.checked_add(fee).ok_or(RefundError::Overflow)?;
+            env.storage().instance().set(&fee_key, &new_accumulated);
+        }
 
         Self::emit_refund_processed(
             &env,
             request_id,
             &admin,
             request.amount,
+            &request.token,
+            fee,
+            net,
             RefundStatus::Processed,
         );
+
+        // Outbound transfer: transfer net payout to requester.
+        // If net is 0 (e.g. 100% fee rate), no outbound transfer is executed.
+        if net > 0 {
+            token_client.transfer(&env.current_contract_address(), &request.requester, &net);
+        }
+
+        Ok(())
+    }
+
+    /// Withdraw accumulated protocol fees for a specific token (admin only).
+    ///
+    /// # Arguments
+    /// * `admin` - Admin address; must authorize and match stored admin.
+    /// * `token` - Token address of the fees to withdraw.
+    /// * `to` - Recipient address to receive the fees.
+    /// * `amount` - Amount of fees to withdraw; must be > 0.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `Unauthorized` - Caller is not the admin.
+    /// * `InvalidAmount` - Amount is not positive.
+    /// * `InvalidRecipient` - Recipient address is this contract or the token address.
+    /// * `InsufficientBalance` - Accumulated fees or contract token balance is below amount.
+    /// * `Overflow` - Arithmetic overflow.
+    pub fn withdraw_fees(
+        env: Env,
+        admin: Address,
+        token: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), RefundError> {
+        admin.require_auth();
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let stored_admin: Address = Self::get_admin_internal(&env)?;
+        if admin != stored_admin {
+            return Err(RefundError::Unauthorized);
+        }
+
+        if amount <= 0 {
+            return Err(RefundError::InvalidAmount);
+        }
+
+        // Recipient validation
+        if to == env.current_contract_address() || to == token {
+            return Err(RefundError::InvalidRecipient);
+        }
+
+        let fee_key = StorageKey::AccumulatedFees(token.clone());
+        let accumulated: i128 = env.storage().instance().get(&fee_key).unwrap_or(0);
+        if accumulated < amount {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if contract_balance < amount {
+            return Err(RefundError::InsufficientBalance);
+        }
+
+        // CEI: Update state before external transfer
+        let new_accumulated = accumulated
+            .checked_sub(amount)
+            .ok_or(RefundError::Overflow)?;
+        env.storage().instance().set(&fee_key, &new_accumulated);
+
+        Self::emit_fees_withdrawn(&env, &admin, &token, &to, amount);
+
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         Ok(())
     }
@@ -397,17 +611,16 @@ impl RefundContract {
     /// Get a refund request by ID.
     ///
     /// Bumps instance and persistent storage TTL on read to prevent premature archival.
-    pub fn get_refund_request(
-        env: Env,
-        request_id: u64,
-    ) -> Result<RefundRequest, RefundError> {
+    pub fn get_refund_request(env: Env, request_id: u64) -> Result<RefundRequest, RefundError> {
         Self::bump_instance_ttl(&env);
 
         let key = StorageKey::PendingRefund(request_id);
         if env.storage().persistent().has(&key) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
         }
         env.storage()
             .persistent()
@@ -415,16 +628,44 @@ impl RefundContract {
             .ok_or(RefundError::NotFound)
     }
 
-    /// Get total refunds processed.
+    /// Get total refunds processed for a specific token.
     ///
     /// Bumps instance storage TTL on read to prevent premature archival.
+    pub fn get_total_refunds_for(env: Env, token: Address) -> Result<i128, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalRefunds(token))
+            .unwrap_or(0))
+    }
+
+    /// Get total refunds processed across all tokens (legacy).
+    ///
+    /// Deprecated: use [`Self::get_total_refunds_for`] instead.
+    /// Bumps instance storage TTL on read to prevent premature archival.
+    #[deprecated(note = "Use get_total_refunds_for(token) instead")]
     pub fn get_total_refunds(env: Env) -> Result<i128, RefundError> {
         Self::bump_instance_ttl(&env);
         Self::ensure_initialized(&env)?;
         Ok(env
             .storage()
             .instance()
-            .get(&StorageKey::TotalRefunds)
+            .get(&StorageKey::TotalRefundsLegacy)
+            .unwrap_or(0))
+    }
+
+    /// Get accumulated protocol fees retained for a specific token.
+    ///
+    /// Bumps instance storage TTL on read to prevent premature archival.
+    pub fn get_accumulated_fees(env: Env, token: Address) -> Result<i128, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&StorageKey::AccumulatedFees(token))
             .unwrap_or(0))
     }
 
@@ -439,6 +680,144 @@ impl RefundContract {
             .instance()
             .get(&StorageKey::RefundCounter)
             .unwrap_or(0))
+    }
+
+    /// Return a bounded page of this requester's refund IDs in creation order.
+    ///
+    /// `start` is a zero-based offset into the retained index. The index keeps
+    /// at most [`MAX_REQUESTER_REFUNDS`] recent IDs; older requests remain
+    /// available through [`Self::get_refund_request`]. Both the index and
+    /// returned request records receive TTL bumps.
+    pub fn get_refunds_by_requester(
+        env: Env,
+        requester: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<u64>, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+
+        let requester_key = StorageKey::RequesterRefunds(requester);
+        let index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&requester_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if env.storage().persistent().has(&requester_key) {
+            env.storage().persistent().extend_ttl(
+                &requester_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let effective_limit = limit.min(MAX_REQUESTER_REFUNDS_PAGE_SIZE);
+        let mut page = soroban_sdk::Vec::new(&env);
+        let end = start.saturating_add(effective_limit).min(index.len());
+        for offset in start..end {
+            let request_id = index.get(offset).unwrap();
+            let key = StorageKey::PendingRefund(request_id);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                page.push_back(request_id);
+            }
+        }
+        Ok(page)
+    }
+
+    /// Return a bounded page of IDs of refund requests still in `Pending` status.
+    ///
+    /// `cursor` is exclusive: only IDs strictly greater than `cursor` are
+    /// considered, so pass `0` for the first page. The returned tuple is the
+    /// ascending page of IDs and the cursor to pass for the next page, or
+    /// `None` when the page reached the end of the index.
+    ///
+    /// `limit` is clamped to [`MAX_PENDING_REFUNDS_PAGE_SIZE`]; a `limit` of `0`
+    /// returns an empty page. The pending index is a sorted `Vec<u64>`, so the
+    /// first eligible ID is located with a binary search (O(log n)) and at most
+    /// [`MAX_PENDING_REFUNDS_PAGE_SIZE`] entries are read afterwards, keeping
+    /// per-call cost bounded. The index and returned request records receive
+    /// TTL bumps.
+    pub fn get_pending_refunds(
+        env: Env,
+        cursor: u64,
+        limit: u32,
+    ) -> Result<(soroban_sdk::Vec<u64>, Option<u64>), RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+
+        let index_key = StorageKey::PendingIndex;
+        let index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&index_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if env.storage().persistent().has(&index_key) {
+            env.storage().persistent().extend_ttl(
+                &index_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let effective_limit = limit.min(MAX_PENDING_REFUNDS_PAGE_SIZE);
+        // First index whose ID is strictly greater than `cursor`: an exact match
+        // sits at the returned position, so start one past it.
+        let start = match index.binary_search(cursor) {
+            Ok(pos) => pos.saturating_add(1),
+            Err(pos) => pos,
+        };
+        let end = start.saturating_add(effective_limit).min(index.len());
+
+        let mut page = soroban_sdk::Vec::new(&env);
+        for offset in start..end {
+            let request_id = index.get(offset).unwrap();
+            let key = StorageKey::PendingRefund(request_id);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                page.push_back(request_id);
+            }
+        }
+
+        let next_cursor = if end < index.len() && end > start {
+            Some(index.get(end - 1).unwrap())
+        } else {
+            None
+        };
+
+        Ok((page, next_cursor))
+    }
+
+    /// Remove `request_id` from the global pending index if it is present.
+    ///
+    /// Shared by [`Self::approve_refund`] and [`Self::reject_refund`] so that
+    /// any future terminal transition (e.g. an `Expired` status) can reuse the
+    /// same helper to keep the index consistent. The index is sorted, so the
+    /// entry is located with a binary search.
+    fn remove_from_pending_index(env: &Env, request_id: u64) {
+        let key = StorageKey::PendingIndex;
+        let mut index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+        if let Ok(pos) = index.binary_search(request_id) {
+            index.remove(pos);
+            env.storage().persistent().set(&key, &index);
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
     }
 
     /// Internal helper to get admin without TTL bump (for internal use).
@@ -533,6 +912,9 @@ impl RefundContract {
         request_id: u64,
         processor: &Address,
         amount: i128,
+        token: &Address,
+        fee: i128,
+        net: i128,
         status: RefundStatus,
     ) {
         env.events().publish(
@@ -541,7 +923,35 @@ impl RefundContract {
                 request_id,
                 processor: processor.clone(),
                 amount,
+                token: token.clone(),
+                fee,
+                net,
                 status,
+            },
+        );
+    }
+
+    /// Publish the `"fees_withdrawn"` event.
+    ///
+    /// **What**: Records an admin withdrawal of accumulated protocol fees.
+    /// **How**: Called from [`Self::withdraw_fees`] after fee deduction is persisted.
+    /// **Why**: Gives indexers and treasuries an audit trail of fee payouts.
+    ///
+    /// Topic: `("fees_withdrawn",)`. Data: [`FeesWithdrawnEvent`].
+    fn emit_fees_withdrawn(
+        env: &Env,
+        admin: &Address,
+        token: &Address,
+        to: &Address,
+        amount: i128,
+    ) {
+        env.events().publish(
+            (Symbol::new(env, "fees_withdrawn"),),
+            FeesWithdrawnEvent {
+                admin: admin.clone(),
+                token: token.clone(),
+                to: to.clone(),
+                amount,
             },
         );
     }
@@ -608,7 +1018,9 @@ pub struct RefundRequestedEvent {
 ///
 /// Published by [`RefundContract::emit_refund_processed`] on every admin
 /// decision on a refund request. `status` distinguishes which transition
-/// occurred — see [`RefundStatus`].
+/// occurred — see [`RefundStatus`]. For `Approved` and `Rejected` transitions,
+/// `fee` and `net` are `0`. For `Processed` transitions, `fee` is the retained
+/// fee and `net` is the token amount transferred to the requester.
 #[soroban_sdk::contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefundProcessedEvent {
@@ -618,8 +1030,31 @@ pub struct RefundProcessedEvent {
     pub processor: Address,
     /// Amount recorded on the original request at decision time.
     pub amount: i128,
+    /// Token contract address for the refund.
+    pub token: Address,
+    /// Fee deducted from the refund amount.
+    pub fee: i128,
+    /// Net amount transferred to the requester.
+    pub net: i128,
     /// New status of the request: `Approved`, `Rejected`, or `Processed`.
     pub status: RefundStatus,
+}
+
+/// Payload for the `"fees_withdrawn"` event.
+///
+/// Published by [`RefundContract::emit_fees_withdrawn`] when accumulated protocol
+/// fees are withdrawn by the admin.
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeesWithdrawnEvent {
+    /// Admin address that initiated the withdrawal.
+    pub admin: Address,
+    /// Token address of the withdrawn fees.
+    pub token: Address,
+    /// Recipient address that received the fees.
+    pub to: Address,
+    /// Amount of fees withdrawn.
+    pub amount: i128,
 }
 
 /// Payload for the `"config_updated"` event.

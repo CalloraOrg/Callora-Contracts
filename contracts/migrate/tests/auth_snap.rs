@@ -12,7 +12,7 @@
 //!
 //! | Category | Entrypoints |
 //! |----------|-------------|
-//! | Mutating (must `require_auth`) | `init`, `migrate`, `authorize_upgrade` |
+//! | Mutating (must `require_auth`) | `init`, `migrate`, `authorize_upgrade`, `validate_before_upgrade` |
 //! | Read-only (must NOT `require_auth`) | `get_current`, `version`, `is_upgrade_authorized` |
 //!
 //! Closes CalloraOrg/Callora-Contracts#868.
@@ -83,6 +83,22 @@ fn authorize_upgrade_requires_auth() {
     assert!(
         res.is_err(),
         "authorize_upgrade must require auth on caller"
+    );
+}
+
+/// Snapshot: `validate_before_upgrade` requires auth on `caller` and is
+/// admin-gated (it records an upgrade authorization guard on success).
+#[test]
+fn validate_before_upgrade_requires_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+    let hash = BytesN::from_array(&env, &[8; 32]);
+
+    env.set_auths(&[]);
+    let res = client.try_validate_before_upgrade(&admin, &7, &hash, &false);
+    assert!(
+        res.is_err(),
+        "validate_before_upgrade must require auth on caller"
     );
 }
 
@@ -160,12 +176,13 @@ fn authorize_upgrade_succeeds_with_auth() {
 /// migrate auth surface grows or shrinks.
 #[test]
 fn auth_snap_covers_expected_entrypoint_counts() {
-    // Mutators asserted above: init, migrate, authorize_upgrade.
-    const EXPECTED_MUTATING_ENTRYPOINTS: usize = 3;
+    // Mutators asserted above: init, migrate, authorize_upgrade,
+    // validate_before_upgrade.
+    const EXPECTED_MUTATING_ENTRYPOINTS: usize = 4;
     // Views asserted above: get_current, version, is_upgrade_authorized.
     const EXPECTED_READ_ONLY_ENTRYPOINTS: usize = 3;
     assert_eq!(
-        EXPECTED_MUTATING_ENTRYPOINTS, 3,
+        EXPECTED_MUTATING_ENTRYPOINTS, 4,
         "update auth_snap.rs when adding/removing migrate mutators"
     );
     assert_eq!(

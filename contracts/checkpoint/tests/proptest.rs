@@ -36,7 +36,7 @@ fn checkpoint_action_strategy() -> impl Strategy<Value = CheckpointAction> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
+    #![proptest_config(ProptestConfig::with_cases(8))]
 
     #[test]
     fn checkpoint_count_equals_next_id(

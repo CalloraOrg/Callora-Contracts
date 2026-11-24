@@ -35,6 +35,11 @@ pub fn event_claim_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "claim_cancelled")
 }
 
+/// Returns the Symbol for the `"claim_expired"` event topic.
+pub fn event_claim_expired(env: &Env) -> Symbol {
+    Symbol::new(env, "claim_expired")
+}
+
 /// Returns the Symbol for the `"claim_consumed"` event topic.
 ///
 /// Emitted when a claim identifier is permanently consumed (marked spent) by

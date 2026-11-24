@@ -6,13 +6,14 @@ extern crate std;
 pub mod errors;
 pub mod events;
 
-use callora_storage_migration::StorageMigrationValidator;
+use callora_storage_migration::{
+    layout_hash, StorageMigrationError, StorageMigrationValidator, LEGACY_VERSION,
+};
 use errors::CheckpointError;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
 
-/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
-/// contract. Bumped whenever the on-ledger schema changes so that the
-/// pre-upgrade validation gate can enforce ordered, single-step migrations.
+/// Storage-layout version recorded at init. Bump whenever the checkpoint
+/// storage schema changes.
 const STORAGE_MIGRATION_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,19 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (approx 1 day).
 pub const BUMP_AMOUNT: u32 = 3_110_400;
 pub const LIFETIME_THRESHOLD: u32 = 17_280;
+
+/// Approximate number of ledgers per day on Stellar (5 seconds per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
+/// Threshold at which instance storage TTL is extended (~30 days).
+///
+/// Admin, pending-admin, and checkpoint counters live in instance storage;
+/// the entrypoint-level [`CalloraCheckpoint::bump_instance`] helper keeps the
+/// instance from archiving independently of the persistent record policy.
+pub const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Target TTL when instance storage is extended (~60 days).
+pub const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -57,6 +71,12 @@ pub enum StorageKey {
     /// Instance: cached count of total checkpoints (`u64`), kept in
     /// sync with `NextCheckpointId` for efficient `get_checkpoint_count`.
     CheckpointCount,
+    /// Persistent: ordered list of checkpoint IDs for a given subject [`Address`].
+    ///
+    /// Maintained as an append-only `Vec<u64>` in persistent storage so that
+    /// [`CalloraCheckpoint::get_checkpoints_for_subject`] can return a
+    /// subject's history in creation order without scanning the full range.
+    SubjectIndex(Address),
 }
 
 /// A single immutable audit checkpoint recording a balance snapshot at a point in time.
@@ -92,6 +112,54 @@ pub struct CalloraCheckpoint;
 
 #[contractimpl]
 impl CalloraCheckpoint {
+    fn storage_layout_hash(env: &Env) -> BytesN<32> {
+        layout_hash(
+            env,
+            "checkpoint:v1:instance:Admin:Address,PendingAdmin:Address,NextCheckpointId:u64,CheckpointCount:u64;persistent:Checkpoint(u64):CheckpointRecord{id:u64,subject:Address,token:Address,balance:i128,timestamp:u64,metadata:Symbol},SubjectIndex(Address):Vec<u64>",
+        )
+    }
+
+    fn migration_error(error: StorageMigrationError) -> CheckpointError {
+        match error {
+            StorageMigrationError::NotInitialized => CheckpointError::NotInitialized,
+            StorageMigrationError::AlreadyInitialized => CheckpointError::AlreadyInitialized,
+            StorageMigrationError::WasmHashZero => CheckpointError::WasmHashZero,
+            StorageMigrationError::VersionSkip => CheckpointError::VersionSkip,
+            StorageMigrationError::RollbackNotAllowed => CheckpointError::RollbackNotAllowed,
+            StorageMigrationError::BackupMissing => CheckpointError::BackupMissing,
+            StorageMigrationError::SchemaMismatch => CheckpointError::SchemaMismatch,
+            StorageMigrationError::SilentLayoutChange => CheckpointError::SilentLayoutChange,
+            StorageMigrationError::UnauthorizedUpgradeState => {
+                CheckpointError::UnauthorizedUpgradeState
+            }
+            StorageMigrationError::StorageUnreadable => CheckpointError::StorageUnreadable,
+            StorageMigrationError::TooManyProbeKeys => CheckpointError::StorageUnreadable,
+            StorageMigrationError::Unauthorized => CheckpointError::Unauthorized,
+        }
+    }
+
+    fn ensure_migration_finalized(env: &Env) -> Result<(), CheckpointError> {
+        if StorageMigrationValidator::authorized_upgrade(env).is_some() {
+            return Err(CheckpointError::MigrationPending);
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // TTL helpers
+    // -----------------------------------------------------------------------
+
+    /// Extend the instance storage TTL.
+    ///
+    /// Called on every entrypoint — including read-only views — so the
+    /// instance (admin, counters) never archives due to inactivity. Persistent
+    /// checkpoint records keep their own independent policy (`BUMP_AMOUNT`).
+    fn bump_instance(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    }
+
     // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
@@ -112,6 +180,7 @@ impl CalloraCheckpoint {
     /// Emits `init` with `admin` as topic and `()` as data.
     pub fn init(env: Env, admin: Address) -> Result<(), CheckpointError> {
         admin.require_auth();
+        Self::bump_instance(&env);
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(CheckpointError::AlreadyInitialized);
         }
@@ -120,6 +189,12 @@ impl CalloraCheckpoint {
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::NextCheckpointId, &0u64);
         inst.set(&StorageKey::CheckpointCount, &0u64);
+        StorageMigrationValidator::record_deployed_schema(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &Self::storage_layout_hash(&env),
+        )
+        .map_err(Self::migration_error)?;
 
         env.events().publish((events::event_init(&env), admin), ());
 
@@ -148,6 +223,7 @@ impl CalloraCheckpoint {
     /// when the caller does not match.
     fn require_admin(env: &Env, caller: &Address) -> Result<(), CheckpointError> {
         caller.require_auth();
+        Self::bump_instance(env);
         let admin = Self::admin(env)?;
         if caller != &admin {
             return Err(CheckpointError::Unauthorized);
@@ -179,6 +255,25 @@ impl CalloraCheckpoint {
         Ok(next)
     }
 
+    /// Append `checkpoint_id` to the persistent per-subject index for `subject`.
+    ///
+    /// Creates the index list on first use. After writing, the entry's TTL is
+    /// extended to [`BUMP_AMOUNT`] ledgers so the index survives as long as
+    /// individual checkpoint records.
+    fn append_to_subject_index(env: &Env, subject: &Address, checkpoint_id: u64) {
+        let key = StorageKey::SubjectIndex(subject.clone());
+        let mut ids: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(checkpoint_id);
+        env.storage().persistent().set(&key, &ids);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+    }
+
     // -----------------------------------------------------------------------
     // Admin views
     // -----------------------------------------------------------------------
@@ -188,12 +283,14 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::NotInitialized`] -- contract was never initialized.
     pub fn get_admin(env: Env) -> Result<Address, CheckpointError> {
+        Self::bump_instance(&env);
         Self::admin(&env)
     }
 
     /// Return the pending admin address for a two-step admin rotation, or
     /// `None` if no transfer is in progress.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::bump_instance(&env);
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
@@ -218,6 +315,7 @@ impl CalloraCheckpoint {
     /// Emits `admin_nominated` with `(current_admin, new_admin)`.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
         env.storage()
             .instance()
@@ -239,22 +337,24 @@ impl CalloraCheckpoint {
     ///
     /// # Errors
     /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
-    /// * Panics with "no admin transfer pending" -- no nomination is in progress.
-    /// * Panics with "unauthorized: caller is not pending admin" -- wrong caller.
+    /// * [`CheckpointError::NoAdminTransferPending`] -- no nomination is in progress.
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the pending admin.
     ///
     /// # Events
     /// Emits `admin_accepted` with `(old_admin, new_admin)`.
     pub fn accept_admin(env: Env, caller: Address) -> Result<(), CheckpointError> {
         caller.require_auth();
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
 
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
+            .ok_or(CheckpointError::NoAdminTransferPending)?;
 
         if caller != pending {
-            env.panic_with_error(CheckpointError::Unauthorized);
+            return Err(CheckpointError::Unauthorized);
         }
 
         let old_admin = Self::admin(&env)?;
@@ -279,22 +379,19 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
     /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
-    /// * Panics with "no admin transfer pending" -- no nomination is in progress.
+    /// * [`CheckpointError::NoAdminTransferPending`] -- no nomination is in progress.
     ///
     /// # Events
     /// Emits `admin_cancelled` with the cancelled pending admin.
     pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
-
-        if !env.storage().instance().has(&StorageKey::PendingAdmin) {
-            env.panic_with_error(CheckpointError::NoAdminTransferPending);
-        }
+        Self::ensure_migration_finalized(&env)?;
 
         let pending: Address = env
             .storage()
             .instance()
             .get(&StorageKey::PendingAdmin)
-            .unwrap_or_else(|| env.panic_with_error(CheckpointError::NoAdminTransferPending))
+            .ok_or(CheckpointError::NoAdminTransferPending)?;
 
         env.storage().instance().remove(&StorageKey::PendingAdmin);
 
@@ -343,6 +440,7 @@ impl CalloraCheckpoint {
         metadata: Symbol,
     ) -> Result<u64, CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
         if balance < 0 {
             return Err(CheckpointError::AmountNegative);
@@ -365,6 +463,10 @@ impl CalloraCheckpoint {
         env.storage()
             .persistent()
             .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        // Maintain the per-subject index so get_checkpoints_for_subject can
+        // return this subject's history without a full-range scan.
+        Self::append_to_subject_index(&env, &subject, id);
 
         env.events()
             .publish((events::event_checkpoint_created(&env), subject), record);
@@ -401,6 +503,7 @@ impl CalloraCheckpoint {
         items: Vec<(Address, Address, i128, Symbol)>,
     ) -> Result<Vec<u64>, CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
         let n = items.len();
         if n == 0 {
@@ -440,6 +543,9 @@ impl CalloraCheckpoint {
                 .persistent()
                 .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
+            // Maintain the per-subject index for each item.
+            Self::append_to_subject_index(&env, &subject, id);
+
             env.events().publish(
                 (events::event_checkpoint_created(&env), subject.clone()),
                 record,
@@ -467,6 +573,8 @@ impl CalloraCheckpoint {
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
     pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
         let key = StorageKey::Checkpoint(id);
         let record = env
             .storage()
@@ -506,12 +614,14 @@ impl CalloraCheckpoint {
         start_id: u64,
         limit: u32,
     ) -> Result<Vec<CheckpointRecord>, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
         if limit == 0 {
             return Err(CheckpointError::InvalidPageSize);
         }
 
         let effective_limit = limit.min(MAX_PAGE_SIZE);
-        let count = Self::get_checkpoint_count(env.clone());
+        let count = Self::get_checkpoint_count(env.clone())?;
 
         // If start exceeds total count, return empty.
         if start_id > count {
@@ -537,26 +647,100 @@ impl CalloraCheckpoint {
         Ok(result)
     }
 
+    /// Return a paginated list of checkpoint records for a specific subject.
+    ///
+    /// The result is ordered by creation order (ascending checkpoint ID).
+    /// Returns an empty [`Vec`] when the subject has no recorded checkpoints.
+    ///
+    /// Reading the subject index bumps its persistent TTL. Every checkpoint
+    /// record returned also has its TTL bumped (buffer #26), consistent with
+    /// [`CalloraCheckpoint::get_checkpoint`] and
+    /// [`CalloraCheckpoint::get_checkpoints_range`].
+    ///
+    /// # Parameters
+    /// * `subject` -- The address whose checkpoint history is requested.
+    /// * `start` -- Zero-based offset into the subject's ID list. Pass `0`
+    ///   to begin from the earliest checkpoint.
+    /// * `limit` -- Maximum number of records to return. Capped at
+    ///   [`MAX_PAGE_SIZE`].
+    ///
+    /// # Errors
+    /// * [`CheckpointError::InvalidPageSize`] -- `limit` is zero.
+    pub fn get_checkpoints_for_subject(
+        env: Env,
+        subject: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<CheckpointRecord>, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        if limit == 0 {
+            return Err(CheckpointError::InvalidPageSize);
+        }
+
+        let index_key = StorageKey::SubjectIndex(subject.clone());
+
+        // No index entry means the subject has no checkpoints yet — return empty.
+        let all_ids: Vec<u64> = match env.storage().persistent().get(&index_key) {
+            Some(ids) => ids,
+            None => return Ok(Vec::new(&env)),
+        };
+
+        // Bump the index entry's TTL on every read so it stays alive as long
+        // as the checkpoints it references.
+        env.storage()
+            .persistent()
+            .extend_ttl(&index_key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let total = all_ids.len();
+        if start >= total || total == 0 {
+            return Ok(Vec::new(&env));
+        }
+
+        let effective_limit = limit.min(MAX_PAGE_SIZE);
+        let end = (start.saturating_add(effective_limit)).min(total);
+
+        let mut result: Vec<CheckpointRecord> = Vec::new(&env);
+        for idx in start..end {
+            let id = all_ids.get(idx).unwrap();
+            let key = StorageKey::Checkpoint(id);
+            if let Some(record) = env.storage().persistent().get(&key) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+                result.push_back(record);
+            }
+        }
+
+        Ok(result)
+    }
+
     /// Return the total number of checkpoints that have been created.
     ///
     /// This is an O(1) instance-storage read. It tracks the highest ID
     /// assigned so far (which is equal to the count since IDs are sequential
     /// starting at 1).
-    pub fn get_checkpoint_count(env: Env) -> u64 {
-        env.storage()
+    pub fn get_checkpoint_count(env: Env) -> Result<u64, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(env
+            .storage()
             .instance()
             .get(&StorageKey::CheckpointCount)
-            .unwrap_or(0)
+            .unwrap_or(0))
     }
 
     /// Return the most recent checkpoint ID.
     ///
     /// Returns `0` when no checkpoints have been created yet.
-    pub fn get_latest_checkpoint_id(env: Env) -> u64 {
-        env.storage()
+    pub fn get_latest_checkpoint_id(env: Env) -> Result<u64, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(env
+            .storage()
             .instance()
             .get(&StorageKey::NextCheckpointId)
-            .unwrap_or(0)
+            .unwrap_or(0))
     }
 
     /// Return the most recently created checkpoint record, or `None` when
@@ -566,12 +750,14 @@ impl CalloraCheckpoint {
     /// [`CalloraCheckpoint::get_latest_checkpoint_id`] and
     /// [`CalloraCheckpoint::get_checkpoint`], and so also bumps the
     /// returned record's persistent TTL (buffer #26).
-    pub fn get_latest_checkpoint(env: Env) -> Option<CheckpointRecord> {
-        let latest_id = Self::get_latest_checkpoint_id(env.clone());
+    pub fn get_latest_checkpoint(env: Env) -> Result<Option<CheckpointRecord>, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        let latest_id = Self::get_latest_checkpoint_id(env.clone())?;
         if latest_id == 0 {
-            return None;
+            return Ok(None);
         }
-        Self::get_checkpoint(env, latest_id).ok()
+        Ok(Some(Self::get_checkpoint(env, latest_id)?))
     }
 
     // -----------------------------------------------------------------------
@@ -600,6 +786,7 @@ impl CalloraCheckpoint {
         checkpoint_id: u64,
     ) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
         let key = StorageKey::Checkpoint(checkpoint_id);
         if !env.storage().persistent().has(&key) {
@@ -637,6 +824,7 @@ impl CalloraCheckpoint {
         end_id: u64,
     ) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
         if start_id > end_id {
             return Err(CheckpointError::InvalidPageSize);
@@ -658,16 +846,19 @@ impl CalloraCheckpoint {
     // Upgrade
     // -----------------------------------------------------------------------
 
-    /// Admin-gated contract upgrade. Replaces the WASM and persists the
-    /// new hash in instance storage.
+    /// Authorize an admin-gated upgrade and replace the contract WASM.
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
     /// * `new_wasm_hash` -- The 32-byte hash of the replacement WASM.
+    /// * `target_version` -- Storage-layout version implemented by the replacement.
     ///
     /// # Errors
     /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
     /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::VersionSkip`] -- target skips a migration version.
+    /// * [`CheckpointError::SchemaMismatch`] -- recorded and current layouts differ.
+    /// * [`CheckpointError::MigrationPending`] -- an earlier upgrade is not finalized.
     ///
     /// # Events
     /// Emits `upgraded` with the admin as topic and the new WASM hash as data.
@@ -675,34 +866,27 @@ impl CalloraCheckpoint {
         env: Env,
         caller: Address,
         new_wasm_hash: BytesN<32>,
+        target_version: u32,
     ) -> Result<(), CheckpointError> {
         Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
 
-        // ── Pre-upgrade storage-migration validation ──────────────────────
-        // Runs in the *current* (old) code, before the WASM is swapped, and
-        // never mutates business state. It enforces ordered, single-step
-        // upgrades, rejects all-zero WASM hashes, and prevents unsanctioned
-        // rollbacks — ensuring existing deployed data stays readable and no
-        // implicit destructive transformation occurs.
-        let placeholder_layout = callora_storage_migration::zero_layout_hash(&env);
-        if let Err(e) = StorageMigrationValidator::validate_before_upgrade(
+        let current_layout_hash = Self::storage_layout_hash(&env);
+        let expected_source_layout_hash =
+            if StorageMigrationValidator::current_version(&env) == LEGACY_VERSION {
+                callora_storage_migration::zero_layout_hash(&env)
+            } else {
+                current_layout_hash.clone()
+            };
+        StorageMigrationValidator::validate_before_upgrade(
             &env,
-            STORAGE_MIGRATION_VERSION,
-            &placeholder_layout,
-            &placeholder_layout,
+            target_version,
+            &current_layout_hash,
+            &expected_source_layout_hash,
             &new_wasm_hash,
             false,
-        ) {
-            env.panic_with_error(e);
-        }
-        if let Err(e) = StorageMigrationValidator::finalize_migration(
-            &env,
-            STORAGE_MIGRATION_VERSION,
-            &placeholder_layout,
-            &new_wasm_hash,
-        ) {
-            env.panic_with_error(e);
-        }
+        )
+        .map_err(Self::migration_error)?;
 
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
@@ -711,6 +895,51 @@ impl CalloraCheckpoint {
             (events::event_upgraded(&env), Self::admin(&env)?),
             new_wasm_hash,
         );
+
+        Ok(())
+    }
+
+    /// Finalize an authorized upgrade in the new WASM before business calls resume.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `target_version` -- Version authorized by [`CalloraCheckpoint::upgrade`].
+    /// * `new_layout_hash` -- Hash of the storage schema implemented by this WASM.
+    ///
+    /// # Errors
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::UnauthorizedUpgradeState`] -- no matching upgrade is authorized.
+    /// * [`CheckpointError::SchemaMismatch`] -- supplied hash is not this WASM's layout.
+    /// * [`CheckpointError::StorageUnreadable`] -- storage validation failed.
+    pub fn migrate(
+        env: Env,
+        caller: Address,
+        target_version: u32,
+        new_layout_hash: BytesN<32>,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+
+        if new_layout_hash != Self::storage_layout_hash(&env) {
+            return Err(CheckpointError::SchemaMismatch);
+        }
+
+        let (authorized_version, wasm_hash) = StorageMigrationValidator::authorized_upgrade(&env)
+            .ok_or(CheckpointError::UnauthorizedUpgradeState)?;
+        if authorized_version != target_version {
+            return Err(CheckpointError::UnauthorizedUpgradeState);
+        }
+
+        StorageMigrationValidator::finalize_migration(
+            &env,
+            target_version,
+            &new_layout_hash,
+            &wasm_hash,
+        )
+        .map_err(Self::migration_error)?;
+
+        env.storage()
+            .instance()
+            .remove(&callora_storage_migration::StorageKey::SmAuthorizedUpgrade);
 
         Ok(())
     }

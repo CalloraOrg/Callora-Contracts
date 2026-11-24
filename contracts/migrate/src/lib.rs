@@ -246,8 +246,13 @@ impl EmergencyMigration {
     /// Deterministic storage-migration validation that must run **before** the
     /// upgraded code is swapped in via `update_current_contract_wasm`.
     ///
-    /// This is the canonical pre-upgrade gate. It verifies, without mutating any
-    /// business state, that:
+    /// This is the canonical pre-upgrade gate. The caller must be the configured
+    /// administrator and must authorize the call; unlike a read-only dry run,
+    /// success records the validator's upgrade authorization guard, so the
+    /// entrypoint is state-changing and must never be callable unauthenticated.
+    ///
+    /// After authentication it verifies, without mutating any *business* state,
+    /// that:
     ///
     /// * the replacement WASM hash is well-formed (rejects all-zero hashes);
     /// * the target version is a single forward step (no skipped migrations)
@@ -259,7 +264,13 @@ impl EmergencyMigration {
     /// performing the platform-level upgrade. The function returns
     /// [`StorageMigrationError`] rather than panicking.
     ///
+    /// Error precedence is **auth → admin → hash → version**: a missing
+    /// signature aborts first, then a non-admin caller is rejected before any
+    /// hash or version check can run.
+    ///
     /// # Errors
+    /// * [`StorageMigrationError::NotInitialized`] — `init` not called.
+    /// * [`StorageMigrationError::Unauthorized`] — caller is not the admin.
     /// * [`StorageMigrationError::WasmHashZero`] — `wasm_hash` is all-zero.
     /// * [`StorageMigrationError::VersionSkip`] — target skips an intermediate version.
     /// * [`StorageMigrationError::RollbackNotAllowed`] — downgrade without `allow_rollback`.
@@ -268,10 +279,25 @@ impl EmergencyMigration {
     ///   — storage-layout incompatibility.
     pub fn validate_before_upgrade(
         env: Env,
+        caller: Address,
         target_version: u32,
         wasm_hash: BytesN<32>,
         allow_rollback: bool,
     ) -> Result<(), StorageMigrationError> {
+        // Auth first: an unsigned call must never reach storage reads/writes.
+        caller.require_auth();
+
+        // Admin second: reject before the hash/version checks so a non-admin
+        // cannot learn or influence validation state.
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .ok_or(StorageMigrationError::NotInitialized)?;
+        if caller != admin {
+            return Err(StorageMigrationError::Unauthorized);
+        }
+
         let zero = zero_layout_hash(&env);
         StorageMigrationValidator::validate_before_upgrade(
             &env,
@@ -497,7 +523,7 @@ mod tests {
 
         let hash = BytesN::from_array(&env, &[9u8; 32]);
         // Runs as a pre-upgrade gate and records an authorization guard.
-        client.validate_before_upgrade(&7, &hash, &false);
+        client.validate_before_upgrade(&admin, &7, &hash, &false);
         // The recorded authorization can be checked by off-chain tooling.
         let authorized = env.as_contract(&contract, || {
             StorageMigrationValidator::is_upgrade_authorized(&env, 7, &hash)
@@ -508,15 +534,115 @@ mod tests {
     #[test]
     fn pre_upgrade_validation_rejects_zero_wasm_hash() {
         let env = Env::default();
-        env.mock_all_auths();
-        let admin = Address::generate(&env);
-        let contract = env.register(EmergencyMigration, ());
+        let (admin, contract) = setup(&env);
         let client = EmergencyMigrationClient::new(&env, &contract);
-        client.init(&admin, &7);
 
         let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let res = client.try_validate_before_upgrade(&admin, &7, &zero_hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::WasmHashZero
+        );
+    }
+
+    #[test]
+    fn pre_upgrade_validation_requires_auth() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env);
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        let hash = BytesN::from_array(&env, &[9u8; 32]);
+
+        env.set_auths(&[]);
         assert!(client
-            .try_validate_before_upgrade(&7, &zero_hash, &false)
+            .try_validate_before_upgrade(&admin, &7, &hash, &false)
             .is_err());
+    }
+
+    #[test]
+    fn pre_upgrade_validation_rejects_non_admin() {
+        let env = Env::default();
+        let (_admin, contract) = setup(&env);
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        let intruder = Address::generate(&env);
+        let hash = BytesN::from_array(&env, &[9u8; 32]);
+
+        let res = client.try_validate_before_upgrade(&intruder, &7, &hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::Unauthorized
+        );
+    }
+
+    /// Regression proof for the forge described in issue #1415.
+    ///
+    /// On `main`, an unauthenticated `validate_before_upgrade(v, H')` wrote
+    /// `H'` into the same `AuthorizedUpgrade` slot read by
+    /// `is_upgrade_authorized`, overwriting the admin's real authorization.
+    /// The entrypoint is now admin-only and the validator keys are namespaced,
+    /// so the attacker call fails and the admin's hash remains authorized.
+    #[test]
+    fn forged_validation_cannot_overwrite_admin_authorization() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env);
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        let intruder = Address::generate(&env);
+        let good_hash = BytesN::from_array(&env, &[3u8; 32]);
+        let evil_hash = BytesN::from_array(&env, &[4u8; 32]);
+
+        client.authorize_upgrade(&admin, &7, &good_hash);
+        assert!(client.is_upgrade_authorized(&good_hash));
+
+        let res = client.try_validate_before_upgrade(&intruder, &7, &evil_hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::Unauthorized
+        );
+
+        // The admin's authorization is intact and the forged hash is not valid.
+        assert!(client.is_upgrade_authorized(&good_hash));
+        assert!(!client.is_upgrade_authorized(&evil_hash));
+        let validator_evil = env.as_contract(&contract, || {
+            StorageMigrationValidator::is_upgrade_authorized(&env, 7, &evil_hash)
+        });
+        assert!(!validator_evil);
+    }
+
+    /// Error precedence: auth → admin → hash → version.
+    #[test]
+    fn validation_error_precedence_is_auth_admin_hash_version() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env);
+        let client = EmergencyMigrationClient::new(&env, &contract);
+        let intruder = Address::generate(&env);
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+        let good_hash = BytesN::from_array(&env, &[9u8; 32]);
+
+        // 1. Missing auth wins over everything.
+        env.set_auths(&[]);
+        assert!(client
+            .try_validate_before_upgrade(&admin, &9, &zero_hash, &false)
+            .is_err());
+        env.mock_all_auths();
+
+        // 2. Non-admin is rejected before the hash / version checks.
+        let res = client.try_validate_before_upgrade(&intruder, &9, &zero_hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::Unauthorized
+        );
+
+        // 3. Admin + zero hash + bad version: hash is checked first.
+        let res = client.try_validate_before_upgrade(&admin, &9, &zero_hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::WasmHashZero
+        );
+
+        // 4. Admin + good hash + skipped version: version check runs last.
+        let res = client.try_validate_before_upgrade(&admin, &9, &good_hash, &false);
+        assert_eq!(
+            res.unwrap_err().unwrap(),
+            StorageMigrationError::VersionSkip
+        );
     }
 }

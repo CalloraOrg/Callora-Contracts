@@ -150,6 +150,22 @@ pub fn event_account_limits_cleared(env: &Env) -> Symbol {
     Symbol::new(env, "account_limits_cleared")
 }
 
+/// Returns the Symbol for the `"operator_set"` event topic.
+///
+/// Emitted when the admin registers an operator that may mutate per-account
+/// counters via [`crate::CalloraYieldLimits::set_operator`].
+pub fn event_operator_set(env: &Env) -> Symbol {
+    Symbol::new(env, "operator_set")
+}
+
+/// Returns the Symbol for the `"operator_removed"` event topic.
+///
+/// Emitted when the admin removes an operator via
+/// [`crate::CalloraYieldLimits::remove_operator`].
+pub fn event_operator_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "operator_removed")
+}
+
 /// Returns the Symbol for the `"bet_placed"` event topic.
 ///
 /// Emitted when the caller successfully increments their open-bet counter
@@ -353,6 +369,25 @@ mod tests {
         assert_eq!(
             event_account_limits_cleared(&env),
             Symbol::new(&env, "account_limits_cleared")
+        );
+    }
+
+    /// Snapshot: proves `event_operator_set` still maps to exactly the bytes
+    /// for `"operator_set"`.
+    #[test]
+    fn test_event_operator_set_bytes() {
+        let env = Env::default();
+        assert_eq!(event_operator_set(&env), Symbol::new(&env, "operator_set"));
+    }
+
+    /// Snapshot: proves `event_operator_removed` still maps to exactly the bytes
+    /// for `"operator_removed"`.
+    #[test]
+    fn test_event_operator_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_operator_removed(&env),
+            Symbol::new(&env, "operator_removed")
         );
     }
 

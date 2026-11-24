@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
+mod events;
+
 pub mod errors;
 pub use errors::ContractError;
 
@@ -27,6 +29,7 @@ pub enum DataKey {
     Admin,
     FeeBps,
     Accumulated,
+    PendingAdmin,
 }
 
 /// Fee contract configuration stored on-chain.
@@ -87,7 +90,10 @@ impl FeeContract {
     pub fn set_fee(env: Env, admin: Address, fee_bps: u32) -> Result<(), ContractError> {
         admin.require_auth();
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin)
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
             .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
             return Err(ContractError::Unauthorized);
@@ -96,7 +102,9 @@ impl FeeContract {
             return Err(ContractError::FeeTooHigh);
         }
 
+        let old_bps: u32 = env.storage().instance().get(&DataKey::FeeBps).unwrap_or(0);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        events::fee_set(&env, old_bps, fee_bps);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -121,12 +129,18 @@ impl FeeContract {
             return Err(ContractError::InvalidAmount);
         }
 
-        let accumulated: i128 = env.storage().instance().get(&DataKey::Accumulated)
+        let accumulated: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Accumulated)
             .unwrap_or(0);
-        let new_accumulated = accumulated.checked_add(amount)
+        let new_accumulated = accumulated
+            .checked_add(amount)
             .ok_or(ContractError::Overflow)?;
 
-        env.storage().instance().set(&DataKey::Accumulated, &new_accumulated);
+        env.storage()
+            .instance()
+            .set(&DataKey::Accumulated, &new_accumulated);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -164,10 +178,18 @@ impl FeeContract {
     /// - `InvalidRecipient` if `recipient` is the contract itself or the zero address.
     /// - `InsufficientBalance` if accumulated fees are less than `amount`.
     /// - `Overflow` if the remaining balance would underflow.
-    pub fn withdraw(env: Env, admin: Address, recipient: Address, amount: i128) -> Result<(), ContractError> {
+    pub fn withdraw(
+        env: Env,
+        admin: Address,
+        recipient: Address,
+        amount: i128,
+    ) -> Result<(), ContractError> {
         admin.require_auth();
 
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin)
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
             .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
             return Err(ContractError::Unauthorized);
@@ -177,21 +199,25 @@ impl FeeContract {
         }
         Self::validate_recipient(&env, &recipient)?;
 
-        let accumulated: i128 = env.storage().instance().get(&DataKey::Accumulated)
+        let accumulated: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Accumulated)
             .unwrap_or(0);
         if accumulated < amount {
             return Err(ContractError::InsufficientBalance);
         }
 
-        let remaining = accumulated.checked_sub(amount)
+        let remaining = accumulated
+            .checked_sub(amount)
             .ok_or(ContractError::Overflow)?;
 
-        env.storage().instance().set(&DataKey::Accumulated, &remaining);
+        env.storage()
+            .instance()
+            .set(&DataKey::Accumulated, &remaining);
 
-        env.events().publish(
-            (Symbol::new(&env, "fee_withdrawn"),),
-            (recipient, amount),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "fee_withdrawn"),), (recipient, amount));
 
         Self::bump_instance_ttl(&env);
         Ok(())
@@ -199,7 +225,10 @@ impl FeeContract {
 
     /// Return the current fee configuration.
     pub fn get_fee_config(env: Env) -> Result<FeeConfig, ContractError> {
-        let fee_bps: u32 = env.storage().instance().get(&DataKey::FeeBps)
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
             .ok_or(ContractError::NotInitialized)?;
         Self::bump_instance_ttl(&env);
         Ok(FeeConfig {
@@ -213,7 +242,10 @@ impl FeeContract {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(ContractError::NotInitialized);
         }
-        let accumulated: i128 = env.storage().instance().get(&DataKey::Accumulated)
+        let accumulated: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Accumulated)
             .unwrap_or(0);
         Self::bump_instance_ttl(&env);
         Ok(accumulated)
@@ -221,10 +253,84 @@ impl FeeContract {
 
     /// Return the stored admin address.
     pub fn get_admin(env: Env) -> Result<Address, ContractError> {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin)
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
             .ok_or(ContractError::NotInitialized)?;
         Self::bump_instance_ttl(&env);
         Ok(admin)
+    }
+
+    /// Nominate a new admin. The nominee must call `accept_admin` to take over.
+    pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if new_admin == stored_admin {
+            return Err(ContractError::SameAdmin);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        events::admin_nominated(&env, new_admin);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Accept a pending admin nomination. Only the nominee may call this.
+    pub fn accept_admin(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingAdmin)?;
+        if caller != pending {
+            return Err(ContractError::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        events::admin_accepted(&env, pending);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Cancel a pending admin nomination. Only the current admin may call this.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
+        if caller != stored_admin {
+            return Err(ContractError::Unauthorized);
+        }
+        if !env.storage().instance().has(&DataKey::PendingAdmin) {
+            return Err(ContractError::NoPendingAdmin);
+        }
+
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        events::admin_cancelled(&env);
+        Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the pending admin nominee, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PendingAdmin)
     }
 }
 
@@ -243,7 +349,10 @@ mod test {
         let admin = Address::generate(&env);
 
         client.init(&admin);
-        assert_eq!(client.try_init(&admin).unwrap_err().unwrap(), ContractError::AlreadyInitialized);
+        assert_eq!(
+            client.try_init(&admin).unwrap_err().unwrap(),
+            ContractError::AlreadyInitialized
+        );
     }
 
     #[test]
@@ -332,7 +441,10 @@ mod test {
         client.init(&admin);
         client.deposit(&caller, &100);
         assert_eq!(
-            client.try_withdraw(&admin, &recipient, &200).unwrap_err().unwrap(),
+            client
+                .try_withdraw(&admin, &recipient, &200)
+                .unwrap_err()
+                .unwrap(),
             ContractError::InsufficientBalance
         );
     }
@@ -354,7 +466,10 @@ mod test {
             ContractError::Unauthorized
         );
         assert_eq!(
-            client.try_withdraw(&fake_admin, &recipient, &10).unwrap_err().unwrap(),
+            client
+                .try_withdraw(&fake_admin, &recipient, &10)
+                .unwrap_err()
+                .unwrap(),
             ContractError::Unauthorized
         );
     }

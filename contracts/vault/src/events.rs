@@ -9,7 +9,10 @@ use soroban_sdk::{Env, Symbol};
 
 /// Returns the Symbol for the `"init"` event topic.
 ///
-/// Emitted when the vault contract is first initialized with an owner and initial balance.
+/// Emitted exactly once, after the owner has authorized initialization and all
+/// configuration (including a fully backed `initial_balance`) has validated.
+/// Topics are `(init, callora_v1, owner)`; the data payload is the recorded
+/// initial balance.
 pub fn event_init(env: &Env) -> Symbol {
     Symbol::new(env, "init")
 }
@@ -93,6 +96,13 @@ pub fn event_ownership_nominated(env: &Env) -> Symbol {
 /// Emitted when a nominated owner accepts and completes the ownership transfer.
 pub fn event_ownership_accepted(env: &Env) -> Symbol {
     Symbol::new(env, "ownership_accepted")
+}
+
+/// Returns the Symbol for the `"ownership_cancelled"` event topic.
+///
+/// Emitted when the current owner cancels a pending ownership transfer.
+pub fn event_ownership_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "ownership_cancelled")
 }
 
 /// Returns the Symbol for the `"withdraw"` event topic.
@@ -209,6 +219,17 @@ pub fn event_allowlist_add(env: &Env) -> Symbol {
     Symbol::new(env, "allowlist_add")
 }
 
+/// Emitted when a single address is removed from the deposit allowlist.
+///
+/// Topics: ("allowlist_remove", "callora_v1", caller: Address, depositor: Address)
+/// Data: ()
+///
+/// Only emitted when the address was actually present and removed. No event is
+/// emitted when the address was not in the list (idempotent remove).
+pub fn event_allowlist_remove(env: &Env) -> Symbol {
+    Symbol::new(env, "allowlist_remove")
+}
+
 /// Emitted when the deposit allowlist is cleared.
 ///
 /// Topics: ("allowlist_clear", caller: Address)
@@ -319,6 +340,42 @@ pub fn event_sweep_executed(env: &Env) -> Symbol {
 /// Emitted when an admin aborts a pending sweep proposal.
 pub fn event_sweep_cancelled(env: &Env) -> Symbol {
     Symbol::new(env, "sweep_cancelled")
+}
+
+/// Returns the Symbol for the `"pause_replaced"` event topic.
+///
+/// Emitted when an admin proposes a pause while a live (unexpired) pause
+/// proposal is already pending. The payload carries both the old and new
+/// `(proposed_at, execute_after)` snapshots.
+pub fn event_pause_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "pause_replaced")
+}
+
+/// Returns the Symbol for the `"upgrade_replaced"` event topic.
+///
+/// Emitted when an admin proposes an upgrade while a live (unexpired)
+/// upgrade proposal is already pending. The payload carries both the old and
+/// new `(wasm_hash, proposed_at, execute_after)` snapshots.
+pub fn event_upgrade_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_replaced")
+}
+
+/// Returns the Symbol for the `"sweep_replaced"` event topic.
+///
+/// Emitted when an admin proposes a sweep while a live (unexpired) sweep
+/// proposal is already pending. The payload carries both the old and new
+/// `(to, amount, proposed_at, execute_after)` snapshots.
+pub fn event_sweep_replaced(env: &Env) -> Symbol {
+    Symbol::new(env, "sweep_replaced")
+}
+
+/// Returns the Symbol for the `"proposal_expired"` event topic.
+///
+/// Emitted once per expired proposal removed by `prune_expired_proposals`.
+/// The data carries `(kind, proposed_at, execute_after, expires_at)`, where
+/// `kind` is one of `"pause"`, `"upgrade"`, or `"sweep"`.
+pub fn event_proposal_expired(env: &Env) -> Symbol {
+    Symbol::new(env, "proposal_expired")
 }
 
 /// Returns the Symbol for the `"timelock_window_changed"` event topic.
@@ -456,6 +513,13 @@ mod tests {
     }
 
     #[test]
+    fn test_event_ownership_cancelled_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_ownership_cancelled(&env);
+        assert_eq!(sym, Symbol::new(&env, "ownership_cancelled"));
+    }
+
+    #[test]
     fn test_event_withdraw_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_withdraw(&env);
@@ -558,6 +622,13 @@ mod tests {
         let env = soroban_sdk::Env::default();
         let sym = event_allowlist_add(&env);
         assert_eq!(sym, Symbol::new(&env, "allowlist_add"));
+    }
+
+    #[test]
+    fn test_event_allowlist_remove_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_allowlist_remove(&env);
+        assert_eq!(sym, Symbol::new(&env, "allowlist_remove"));
     }
 
     #[test]
@@ -684,9 +755,50 @@ mod tests {
     }
 
     #[test]
+    fn test_event_pause_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_pause_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "pause_replaced"));
+    }
+
+    #[test]
+    fn test_event_upgrade_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_upgrade_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "upgrade_replaced"));
+    }
+
+    #[test]
+    fn test_event_sweep_replaced_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_sweep_replaced(&env);
+        assert_eq!(sym, Symbol::new(&env, "sweep_replaced"));
+    }
+
+    #[test]
+    fn test_event_proposal_expired_bytes() {
+        let env = soroban_sdk::Env::default();
+        let sym = event_proposal_expired(&env);
+        assert_eq!(sym, Symbol::new(&env, "proposal_expired"));
+    }
+
+    #[test]
     fn test_event_timelock_window_changed_bytes() {
         let env = soroban_sdk::Env::default();
         let sym = event_timelock_window_changed(&env);
         assert_eq!(sym, Symbol::new(&env, "tl_window_changed"));
+    }
+}
+
+#[cfg(test)]
+mod version_symbol_tests {
+    use super::*;
+
+    /// Regression: `"callora.v1"` contains `.`, which Soroban rejects in a
+    /// Symbol, so `init` panicked on every call.
+    #[test]
+    fn test_event_version_v1_is_a_valid_symbol() {
+        let env = soroban_sdk::Env::default();
+        assert_eq!(event_version_v1(&env), Symbol::new(&env, "callora_v1"));
     }
 }

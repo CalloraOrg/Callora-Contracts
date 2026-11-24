@@ -70,7 +70,7 @@
 //!
 //! - **Every hot read** (`get_claim`, `has_claim`, and the internal reads
 //!   inside `batch_claim`) calls `extend_ttl` on the `ClaimRecord` entry with
-//!   a `PERSISTENT_BUMP` of 10 000 ledgers (≈16 days).
+//!   a `PERSISTENT_BUMP` of 120 days worth of ledgers.
 //! - **Every write** also bumps the instance-storage TTL via
 //!   `extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT)`.
 //! - The `ClaimConsumed` persistent entry is bumped alongside the `Claim`
@@ -100,19 +100,26 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Ve
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Extend **instance** storage TTL by 10 000 ledgers (≈16 days) on mutating calls.
-pub const BUMP_AMOUNT: u32 = 10_000;
-/// Minimum remaining instance TTL before triggering a bump (≈1.5 days).
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// Ledgers per day on the Stellar network (5 s per ledger).
+pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-/// Extend **persistent** claim entry TTL by 10 000 ledgers on every hot read.
+/// Network maximum `max_entry_ttl` (in ledgers). No TTL extension may exceed
+/// this value; the constant sanity test asserts every bump stays below it.
+pub const MAX_ENTRY_TTL: u32 = 6_312_000;
+
+/// Extend **instance** storage TTL by 60 days worth of ledgers on mutating calls.
+pub const BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
+/// Minimum remaining instance TTL before triggering a bump (30 days).
+pub const LIFETIME_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Extend **persistent** claim entry TTL by 120 days worth of ledgers on every hot read.
 ///
 /// This is the core mechanism that prevents archival pressure on claim storage.
 /// Any code path that reads a `ClaimRecord` MUST call `extend_ttl` with these
 /// constants before returning the data.
-pub const PERSISTENT_BUMP: u32 = 10_000;
-/// Minimum remaining persistent TTL before triggering a claim-entry bump (≈1.5 days).
-pub const PERSISTENT_THRESHOLD: u32 = 1_000;
+pub const PERSISTENT_BUMP: u32 = LEDGERS_PER_DAY * 120;
+/// Minimum remaining persistent TTL before triggering a claim-entry bump (30 days).
+pub const PERSISTENT_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 
 /// Extend a **consumed-claim tombstone** (`StorageKey::ClaimConsumed`) TTL by
 /// this many ledgers (~6 months) on every touch — matching the long-lived
@@ -159,6 +166,13 @@ pub enum StorageKey {
     /// stronger question "has this id ever existed, and whose is it?", which
     /// is what makes the identifier globally unique for the life of the
     /// contract rather than merely un-replayable after settlement.
+    ///
+    /// The reservation is extended with the `CONSUMED_TOMBSTONE_*` lifetime
+    /// (matching `ClaimConsumed`) so it outlives the short-lived `ClaimRecord`.
+    /// If the entry is archived and later restored, the stored owner is
+    /// returned unchanged and the id remains reserved. If it has expired
+    /// entirely, the id is treated as free again — which is why the long
+    /// tombstone lifetime is required to keep the replay guarantee intact.
     ClaimIdOwner(BytesN<32>),
 }
 
@@ -185,6 +199,8 @@ pub struct ClaimRecord {
     /// (`ClaimIdMismatch`) and permanently rejects any call once
     /// `ClaimConsumed(claim_id) == true` (`ClaimIdAlreadyUsed`).
     pub claim_id: BytesN<32>,
+    /// Unix timestamp at or after which this claim cannot be settled; zero means no expiry.
+    pub expires_at: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +285,18 @@ impl CalloraBatchClaim {
         amount: i128,
         claim_id: BytesN<32>,
     ) -> Result<(), BatchClaimError> {
+        Self::add_claim_with_expiry(env, caller, claimant, amount, claim_id, 0)
+    }
+
+    /// Add a claim with an optional Unix timestamp expiry (zero means never).
+    pub fn add_claim_with_expiry(
+        env: Env,
+        caller: Address,
+        claimant: Address,
+        amount: i128,
+        claim_id: BytesN<32>,
+        expires_at: u64,
+    ) -> Result<(), BatchClaimError> {
         caller.require_auth();
         let admin = Self::require_admin(&env)?;
         if caller != admin {
@@ -309,8 +337,8 @@ impl CalloraBatchClaim {
         if let Some(owner) = reserved_for.clone() {
             env.storage().persistent().extend_ttl(
                 &owner_key,
-                PERSISTENT_THRESHOLD,
-                PERSISTENT_BUMP,
+                CONSUMED_TOMBSTONE_THRESHOLD,
+                CONSUMED_TOMBSTONE_BUMP,
             );
             if owner != claimant {
                 return Err(BatchClaimError::ClaimIdAlreadyUsed);
@@ -365,6 +393,7 @@ impl CalloraBatchClaim {
             pending_amount: new_pending,
             settled: false,
             claim_id: claim_id.clone(),
+            expires_at,
         };
         env.storage().persistent().set(&key, &record);
         // Bump claim record TTL after writing.
@@ -386,9 +415,11 @@ impl CalloraBatchClaim {
         if reserved_for.is_none() {
             env.storage().persistent().set(&owner_key, &claimant);
         }
-        env.storage()
-            .persistent()
-            .extend_ttl(&owner_key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        env.storage().persistent().extend_ttl(
+            &owner_key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
 
         Self::bump_instance(&env);
         env.events()
@@ -435,6 +466,9 @@ impl CalloraBatchClaim {
         // Issue #1044: bound the batch before doing any per-entry work, so an
         // oversized call fails closed and cheaply rather than part-way
         // through a settlement loop.
+        if claimants.is_empty() {
+            return Err(BatchClaimError::BatchEmpty);
+        }
         if claimants.len() > MAX_PENDING_AMOUNTS {
             return Err(BatchClaimError::BatchTooLarge);
         }
@@ -464,6 +498,10 @@ impl CalloraBatchClaim {
             // 1. Verify the claim_id matches the stored record.
             if record.claim_id != claim_id {
                 return Err(BatchClaimError::ClaimIdMismatch);
+            }
+
+            if record.expires_at != 0 && env.ledger().timestamp() >= record.expires_at {
+                return Err(BatchClaimError::ClaimExpired);
             }
 
             // 2. Verify the claim_id has not been consumed by a prior call.
@@ -580,10 +618,74 @@ impl CalloraBatchClaim {
             return Err(BatchClaimError::AlreadySettled);
         }
 
+        // Consume the claim id with a long-lived tombstone so it can never be
+        // reissued, and release the owner reservation.
+        let consumed_key = StorageKey::ClaimConsumed(record.claim_id.clone());
+        env.storage().persistent().set(&consumed_key, &true);
+        env.storage().persistent().extend_ttl(
+            &consumed_key,
+            CONSUMED_TOMBSTONE_THRESHOLD,
+            CONSUMED_TOMBSTONE_BUMP,
+        );
+
+        // Decrement the total-claims counter with checked subtraction.
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalClaims)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &StorageKey::TotalClaims,
+            &count.checked_sub(1).ok_or(BatchClaimError::Overflow)?,
+        );
+
         env.storage().persistent().remove(&key);
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_claim_cancelled(&env),), claimant);
+        Ok(())
+    }
+
+    /// Remove an expired, unsettled claim while retaining its claim id reservation.
+    pub fn expire_claim(
+        env: Env,
+        caller: Address,
+        claimant: Address,
+    ) -> Result<(), BatchClaimError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(BatchClaimError::Unauthorized);
+        }
+        let key = StorageKey::Claim(claimant.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
+        }
+        let record: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(BatchClaimError::ClaimNotFound)?;
+        if record.settled {
+            return Err(BatchClaimError::AlreadySettled);
+        }
+        if record.expires_at == 0 || env.ledger().timestamp() < record.expires_at {
+            return Err(BatchClaimError::ClaimNotExpired);
+        }
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::TotalClaims)
+            .unwrap_or(0);
+        env.storage().instance().set(
+            &StorageKey::TotalClaims,
+            &count.checked_sub(1).ok_or(BatchClaimError::Overflow)?,
+        );
+        env.storage().persistent().remove(&key);
+        Self::bump_instance(&env);
+        env.events().publish((events::event_claim_expired(&env),), claimant);
         Ok(())
     }
 
@@ -603,6 +705,7 @@ impl CalloraBatchClaim {
     /// - [`BatchClaimError::ClaimNotFound`] if `claimant` has no record.
     pub fn get_claim(env: Env, claimant: Address) -> Result<ClaimRecord, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::Claim(claimant);
 
         // Hot-read TTL bump: prevent archival of frequently polled entries.
@@ -628,6 +731,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn has_claim(env: Env, claimant: Address) -> Result<bool, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::Claim(claimant);
 
         // Hot-read TTL bump.
@@ -657,6 +761,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_consumed(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::ClaimConsumed(claim_id);
 
         if env.storage().persistent().has(&key) {
@@ -687,6 +792,7 @@ impl CalloraBatchClaim {
         claim_id: BytesN<32>,
     ) -> Result<Option<Address>, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         let key = StorageKey::ClaimIdOwner(claim_id);
         if env.storage().persistent().has(&key) {
             env.storage()
@@ -707,7 +813,10 @@ impl CalloraBatchClaim {
     /// # Errors
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn claim_id_reserved(env: Env, claim_id: BytesN<32>) -> Result<bool, BatchClaimError> {
+        Self::bump_instance(&env);
         Ok(Self::claim_id_owner(env, claim_id)?.is_some())
+    }
+
     /// Proactively extend a consumed-claim tombstone's TTL, independent of
     /// any claim/settle activity.
     ///
@@ -748,6 +857,7 @@ impl CalloraBatchClaim {
             CONSUMED_TOMBSTONE_BUMP,
         );
         Ok(true)
+    }
 
     /// Total number of claims ever created (monotonically increasing).
     ///
@@ -757,6 +867,7 @@ impl CalloraBatchClaim {
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn total_claims(env: Env) -> Result<u32, BatchClaimError> {
         Self::require_admin(&env)?;
+        Self::bump_instance(&env);
         Ok(env
             .storage()
             .instance()
@@ -771,6 +882,7 @@ impl CalloraBatchClaim {
     /// # Errors
     /// Returns [`BatchClaimError::NotInitialized`] if `init` has not been called.
     pub fn get_admin(env: Env) -> Result<Address, BatchClaimError> {
+        Self::bump_instance(&env);
         Self::require_admin(&env)
     }
 
@@ -914,6 +1026,56 @@ mod tests {
         client.add_claim(&admin, &claimant, &1, &id);
         let rec = client.get_claim(&claimant);
         assert_eq!(rec.pending_amount, 1);
+    }
+
+    #[test]
+    fn test_claim_expiry_boundaries_and_admin_sweep() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 201);
+        let now = env.ledger().timestamp();
+        client.add_claim_with_expiry(&admin, &claimant, &10, &id, &(now + 10));
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        let early = client.try_expire_claim(&admin, &claimant);
+        assert_eq!(early, Err(Ok(BatchClaimError::ClaimNotExpired)));
+        env.ledger().set_timestamp(now + 9);
+        assert_eq!(client.batch_claim(&batch), 10);
+
+        let claimant2 = Address::generate(&env);
+        let id2 = make_id(&env, 202);
+        client.add_claim_with_expiry(&admin, &claimant2, &10, &id2, &(now + 20));
+        env.ledger().set_timestamp(now + 20);
+        let mut batch2 = Vec::new(&env);
+        batch2.push_back((claimant2.clone(), id2.clone()));
+        assert_eq!(client.try_batch_claim(&batch2), Err(Ok(BatchClaimError::ClaimExpired)));
+        let intruder = Address::generate(&env);
+        assert_eq!(client.try_expire_claim(&intruder, &claimant2), Err(Ok(BatchClaimError::Unauthorized)));
+        client.expire_claim(&admin, &claimant2);
+        assert_eq!(client.total_claims(), 1);
+        let claimant3 = Address::generate(&env);
+        assert_eq!(client.try_add_claim(&admin, &claimant3, &10, &id2), Err(Ok(BatchClaimError::ClaimIdAlreadyUsed)));
+    }
+
+    #[test]
+    fn test_zero_expiry_never_expires() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 203);
+        client.add_claim(&admin, &claimant, &10, &id);
+        env.ledger().set_timestamp(u64::MAX);
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant, id));
+        assert_eq!(client.batch_claim(&batch), 10);
+    }
+
+    #[test]
+    fn test_claim_expired_event_topic_snapshot() {
+        let env = Env::default();
+        assert_eq!(
+            events::event_claim_expired(&env),
+            soroban_sdk::Symbol::new(&env, "claim_expired")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1466,6 +1628,33 @@ mod tests {
         );
     }
 
+    /// An empty batch is rejected with `BatchEmpty` rather than silently
+    /// succeeding with a total of zero.
+    #[test]
+    fn test_empty_batch_rejected() {
+        let env = Env::default();
+        let (_admin, _claimant, client) = setup(&env);
+
+        let batch: Vec<(Address, BytesN<32>)> = Vec::new(&env);
+        let res = client.try_batch_claim(&batch);
+        assert_eq!(res, Err(Ok(BatchClaimError::BatchEmpty)));
+    }
+
+    /// A batch at exactly `MAX_PENDING_AMOUNTS` still succeeds when every
+    /// entry is valid — the empty check must not interfere with the cap.
+    #[test]
+    fn test_batch_at_exact_cap_succeeds_with_valid_entries() {
+        let env = Env::default();
+        let (admin, claimant, client) = setup(&env);
+        let id = make_id(&env, 112);
+        client.add_claim(&admin, &claimant, &10, &id);
+
+        let mut batch = Vec::new(&env);
+        batch.push_back((claimant.clone(), id.clone()));
+        assert_eq!(batch.len(), 1);
+        assert_eq!(client.batch_claim(&batch), 10);
+    }
+
     /// The same claimant twice in one batch cannot settle twice: the second
     /// entry hits the consumed tombstone and the whole call reverts.
     #[test]
@@ -1505,6 +1694,8 @@ mod tests {
         assert_eq!(client.claim_id_owner(&unknown), None);
         assert!(!client.claim_id_reserved(&unknown));
         assert!(!client.claim_id_consumed(&unknown));
+    }
+
     // Consumed-tombstone TTL: survival beyond claim archival (#1043)
     // -----------------------------------------------------------------------
 
@@ -1625,9 +1816,16 @@ mod tests {
         batch.push_back((claimant.clone(), id.clone()));
         client.batch_claim(&batch);
 
-        // Advance well past a single PERSISTENT_BUMP window without ever
-        // reading/writing this claim_id's record or tombstone directly.
-        advance_ledger_keeping_instance_alive(&env, &admin, &client, 2 * PERSISTENT_BUMP);
+        // Advance past a full PERSISTENT_BUMP window (the claim record's
+        // archival horizon) without ever reading/writing this claim_id's
+        // record or tombstone directly, while staying inside the tombstone's
+        // CONSUMED_TOMBSTONE_BUMP lifetime.
+        advance_ledger_keeping_instance_alive(
+            &env,
+            &admin,
+            &client,
+            PERSISTENT_BUMP + LEDGERS_PER_DAY,
+        );
 
         let remaining = consumed_ttl(&env, &client.address, &id);
         assert!(
@@ -1747,4 +1945,5 @@ mod tests {
             assert_eq!(client.extend_claim_consumed_ttl(&id), true);
             assert_eq!(client.claim_id_consumed(&id), true);
         }
+    }
 }
