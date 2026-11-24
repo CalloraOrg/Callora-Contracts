@@ -1,10 +1,9 @@
 use soroban_sdk::Env;
 
-/// Bit 0 — Stake/unstake: users can stake tokens to earn rewards and unstake
-/// after a cooldown period.
+/// Bit 0 — Stake/unstake: users can stake tokens into contract custody and
+/// unstake their deposited balance.
 ///
-/// Reserved bit assignment. The contract does not yet export this functionality,
-/// so the bit is not set in `capabilities()`. Bit positions are never reused.
+/// Implemented by `stake` and `unstake`. Bit positions are never reused.
 pub const CAP_STAKE_UNSTAKE: u64 = 1 << 0;
 
 /// Bit 1 — Delegation: users can delegate their stake to a validator or
@@ -32,9 +31,10 @@ pub const CAP_SLASHING: u64 = 1 << 3;
 pub const CAP_WITHDRAW_TIMELOCK: u64 = 1 << 4;
 
 /// Bit 5 — Stake view: clients can query current stake balances, total
-/// staked, and per-user breakdowns.
+/// staked, and the staking token.
 ///
-/// Reserved bit assignment. Bit positions are never reused.
+/// Implemented by `get_stake`, `total_staked`, and `get_token`. Bit positions
+/// are never reused.
 pub const CAP_STAKE_VIEW: u64 = 1 << 5;
 
 // Bits 6–63 reserved for future stake capabilities.
@@ -53,9 +53,9 @@ pub const SUPPORTED_CAPABILITIES: u64 = CAP_STAKE_UNSTAKE
 
 /// Bitmask of capabilities currently backed by an exported entrypoint.
 ///
-/// Today the contract exports no stake operations, and `capabilities()` itself
-/// is not a stake feature bit, so the honest value is 0.
-pub const IMPLEMENTED_CAPABILITIES: u64 = 0;
+/// Reports `CAP_STAKE_UNSTAKE | CAP_STAKE_VIEW`; delegation, rewards,
+/// slashing, and withdraw timelock remain reserved and unset.
+pub const IMPLEMENTED_CAPABILITIES: u64 = CAP_STAKE_UNSTAKE | CAP_STAKE_VIEW;
 
 pub fn capabilities(_env: &Env) -> u64 {
     IMPLEMENTED_CAPABILITIES
@@ -69,7 +69,12 @@ mod tests {
     #[test]
     fn capabilities_reports_only_implemented() {
         let env = Env::default();
-        assert_eq!(capabilities(&env), 0);
+        let caps = capabilities(&env);
+        assert_eq!(caps, CAP_STAKE_UNSTAKE | CAP_STAKE_VIEW);
+        assert_eq!(
+            caps & (CAP_DELEGATION | CAP_REWARDS | CAP_SLASHING | CAP_WITHDRAW_TIMELOCK),
+            0
+        );
     }
 
     #[test]
