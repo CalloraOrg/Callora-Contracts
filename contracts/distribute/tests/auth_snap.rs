@@ -17,6 +17,7 @@
 //! | Read-only views       | `get_admin`, `get_usdc_token`, `get_pending_admin`,               |
 //! |                       | `get_paused`, `get_max_distribute`, `get_max_batch_size`,         |
 //! |                       | `balance`, `get_version`, `version`                               |
+//! |                       | `simulate_batch_distribute`                                      |
 
 #![cfg(test)]
 
@@ -298,4 +299,6 @@ fn read_only_views_do_not_require_auth() {
     assert_eq!(client.balance(), 500, "balance");
     assert_eq!(client.get_version(), None, "get_version — never upgraded");
     let _ = client.version();
+    let payments = Vec::from_array(&env, [(Address::generate(&env), 500_i128)]);
+    assert!(client.simulate_batch_distribute(&payments).ok);
 }

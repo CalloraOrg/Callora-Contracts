@@ -9,8 +9,9 @@
 //! # Instance storage TTL policy
 //!
 //! Critical configuration lives in Soroban instance storage. Reads count as
-//! active use: every public view refreshes instance TTL at or below a 30-day
-//! threshold, extending it back to a 60-day target, matching the vault policy.
+//! active use: views other than `simulate_batch_distribute` refresh instance TTL
+//! at or below a 30-day threshold, extending it back to a 60-day target,
+//! matching the vault policy.
 //!
 //! TTL changes persist only when the invocation is submitted and committed.
 //! RPC simulation alone does not extend on-chain lifetime; clients that only
@@ -22,7 +23,44 @@ pub mod limits;
 
 use crate::errors::DistributeError;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env, Symbol, Vec};
+
+/// Read-only batch validation. Error codes retain payment order and may repeat.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchSimulation {
+    pub ok: bool,
+    /// Sum of positive amounts, saturated at i128::MAX on overflow.
+    pub total: i128,
+    pub legs: u32,
+    pub contract_balance: i128,
+    pub paused: bool,
+    pub errors: Vec<u32>,
+}
+
+fn validate_recipient(recipient: &Address, contract_self: &Address) -> Result<(), DistributeError> {
+    if recipient == contract_self {
+        Err(DistributeError::InvalidRecipient)
+    } else {
+        Ok(())
+    }
+}
+
+/// Shared fail-early validation for one payment; no host mutations or auth.
+fn validate_leg(
+    recipient: &Address,
+    amount: i128,
+    cap: i128,
+    contract_self: &Address,
+) -> Result<(), DistributeError> {
+    if amount <= 0 {
+        return Err(DistributeError::AmountNotPositive);
+    }
+    if amount > cap {
+        return Err(DistributeError::AmountExceedsMaxDistribute);
+    }
+    validate_recipient(recipient, contract_self)
+}
 
 // ---------------------------------------------------------------------------
 // Storage key constants
@@ -152,12 +190,6 @@ impl Distribute {
             .instance()
             .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
             .unwrap_or(false)
-    }
-
-    fn validate_recipient(env: &Env, recipient: &Address, contract_self: &Address) {
-        if recipient == contract_self {
-            env.panic_with_error(DistributeError::InvalidRecipient);
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -472,7 +504,7 @@ impl Distribute {
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_address);
         let contract_address = env.current_contract_address();
-        Self::validate_recipient(&env, &to, &contract_address);
+        validate_recipient(&to, &contract_address).unwrap_or_else(|e| env.panic_with_error(e));
         if usdc.balance(&contract_address) < amount {
             env.panic_with_error(DistributeError::InsufficientBalance);
         }
@@ -572,13 +604,8 @@ impl Distribute {
         let mut total: i128 = 0;
         for i in 0..n {
             let (ref to, amount) = payments.get(i).expect("payment leg");
-            if amount <= 0 {
-                env.panic_with_error(DistributeError::AmountNotPositive);
-            }
-            if amount > max_distribute {
-                env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
-            }
-            Self::validate_recipient(&env, to, &contract_address);
+            validate_leg(to, amount, max_distribute, &contract_address)
+                .unwrap_or_else(|e| env.panic_with_error(e));
             // Overflow-safe accumulation
             total = total
                 .checked_add(amount)
@@ -632,8 +659,89 @@ impl Distribute {
     }
 
     // -----------------------------------------------------------------------
-    // Balance view
+    // Batch simulation and balance views
     // -----------------------------------------------------------------------
+
+    /// Validate a batch without auth, transfers, events, or Distribute storage/TTL writes.
+    ///
+    /// Reports all locally detectable errors in execution order: pause, missing
+    /// admin, size, missing token, then each leg's amount/recipient/overflow, and
+    /// finally insufficient balance. Repeated codes are retained. Positive amounts
+    /// contribute to `total` even on invalid legs; nonpositive amounts do not.
+    /// On overflow `total` saturates at i128::MAX and the balance is insufficient.
+    /// Missing token configuration reports a zero balance.
+    ///
+    /// `ok` predicts local validation for an authorized admin at the same state.
+    /// It does not validate signatures or predict external token transfer failures
+    /// (for example a frozen recipient). The configured token's balance view is
+    /// called; no token transfers are attempted. That external view may refresh
+    /// the token's own TTL (as Stellar Asset Contracts do), which this contract
+    /// cannot suppress. Use RPC simulation if no on-chain TTL changes are wanted.
+    pub fn simulate_batch_distribute(env: Env, payments: Vec<(Address, i128)>) -> BatchSimulation {
+        let inst = env.storage().instance();
+        let paused = Self::is_paused(&env);
+        let mut errors = Vec::new(&env);
+        if paused {
+            errors.push_back(DistributeError::Paused as u32);
+        }
+        let initialized = inst.has(&Symbol::new(&env, ADMIN_KEY));
+        if !initialized {
+            errors.push_back(DistributeError::NotInitialized as u32);
+        }
+        let legs = payments.len();
+        if legs == 0 {
+            errors.push_back(DistributeError::BatchEmpty as u32);
+        }
+        if legs > limits::MAX_BATCH_SIZE {
+            errors.push_back(DistributeError::BatchTooLarge as u32);
+        }
+        let token_address: Option<Address> = inst.get(&Symbol::new(&env, USDC_KEY));
+        if token_address.is_none() && initialized {
+            errors.push_back(DistributeError::NotInitialized as u32);
+        }
+        let cap = inst
+            .get(&Symbol::new(&env, MAX_DISTRIBUTE_KEY))
+            .unwrap_or(DEFAULT_MAX_DISTRIBUTE);
+        let contract_self = env.current_contract_address();
+        let mut total: i128 = 0;
+        let mut overflow = false;
+        for (recipient, amount) in payments.iter() {
+            if let Err(error) = validate_leg(&recipient, amount, cap, &contract_self) {
+                errors.push_back(error as u32);
+                // Amount errors must not conceal an invalid recipient on this leg.
+                if error != DistributeError::InvalidRecipient {
+                    if let Err(error) = validate_recipient(&recipient, &contract_self) {
+                        errors.push_back(error as u32);
+                    }
+                }
+            }
+            if amount > 0 {
+                match total.checked_add(amount) {
+                    Some(sum) => total = sum,
+                    None => {
+                        total = i128::MAX;
+                        overflow = true;
+                        errors.push_back(DistributeError::Overflow as u32);
+                    }
+                }
+            }
+        }
+        let contract_balance = token_address
+            .as_ref()
+            .map(|address| token::Client::new(&env, address).balance(&contract_self))
+            .unwrap_or(0);
+        if token_address.is_some() && (overflow || contract_balance < total) {
+            errors.push_back(DistributeError::InsufficientBalance as u32);
+        }
+        BatchSimulation {
+            ok: errors.is_empty(),
+            total,
+            legs,
+            contract_balance,
+            paused,
+            errors,
+        }
+    }
 
     /// Return this contract's on-ledger USDC balance.
     ///
@@ -709,3 +817,6 @@ extern crate std;
 
 #[cfg(test)]
 mod test_ttl;
+
+#[cfg(test)]
+mod test_simulation;
