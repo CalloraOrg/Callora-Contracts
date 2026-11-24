@@ -1,0 +1,19 @@
+[package]
+name = "callora-access-matrix"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+callora-vault = { path = "../vault" }
+callora-settlement = { path = "../settlement", features = ["testutils"] }
+callora-revenue-pool = { path = "../revenue_pool", features = ["testutils"] }
+callora-distribute = { path = "../distribute", features = ["testutils"] }
