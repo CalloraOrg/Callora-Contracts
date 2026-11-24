@@ -5,7 +5,7 @@ use crate::{
     RefundContractClient, RefundError, RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
     MAX_PENDING_REFUNDS_PAGE_SIZE, MAX_REQUESTER_REFUNDS,
 };
-use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, IntoVal, Symbol};
 
 fn create_token<'a>(

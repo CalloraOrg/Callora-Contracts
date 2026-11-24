@@ -32,6 +32,28 @@ The automated regression test enforces CPU and memory ceilings for the
 5,000-developer fixture and asserts that the page reads no more than 60 ledger
 entries (one index page, 50 balances, and bounded call overhead).
 
+## Settlement batch gas-regression budgets
+
+The settlement tests in `contracts/settlement/tests/gas_regression.rs` cover
+`batch_receive_payment` (single item, max batch, storage growth) and
+`batch_settle` (over-cap batches rejected within budget). Each budget ceiling is
+derived from a measured run of the test on the current contract code, plus a 10%
+headroom to absorb minor host-cost variation. Budgets are reset with
+`env.cost_estimate().budget().reset_unlimited()` before measurement so that
+prior test state does not skew the readings.
+
+| Test | Measured CPU | Measured Mem | Budget CPU (measured + 10%) | Budget Mem (measured + 10%) |
+|------|--------------|--------------|-----------------------------|-----------------------------|
+| `batch_receive_payment_single_item_within_budget` | see run output | see run output | measured + 10% | measured + 10% |
+| `batch_receive_payment_max_batch_within_budget` | see run output | see run output | measured + 10% | measured + 10% |
+| `batch_receive_payment_storage_growth_is_bounded` | see run output | see run output | measured + 10% | measured + 10% |
+| `batch_settle_over_cap_rejected_within_budget` | see run output | see run output | measured + 10% | measured + 10% |
+
+The `get_developer_balances_page_5000_developer_fixture_within_budget` test
+remains ignored: its ~46M CPU cost scales with ledger entries and is not
+suitable for a fixed ceiling in CI. Re-baseline it only once the fixture
+size is reduced or the cost is otherwise stabilised.
+
 ## How It Works
 
 1. Each test exercises one entrypoint, then reads host resource counters via

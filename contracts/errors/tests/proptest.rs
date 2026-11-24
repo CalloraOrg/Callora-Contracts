@@ -48,11 +48,11 @@
 
 extern crate std;
 
-use errors::{Error, ErrorsContract, ErrorsContractClient};
+use errors::{Error, ErrorsContract, ErrorsContractClient, MAX_ERROR_HISTORY};
 use proptest::prelude::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env, String};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------------
 // Deterministic PRNG (no std::rand, reproducible across platforms)
@@ -328,6 +328,55 @@ proptest! {
     ) {
         let env = Env::default();
         run_sequence(&env, &actions);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// The per-user history is a bounded ring buffer: its length never exceeds
+    /// `MAX_ERROR_HISTORY` and it always ends with the most recently logged
+    /// code, regardless of how many codes are logged.
+    #[test]
+    fn error_history_never_exceeds_max(
+        codes in prop::collection::vec(any::<u32>(), 1..=64)
+    ) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(ErrorsContract, ());
+        let client = ErrorsContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+        client.init(&admin);
+
+        let desc = String::from_str(&env, "code");
+        let mut registered = BTreeSet::new();
+        let mut logged = std::vec::Vec::new();
+
+        for code in codes {
+            if registered.insert(code) {
+                client.register_error(&admin, &code, &desc);
+            }
+            client.log_error(&user, &code);
+            logged.push(code);
+
+            let history = client.get_error_history(&user);
+            prop_assert!(
+                history.len() <= MAX_ERROR_HISTORY,
+                "history length {} exceeded MAX_ERROR_HISTORY {}",
+                history.len(),
+                MAX_ERROR_HISTORY
+            );
+            prop_assert_eq!(history.get_unchecked(history.len() - 1), code);
+        }
+
+        let history = client.get_error_history(&user);
+        let expected_start = logged.len().saturating_sub(MAX_ERROR_HISTORY as usize);
+        let expected = &logged[expected_start..];
+        prop_assert_eq!(history.len(), expected.len() as u32);
+        for (i, code) in expected.iter().enumerate() {
+            prop_assert_eq!(history.get_unchecked(i as u32), *code);
+        }
     }
 }
 

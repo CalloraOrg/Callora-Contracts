@@ -14,10 +14,17 @@ pub mod replay_guard;
 pub mod timelock;
 mod types;
 
+use callora_recipient::CalloraRecipientClient;
 use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
+
+/// Maximum byte length of a developer payout name.
+///
+/// Mirrors [`callora_recipient::MAX_NAME_LEN`] so a name accepted here is
+/// always a valid lookup key in the recipient registry.
+pub const MAX_PAYOUT_NAME_LEN: u32 = callora_recipient::MAX_NAME_LEN;
 
 /// Maximum number of developer balances returned per page in paginated queries.
 pub const MAX_DEVELOPER_BALANCES_PAGE_SIZE: u32 = 100;
@@ -582,6 +589,94 @@ impl CalloraSettlement {
             .ok_or(SettlementError::UsdcTokenNotConfigured)
     }
 
+    /// Configure the recipient registry used to resolve developer payout names.
+    ///
+    /// Admin only. Setting the registry does not change any developer's payout
+    /// name; it only determines how names are resolved on future withdrawals.
+    pub fn set_recipient_registry(env: Env, caller: Address, registry: Address) {
+        caller.require_auth();
+        Self::bump_instance(&env);
+        let admin = Self::get_admin(env.clone()).unwrap();
+        if caller != admin {
+            env.panic_with_error(SettlementError::Unauthorized);
+        }
+        if registry == env.current_contract_address() {
+            env.panic_with_error(SettlementError::InvalidRecipient);
+        }
+        env.storage()
+            .instance()
+            .set(&StorageKey::RecipientRegistry, &registry);
+    }
+
+    /// Return the configured recipient registry address, if any.
+    pub fn get_recipient_registry(env: Env) -> Option<Address> {
+        Self::bump_instance(&env);
+        env.storage().instance().get(&StorageKey::RecipientRegistry)
+    }
+
+    /// Configure the recipient registry name used for this developer's
+    /// withdrawals.
+    ///
+    /// The developer must authorize the call. When a withdrawal is later made
+    /// with `to = None`, the settlement contract resolves this name through the
+    /// configured registry and pays the address currently bound to it, so the
+    /// registry admin can rotate the destination without the developer
+    /// submitting a new address.
+    ///
+    /// Returns [`SettlementError::InvalidRecipient`] when the name is empty or
+    /// longer than [`MAX_PAYOUT_NAME_LEN`].
+    pub fn set_payout_name(
+        env: Env,
+        developer: Address,
+        name: soroban_sdk::String,
+    ) -> Result<(), SettlementError> {
+        developer.require_auth();
+        Self::bump_instance(&env);
+        if name.is_empty() || name.len() > MAX_PAYOUT_NAME_LEN {
+            return Err(SettlementError::InvalidRecipient);
+        }
+
+        let key = StorageKey::PayoutName(developer.clone());
+        env.storage().persistent().set(&key, &name);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+        events::emit_payout_name_set(&env, &developer, &name);
+        Ok(())
+    }
+
+    /// Remove the developer's configured payout name.
+    ///
+    /// The developer must authorize the call. Subsequent withdrawals with
+    /// `to = None` pay the developer directly again.
+    pub fn clear_payout_name(env: Env, developer: Address) -> Result<(), SettlementError> {
+        developer.require_auth();
+        Self::bump_instance(&env);
+        let key = StorageKey::PayoutName(developer.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            events::emit_payout_name_cleared(&env, &developer);
+        }
+        Ok(())
+    }
+
+    /// Return the developer's configured payout name, if any.
+    pub fn get_payout_name(env: Env, developer: Address) -> Option<soroban_sdk::String> {
+        Self::bump_instance(&env);
+        let key = StorageKey::PayoutName(developer);
+        let name: Option<soroban_sdk::String> = env.storage().persistent().get(&key);
+        if name.is_some() {
+            env.storage().persistent().extend_ttl(
+                &key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+        name
+    }
+
     /// Withdraw developer balance as USDC to a designated recipient.
     ///
     /// Requires the developer to authorize the request and the claim to pass
@@ -710,6 +805,49 @@ impl CalloraSettlement {
                 PERSISTENT_BUMP_AMOUNT,
             );
         }
+        let payout_key = StorageKey::PayoutName(developer.clone());
+        if env.storage().persistent().has(&payout_key) {
+            env.storage().persistent().extend_ttl(
+                &payout_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+    }
+
+    /// Resolve the address that should receive a withdrawal.
+    ///
+    /// Precedence: an explicit `to` argument wins; otherwise a configured
+    /// payout name is looked up in the recipient registry; otherwise the
+    /// developer is paid directly. Read-only, so `simulate_claim` and the real
+    /// withdrawal always agree.
+    fn resolve_recipient(
+        env: &Env,
+        developer: &Address,
+        to: Option<Address>,
+    ) -> Result<Address, SettlementError> {
+        if let Some(recipient) = to {
+            return Ok(recipient);
+        }
+
+        let name: Option<soroban_sdk::String> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::PayoutName(developer.clone()));
+        let Some(name) = name else {
+            return Ok(developer.clone());
+        };
+
+        let registry: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::RecipientRegistry)
+            .ok_or(SettlementError::RecipientRegistryNotSet)?;
+        let registry_client = CalloraRecipientClient::new(env, &registry);
+        match registry_client.try_get_recipient(&name) {
+            Ok(Ok(record)) => Ok(record.address),
+            _ => Err(SettlementError::PayoutNameNotFound),
+        }
     }
 
     /// Simulate a developer claim without side effects.
@@ -759,7 +897,7 @@ impl CalloraSettlement {
             return Err(SettlementError::AmountNotPositive);
         }
 
-        let recipient = to.unwrap_or_else(|| developer.clone());
+        let recipient = Self::resolve_recipient(env, developer, to)?;
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
             env.panic_with_error(SettlementError::InvalidRecipient);

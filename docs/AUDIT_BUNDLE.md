@@ -15,8 +15,8 @@ cargo build
 # Run all tests
 cargo test
 
-# Generate coverage report (requires cargo-tarpaulin)
-//scripts/coverage.sh
+# Generate coverage report (requires cargo-llvm-cov)
+./scripts/coverage.sh
 
 # Build WASM binaries for deployment
 cargo build --target wasm32-unknown-unknown --release -p callora-vault
@@ -54,9 +54,10 @@ Callora Contracts is a Soroban (Stellar) smart contract suite for an API marketp
    rustup target add wasm32-unknown-unknown
    ```
 
-4. **cargo-tarpaulin** (for coverage reports)
+4. **cargo-llvm-cov** (for coverage reports)
    ```bash
-   cargo install cargo-tarpaulin
+   rustup component add llvm-tools-preview
+   cargo install cargo-llvm-cov
    ```
 
 ### System Requirements
@@ -137,30 +138,42 @@ cargo test test_deposit_success
 
 ### Test Coverage
 
-The project enforces **95% minimum line coverage** on all code.
+Coverage is measured with `cargo-llvm-cov` and reported per crate. The
+workspace currently measures roughly 95% line coverage; the repository does
+**not** enforce a hard minimum by default because roughly 170 legacy tests are
+`#[ignore]`d (see `docs/KNOWN_ISSUES.md`), so the number is a lower bound until
+those are revived. CI can enforce a floor by passing `--fail-under-lines <N>`
+(or by setting `COVERAGE_FAIL_UNDER_LINES`).
 
 #### Generate Coverage Report
 
 ```bash
-# Automated coverage with enforcement
-//scripts/coverage.sh
+# Automated coverage report (requires cargo-llvm-cov)
+./scripts/coverage.sh
 
-# Manual coverage generation
-cargo tarpaulin
+# Also write the interactive HTML report
+./scripts/coverage.sh --html
+
+# Enforce a minimum line-coverage percentage
+./scripts/coverage.sh --fail-under-lines 80
 ```
 
 #### Coverage Output
 
-Reports are generated in the `coverage/` directory:
-- `coverage/tarpaulin-report.html` - Interactive HTML report
-- `coverage/cobertura.xml` - XML format for CI systems
+Reports are generated under `target/`:
+- `target/lcov.info` - LCOV report for CI and third-party tools
+- `target/coverage-summary.txt` - per-file text summary
+- `target/coverage-crates.txt` - per-crate text summary
+- `target/coverage/html/` - Interactive HTML report (written with `--html`)
 
 #### Coverage Requirements
 
-- **Minimum threshold**: 95% line coverage
-- **Enforcement**: CI fails if coverage drops below threshold
-- **Scope**: All contract code in `contracts/*/src/`
-- **Exclusions**: Build scripts, generated code
+- **Minimum threshold**: none by default; opt in with `--fail-under-lines` or
+  `COVERAGE_FAIL_UNDER_LINES`
+- **Enforcement**: the script exits non-zero when the requested floor is not met
+- **Scope**: all workspace crates under `contracts/*/src/`
+- **Exclusions**: unit-test modules, integration-test crates and Kani proof
+  harnesses (`--ignore-filename-regex 'test|tests/|kani_proofs'`)
 
 ### Test Categories
 
@@ -309,7 +322,7 @@ When reviewing pull requests that affect security-sensitive areas, auditors shou
 
 ### Testing Evidence
 - [ ] **Test Results**: All tests passing with output logs
-- [ ] **Coverage Report**: Maintained or improved coverage (≥95%)
+- [ ] **Coverage Report**: Measured with `./scripts/coverage.sh`; no regression in reported totals
 - [ ] **Edge Case Testing**: Specific tests for security boundaries
 
 ### Security Analysis

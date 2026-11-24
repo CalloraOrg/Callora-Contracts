@@ -1,11 +1,13 @@
 use crate::{
-    events, CalloraRecipient, CalloraRecipientClient, RecipientError, RecipientUpdatedEvent,
-    StorageKey, INSTANCE_BUMP_AMOUNT, LEDGERS_PER_DAY, MAX_PAGE_SIZE, PERSISTENT_BUMP_AMOUNT,
-    PERSISTENT_BUMP_THRESHOLD,
+    events, CalloraRecipient, CalloraRecipientClient, RecipientError, RecipientRecord,
+    RecipientUpdatedEvent, StorageKey, INSTANCE_BUMP_AMOUNT, LEDGERS_PER_DAY, MAX_BATCH_SIZE,
+    MAX_PAGE_SIZE, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
 };
 use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{Address, Env, IntoVal, String as SorobanString, Symbol};
+use soroban_sdk::{
+    Address, Env, IntoVal, String as SorobanString, Symbol, TryFromVal, Vec as SorobanVec,
+};
 
 /// Helper to create an Env and register the contract, returning (env, admin, client).
 fn setup() -> (Env, Address, CalloraRecipientClient<'static>) {
@@ -700,6 +702,191 @@ fn test_plan_scenario_7_unauthorized_register_or_update() {
 
     let err_upd = client.try_update_recipient(&outsider, &r_name, &addr2);
     assert!(err_upd.is_err(), "unauthorized update must fail");
+}
+
+// ---------------------------------------------------------------------------
+// batch_register_recipients tests
+// ---------------------------------------------------------------------------
+
+/// Decode `recipient_registered` records emitted at or after `from`.
+fn registered_records(env: &Env, from: u32) -> std::vec::Vec<RecipientRecord> {
+    let all = env.events().all();
+    let mut out = std::vec::Vec::new();
+    for i in from..all.len() {
+        let (_, _, data) = all.get(i).unwrap();
+        if let Ok(record) = RecipientRecord::try_from_val(env, &data) {
+            out.push(record);
+        }
+    }
+    out
+}
+
+#[test]
+fn batch_register_recipients_happy_path() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let n_a = name(&env, "alpha");
+    let n_b = name(&env, "beta");
+    let n_c = name(&env, "gamma");
+    let a_a = Address::generate(&env);
+    let a_b = Address::generate(&env);
+    let a_c = Address::generate(&env);
+
+    let entries = SorobanVec::from_array(
+        &env,
+        [
+            (n_a.clone(), a_a.clone()),
+            (n_b.clone(), a_b.clone()),
+            (n_c.clone(), a_c.clone()),
+        ],
+    );
+
+    client.batch_register_recipients(&admin, &entries);
+
+    // Capture events before any view call replaces the invocation buffer.
+    let records = registered_records(&env, 0);
+
+    assert_eq!(client.get_recipient_count(), 3);
+    assert_eq!(client.get_recipient(&n_a).address, a_a);
+    assert_eq!(client.get_recipient(&n_b).address, a_b);
+    assert_eq!(client.get_recipient(&n_c).address, a_c);
+
+    let page = client.list_recipients(&0, &10);
+    assert_eq!(page.len(), 3);
+    assert_eq!(page.get(0).unwrap(), n_a);
+    assert_eq!(page.get(1).unwrap(), n_b);
+    assert_eq!(page.get(2).unwrap(), n_c);
+
+    // One event per entry, in input order.
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].name, n_a);
+    assert_eq!(records[1].name, n_b);
+    assert_eq!(records[2].name, n_c);
+    assert_eq!(records[0].address, a_a);
+    assert_eq!(records[1].address, a_b);
+    assert_eq!(records[2].address, a_c);
+}
+
+#[test]
+fn batch_register_recipients_empty_batch_rejected() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let entries: SorobanVec<(SorobanString, Address)> = SorobanVec::new(&env);
+    let err = client.try_batch_register_recipients(&admin, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::EmptyBatch)));
+    assert_eq!(client.get_recipient_count(), 0);
+}
+
+#[test]
+fn batch_register_recipients_at_cap_succeeds() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let mut entries = SorobanVec::new(&env);
+    for i in 0..MAX_BATCH_SIZE {
+        let n = name(&env, &std::format!("b{:03}", i));
+        entries.push_back((n, Address::generate(&env)));
+    }
+
+    client.batch_register_recipients(&admin, &entries);
+    assert_eq!(client.get_recipient_count(), MAX_BATCH_SIZE);
+}
+
+#[test]
+fn batch_register_recipients_over_cap_rejected() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let mut entries = SorobanVec::new(&env);
+    for i in 0..(MAX_BATCH_SIZE + 1) {
+        let n = name(&env, &std::format!("c{:03}", i));
+        entries.push_back((n, Address::generate(&env)));
+    }
+
+    let err = client.try_batch_register_recipients(&admin, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::BatchTooLarge)));
+    assert_eq!(client.get_recipient_count(), 0);
+}
+
+#[test]
+fn batch_register_recipients_duplicate_within_batch_rejected() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let n = name(&env, "same");
+    let entries = SorobanVec::from_array(
+        &env,
+        [
+            (n.clone(), Address::generate(&env)),
+            (n, Address::generate(&env)),
+        ],
+    );
+
+    let err = client.try_batch_register_recipients(&admin, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::AlreadyRegistered)));
+    assert_eq!(client.get_recipient_count(), 0);
+}
+
+#[test]
+fn batch_register_recipients_existing_name_rejected_atomically() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let existing = name(&env, "existing");
+    client.register_recipient(&admin, &existing, &Address::generate(&env));
+
+    let fresh = name(&env, "fresh");
+    let entries = SorobanVec::from_array(
+        &env,
+        [
+            (fresh.clone(), Address::generate(&env)),
+            (existing, Address::generate(&env)),
+        ],
+    );
+
+    let err = client.try_batch_register_recipients(&admin, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::AlreadyRegistered)));
+    assert_eq!(client.get_recipient_count(), 1);
+    assert!(
+        !client.has_recipient(&fresh),
+        "a rejected batch must not register earlier entries"
+    );
+}
+
+#[test]
+fn batch_register_recipients_invalid_name_rejected_atomically() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let good = name(&env, "good");
+    let entries = SorobanVec::from_array(
+        &env,
+        [
+            (good.clone(), Address::generate(&env)),
+            (name(&env, ""), Address::generate(&env)),
+        ],
+    );
+
+    let err = client.try_batch_register_recipients(&admin, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::InvalidName)));
+    assert_eq!(client.get_recipient_count(), 0);
+    assert!(!client.has_recipient(&good));
+}
+
+#[test]
+fn batch_register_recipients_non_admin_rejected() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let outsider = Address::generate(&env);
+    let n = name(&env, "x");
+    let entries = SorobanVec::from_array(&env, [(n, Address::generate(&env))]);
+
+    let err = client.try_batch_register_recipients(&outsider, &entries);
+    assert_eq!(err, Err(Ok(RecipientError::Unauthorized)));
+    assert_eq!(client.get_recipient_count(), 0);
 }
 
 // ---------------------------------------------------------------------------

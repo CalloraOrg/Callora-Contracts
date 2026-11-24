@@ -1525,6 +1525,29 @@ remain stored, but future single and batch payments in that token are rejected.
 | topic 2 | topics   | Address | Token contract address |
 | data    | data     | Address | Token contract address |
 
+### `payout_name_set`
+
+Emitted when a developer configures the registry name used for future
+withdrawals. Resolution happens at withdrawal time, so the registry admin can
+rotate the destination without another `set_payout_name` call.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_set"` |
+| topic 1 | topics   | Address | Developer that set the name |
+| data    | data     | String  | Payout name (1-64 bytes) |
+
+### `payout_name_cleared`
+
+Emitted when a developer removes their payout name. Later withdrawals with
+`to = None` pay the developer directly again.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_cleared"` |
+| topic 1 | topics   | Address | Developer that cleared the name |
+| data    | data     | void    | Empty |
+
 ### `balance_credited`
 
 Emitted by `receive_payment()` **only** when `to_pool = false`, immediately
