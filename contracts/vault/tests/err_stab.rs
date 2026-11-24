@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Every variant is paired with its **stable numeric discriminant**.  If a
 /// discriminant changes (accidentally or intentionally), this test fails
 /// with a diff-friendly message identifying the regressed variant.
-const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
+const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 48] = [
     (1, VaultError::NotInitialized),
     (2, VaultError::AlreadyInitialized),
     (3, VaultError::Unauthorized),
@@ -66,6 +66,8 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
     (56, VaultError::SettlementCannotBeVault),
     (57, VaultError::SettlementCannotBeToken),
     (58, VaultError::ProposalExpired),
+    (59, VaultError::SettlementEqualsRevenuePool),
+    (60, VaultError::TooManyIds),
 ];
 
 /// Verify every error code in the snapshot maps to the expected discriminant.
@@ -356,4 +358,16 @@ fn test_below_min_transfer_amount_is_code_55() {
 #[test]
 fn test_proposal_expired_is_code_56() {
     assert_eq!(VaultError::ProposalExpired as u32, 58);
+}
+
+/// Verify `SettlementEqualsRevenuePool` still has discriminant 59.
+#[test]
+fn test_settlement_equals_revenue_pool_is_code_59() {
+    assert_eq!(VaultError::SettlementEqualsRevenuePool as u32, 59);
+}
+
+/// Verify `TooManyIds` still has discriminant 60.
+#[test]
+fn test_too_many_ids_is_code_60() {
+    assert_eq!(VaultError::TooManyIds as u32, 60);
 }

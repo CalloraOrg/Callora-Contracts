@@ -168,4 +168,7 @@ pub enum VaultError {
     ProposalExpired = 58,
     /// Settlement and revenue pool addresses must be distinct (code 59).
     SettlementEqualsRevenuePool = 59,
+    /// `prune_processed_requests` received more ids than [`crate::MAX_PRUNE_IDS`]
+    /// allows (code 60).  Split the work into smaller batches.
+    TooManyIds = 60,
 }
