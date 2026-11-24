@@ -809,7 +809,8 @@ impl CalloraBatchClaim {
         );
         env.storage().persistent().remove(&key);
         Self::bump_instance(&env);
-        env.events().publish((events::event_claim_expired(&env),), claimant);
+        env.events()
+            .publish((events::event_claim_expired(&env),), claimant);
         Ok(())
     }
 
@@ -1240,13 +1241,22 @@ mod tests {
         env.ledger().set_timestamp(now + 20);
         let mut batch2 = Vec::new(&env);
         batch2.push_back((claimant2.clone(), id2.clone()));
-        assert_eq!(client.try_batch_claim(&batch2), Err(Ok(BatchClaimError::ClaimExpired)));
+        assert_eq!(
+            client.try_batch_claim(&batch2),
+            Err(Ok(BatchClaimError::ClaimExpired))
+        );
         let intruder = Address::generate(&env);
-        assert_eq!(client.try_expire_claim(&intruder, &claimant2), Err(Ok(BatchClaimError::Unauthorized)));
+        assert_eq!(
+            client.try_expire_claim(&intruder, &claimant2),
+            Err(Ok(BatchClaimError::Unauthorized))
+        );
         client.expire_claim(&admin, &claimant2);
         assert_eq!(client.total_claims(), 1);
         let claimant3 = Address::generate(&env);
-        assert_eq!(client.try_add_claim(&admin, &claimant3, &10, &id2), Err(Ok(BatchClaimError::ClaimIdAlreadyUsed)));
+        assert_eq!(
+            client.try_add_claim(&admin, &claimant3, &10, &id2),
+            Err(Ok(BatchClaimError::ClaimIdAlreadyUsed))
+        );
     }
 
     #[test]

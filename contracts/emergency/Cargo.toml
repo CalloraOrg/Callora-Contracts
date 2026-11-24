@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+callora-storage-migration = { path = "../storage_migration" }
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
@@ -18,4 +19,4 @@ callora-distribute = { path = "../distribute" }
 callora-revenue-pool = { path = "../revenue_pool" }
 
 [features]
-testutils = ["soroban-sdk/testutils"]
+testutils = ["soroban-sdk/testutils", "callora-storage-migration/testutils"]
