@@ -41,17 +41,23 @@ members = [
 ]
 
 default-members = [
+    ".",
+    "contracts/admin",
+    "contracts/allowlist",
     "contracts/batch_claim",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
     "contracts/emergency",
+    "contracts/errors",
     "contracts/escrow",
+    "contracts/fee",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/hot",
     "contracts/limits",
     "contracts/migrate",
+    "contracts/recipient",
     "contracts/registry",
     "contracts/refund",
     "contracts/rescue",
