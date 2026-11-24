@@ -22,7 +22,7 @@
 //! | Event topic            | Entrypoint            | Data                                         |
 //! |------------------------|-----------------------|----------------------------------------------|
 //! | `freeze_initialized`   | `init`                | `()`                                         |
-//! | `freeze_set`           | `freeze`              | `FreezeSetEvent { reason, frozen_at }`       |
+//! | `freeze_set`           | `freeze` / `freeze_until` | `FreezeSetEvent { reason, frozen_at, freeze_until }` |
 //! | `freeze_cleared`       | `unfreeze`            | `()`                                         |
 //! | `freeze_operator_set`  | `set_freeze_operator` | `FreezeOperatorSetEvent { old, new }`        |
 //!
@@ -137,6 +137,9 @@ pub enum DataKey {
     /// The ledger timestamp (`env.ledger().timestamp()`) of the last successful
     /// `freeze()` call.
     FreezeTimestamp,
+    /// Optional ledger timestamp at which a timed freeze (`freeze_until`)
+    /// lapses automatically. Absent for indefinite freezes.
+    FreezeUntil,
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +161,16 @@ pub struct FreezeStatus {
     /// The ledger timestamp of the last `freeze()` call, or `None` if the
     /// contract was never frozen or has been unfrozen and the field cleared.
     pub frozen_at: Option<u64>,
+    /// The ledger timestamp at which a timed freeze lapses, or `None` for an
+    /// indefinite freeze (or before the first freeze / after `unfreeze`).
+    ///
+    /// When `Some(t)`, the freeze is active only while
+    /// `env.ledger().timestamp() < t`; at `now >= t` the freeze has lapsed and
+    /// `frozen` reports `false` even though the stored flag is still set.
+    /// This field is additive: indexers that ignore unknown fields are
+    /// unaffected, but deserializers expecting the old three-field layout
+    /// must be updated.
+    pub until: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,12 +233,33 @@ impl CalloraFreeze {
     }
 
     /// Return `true` if the contract is currently frozen.
+    ///
+    /// A timed freeze (`freeze_until`) reports `false` once
+    /// `env.ledger().timestamp() >= until`, without requiring a state write.
     pub fn is_frozen(env: Env) -> bool {
         Self::bump_instance(&env);
-        env.storage()
+        Self::frozen_active(&env)
+    }
+
+    /// Read the persisted frozen flag and apply the timed-freeze lapse rule.
+    ///
+    /// Returns `false` when the flag is unset, or when a `FreezeUntil`
+    /// deadline exists and `now >= until`. No storage writes are performed,
+    /// so a lapsed freeze remains "frozen" in storage until the next
+    /// `freeze` / `unfreeze` overwrites or clears it.
+    fn frozen_active(env: &Env) -> bool {
+        let frozen = env
+            .storage()
             .instance()
             .get::<_, bool>(&DataKey::Frozen)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if !frozen {
+            return false;
+        }
+        match env.storage().instance().get::<_, u64>(&DataKey::FreezeUntil) {
+            Some(until) => env.ledger().timestamp() < until,
+            None => true,
+        }
     }
 
     /// Return a snapshot of the current freeze state, last reason, and
@@ -242,17 +276,15 @@ impl CalloraFreeze {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(FreezeError::NotInitialized);
         }
-        let frozen = env
-            .storage()
-            .instance()
-            .get::<_, bool>(&DataKey::Frozen)
-            .unwrap_or(false);
+        let frozen = Self::frozen_active(&env);
         let reason: Option<Symbol> = env.storage().instance().get(&DataKey::FreezeReason);
         let frozen_at: Option<u64> = env.storage().instance().get(&DataKey::FreezeTimestamp);
+        let until: Option<u64> = env.storage().instance().get(&DataKey::FreezeUntil);
         Ok(FreezeStatus {
             frozen,
             reason,
             frozen_at,
+            until,
         })
     }
 
@@ -272,6 +304,48 @@ impl CalloraFreeze {
     /// * [`FreezeError::Unauthorized`] — caller is neither admin nor operator.
     /// * [`FreezeError::AlreadyFrozen`] — contract is already frozen.
     pub fn freeze(env: Env, caller: Address, reason: Symbol) -> Result<(), FreezeError> {
+        Self::do_freeze(env, caller, reason, None)
+    }
+
+    /// Activate the circuit-breaker for a limited time.
+    ///
+    /// Identical to [`CalloraFreeze::freeze`] except the freeze lapses
+    /// automatically once `env.ledger().timestamp() >= until`: `is_frozen`
+    /// and `get_freeze_status` then report the contract as unfrozen with no
+    /// admin action and no state write required. A lapsed freeze does not
+    /// block a subsequent `freeze` / `freeze_until` call.
+    ///
+    /// `unfreeze` on a lapsed freeze returns [`FreezeError::NotFrozen`],
+    /// since the circuit-breaker is already inactive; the stale stored flag
+    /// is simply overwritten by the next successful `freeze`.
+    ///
+    /// # Arguments
+    /// * `caller` — Must be the admin or freeze operator; must authorise.
+    /// * `reason` — Opaque label persisted in storage and emitted in the event.
+    /// * `until` — Ledger timestamp deadline; must be strictly greater than
+    ///   `env.ledger().timestamp()`.
+    ///
+    /// # Errors
+    /// * [`FreezeError::Unauthorized`] — caller is neither admin nor operator.
+    /// * [`FreezeError::AlreadyFrozen`] — contract is already frozen.
+    /// * [`FreezeError::FreezeUntilNotInFuture`] — `until <= now`.
+    pub fn freeze_until(
+        env: Env,
+        caller: Address,
+        reason: Symbol,
+        until: u64,
+    ) -> Result<(), FreezeError> {
+        Self::do_freeze(env, caller, reason, Some(until))
+    }
+
+    /// Shared implementation for `freeze` (indefinite) and `freeze_until`
+    /// (timed). `until = None` clears any previously stored deadline.
+    fn do_freeze(
+        env: Env,
+        caller: Address,
+        reason: Symbol,
+        until: Option<u64>,
+    ) -> Result<(), FreezeError> {
         caller.require_auth();
         Self::bump_instance(&env);
         let admin = Self::get_admin(env.clone())?;
@@ -281,7 +355,12 @@ impl CalloraFreeze {
         if !is_authorized {
             return Err(FreezeError::Unauthorized);
         }
-        if Self::is_frozen(env.clone()) {
+        if let Some(deadline) = until {
+            if deadline <= env.ledger().timestamp() {
+                return Err(FreezeError::FreezeUntilNotInFuture);
+            }
+        }
+        if Self::frozen_active(&env) {
             return Err(FreezeError::AlreadyFrozen);
         }
 
@@ -293,8 +372,15 @@ impl CalloraFreeze {
         env.storage()
             .instance()
             .set(&DataKey::FreezeTimestamp, &frozen_at);
+        match until {
+            Some(deadline) => env
+                .storage()
+                .instance()
+                .set(&DataKey::FreezeUntil, &deadline),
+            None => env.storage().instance().remove(&DataKey::FreezeUntil),
+        }
 
-        events::emit_freeze_set(&env, &caller, reason, frozen_at);
+        events::emit_freeze_set(&env, &caller, reason, frozen_at, until);
         Ok(())
     }
 
@@ -313,12 +399,13 @@ impl CalloraFreeze {
         if caller != admin {
             return Err(FreezeError::Unauthorized);
         }
-        if !Self::is_frozen(env.clone()) {
+        if !Self::frozen_active(&env) {
             return Err(FreezeError::NotFrozen);
         }
         env.storage().instance().set(&DataKey::Frozen, &false);
         env.storage().instance().remove(&DataKey::FreezeReason);
         env.storage().instance().remove(&DataKey::FreezeTimestamp);
+        env.storage().instance().remove(&DataKey::FreezeUntil);
 
         events::emit_freeze_cleared(&env, &caller);
         Ok(())
@@ -367,4 +454,5 @@ impl CalloraFreeze {
 }
 
 #[cfg(test)]
+mod test;
 mod test;

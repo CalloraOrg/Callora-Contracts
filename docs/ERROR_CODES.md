@@ -182,3 +182,4 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+| 7 | `FreezeUntilNotInFuture` | Freeze | `freeze_until` deadline is not in the future (`until <= now`) |
