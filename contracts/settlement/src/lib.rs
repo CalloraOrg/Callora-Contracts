@@ -14,7 +14,9 @@ pub mod replay_guard;
 pub mod timelock;
 mod types;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+#[cfg(any(test, feature = "testutils"))]
+use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
+use soroban_sdk::{contract, contractclient, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
 
 /// Maximum number of items allowed in a single `batch_receive_payment` call.
 pub const MAX_BATCH_SIZE: u32 = 50;
@@ -42,6 +44,39 @@ pub use timelock::{
     UPGRADE_TIMELOCK_SECONDS,
 };
 pub use types::*;
+
+// ---------------------------------------------------------------------------
+// Freeze client interface (shared with vault)
+// ---------------------------------------------------------------------------
+
+/// Minimal cross-contract interface for the CalloraFreeze circuit-breaker.
+///
+/// Settlement consults this before `receive_payment`, `batch_receive_payment`,
+/// and `withdraw_developer_balance`.  Fail-closed: any error from the call is
+/// treated as frozen.
+#[contractclient(name = "FreezeClient")]
+pub trait FreezeInterface {
+    /// Return `true` when the system is in the frozen state.
+    fn is_frozen(env: Env) -> bool;
+}
+
+/// Internal helper: fail with [`SettlementError::SystemFrozen`] when a freeze
+/// contract is configured and reports `is_frozen() == true`.
+///
+/// When no freeze contract is configured this is a no-op (unchanged behaviour).
+fn check_not_frozen(env: &Env) -> Result<(), SettlementError> {
+    let maybe_fc: Option<Address> = env
+        .storage()
+        .instance()
+        .get(&StorageKey::FreezeContract);
+    if let Some(fc) = maybe_fc {
+        let freeze_client = FreezeClient::new(env, &fc);
+        if freeze_client.is_frozen() {
+            return Err(SettlementError::SystemFrozen);
+        }
+    }
+    Ok(())
+}
 
 #[contract]
 pub struct CalloraSettlement;
@@ -190,6 +225,9 @@ impl CalloraSettlement {
             env.panic_with_error(SettlementError::AmountNotPositive);
         }
 
+        // Global freeze circuit-breaker: fail closed if frozen.
+        check_not_frozen(&env).unwrap_or_else(|e| env.panic_with_error(e));
+
         // Replay guard: reject duplicate / out-of-order settlement claims.
         if to_pool {
             replay_guard::check_pool(&env, ledger_seq).unwrap_or_else(|e| env.panic_with_error(e));
@@ -326,6 +364,9 @@ impl CalloraSettlement {
         if n > MAX_BATCH_SIZE {
             env.panic_with_error(SettlementError::BatchTooLarge);
         }
+
+        // Global freeze circuit-breaker: fail closed if frozen.
+        check_not_frozen(&env).unwrap_or_else(|e| env.panic_with_error(e));
 
         // Validate all amounts before touching state.
         for item in items.iter() {
@@ -577,6 +618,75 @@ impl CalloraSettlement {
             .ok_or(SettlementError::UsdcTokenNotConfigured)
     }
 
+    // -----------------------------------------------------------------------
+    // Freeze contract configuration (Issue #1527)
+    // -----------------------------------------------------------------------
+
+    /// Set or clear the optional freeze contract address.
+    ///
+    /// When set, `receive_payment`, `batch_receive_payment`, and
+    /// `withdraw_developer_balance` call `is_frozen()` on the freeze contract
+    /// before executing. If the system is frozen these operations fail with
+    /// [`SettlementError::SystemFrozen`] without changing any state.
+    ///
+    /// Pass `None` to remove the freeze contract (disables global freeze checks).
+    ///
+    /// # Authorization
+    /// Only the current admin may call this function.
+    ///
+    /// # Validation
+    /// - The freeze contract address cannot be the settlement contract itself.
+    ///
+    /// # Events
+    /// Emits `freeze_contract_set` with the caller and new address.
+    pub fn set_freeze_contract(
+        env: Env,
+        caller: Address,
+        freeze_contract: Option<Address>,
+    ) -> Result<(), SettlementError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone());
+        if caller != admin {
+            return Err(SettlementError::Unauthorized);
+        }
+
+        if let Some(ref fc) = freeze_contract {
+            if *fc == env.current_contract_address() {
+                return Err(SettlementError::Unauthorized);
+            }
+        }
+
+        match &freeze_contract {
+            Some(fc) => env
+                .storage()
+                .instance()
+                .set(&StorageKey::FreezeContract, fc),
+            None => {
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::FreezeContract);
+            }
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "freeze_contract_set"), caller),
+            freeze_contract,
+        );
+        Ok(())
+    }
+
+    /// Return the configured freeze contract address, if any.
+    ///
+    /// Returns `None` when no freeze contract has been configured. No auth required.
+    pub fn get_freeze_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::FreezeContract)
+    }
+
     /// Withdraw developer balance as USDC to a designated recipient.
     ///
     /// Requires the developer to authorize the request and the claim to pass
@@ -753,6 +863,9 @@ impl CalloraSettlement {
         if amount <= 0 {
             return Err(SettlementError::AmountNotPositive);
         }
+
+        // Global freeze circuit-breaker: fail closed if frozen.
+        check_not_frozen(&env)?;
 
         let recipient = to.unwrap_or_else(|| developer.clone());
         let contract_address = env.current_contract_address();
@@ -1966,3 +2079,5 @@ mod test_ttl_bump;
 mod test_upgrade_timelock;
 #[cfg(test)]
 mod test_views;
+#[cfg(test)]
+mod test_freeze;

@@ -73,6 +73,7 @@ must not be reassigned once released.
 | 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
 | 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
 | 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
+| 60 | `Frozen` | Vault | System is globally frozen via the configured freeze contract |
 
 ## Settlement
 
@@ -129,6 +130,7 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
 
 ## Revenue Pool
 

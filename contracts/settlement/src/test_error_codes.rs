@@ -57,6 +57,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (49, SettlementError::LengthMismatch),
         (50, SettlementError::InvalidCursor),
         (51, SettlementError::TooManyResults),
+        (52, SettlementError::SystemFrozen),
     ];
 
     let mut seen = BTreeSet::new();
@@ -68,7 +69,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 #[test]
@@ -123,6 +124,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |",
         "| 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |",
         "| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |",
+        "| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |",
     ];
 
     for line in expected_lines {

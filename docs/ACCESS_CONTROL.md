@@ -38,6 +38,8 @@ The Callora Vault implements role-based access control for deposit operations to
 | `pause` | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `nuclear_pause` | ❌ | ❌ | ❌ | ❌ | Admin only |
 | `unpause` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `set_freeze_contract` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `get_freeze_contract` | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ### Security Model
 - **Two-Step Owner Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
@@ -46,6 +48,7 @@ The Callora Vault implements role-based access control for deposit operations to
 - **Restricted Depositors**: Only owner and explicitly allowed depositors can increase vault balance.
 - **Multisig-Guarded Nuclear Pause**: `nuclear_pause(caller)` accepts only the current admin address and calls `caller.require_auth()`, so deployments that set admin to a Stellar multisig account get native threshold enforcement for the emergency pause.
 - **Nonce-Bound Authorized-Caller Rotation**: `set_authorized_caller` requires the caller to supply the current monotonic nonce (see below), preventing a leaked owner signature from being replayed to reinstate a stale `authorized_caller`.
+- **Global Freeze Circuit Breaker**: An optional freeze contract address may be configured by the owner via `set_freeze_contract`. When set, `deduct` and `batch_deduct` call `is_frozen()` on the freeze contract before executing. If the system is frozen, both operations fail with `VaultError::Frozen` without changing any state. When no freeze contract is configured, behaviour is exactly unchanged (no-op). If the cross-contract call itself fails, the vault fails closed. Clear the address with `set_freeze_contract(owner, None)` to restore unchecked behaviour.
 
 ### Authorized-Caller Replay Protection
 
@@ -142,6 +145,8 @@ is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MI
 | `freeze_developer` | Admin | Freezing developer withdrawals |
 | `unfreeze_developer` | Admin | Unfreezing developer withdrawals |
 | `set_price` / `remove_price` | Admin | Price registry management |
+| `set_freeze_contract` | Admin | Configure the global freeze circuit-breaker contract address |
+| `get_freeze_contract` | Anyone | Read the configured freeze contract address |
 
 > [!NOTE]
 > Read-only view entrypoints (`get_admin`, `get_vault`, `get_global_pool`, `get_total_received`, `get_developer_balance`, `get_developer_min_balance`, `get_minimum_balance`, `get_developer_claim_window`, `get_daily_withdraw_cap`, `get_withdrawal_today`, `get_pending_admin`, `get_balance_migration`, `get_usdc_token`, `get_version`, `version`, `migration_storage_version`, `is_developer_frozen`, `get_price`, `simulate_claim`) do not require authentication and are accessible by any caller.
@@ -161,6 +166,7 @@ is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MI
 - **Per-Developer Claim Windows**: Admins may configure inclusive ledger timestamp windows that restrict when each developer can claim accrued settlement balance. Developers without a configured window remain unrestricted.
 - **Restricted Views**: Sensitive batch queries like `get_all_developer_balances` are restricted to the admin to prevent unnecessary exposure of the full ledger via the contract interface.
 - **Cancellation Safety**: The admin can invoke `cancel_admin_transfer` to clear a mistaken nomination.
+- **Global Freeze Circuit Breaker**: An optional freeze contract address may be configured by the admin via `set_freeze_contract`. When set, `receive_payment`, `batch_receive_payment`, and `withdraw_developer_balance` call `is_frozen()` on the freeze contract before executing. If frozen, all three operations fail with `SettlementError::SystemFrozen` without changing any state. When no freeze contract is configured, behaviour is exactly unchanged. If the cross-contract call itself fails, the settlement fails closed. Clear the address with `set_freeze_contract(admin, None)` to restore unchecked behaviour.
 
 ---
 

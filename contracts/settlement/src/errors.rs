@@ -59,6 +59,7 @@ use soroban_sdk::contracterror;
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
 /// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
+/// | 52   | SystemFrozen                 | System is globally frozen via the configured freeze contract |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -130,4 +131,6 @@ pub enum SettlementError {
     /// `get_all_developer_balances` index exceeds
     /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
     TooManyResults = 51,
+    /// System is globally frozen via the configured freeze contract (code 52).
+    SystemFrozen = 52,
 }
