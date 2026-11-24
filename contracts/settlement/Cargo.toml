@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
+callora-recipient = { path = "../recipient" }
 soroban-sdk = { workspace = true }
 callora-validators = { path = "../validators" }
 

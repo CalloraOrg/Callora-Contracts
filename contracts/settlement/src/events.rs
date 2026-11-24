@@ -24,7 +24,7 @@
 //!    byte-identity of the topic string.
 //! 4. Update `EVENT_SCHEMA.md` and `docs/EVENT_TOPICS.md`.
 
-use soroban_sdk::{Address, BytesN, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, String, Symbol};
 
 use crate::limits::MinBalanceChanged;
 use crate::types::{
@@ -95,6 +95,30 @@ pub fn emit_supported_token_removed(env: &Env, caller: &Address, token: &Address
         ),
         token.clone(),
     );
+}
+
+/// Returns the Symbol for the `payout_name_set` event topic.
+pub fn event_payout_name_set(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_set")
+}
+
+/// Emit `payout_name_set` when a developer configures a registry payout name.
+pub fn emit_payout_name_set(env: &Env, developer: &Address, name: &String) {
+    env.events().publish(
+        (event_payout_name_set(env), developer.clone()),
+        name.clone(),
+    );
+}
+
+/// Returns the Symbol for the `payout_name_cleared` event topic.
+pub fn event_payout_name_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_cleared")
+}
+
+/// Emit `payout_name_cleared` when a developer removes their payout name.
+pub fn emit_payout_name_cleared(env: &Env, developer: &Address) {
+    env.events()
+        .publish((event_payout_name_cleared(env), developer.clone()), ());
 }
 
 /// Returns the canonical Symbol for the `deduction_recorded` event topic.

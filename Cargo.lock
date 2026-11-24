@@ -310,6 +310,8 @@ dependencies = [
 name = "callora-emergency"
 version = "0.1.0"
 dependencies = [
+ "callora-distribute",
+ "callora-revenue-pool",
  "soroban-sdk",
 ]
 
@@ -409,6 +411,7 @@ dependencies = [
 name = "callora-settlement"
 version = "0.1.0"
 dependencies = [
+ "callora-recipient",
  "proptest",
  "soroban-sdk",
 ]
