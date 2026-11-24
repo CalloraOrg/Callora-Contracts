@@ -150,14 +150,19 @@ impl CalloraSettlement {
     ///
     /// Intended for owner-driven pruning of vault request IDs after the vault
     /// has explicitly removed the corresponding marker from its own storage.
-    /// This is a no-op if the request was never recorded.
-    pub fn clear_deduction_request(env: Env, request_id: u64) {
-        let vault = Self::get_vault(env.clone()).unwrap();
+    /// Extends instance TTL and emits `deduction_request_cleared` when a
+    /// marker is removed; this is a no-op (no event) if the request was never
+    /// recorded.
+    pub fn clear_deduction_request(env: Env, request_id: u64) -> Result<(), SettlementError> {
+        let vault = Self::get_vault(env.clone())?;
         vault.require_auth();
+        Self::bump_instance(&env);
         let request_key = StorageKey::DeductionRequest(request_id);
         if env.storage().persistent().has(&request_key) {
             env.storage().persistent().remove(&request_key);
+            events::emit_deduction_request_cleared(&env, request_id);
         }
+        Ok(())
     }
 
     /// Receive payment from vault and credit to pool or developer balance.

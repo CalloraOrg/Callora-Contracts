@@ -131,6 +131,17 @@ pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
     env.events().publish((event_deduction_recorded(env),), data);
 }
 
+/// Returns the canonical Symbol for the `deduction_request_cleared` event topic.
+pub fn event_deduction_request_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "deduction_request_cleared")
+}
+
+/// Emit `deduction_request_cleared` when a recorded deduction request marker is removed.
+pub fn emit_deduction_request_cleared(env: &Env, request_id: u64) {
+    env.events()
+        .publish((event_deduction_request_cleared(env),), request_id);
+}
+
 /// Returns the Symbol for the `"balance_credited"` event topic.
 ///
 /// **What**: Returns the canonical symbol for balance credited events.
@@ -832,6 +843,15 @@ mod tests {
         assert_eq!(
             event_deduction_recorded(&env),
             Symbol::new(&env, "deduction_recorded")
+        );
+    }
+
+    #[test]
+    fn test_event_deduction_request_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_deduction_request_cleared(&env),
+            Symbol::new(&env, "deduction_request_cleared")
         );
     }
 
