@@ -1401,6 +1401,20 @@ and extended using `PERSISTENT_BUMP_THRESHOLD` / `PERSISTENT_BUMP_AMOUNT`
 treated as unused IDs. Markers begin with this upgrade; historical deductions
 made before replay protection was introduced cannot be deduplicated retroactively.
 
+### `deduction_request_cleared`
+
+Emitted once when `clear_deduction_request(request_id)` removes an existing
+`DeductionRequest(request_id)` persistent replay marker. Clearing an unknown
+or already-cleared `request_id` is a no-op and emits no event.
+
+| Index | Location | Type | Description |
+|-------|----------|------|-------------|
+| topic 0 | topics | Symbol | `"deduction_request_cleared"` |
+| `request_id` | data | u64 | Deduction request identifier whose replay marker was removed |
+
+Only the configured vault may authorize this entrypoint. Calling before
+initialization returns `NotInitialized` (1).
+
 ### `initialized`
 
 Emitted once by `init()` when the settlement contract is first configured.
