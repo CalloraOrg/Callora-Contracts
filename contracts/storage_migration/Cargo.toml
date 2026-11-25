@@ -18,8 +18,10 @@ proptest = "1.4"
 # Workspace hosts that embed StorageMigrationValidator. Used by the
 # cross-host key-collision regression test.
 callora-checkpoint = { path = "../checkpoint" }
+callora-emergency = { path = "../emergency" }
 callora-migrate = { path = "../migrate" }
 callora-revenue-pool = { path = "../revenue_pool" }
+callora-stake = { path = "../stake" }
 callora-yield = { path = "../yield" }
 
 [features]

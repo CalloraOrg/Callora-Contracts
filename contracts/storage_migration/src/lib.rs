@@ -49,8 +49,13 @@
 //!   [`StorageMigrationError::BackupMissing`]).
 
 pub mod error;
+pub mod migration_stub;
 
 pub use error::StorageMigrationError;
+pub use migration_stub::{
+    authorize_upgrade, get_current, init, is_upgrade_authorized, migrate, require_admin,
+    validate_before_upgrade, version, AuthorizeOptions, MigrateOptions, MigrationKeys, StubError,
+};
 
 use soroban_sdk::{contracttype, Bytes, BytesN, Env};
 
@@ -82,6 +87,7 @@ pub fn zero_layout_hash(env: &Env) -> BytesN<32> {
 /// We deliberately use Instance storage: the version marker, schema hash, and
 /// upgrade authorization are singletons consulted on every upgrade path and
 /// must never be independently evictable from Persistent/Temporary tiers.
+#[allow(clippy::enum_variant_names)]
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StorageKey {

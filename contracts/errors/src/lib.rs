@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    Address, Env, String, Symbol, contract, contracterror, contractimpl, contracttype,
+    Address, Env, String, Symbol, Vec, contract, contracterror, contractimpl, contracttype,
 };
 
 mod events;
@@ -13,6 +13,13 @@ mod events;
 /// and event payloads predictable. Matches the 256-byte convention used by
 /// `MAX_METADATA_LEN` (registry) and `MAX_MESSAGE_LEN` (revenue_pool).
 pub const MAX_DESC_LEN: u32 = 256;
+
+/// Maximum number of error codes retained per user by [`ErrorsContract::log_error`].
+///
+/// The history is a bounded ring buffer: once it holds
+/// [`MAX_ERROR_HISTORY`] entries, logging a new code evicts the oldest one.
+/// Keeping the bound small makes per-user temporary storage predictable.
+pub const MAX_ERROR_HISTORY: u32 = 8;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -37,6 +44,9 @@ pub enum DataKey {
     Admin,
     ErrorReg(u32),
     RecentErr(Address),
+    /// Bounded oldest-to-newest history of codes logged by a user.
+    /// Appended last so existing XDR discriminants stay stable.
+    ErrHistory(Address),
 }
 
 /// Ledger cadence used across the workspace for TTL policy.
@@ -52,15 +62,16 @@ const LEDGERS_PER_DAY: u32 = 17_280;
 const INSTANCE_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
 const INSTANCE_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 60;
 
-/// Lifetime of the temporary `RecentErr(Address)` entry — the most recent code
-/// logged by a user.
+/// Lifetime of the temporary `RecentErr(Address)` and `ErrHistory(Address)`
+/// entries — the most recent code and the bounded history logged by a user.
 ///
-/// This is deliberately short: the value exists only for short-term debugging
-/// and rate-limiting feedback, so it is written with a ~8-minute lifetime
+/// This is deliberately short: the values exist only for short-term debugging
+/// and rate-limiting feedback, so they are written with a ~8-minute lifetime
 /// (`RECENT_ERR_TTL_LEDGERS` ledgers at 5 s/ledger) and left to expire
-/// naturally. It is intentionally *not* refreshed on reads and must not be
+/// naturally. They are intentionally *not* refreshed on reads and must not be
 /// relied upon as durable state — use the persistent `ErrorReg(code)` registry
-/// for anything that needs to survive.
+/// for anything that needs to survive. Both entries share the same TTL so the
+/// history and the most-recent value expire together.
 const RECENT_ERR_TTL_LEDGERS: u32 = 100;
 
 /// TTL policy for the persistent error registry.
@@ -215,15 +226,20 @@ impl ErrorsContract {
     /// Only codes previously defined by [`Self::register_error`] are accepted;
     /// anything else returns [`Error::UnknownErrorCode`] so consumers can trust
     /// that every logged code resolves to a known description. On success the
-    /// code is stored as the user's most recent error and an `error_logged`
+    /// code is stored as the user's most recent error, appended to their
+    /// bounded history (see [`Self::get_error_history`]), and an `error_logged`
     /// event is published.
+    ///
+    /// Both temporary entries expire after roughly eight minutes
+    /// (`RECENT_ERR_TTL_LEDGERS` ledgers) unless another log refreshes them.
     pub fn log_error(env: Env, user: Address, code: u32) -> Result<(), Error> {
         user.require_auth();
         Self::bump_instance(&env);
 
         let reg_key = DataKey::ErrorReg(code);
 
-        // Only registered codes may be logged.
+        // Only registered codes may be logged. Reject before touching either
+        // temporary entry so a failed call leaves the history untouched.
         if !env.storage().persistent().has(&reg_key) {
             return Err(Error::UnknownErrorCode);
         }
@@ -233,12 +249,27 @@ impl ErrorsContract {
             .persistent()
             .extend_ttl(&reg_key, REGISTRY_TTL_THRESHOLD, REGISTRY_TTL_BUMP);
 
-        env.storage()
-            .temporary()
-            .set(&DataKey::RecentErr(user.clone()), &code);
-
+        let recent_key = DataKey::RecentErr(user.clone());
+        env.storage().temporary().set(&recent_key, &code);
         env.storage().temporary().extend_ttl(
-            &DataKey::RecentErr(user.clone()),
+            &recent_key,
+            RECENT_ERR_TTL_LEDGERS,
+            RECENT_ERR_TTL_LEDGERS,
+        );
+
+        let history_key = DataKey::ErrHistory(user.clone());
+        let mut history: Vec<u32> = env
+            .storage()
+            .temporary()
+            .get(&history_key)
+            .unwrap_or_else(|| Vec::new(&env));
+        if history.len() >= MAX_ERROR_HISTORY {
+            history.remove(0);
+        }
+        history.push_back(code);
+        env.storage().temporary().set(&history_key, &history);
+        env.storage().temporary().extend_ttl(
+            &history_key,
             RECENT_ERR_TTL_LEDGERS,
             RECENT_ERR_TTL_LEDGERS,
         );
@@ -251,9 +282,29 @@ impl ErrorsContract {
 
     /// Return the most recent code logged by `user`, or `None` if they never
     /// logged an error.
+    ///
+    /// This is the single-value companion to [`Self::get_error_history`]; it
+    /// is unchanged by the history ring buffer. The value lives in temporary
+    /// storage and expires after ~8 minutes of inactivity.
     pub fn get_recent_error(env: Env, user: Address) -> Option<u32> {
         Self::bump_instance(&env);
         env.storage().temporary().get(&DataKey::RecentErr(user))
+    }
+
+    /// Return the last [`MAX_ERROR_HISTORY`] codes logged by `user`, oldest
+    /// first.
+    ///
+    /// Returns an empty vector when nothing is stored. The history is kept in
+    /// temporary storage with the same ~8-minute lifetime as
+    /// [`Self::get_recent_error`]; reads do not refresh that lifetime, so the
+    /// value is diagnostic and must not be relied on as durable state. This
+    /// view requires no authentication.
+    pub fn get_error_history(env: Env, user: Address) -> Vec<u32> {
+        Self::bump_instance(&env);
+        env.storage()
+            .temporary()
+            .get(&DataKey::ErrHistory(user))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 }
 

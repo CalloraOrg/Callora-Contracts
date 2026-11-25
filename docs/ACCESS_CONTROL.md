@@ -186,8 +186,7 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 > state-changing entrypoint below was verified to call `require_auth` on its
 > acting `Address` before touching storage or emitting events.  No gaps were
 > found.  Focused per-entrypoint tests are maintained in
-> `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit`
-> module) and `contracts/revenue_pool/tests/auth_snap.rs`.
+> `contracts/tests/tests/auth_matrix.rs` (revenue pool cases) and `contracts/revenue_pool/tests/auth_snap.rs`.
 
 | Function | `require_auth` on | Admin | Pending Admin | Pause Guardian | Others |
 |----------|-------------------|-------|---------------|----------------|--------|
@@ -226,7 +225,7 @@ The current admin can call `set_pause_guardian` to delegate emergency pause auth
 
 | Date | Issue | Scope | Outcome |
 |------|-------|-------|---------|
-| 2026-07-28 | [#730](https://github.com/CalloraOrg/Callora-Contracts/issues/730) | All 18 state-changing entrypoints on `callora-revenue-pool` | ✅ All entrypoints call `require_auth`; no gaps found. Focused tests added to `revenue_pool_audit` module in `grant_fox_fwc26_auth_matrix.rs`. |
+| 2026-07-28 | [#730](https://github.com/CalloraOrg/Callora-Contracts/issues/730) | All 18 state-changing entrypoints on `callora-revenue-pool` | ✅ All entrypoints call `require_auth`; no gaps found. Focused tests added to `contracts/tests/tests/auth_matrix.rs`. |
 
 ---
 
@@ -297,7 +296,7 @@ TTL is refreshed on every write and on every authorized read by a mutation.
 The implementation includes comprehensive tests covering:
 - ✅ **Issue #730 — Revenue Pool auth audit (FWC26 Stellar Wave)**: every state-changing
   entrypoint audited; focused three-variant tests (`_no_auth`, `_wrong_role`, `_authorized`)
-  added to `contracts/tests/src/grant_fox_fwc26_auth_matrix.rs` (`revenue_pool_audit` module).
+  added to `contracts/tests/tests/auth_matrix.rs`.
   Existing per-entrypoint coverage in `contracts/revenue_pool/tests/auth_snap.rs` and
   `contracts/revenue_pool/tests/emergency_auth_snap.rs` confirmed complete.
 - ✅ `set_authorized_caller` default nonce is `0` before first rotation
@@ -333,3 +332,35 @@ cargo build --workspace --release --target=wasm32-unknown-unknown
 +| `clear_all` | ✅ | ❌ | ❌ | ❌ | ❌ |
 +| `get_allowlist` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
 +| `is_authorized_depositor` (view) | ✅ | ✅ | ✅ | ✅ | ✅ |
+## Allowlist Contract Access Control
+
+The shared `callora-allowlist` contract stores one persistent entry per
+allowed address plus a dense index for pagination.
+
+### Roles
+- **Admin**: set at `init`; may add, remove or clear addresses and nominate a successor.
+- **Pending Admin**: nominee awaiting `accept_admin`.
+
+### Authorization Matrix
+
+| Function | Admin | Pending Admin | Others |
+|----------|-------|---------------|--------|
+| `init` | ✅ (first caller) | ❌ | ❌ |
+| `get_admin`, `get_pending_admin`, `is_allowed`, `is_authorized_depositor`, `allowlist_count`, `get_allowlist`, `get_allowlist_page` (views) | ✅ | ✅ | ✅ |
+| `set_admin` | ✅ | ❌ | ❌ |
+| `accept_admin` | ❌ | ✅ | ❌ |
+| `cancel_admin_transfer` | ✅ | ❌ | ❌ |
+| `add_address` | ✅ | ❌ | ❌ |
+| `remove_address` | ✅ | ❌ | ❌ |
+| `clear_all` | ✅ | ❌ | ❌ |
+
+### Security Model
+- **Two-step admin rotation**: `set_admin` nominates, `accept_admin` completes
+  the transfer and `cancel_admin_transfer` aborts a pending nomination.
+- **Signature on every mutation**: each mutator calls `require_auth` on the
+  caller before touching storage.
+- **Per-address persistent storage**: entries live under
+  `StorageKey::Entry(Address)` and their TTL is extended on every touch, so the
+  list never grows instance storage.
+- **Bounded clear**: `clear_all` walks the dense index exactly once
+  (`0 .. allowlist_count()`).

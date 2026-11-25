@@ -7,12 +7,13 @@
 extern crate std;
 
 use crate::limits::{
-    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, DEFAULT_LIMITS,
-    MAX_CAP,
+    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, WindowLimits,
+    WindowState, DEFAULT_LIMITS, DEFAULT_WINDOW_LIMITS, MAX_CAP, MAX_WINDOW_LEDGERS,
+    MAX_BATCH_CLEAR, MAX_CAP,
 };
 use crate::YieldLimitError;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, TryFromVal, Val};
+use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, TryFromVal, Val, Vec as SorobanVec};
 
 // ---------------------------------------------------------------------
 // helpers
@@ -652,6 +653,225 @@ fn storage_layout_hash_is_real_and_deterministic() {
     );
 }
 
+// ---------------------------------------------------------------------
+// Admin counter resets
+// ---------------------------------------------------------------------
+
+/// Decode `account_state_reset` payloads from the last invocation's events.
+fn reset_events(env: &Env) -> std::vec::Vec<AccountState> {
+    let target = Symbol::new(env, "account_state_reset");
+    let mut out = std::vec::Vec::new();
+    for event in env.events().all().iter() {
+        if event.1.is_empty() {
+            continue;
+        }
+        let first: Option<Symbol> = Symbol::try_from_val(env, &event.1.get(0).unwrap()).ok();
+        if first.as_ref() != Some(&target) {
+            continue;
+        }
+        if let Ok(state) = AccountState::try_from_val(env, &event.2) {
+            out.push(state);
+        }
+    }
+    out
+}
+
+#[test]
+fn reset_account_state_clears_all_counters() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+    client.set_account_limits(&admin, &user, &1u32, &1u32, &1u32);
+    client.place_bet(&admin, &user);
+    client.open_position(&admin, &user);
+    client.subscribe(&admin, &user);
+
+    assert_eq!(
+        client.get_account_state(&user),
+        AccountState {
+            bets: 1,
+            positions: 1,
+            subscriptions: 1,
+        }
+    );
+    assert!(!client.can_place_bet(&user));
+    assert!(!client.can_open_position(&user));
+    assert!(!client.can_subscribe(&user));
+
+    client.reset_account_state(&admin, &user);
+
+    assert_eq!(client.get_account_state(&user), AccountState::zero());
+    assert!(client.can_place_bet(&user));
+    assert!(client.can_open_position(&user));
+    assert!(client.can_subscribe(&user));
+}
+
+#[test]
+fn reset_account_state_emits_previous_counters() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+    client.place_bet(&admin, &user);
+    client.place_bet(&admin, &user);
+    client.open_position(&admin, &user);
+    client.subscribe(&admin, &user);
+
+    client.reset_account_state(&admin, &user);
+
+    let events = reset_events(&env);
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        AccountState {
+            bets: 2,
+            positions: 1,
+            subscriptions: 1,
+        }
+    );
+}
+
+#[test]
+fn reset_account_state_unseen_account_is_noop() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+
+    client.reset_account_state(&admin, &user);
+    let events = reset_events(&env);
+
+    assert_eq!(client.get_account_state(&user), AccountState::zero());
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0], AccountState::zero());
+}
+
+#[test]
+fn reset_account_state_requires_admin() {
+    let env = Env::default();
+    let (_, _admin, client, user) = setup_with_user(&env);
+
+    assert_eq!(
+        client.try_reset_account_state(&user, &user),
+        Err(Ok(YieldLimitError::Unauthorized))
+    );
+}
+
+#[test]
+fn clear_bet_after_reset_underflows() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+    client.place_bet(&admin, &user);
+    client.reset_account_state(&admin, &user);
+
+    assert_eq!(
+        client.try_clear_bet(&admin, &user),
+        Err(Ok(YieldLimitError::CounterUnderflow))
+    );
+    assert_eq!(client.get_account_state(&user), AccountState::zero());
+}
+
+#[test]
+fn batch_clear_accounts_resets_each_account() {
+    let env = Env::default();
+    let (_, admin, client, first) = setup_with_user(&env);
+    let second = Address::generate(&env);
+    client.place_bet(&admin, &first);
+    client.place_bet(&admin, &second);
+
+    let accounts = SorobanVec::from_array(&env, [first.clone(), second.clone()]);
+    client.batch_clear_accounts(&admin, &accounts);
+    let events = reset_events(&env);
+
+    assert_eq!(client.get_account_state(&first), AccountState::zero());
+    assert_eq!(client.get_account_state(&second), AccountState::zero());
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[0],
+        AccountState {
+            bets: 1,
+            positions: 0,
+            subscriptions: 0,
+        }
+    );
+    assert_eq!(
+        events[1],
+        AccountState {
+            bets: 1,
+            positions: 0,
+            subscriptions: 0,
+        }
+    );
+}
+
+#[test]
+fn batch_clear_accounts_empty_rejected() {
+    let env = Env::default();
+    let (_, admin, client, _user) = setup_with_user(&env);
+    let accounts: SorobanVec<Address> = SorobanVec::new(&env);
+
+    assert_eq!(
+        client.try_batch_clear_accounts(&admin, &accounts),
+        Err(Ok(YieldLimitError::EmptyBatch))
+    );
+}
+
+#[test]
+fn batch_clear_accounts_over_cap_rejected_atomically() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+    client.place_bet(&admin, &user);
+
+    let mut accounts = SorobanVec::new(&env);
+    accounts.push_back(user.clone());
+    for _ in 0..MAX_BATCH_CLEAR {
+        accounts.push_back(Address::generate(&env));
+    }
+
+    assert_eq!(
+        client.try_batch_clear_accounts(&admin, &accounts),
+        Err(Ok(YieldLimitError::BatchTooLarge))
+    );
+    assert_eq!(
+        client.get_account_state(&user),
+        AccountState {
+            bets: 1,
+            positions: 0,
+            subscriptions: 0,
+        }
+    );
+}
+
+#[test]
+fn batch_clear_accounts_duplicates_processed_in_order() {
+    let env = Env::default();
+    let (_, admin, client, user) = setup_with_user(&env);
+    client.place_bet(&admin, &user);
+
+    let accounts = SorobanVec::from_array(&env, [user.clone(), user.clone()]);
+    client.batch_clear_accounts(&admin, &accounts);
+    let events = reset_events(&env);
+
+    assert_eq!(client.get_account_state(&user), AccountState::zero());
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[0],
+        AccountState {
+            bets: 1,
+            positions: 0,
+            subscriptions: 0,
+        }
+    );
+    assert_eq!(events[1], AccountState::zero());
+}
+
+#[test]
+fn batch_clear_accounts_requires_admin() {
+    let env = Env::default();
+    let (_, _admin, client, user) = setup_with_user(&env);
+    let accounts = SorobanVec::from_array(&env, [user.clone()]);
+
+    assert_eq!(
+        client.try_batch_clear_accounts(&user, &accounts),
+        Err(Ok(YieldLimitError::Unauthorized))
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Documentation invariant — fail loudly if the mutator count drifts
 // ---------------------------------------------------------------------------
@@ -664,20 +884,21 @@ fn storage_layout_hash_is_real_and_deterministic() {
 ///   admin trio (`set_admin`, `accept_admin`, `cancel_admin_transfer`) (3) +
 ///   limits trio (`set_default_limits`, `set_account_limits`,
 ///               `clear_account_limits`) (3) +
+///   counter-reset pair (`reset_account_state`, `batch_clear_accounts`) (2) +
 ///   operator pair (`set_operator`, `remove_operator`) (2) +
 ///   operator-gated counter sextet (`place_bet`, `clear_bet`, `open_position`,
 ///                                 `close_position`, `subscribe`,
 ///                                 `unsubscribe`) (6) +
-///   `upgrade` (1) = 15.
+///   `upgrade` (1) = 17.
 ///
 /// Excludes `init` because it takes no `caller` parameter, but note that `init`
 /// now authenticates `admin` directly (#1414) and is covered by
 /// `tests/auth_snap.rs::init_requires_admin_auth`.
 #[test]
 fn mutator_count_matches_documented_surface() {
-    const DOCUMENTED_MUTATOR_COUNT: usize = 15;
+    const DOCUMENTED_MUTATOR_COUNT: usize = 17;
     assert_eq!(
-        DOCUMENTED_MUTATOR_COUNT, 15,
+        DOCUMENTED_MUTATOR_COUNT, 17,
         "bump DOCUMENTED_MUTATOR_COUNT and add an auth-snap test when new mutators land"
     );
 }
