@@ -18,9 +18,13 @@ The remaining ~1850 tests pass.
 ## Removed during the repair
 
 - `cargo-fuzz` crates (`contracts/*/fuzz`) and criterion-style benches for hot/registry/whitelist, which no longer compiled.
-- `contracts/tests` (cross-contract and access-control matrix crate): duplicate `#[contractimpl]` function names and stale vault APIs.
-- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, `test_simulate_parity.rs`, and allowlist integration tests written against a removed API.
-- Node/TypeScript TTL doctor tooling and the coverage/Kani/TTL workflows.
+- `contracts/tests` (cross-contract and access-control matrix crate): the
+  original crate was removed because linking several `cdylib`s produced
+  duplicate `#[contractimpl]` symbols and its tests targeted stale vault APIs.
+  It has since been rebuilt as the `rlib`-only `callora-access-matrix` crate
+  (`contracts/tests/tests/auth_matrix.rs`).
+- Vault quarantined `*.rs.broken` tests, `contracts/vault/tests/rescue.rs`, and `test_simulate_parity.rs`.
+- Node/TypeScript TTL doctor tooling and the Kani/TTL workflows.
 
 ## Other notes
 

@@ -151,7 +151,7 @@ sequenceDiagram
 
 ## Development
 
-Use one branch per issue or feature. Run `cargo fmt --all` and `cargo test --workspace` before pushing, and make sure the core contracts still build to WASM (`cargo build --release --target wasm32v1-none -p callora-vault -p callora-settlement -p callora-revenue-pool`).
+Use one branch per issue or feature. Plain `cargo test` at the repository root now covers every crate in the workspace (equivalent to `cargo test --workspace`). Run `cargo fmt --all` and `cargo test` before pushing, and make sure the core contracts still build to WASM (`cargo build --release --target wasm32v1-none -p callora-vault -p callora-settlement -p callora-revenue-pool`).
 
 Some legacy tests that no longer match the current contract behaviour are marked `#[ignore]`; they are catalogued in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 

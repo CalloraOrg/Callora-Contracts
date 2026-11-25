@@ -183,3 +183,88 @@ fn record_deduction_requires_vault_authorization() {
     client.record_deduction(&100, &10);
     assert_eq!(client.get_total_received(), 100);
 }
+
+#[test]
+fn clear_deduction_request_uninitialized_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(CalloraSettlement, ());
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.try_clear_deduction_request(&1),
+        Err(Ok(SettlementError::NotInitialized))
+    );
+    assert!(env.events().all().is_empty());
+}
+
+#[test]
+fn clear_deduction_request_removes_existing_emits_event_and_bumps_instance_ttl() {
+    let (env, contract_id, vault) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+    client.record_deduction(&100, &55);
+    assert!(has_marker(&env, &contract_id, 55));
+
+    // Advance past the instance TTL threshold so bump_instance extends it back to INSTANCE_BUMP_AMOUNT.
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + crate::INSTANCE_BUMP_AMOUNT - 10);
+
+    client.clear_deduction_request(&55);
+    assert!(!has_marker(&env, &contract_id, 55));
+
+    env.as_contract(&contract_id, || {
+        assert_eq!(env.storage().instance().get_ttl(), INSTANCE_BUMP_AMOUNT);
+    });
+
+    assert_eq!(env.events().all().len(), 1);
+    let (emitter, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(emitter, contract_id);
+    assert_eq!(
+        topics,
+        soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "deduction_request_cleared").into_val(&env)
+        ]
+    );
+    assert_eq!(u64::from_val(&env, &data), 55u64);
+    assert_eq!(
+        env.auths(),
+        std::vec![(
+            vault.clone(),
+            soroban_sdk::testutils::AuthorizedInvocation {
+                function: soroban_sdk::testutils::AuthorizedFunction::Contract((
+                    contract_id.clone(),
+                    Symbol::new(&env, "clear_deduction_request"),
+                    (55u64,).into_val(&env),
+                )),
+                sub_invocations: std::vec![],
+            },
+        )]
+    );
+
+    // Clearing the same id a second time is a no-op with no event.
+    client.clear_deduction_request(&55);
+    assert!(env.events().all().is_empty());
+}
+
+#[test]
+fn clear_deduction_request_unknown_id_is_noop_without_event() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+
+    client.clear_deduction_request(&999);
+    assert!(env.events().all().is_empty());
+    assert!(!has_marker(&env, &contract_id, 999));
+}
+
+#[test]
+fn clear_deduction_request_requires_vault_authorization() {
+    let (env, contract_id, _) = setup();
+    let client = CalloraSettlementClient::new(&env, &contract_id);
+    client.record_deduction(&50, &77);
+
+    env.mock_auths(&[]);
+    assert!(client.try_clear_deduction_request(&77).is_err());
+    assert!(env.events().all().is_empty());
+    assert!(has_marker(&env, &contract_id, 77));
+}

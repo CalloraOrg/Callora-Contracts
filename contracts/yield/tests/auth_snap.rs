@@ -3,7 +3,7 @@ extern crate std;
 
 use callora_yield::{AccountLimits, CalloraYieldLimits, CalloraYieldLimitsClient};
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{Address, BytesN, Env, IntoVal};
+use soroban_sdk::{Address, BytesN, Env, IntoVal, Vec as SorobanVec};
 
 macro_rules! mock_auth {
     ($env:expr, $addr:expr, $client:expr, $fn_name:expr, $($arg:expr),*) => {
@@ -154,6 +154,30 @@ fn set_account_limits_requires_auth() {
 }
 
 #[test]
+fn set_window_ledgers_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_ledgers(&intruder, &10u32);
+    assert!(
+        res.is_err(),
+        "set_window_ledgers must require auth on caller"
+    );
+}
+
+#[test]
+fn set_window_limits_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let res = client.try_set_window_limits(&intruder, &1u32, &1u32, &1u32);
+    assert!(
+        res.is_err(),
+        "set_window_limits must require auth on caller"
+    );
+}
+
+#[test]
 fn clear_account_limits_requires_auth() {
     let env = Env::default();
     let (_contract, _admin, client) = setup(&env);
@@ -163,6 +187,33 @@ fn clear_account_limits_requires_auth() {
     assert!(
         res.is_err(),
         "clear_account_limits must require auth on caller"
+    );
+}
+
+#[test]
+fn reset_account_state_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let target = Address::generate(&env);
+    let res = client.try_reset_account_state(&intruder, &target);
+    assert!(
+        res.is_err(),
+        "reset_account_state must require auth on caller"
+    );
+}
+
+#[test]
+fn batch_clear_accounts_requires_auth() {
+    let env = Env::default();
+    let (_contract, _admin, client) = setup(&env);
+    let intruder = Address::generate(&env);
+    let target = Address::generate(&env);
+    let accounts = SorobanVec::from_array(&env, [target]);
+    let res = client.try_batch_clear_accounts(&intruder, &accounts);
+    assert!(
+        res.is_err(),
+        "batch_clear_accounts must require auth on caller"
     );
 }
 
@@ -421,7 +472,8 @@ fn authenticated_happy_path() {
 
 #[test]
 fn auth_snap_covers_expected_mutator_count() {
-    // admin trio + limits trio + operator pair + counter sextet + upgrade.
-    const EXPECTED_MUTATORS: usize = 15;
-    assert_eq!(EXPECTED_MUTATORS, 15);
+    // admin trio + limits trio + counter-reset pair + operator pair +
+    // counter sextet + upgrade.
+    const EXPECTED_MUTATORS: usize = 17;
+    assert_eq!(EXPECTED_MUTATORS, 17);
 }

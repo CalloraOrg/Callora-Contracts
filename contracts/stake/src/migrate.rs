@@ -50,6 +50,7 @@
 //! | `migrate`            | `stake_migrated`| `(topic)`        | `target_version` |
 //! | `authorize_upgrade`  | `upg_authorised`| `(topic, hash)`  | `target_version` |
 
+use callora_storage_migration::{AuthorizeOptions, MigrateOptions, MigrationKeys, StubError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
 };
@@ -147,6 +148,39 @@ fn event_upgrade_authorised(env: &Env) -> Symbol {
     Symbol::new(env, "upg_authorised")
 }
 
+/// Ledger threshold below which the instance TTL is extended on migration.
+const INSTANCE_TTL_THRESHOLD: u32 = 100;
+
+/// Ledger count to extend the instance TTL to on migration.
+const INSTANCE_TTL_EXTEND_TO: u32 = 10_000;
+
+impl From<StubError> for StakeMigrateError {
+    fn from(err: StubError) -> Self {
+        match err {
+            StubError::NotInitialized => StakeMigrateError::NotInitialized,
+            StubError::AlreadyInitialized => StakeMigrateError::AlreadyInitialized,
+            StubError::Unauthorized => StakeMigrateError::Unauthorized,
+            StubError::LegacyStateMissing => StakeMigrateError::LegacyStateMissing,
+            StubError::InvalidLegacyBalance => StakeMigrateError::InvalidLegacyBalance,
+            StubError::VersionMismatch => StakeMigrateError::VersionMismatch,
+            StubError::InvalidTargetVersion => StakeMigrateError::InvalidTargetVersion,
+            StubError::AlreadyMigrated => StakeMigrateError::AlreadyMigrated,
+            StubError::UpgradeNotAuthorized => StakeMigrateError::UpgradeNotAuthorized,
+            StubError::Overflow => StakeMigrateError::Overflow,
+            StubError::InvalidInitialVersion => StakeMigrateError::NotInitialized,
+            StubError::WasmHashZero => StakeMigrateError::WasmHashZero,
+        }
+    }
+}
+
+const KEYS: MigrationKeys<StorageKey> = MigrationKeys::new(
+    StorageKey::Admin,
+    StorageKey::Version,
+    StorageKey::Legacy,
+    StorageKey::Current,
+    StorageKey::AuthorisedUpgrade,
+);
+
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
 /// Stake data migration and upgrade guard.
@@ -159,247 +193,74 @@ pub struct CalloraStakeMigrate;
 #[contractimpl]
 impl CalloraStakeMigrate {
     /// Initialise the stake migration guard.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin` — the administrator address; must authorise this call.
-    /// * `initial_version` — the version of the legacy state currently stored
-    ///   by the previous deployment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`StakeMigrateError::AlreadyInitialized`] if already initialised.
     pub fn init(env: Env, admin: Address, initial_version: u32) -> Result<(), StakeMigrateError> {
-        admin.require_auth();
-        if env.storage().instance().has(&StorageKey::Admin) {
-            return Err(StakeMigrateError::AlreadyInitialized);
-        }
-        env.storage().instance().set(&StorageKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&StorageKey::Version, &initial_version);
-        Ok(())
+        KEYS.init(&env, &admin, initial_version, None)
+            .map_err(Into::into)
     }
 
     /// Reshape legacy stake state and advance the migration version.
-    ///
-    /// The operation is atomic from the caller's perspective: the current
-    /// record and version are written only after all validation passes.
-    /// `target_version` **must** be exactly `expected_version + 1`, which
-    /// prevents skipped migrations and replayed migrations.
-    ///
-    /// # Arguments
-    ///
-    /// * `caller` — must be the configured administrator.
-    /// * `expected_version` — the version the contract should currently be at.
-    /// * `target_version` — the version to advance to; must equal
-    ///   `expected_version + 1`.
-    ///
-    /// # Returns
-    ///
-    /// The reshaped [`CurrentStake`] record on success.
-    ///
-    /// # Errors
-    ///
-    /// | Condition                            | Error                                      |
-    /// |--------------------------------------|--------------------------------------------|
-    /// | Contract not initialised             | [`StakeMigrateError::NotInitialized`]      |
-    /// | Caller is not the admin              | [`StakeMigrateError::Unauthorized`]        |
-    /// | `expected_version` ≠ stored version  | [`StakeMigrateError::VersionMismatch`]     |
-    /// | `target_version` ≠ version + 1       | [`StakeMigrateError::InvalidTargetVersion`]|
-    /// | Migration already completed          | [`StakeMigrateError::AlreadyMigrated`]     |
-    /// | Legacy state not found               | [`StakeMigrateError::LegacyStateMissing`]  |
-    /// | Legacy `total_staked` is negative    | [`StakeMigrateError::InvalidLegacyBalance`]|
-    /// | Version arithmetic overflow          | [`StakeMigrateError::Overflow`]            |
-    ///
-    /// # Events
-    ///
-    /// Emits `stake_migrated` with `target_version` as data.
     pub fn migrate(
         env: Env,
         caller: Address,
         expected_version: u32,
         target_version: u32,
     ) -> Result<CurrentStake, StakeMigrateError> {
-        caller.require_auth();
-        require_admin(&env, &caller)?;
-
-        let version: u32 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Version)
-            .ok_or(StakeMigrateError::NotInitialized)?;
-
-        if version != expected_version {
-            return Err(StakeMigrateError::VersionMismatch);
-        }
-
-        let next_version = expected_version
-            .checked_add(1)
-            .ok_or(StakeMigrateError::Overflow)?;
-
-        if target_version != next_version {
-            return Err(StakeMigrateError::InvalidTargetVersion);
-        }
-
-        if env.storage().instance().has(&StorageKey::Current) {
-            return Err(StakeMigrateError::AlreadyMigrated);
-        }
-
-        // Extend the instance TTL so the migration state survives long enough
-        // for the follow-on upgrade to be authorised and deployed.
-        env.storage()
-            .instance()
-            .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
-
-        let legacy: LegacyStake = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Legacy)
-            .ok_or(StakeMigrateError::LegacyStateMissing)?;
-
-        if legacy.total_staked < 0 {
-            return Err(StakeMigrateError::InvalidLegacyBalance);
-        }
-
-        let current = CurrentStake {
-            total_staked: legacy.total_staked,
-            last_checkpoint: legacy.last_checkpoint,
-            reserve: 0,
-        };
-
-        env.storage().instance().set(&StorageKey::Current, &current);
-        env.storage()
-            .instance()
-            .set(&StorageKey::Version, &target_version);
-        // The legacy record has been reshaped into `Current`; remove it so a
-        // re-run cannot depend on stale input and the docs stay truthful.
-        env.storage().instance().remove(&StorageKey::Legacy);
-
-        env.events()
-            .publish((event_stake_migrated(&env),), target_version);
-
-        Ok(current)
+        KEYS.migrate(
+            &env,
+            &caller,
+            expected_version,
+            target_version,
+            &MigrateOptions {
+                ttl_extension: Some((INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO)),
+                remove_legacy: true,
+                event_topic: Some(event_stake_migrated(&env)),
+            },
+            |legacy: LegacyStake| {
+                if legacy.total_staked < 0 {
+                    return Err(StubError::InvalidLegacyBalance);
+                }
+                Ok(CurrentStake {
+                    total_staked: legacy.total_staked,
+                    last_checkpoint: legacy.last_checkpoint,
+                    reserve: 0,
+                })
+            },
+        )
+        .map_err(Into::into)
     }
 
     /// Authorise a contract upgrade for the current migration version.
-    ///
-    /// This is a guard only — it does **not** call
-    /// `update_current_contract_wasm`. The deployment tool must consume the
-    /// returned authorisation state and perform the platform upgrade in a
-    /// separate transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `caller` — must be the configured administrator.
-    /// * `target_version` — must match the stored migration version.
-    /// * `wasm_hash` — the WASM hash to authorise for deployment.
-    ///
-    /// # Errors
-    ///
-    /// | Condition                          | Error                                  |
-    /// |------------------------------------|----------------------------------------|
-    /// | Contract not initialised           | [`StakeMigrateError::NotInitialized`]  |
-    /// | Caller is not the admin            | [`StakeMigrateError::Unauthorized`]    |
-    /// | `target_version` ≠ stored version  | [`StakeMigrateError::VersionMismatch`] |
-    /// | `wasm_hash` is all-zero bytes      | [`StakeMigrateError::WasmHashZero`]    |
-    ///
-    /// # Events
-    ///
-    /// Emits `upg_authorised` with `(topic, wasm_hash)` as topics and
-    /// `target_version` as data.
     pub fn authorize_upgrade(
         env: Env,
         caller: Address,
         target_version: u32,
         wasm_hash: BytesN<32>,
     ) -> Result<(), StakeMigrateError> {
-        caller.require_auth();
-        require_admin(&env, &caller)?;
-
-        let version: u32 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Version)
-            .ok_or(StakeMigrateError::NotInitialized)?;
-
-        if target_version != version {
-            return Err(StakeMigrateError::VersionMismatch);
-        }
-
-        // Reject an all-zero hash — almost certainly a programming mistake
-        // (e.g. a zero-initialised buffer passed by a deployment script).
-        if wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
-            return Err(StakeMigrateError::WasmHashZero);
-        }
-
-        env.storage().instance().set(
-            &StorageKey::AuthorisedUpgrade,
-            &(target_version, wasm_hash.clone()),
-        );
-
-        env.events()
-            .publish((event_upgrade_authorised(&env), wasm_hash), target_version);
-
-        Ok(())
+        KEYS.authorize_upgrade(
+            &env,
+            &caller,
+            target_version,
+            &wasm_hash,
+            &AuthorizeOptions {
+                reject_zero_hash: true,
+                event_topic: Some(event_upgrade_authorised(&env)),
+            },
+        )
+        .map_err(Into::into)
     }
 
     /// Return the reshaped stake state, if migration has completed.
-    ///
-    /// Returns `None` if migration has not yet run.
     pub fn get_current(env: Env) -> Option<CurrentStake> {
-        env.storage().instance().get(&StorageKey::Current)
+        KEYS.get_current(&env)
     }
 
     /// Return the stored migration version, if initialised.
-    ///
-    /// Returns `None` if the contract has not been initialised.
     pub fn version(env: Env) -> Option<u32> {
-        env.storage().instance().get(&StorageKey::Version)
+        KEYS.version(&env)
     }
 
     /// Check whether a WASM hash is authorised for the current migration version.
-    ///
-    /// Returns `true` only when:
-    /// - A version is stored.
-    /// - An authorised `(version, hash)` pair is stored.
-    /// - Both the stored version and the authorised version match **and** the
-    ///   supplied hash matches the authorised hash.
     pub fn is_upgrade_authorised(env: Env, wasm_hash: BytesN<32>) -> bool {
-        let stored_version: Option<u32> = env.storage().instance().get(&StorageKey::Version);
-        let authorisation: Option<(u32, BytesN<32>)> =
-            env.storage().instance().get(&StorageKey::AuthorisedUpgrade);
-
-        match (stored_version, authorisation) {
-            (Some(version), Some((auth_version, auth_hash))) => {
-                version == auth_version && wasm_hash == auth_hash
-            }
-            _ => false,
-        }
+        KEYS.is_upgrade_authorized(&env, &wasm_hash)
     }
-}
-
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Ledger threshold below which the instance TTL is extended on migration.
-const INSTANCE_TTL_THRESHOLD: u32 = 100;
-
-/// Ledger count to extend the instance TTL to on migration.
-const INSTANCE_TTL_EXTEND_TO: u32 = 10_000;
-
-/// Verify that `caller` is the stored administrator.
-///
-/// Returns [`StakeMigrateError::NotInitialized`] if the contract has not
-/// been initialised, or [`StakeMigrateError::Unauthorized`] if `caller` is
-/// not the admin.
-fn require_admin(env: &Env, caller: &Address) -> Result<(), StakeMigrateError> {
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&StorageKey::Admin)
-        .ok_or(StakeMigrateError::NotInitialized)?;
-    if caller != &admin {
-        return Err(StakeMigrateError::Unauthorized);
-    }
-    Ok(())
 }

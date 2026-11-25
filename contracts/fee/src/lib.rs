@@ -42,6 +42,11 @@ pub struct FeeConfig {
     pub max_fee_bps: u32,
 }
 
+/// Fee configuration and collection contract.
+///
+/// Fees are denominated in basis points (`fee_bps`, where `10_000` bps = 100%).
+/// Fee calculations via [`FeeContract::calculate_fee`] always round down (floor)
+/// to the nearest whole unit: `floor(amount * fee_bps / 10_000)`.
 #[contract]
 pub struct FeeContract;
 
@@ -237,6 +242,50 @@ impl FeeContract {
         })
     }
 
+    /// Compute the fee for `amount` using the configured `fee_bps`.
+    ///
+    /// Rounds down (floor): `floor(amount * fee_bps / 10_000)`.
+    ///
+    /// Uses checked arithmetic: attempts `amount.checked_mul(fee_bps) / 10_000` first
+    /// and, if the intermediate product would overflow `i128`, falls back to an exact
+    /// quotient/remainder decomposition
+    /// `(amount / 10_000) * fee_bps + ((amount % 10_000) * fee_bps) / 10_000`
+    /// so values up to `i128::MAX` never panic or overflow.
+    ///
+    /// # Arguments
+    /// * `amount` - Non-negative base amount to calculate the fee on.
+    ///
+    /// # Errors
+    /// - `NotInitialized` if the contract is not initialised (`FeeBps` is unset).
+    /// - `InvalidAmount` if `amount` is negative.
+    /// - `Overflow` if checked arithmetic overflows.
+    pub fn calculate_fee(env: Env, amount: i128) -> Result<i128, ContractError> {
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(ContractError::NotInitialized)?;
+        if amount < 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+
+        let bps = i128::from(fee_bps);
+        let denom = i128::from(MAX_BASIS_POINTS);
+        let fee = match amount.checked_mul(bps) {
+            Some(product) => product / denom,
+            None => {
+                let quotient = amount / denom;
+                let remainder = amount % denom;
+                let high = quotient.checked_mul(bps).ok_or(ContractError::Overflow)?;
+                let low = remainder.checked_mul(bps).ok_or(ContractError::Overflow)? / denom;
+                high.checked_add(low).ok_or(ContractError::Overflow)?
+            }
+        };
+
+        Self::bump_instance_ttl(&env);
+        Ok(fee)
+    }
+
     /// Return the total accumulated fees.
     pub fn get_accumulated(env: Env) -> Result<i128, ContractError> {
         if !env.storage().instance().has(&DataKey::Admin) {
@@ -281,7 +330,7 @@ impl FeeContract {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdmin, &new_admin);
-        events::admin_nominated(&env, new_admin);
+        events::admin_nominated(&env, stored_admin, new_admin);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -290,6 +339,11 @@ impl FeeContract {
     pub fn accept_admin(env: Env, caller: Address) -> Result<(), ContractError> {
         caller.require_auth();
 
+        let old_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
         let pending: Address = env
             .storage()
             .instance()
@@ -301,7 +355,7 @@ impl FeeContract {
 
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
-        events::admin_accepted(&env, pending);
+        events::admin_accepted(&env, old_admin, pending);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -318,12 +372,14 @@ impl FeeContract {
         if caller != stored_admin {
             return Err(ContractError::Unauthorized);
         }
-        if !env.storage().instance().has(&DataKey::PendingAdmin) {
-            return Err(ContractError::NoPendingAdmin);
-        }
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(ContractError::NoPendingAdmin)?;
 
         env.storage().instance().remove(&DataKey::PendingAdmin);
-        events::admin_cancelled(&env);
+        events::admin_cancelled(&env, stored_admin, pending);
         Self::bump_instance_ttl(&env);
         Ok(())
     }
@@ -586,6 +642,88 @@ mod test {
 
         client.withdraw(&admin, &recipient, &400);
         assert_eq!(client.get_accumulated(), 600);
+    }
+
+    #[test]
+    fn test_calculate_fee_not_initialized() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+
+        assert_eq!(
+            client.try_calculate_fee(&1000).unwrap_err().unwrap(),
+            ContractError::NotInitialized
+        );
+    }
+
+    #[test]
+    fn test_calculate_fee_negative_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.init(&admin);
+        client.set_fee(&admin, &250);
+
+        assert_eq!(
+            client.try_calculate_fee(&-1).unwrap_err().unwrap(),
+            ContractError::InvalidAmount
+        );
+        assert_eq!(
+            client.try_calculate_fee(&i128::MIN).unwrap_err().unwrap(),
+            ContractError::InvalidAmount
+        );
+    }
+
+    #[test]
+    fn test_calculate_fee_boundaries_and_rounding() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, FeeContract);
+        let client = FeeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+
+        client.init(&admin);
+
+        // fee_bps = 0
+        client.set_fee(&admin, &0);
+        assert_eq!(client.calculate_fee(&0), 0);
+        assert_eq!(client.calculate_fee(&1), 0);
+        assert_eq!(client.calculate_fee(&i128::MAX), 0);
+
+        // fee_bps = 1 (0.01%)
+        client.set_fee(&admin, &1);
+        assert_eq!(client.calculate_fee(&0), 0);
+        assert_eq!(client.calculate_fee(&1), 0);
+        assert_eq!(client.calculate_fee(&9_999), 0);
+        assert_eq!(client.calculate_fee(&10_000), 1);
+        assert_eq!(client.calculate_fee(&i128::MAX), i128::MAX / 10_000);
+
+        // Rounding down (floor) example: 1 at 5_000 bps (50%) -> 0
+        client.set_fee(&admin, &5_000);
+        assert_eq!(client.calculate_fee(&1), 0);
+        assert_eq!(client.calculate_fee(&2), 1);
+        assert_eq!(client.calculate_fee(&3), 1);
+
+        // fee_bps = 9_999 (99.99%)
+        client.set_fee(&admin, &9_999);
+        assert_eq!(client.calculate_fee(&0), 0);
+        assert_eq!(client.calculate_fee(&1), 0);
+        assert_eq!(client.calculate_fee(&10_000), 9_999);
+        let expected_max_9999 =
+            (i128::MAX / 10_000) * 9_999 + ((i128::MAX % 10_000) * 9_999) / 10_000;
+        assert_eq!(client.calculate_fee(&i128::MAX), expected_max_9999);
+
+        // fee_bps = 10_000 (100%): fee == amount
+        client.set_fee(&admin, &10_000);
+        assert_eq!(client.calculate_fee(&0), 0);
+        assert_eq!(client.calculate_fee(&1), 1);
+        assert_eq!(client.calculate_fee(&123_456), 123_456);
+        assert_eq!(client.calculate_fee(&i128::MAX), i128::MAX);
     }
 }
 

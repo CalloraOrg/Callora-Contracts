@@ -77,6 +77,132 @@ fn test_log_error_after_registration() {
     assert_eq!(client.get_recent_error(&user), Some(101));
 }
 
+fn history_of(env: &Env, codes: &[u32]) -> Vec<u32> {
+    let mut history = Vec::new(env);
+    for code in codes {
+        history.push_back(*code);
+    }
+    history
+}
+
+#[test]
+fn test_error_history_is_empty_before_any_log() {
+    let env = Env::default();
+    let (client, _admin) = setup(&env);
+    let user = Address::generate(&env);
+
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[]));
+}
+
+#[test]
+fn test_error_history_keeps_fewer_than_max_in_order() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in [101u32, 102, 103] {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    assert_eq!(
+        client.get_error_history(&user),
+        history_of(&env, &[101, 102, 103])
+    );
+    assert_eq!(client.get_recent_error(&user), Some(103));
+}
+
+#[test]
+fn test_error_history_keeps_exactly_max_entries() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in 0..MAX_ERROR_HISTORY {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    let expected = [0, 1, 2, 3, 4, 5, 6, 7];
+    assert_eq!(client.get_error_history(&user), history_of(&env, &expected));
+}
+
+#[test]
+fn test_error_history_evicts_oldest_when_full() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in 0..(MAX_ERROR_HISTORY + 4) {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    let expected = [4, 5, 6, 7, 8, 9, 10, 11];
+    assert_eq!(
+        client.get_error_history(&user),
+        history_of(&env, &expected),
+        "history must hold the last MAX_ERROR_HISTORY codes oldest-first"
+    );
+    assert_eq!(client.get_recent_error(&user), Some(MAX_ERROR_HISTORY + 3));
+}
+
+#[test]
+fn test_error_history_is_per_user() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.register_error(&admin, &202, &desc);
+    client.log_error(&alice, &101);
+    client.log_error(&bob, &202);
+
+    assert_eq!(client.get_error_history(&alice), history_of(&env, &[101]));
+    assert_eq!(client.get_error_history(&bob), history_of(&env, &[202]));
+}
+
+#[test]
+fn test_rejected_log_error_leaves_history_untouched() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.log_error(&user, &101);
+
+    assert_eq!(
+        client.try_log_error(&user, &999).unwrap_err().unwrap(),
+        Error::UnknownErrorCode
+    );
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[101]));
+    assert_eq!(client.get_recent_error(&user), Some(101));
+}
+
+#[test]
+fn test_error_history_expires_with_temporary_ttl() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.log_error(&user, &101);
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[101]));
+
+    env.ledger()
+        .set_sequence_number(RECENT_ERR_TTL_LEDGERS + 1);
+
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[]));
+    assert_eq!(client.get_recent_error(&user), None);
+}
+
 #[test]
 fn test_get_error_description_returns_stored_data() {
     let env = Env::default();
