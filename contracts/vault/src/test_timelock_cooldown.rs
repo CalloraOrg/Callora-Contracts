@@ -220,7 +220,7 @@ fn timelock_cooldown_failed_execution_does_not_arm_cooldown() {
     // After propose the tracked balance is raised to match on-ledger, dropping
     // surplus to zero so execute_sweep fails with InsufficientBalance — before
     // admin::guard runs — and the cooldown is never armed.
-    token::StellarAssetClient::new(ctx.env, &ctx.usdc.address()).mint(&ctx.vault, &1);
+    token::StellarAssetClient::new(ctx.env, &ctx.usdc.address).mint(&ctx.vault, &1);
     ctx.client
         .propose_sweep(&ctx.admin, &ctx.recipient, &(VAULT_USDC + 1));
     // Raise tracked balance so surplus < proposed amount at execute time.

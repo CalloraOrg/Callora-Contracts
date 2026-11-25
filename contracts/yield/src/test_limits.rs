@@ -9,7 +9,7 @@ extern crate std;
 use crate::limits::{
     AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, WindowLimits,
     WindowState, DEFAULT_LIMITS, DEFAULT_WINDOW_LIMITS, MAX_CAP, MAX_WINDOW_LEDGERS,
-    MAX_BATCH_CLEAR, MAX_CAP,
+    MAX_BATCH_CLEAR,
 };
 use crate::YieldLimitError;
 use soroban_sdk::testutils::{Address as _, Events as _};

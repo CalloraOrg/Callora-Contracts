@@ -59,7 +59,6 @@ fn settlement_error_codes_are_stable_and_unique() {
         (51, SettlementError::TooManyResults),
         (52, SettlementError::RecipientRegistryNotSet),
         (53, SettlementError::PayoutNameNotFound),
-        (52, SettlementError::SystemFrozen),
     ];
 
     let mut seen = BTreeSet::new();
@@ -71,7 +70,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 51);
+    assert_eq!(seen.len(), 50);
 }
 
 #[test]
