@@ -223,6 +223,7 @@ must not be reassigned once released.
 | 13 | `ApprovedAmountInvalid` | Refund | Partial approved amount is `<= 0` or `> request.amount` |
 | 14 | `DisputeWindowClosed` | Refund | Dispute was submitted after the configured dispute window elapsed |
 | 15 | `AlreadyDisputed` | Refund | Request has already been disputed once |
+| 16 | `NotExpired` | Refund | Request lifetime is `0` or the request is younger than the configured lifetime |
 
 ## Escrow
 

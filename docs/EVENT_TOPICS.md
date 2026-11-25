@@ -224,6 +224,28 @@ Source: [`contracts/distribute/src/events.rs`](../contracts/distribute/src/event
 
 ---
 
+## Refund Contract (`callora-refund`)
+
+Source: [`contracts/refund/src/lib.rs`](../contracts/refund/src/lib.rs) (events are
+published by the private `emit_*` helpers on `RefundContract`).
+
+| #  | Topic String        | Emitter                | Trigger                                                        |
+|----|---------------------|------------------------|----------------------------------------------------------------|
+| 1  | `initialized`       | `emit_initialized`     | Contract first configured via `init()`                         |
+| 2  | `refund_requested`  | `emit_refund_requested`| New request created in `Pending` status                        |
+| 3  | `refund_processed`  | `emit_refund_processed`| Admin moves a request to `Approved`, `Rejected`, `Disputed` or `Processed` |
+| 4  | `fees_withdrawn`    | `emit_fees_withdrawn`  | Admin withdraws accumulated protocol fees                      |
+| 5  | `config_updated`    | `emit_config_updated`  | Admin changes fee, minimum amount or request lifetime          |
+| 6  | `refund_expired`    | `emit_refund_expired`  | Anyone expires a `Pending` request older than its lifetime      |
+
+**Total: 6 topics**
+
+> `refund_processed` carries the transition in its payload `status` field, so
+> indexers filter on `request_id`. Expiry has its own topic because it needs no
+> admin decision.
+
+---
+
 ## Indexer Quick-Reference
 
 Subscribe by contract address + topic[0]:

@@ -551,6 +551,10 @@ fn error_codes_doc_matches_contract_enums() {
         RefundError::InsufficientBalance,
         RefundError::InvalidRecipient,
         RefundError::TooManyOpenRequests,
+        RefundError::ApprovedAmountInvalid,
+        RefundError::DisputeWindowClosed,
+        RefundError::AlreadyDisputed,
+        RefundError::NotExpired,
     ];
     for &v in &refund_variants {
         match v {
@@ -565,7 +569,11 @@ fn error_codes_doc_matches_contract_enums() {
             | RefundError::InvalidStatus
             | RefundError::InsufficientBalance
             | RefundError::InvalidRecipient
-            | RefundError::TooManyOpenRequests => {}
+            | RefundError::TooManyOpenRequests
+            | RefundError::ApprovedAmountInvalid
+            | RefundError::DisputeWindowClosed
+            | RefundError::AlreadyDisputed
+            | RefundError::NotExpired => {}
         }
     }
     assert_section_matches(&sections, "Refund", &refund_variants, |e| e as u32);

@@ -19,7 +19,7 @@ fn setup() -> (Env, Address, RefundContractClient<'static>) {
     let admin = Address::generate(&env);
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
-    client.init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
     (env, admin, client)
 }
 
@@ -317,7 +317,7 @@ fn test_update_config_bumps_instance_ttl() {
     let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
     assert!(ttl_before < INSTANCE_BUMP_THRESHOLD);
 
-    client.update_config(&admin, &500, &200);
+    client.update_config(&admin, &500, &200, &0);
 
     let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
     assert_eq!(ttl_after, INSTANCE_BUMP_AMOUNT);
