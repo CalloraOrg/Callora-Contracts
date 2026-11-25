@@ -17,7 +17,8 @@ use soroban_sdk::contracterror;
 /// | 50   | InvalidAdminCooldown        | Admin cool-off window is outside accepted bounds     |
 /// | 51   | NoAdminTransferPending      | No admin transfer is pending                         |
 /// | 52   | NewAdminSameAsCurrent       | Proposed admin matches the current admin             |
-/// | 53   | InvalidExpiry               | `add_address_until` expiry is not in the future      |
+/// | 53   | AdminTransferCancelled      | Admin transfer was cancelled                        |
+/// | 54   | InvalidExpiry               | `add_address_until` expiry is not in the future      |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -45,6 +46,6 @@ pub enum WhitelistError {
     NewAdminSameAsCurrent = 52,
     /// Admin transfer was cancelled (code 53).
     AdminTransferCancelled = 53,
-    /// Expiry passed to `add_address_until` is not strictly in the future (code 53).
-    InvalidExpiry = 53,
+    /// Expiry passed to `add_address_until` is not strictly in the future (code 54).
+    InvalidExpiry = 54,
 }

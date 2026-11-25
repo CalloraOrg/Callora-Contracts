@@ -45,33 +45,47 @@ fn set_admin_requires_auth() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn accept_admin_requires_auth() {
     let env = Env::default();
     let (admin, _vault, client) = setup(&env);
 
     env.mock_all_auths();
-    let new_admin = Address::generate(&env);
-    client.set_admin(&admin, &new_admin);
+    let pending_admin = Address::generate(&env);
+    client.set_admin(&admin, &pending_admin);
+    assert_eq!(client.get_pending_admin(), Some(pending_admin.clone()));
 
     env.set_auths(&[]);
     let res = client.try_accept_admin();
     assert!(res.is_err(), "accept_admin must require auth");
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_pending_admin(), Some(pending_admin.clone()));
+
+    // The same pending transfer succeeds once the nominee is authorized,
+    // proving the previous failure came from the missing auth.
+    env.mock_all_auths();
+    client.accept_admin();
+    assert_eq!(client.get_admin(), pending_admin);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_admin_transfer_requires_auth() {
     let env = Env::default();
     let (admin, _vault, client) = setup(&env);
 
     env.mock_all_auths();
-    let new_admin = Address::generate(&env);
-    client.set_admin(&admin, &new_admin);
+    let pending_admin = Address::generate(&env);
+    client.set_admin(&admin, &pending_admin);
+    assert_eq!(client.get_pending_admin(), Some(pending_admin.clone()));
 
     env.set_auths(&[]);
     let res = client.try_cancel_admin_transfer(&admin);
     assert!(res.is_err(), "cancel_admin_transfer must require auth");
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_pending_admin(), Some(pending_admin));
+
+    env.mock_all_auths();
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(client.get_pending_admin(), None);
 }
 
 #[test]

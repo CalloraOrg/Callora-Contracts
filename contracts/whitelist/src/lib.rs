@@ -456,16 +456,12 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
-        let cleared: u32 = env
-            .storage()
-            .instance()
-            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
-            .map(|list| list.len())
-            .unwrap_or(0);
+        let whitelist: Option<Vec<Address>> =
+            env.storage().instance().get(&StorageKey::WhitelistList);
+        let cleared = whitelist.as_ref().map(|list| list.len()).unwrap_or(0);
         // Remove each address's optional expiry before dropping the list so no
         // orphaned expiry entries survive a clear.
-        if let Some(list) = env
-        {
+        if let Some(list) = whitelist {
             for address in list.iter() {
                 env.storage()
                     .instance()
@@ -1296,6 +1292,6 @@ mod tests {
         assert_eq!(WhitelistError::InvalidAdminCooldown as u32, 50);
         assert_eq!(WhitelistError::NoAdminTransferPending as u32, 51);
         assert_eq!(WhitelistError::NewAdminSameAsCurrent as u32, 52);
-        assert_eq!(WhitelistError::InvalidExpiry as u32, 53);
+        assert_eq!(WhitelistError::InvalidExpiry as u32, 54);
     }
 }
