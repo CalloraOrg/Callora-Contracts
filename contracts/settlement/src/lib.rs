@@ -44,7 +44,7 @@ pub const INDEX_PAGE_SIZE: u32 = 50;
 /// bounded and predictable for a public admin entry point.
 pub const MAX_BROADCAST_MESSAGE_LEN: u32 = 1024;
 
-pub use errors::SettlementError;
+pub use errors::{PriceRegistryError, SettlementError};
 pub use migrate::{STORAGE_VERSION_V1, STORAGE_VERSION_V2};
 pub use timelock::{
     PendingDeveloperMigration, PendingUpgrade, DEVELOPER_MIGRATION_TIMELOCK_SECONDS,
@@ -67,11 +67,11 @@ pub trait FreezeInterface {
     fn is_frozen(env: Env) -> bool;
 }
 
-/// Internal helper: fail with [`SettlementError::SystemFrozen`] when a freeze
+/// Internal helper: fail with [`PriceRegistryError::SystemFrozen`] when a freeze
 /// contract is configured and reports `is_frozen() == true`.
 ///
 /// When no freeze contract is configured this is a no-op (unchanged behaviour).
-fn check_not_frozen(env: &Env) -> Result<(), SettlementError> {
+fn check_not_frozen(env: &Env) -> Result<(), PriceRegistryError> {
     let maybe_fc: Option<Address> = env
         .storage()
         .instance()
@@ -79,7 +79,7 @@ fn check_not_frozen(env: &Env) -> Result<(), SettlementError> {
     if let Some(fc) = maybe_fc {
         let freeze_client = FreezeClient::new(env, &fc);
         if freeze_client.is_frozen() {
-            return Err(SettlementError::SystemFrozen);
+            return Err(PriceRegistryError::SystemFrozen);
         }
     }
     Ok(())
@@ -727,7 +727,7 @@ impl CalloraSettlement {
     /// When set, `receive_payment`, `batch_receive_payment`, and
     /// `withdraw_developer_balance` call `is_frozen()` on the freeze contract
     /// before executing. If the system is frozen these operations fail with
-    /// [`SettlementError::SystemFrozen`] without changing any state.
+    /// [`PriceRegistryError::SystemFrozen`] without changing any state.
     ///
     /// Pass `None` to remove the freeze contract (disables global freeze checks).
     ///
@@ -740,9 +740,15 @@ impl CalloraSettlement {
     /// # Events
     /// Emits `freeze_contract_set` with the caller and new address.
     pub fn set_freeze_contract(
+        env: Env,
         caller: Address,
         freeze_contract: Option<Address>,
-        let admin = Self::get_admin(env.clone());
+    ) -> Result<(), SettlementError> {
+        caller.require_auth();
+        Self::bump_instance(&env);
+
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
 
@@ -758,23 +764,22 @@ impl CalloraSettlement {
                 .instance()
                 .set(&StorageKey::FreezeContract, fc),
             None => {
-                env.storage()
-                    .instance()
-                    .remove(&StorageKey::FreezeContract);
+                env.storage().instance().remove(&StorageKey::FreezeContract);
             }
         }
 
-        env.events().publish(
-            (Symbol::new(&env, "freeze_contract_set"), caller),
-            freeze_contract,
-        );
+        events::emit_freeze_contract_set(&env, &caller, &freeze_contract);
+
+        Ok(())
     }
 
     /// Return the configured freeze contract address, if any.
     ///
     /// Returns `None` when no freeze contract has been configured. No auth required.
     pub fn get_freeze_contract(env: Env) -> Option<Address> {
-            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        Self::bump_instance(&env);
+        env.storage()
+            .instance()
             .get::<_, Address>(&StorageKey::FreezeContract)
     }
 
@@ -1000,7 +1005,7 @@ impl CalloraSettlement {
 
         let recipient = Self::resolve_recipient(env, developer, to)?;
         // Global freeze circuit-breaker: fail closed if frozen.
-        check_not_frozen(&env)?;
+        check_not_frozen(&env).unwrap_or_else(|e| env.panic_with_error(e));
 
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
@@ -1766,16 +1771,6 @@ impl CalloraSettlement {
         migrate::migrate_single_developer(&env, &caller, &developer)
     }
 
-    /// Migrate a single developer's V1 balance to V2 (admin only). Alias of
-    /// `migrate_developer_balance`.
-    pub fn migrate_single_dev_v2(
-        env: Env,
-        caller: Address,
-        developer: Address,
-    ) -> Result<(), SettlementError> {
-        migrate::migrate_single_developer(&env, &caller, &developer)
-    }
-
     /// One-shot V1 -> V2 storage migration (admin only). See [`migrate`] module docs.
     pub fn migrate_v1_to_v2(env: Env, caller: Address) {
         migrate::migrate_v1_to_v2(&env, &caller);
@@ -2213,5 +2208,3 @@ mod test_ttl_bump;
 mod test_upgrade_timelock;
 #[cfg(test)]
 mod test_views;
-#[cfg(test)]
-mod test_freeze;

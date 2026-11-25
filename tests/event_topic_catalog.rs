@@ -190,6 +190,9 @@ const SETTLEMENT_TOPICS: &[(&str, fn(&Env) -> Symbol)] = &[
     ("supported_token_removed", |e| {
         callora_settlement::events::event_supported_token_removed(e)
     }),
+    ("freeze_contract_set", |e| {
+        callora_settlement::events::event_freeze_contract_set(e)
+    }),
 ];
 
 // ---------------------------------------------------------------------------
@@ -375,7 +378,7 @@ fn topic_counts_match_catalog_documentation() {
     );
     assert_eq!(
         SETTLEMENT_TOPICS.len(),
-        20,
+        21,
         "settlement topic count changed — update docs/EVENT_TOPICS.md"
     );
     assert_eq!(
@@ -393,7 +396,7 @@ fn topic_counts_match_catalog_documentation() {
             + SETTLEMENT_TOPICS.len()
             + REVENUE_POOL_TOPICS.len()
             + DISTRIBUTE_TOPICS.len(),
-        94,
+        95,
         "total topic count changed — update docs/EVENT_TOPICS.md"
     );
 }

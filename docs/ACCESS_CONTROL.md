@@ -138,7 +138,7 @@ is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MI
 | `accept_vault` | Proposed Vault + Admin | Finalizing pending vault rotation (step 2 of two-step rotation) |
 | `broadcast` | Admin | Broadcasting operator/emergency message |
 | `upgrade` | Admin | Upgrading contract code WASM |
-| `migrate_developer_balance` (and alias `migrate_single_dev_v2`) | Admin | Storage schema migration for developer balance |
+| `migrate_developer_balance` | Admin | Storage schema migration for developer balance |
 | `migrate_v1_to_v2` / `migrate_v1_to_v2_page` | Admin | Storage schema migration |
 | `batch_withdraw_balance_cursor` | Anyone | Compatibility placeholder for cursor batch withdrawals |
 | `batch_settle` | Anyone | Delegates to settlement batch helper |

@@ -580,7 +580,7 @@ mod write_paths {
             let v1 = StorageKey::DeveloperBalanceV1(dev.clone());
             ctx.env.storage().persistent().set(&v1, &321_i128);
         });
-        ctx.client().migrate_single_dev_v2(&ctx.admin, &dev);
+        ctx.client().migrate_developer_balance(&ctx.admin, &dev);
         assert_eq!(ttl(&ctx, &balance_key(&ctx, &dev)), PERSISTENT_BUMP_AMOUNT);
     }
 
