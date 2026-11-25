@@ -130,6 +130,9 @@ pub enum StorageKey {
     Settlement,
     /// Monotonic rotation nonce guarding authorized-caller rotation against replay.
     AuthCallerNonce,
+    /// Optional freeze contract address. When set, deduct and batch_deduct
+    /// consult it before proceeding. `None` means no freeze check is performed.
+    FreezeContract,
 }
 
 /// Ledgers per day at a 5-second close cadence.
@@ -184,6 +187,27 @@ pub mod settlement {
         fn record_deduction(env: Env, amount: i128, request_id: u64);
         fn clear_deduction_request(env: Env, request_id: u64);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Freeze client interface
+// ---------------------------------------------------------------------------
+
+/// Minimal cross-contract interface for the CalloraFreeze circuit-breaker.
+///
+/// Used by both the vault and settlement to query the global frozen state before
+/// executing state-changing operations.  Defined as a `#[contractclient]` trait
+/// so the same interface compiles in both native (test) and wasm32 builds.
+///
+/// # Fail-closed policy
+/// If no freeze contract address is configured the check is skipped entirely
+/// (no-op, unchanged behaviour).  If the cross-contract call itself fails the
+/// error propagates as `VaultError::Frozen` / `SettlementError::SystemFrozen`,
+/// erring on the side of safety.
+#[contractclient(name = "FreezeClient")]
+pub trait FreezeInterface {
+    /// Return `true` when the contract is in the frozen state.
+    fn is_frozen(env: Env) -> bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +288,10 @@ impl CalloraVault {
         {
             return Err(VaultError::Paused);
         }
+
+        // Global freeze circuit-breaker: fail closed if the configured
+        // freeze contract reports is_frozen() == true.
+        Self::check_not_frozen(env)?;
 
         if items.is_empty() {
             return Err(VaultError::BatchEmpty);
@@ -602,7 +630,6 @@ impl CalloraVault {
             .instance()
             .get::<_, Address>(&DataKey::UsdcToken)
             .ok_or(VaultError::NotInitialized)?;
-
         let current_bal = env
             .storage()
             .instance()
@@ -1482,6 +1509,99 @@ impl CalloraVault {
         env.storage()
             .instance()
             .get::<_, Address>(&DataKey::RevenuePool)
+    }
+
+    // -----------------------------------------------------------------------
+    // Freeze contract configuration (Issue #1527)
+    // -----------------------------------------------------------------------
+
+    /// Set or clear the optional freeze contract address.
+    ///
+    /// When set, `deduct` and `batch_deduct` call `is_frozen()` on the freeze
+    /// contract before executing. If the system is frozen both operations fail
+    /// with [`VaultError::Frozen`] without changing any state.
+    ///
+    /// Pass `None` to remove the freeze contract (disables global freeze checks).
+    ///
+    /// # Authorization
+    /// Only the current owner may call this function.
+    ///
+    /// # Validation
+    /// - The freeze contract address cannot be the vault itself.
+    /// - The freeze contract address cannot be the USDC token.
+    ///
+    /// # Events
+    /// Emits `freeze_contract_set` with the caller and new address.
+    pub fn set_freeze_contract(
+        env: Env,
+        caller: Address,
+        freeze_contract: Option<Address>,
+    ) -> Result<(), VaultError> {
+        caller.require_auth();
+        Self::require_owner(env.clone(), caller.clone())?;
+
+        if let Some(ref fc) = freeze_contract {
+            // Cannot be the vault itself.
+            if *fc == env.current_contract_address() {
+                return Err(VaultError::Unauthorized);
+            }
+            // Cannot be the USDC token address.
+            let usdc = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&DataKey::UsdcToken)
+                .unwrap_or_else(|| panic!("USDC token not set"));
+            if *fc == usdc {
+                return Err(VaultError::Unauthorized);
+            }
+        }
+
+        match &freeze_contract {
+            Some(fc) => env
+                .storage()
+                .instance()
+                .set(&StorageKey::FreezeContract, fc),
+            None => {
+                env.storage()
+                    .instance()
+                    .remove(&StorageKey::FreezeContract);
+            }
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "freeze_contract_set"), caller),
+            freeze_contract,
+        );
+        Ok(())
+    }
+
+    /// Return the configured freeze contract address, if any.
+    ///
+    /// Returns `None` when no freeze contract has been configured. No auth required.
+    pub fn get_freeze_contract(env: Env) -> Option<Address> {
+        Self::bump_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get::<_, Address>(&StorageKey::FreezeContract)
+    }
+
+    /// Internal helper: fail with [`VaultError::Frozen`] when the freeze
+    /// contract is configured and reports `is_frozen() == true`.
+    ///
+    /// When no freeze contract is configured this is a no-op (unchanged behaviour).
+    /// Any error from the cross-contract call is treated as frozen (fail-closed).
+    fn check_not_frozen(env: &Env) -> Result<(), VaultError> {
+        let maybe_fc: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&StorageKey::FreezeContract);
+        if let Some(fc) = maybe_fc {
+            let freeze_client = FreezeClient::new(env, &fc);
+            if freeze_client.is_frozen() {
+                return Err(VaultError::Frozen);
+            }
+        }
+        Ok(())
     }
 
     /// Return the capability bitmap for this contract version.
@@ -3205,6 +3325,9 @@ mod test_init_hardening;
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_freeze;
 
 // #[cfg(test)]
 // mod test_gas_budget;

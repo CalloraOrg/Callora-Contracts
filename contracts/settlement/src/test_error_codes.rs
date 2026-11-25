@@ -59,6 +59,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         (51, SettlementError::TooManyResults),
         (52, SettlementError::RecipientRegistryNotSet),
         (53, SettlementError::PayoutNameNotFound),
+        (52, SettlementError::SystemFrozen),
     ];
 
     let mut seen = BTreeSet::new();
@@ -70,7 +71,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 50);
+    assert_eq!(seen.len(), 51);
 }
 
 #[test]
@@ -127,6 +128,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |",
         "| 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |",
         "| 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |",
+        "| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |",
     ];
 
     for line in expected_lines {

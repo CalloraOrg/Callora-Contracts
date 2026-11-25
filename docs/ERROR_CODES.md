@@ -73,6 +73,7 @@ must not be reassigned once released.
 | 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
 | 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
 | 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
+| 60 | `Frozen` | Vault | System is globally frozen via the configured freeze contract |
 
 ## Settlement
 
@@ -133,6 +134,7 @@ must not be reassigned once released.
 | 53 | `InvalidPrice` | Settlement | Price string failed validation |
 | 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
 | 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
+| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
 
 ## Revenue Pool
 

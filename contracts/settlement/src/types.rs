@@ -132,6 +132,10 @@ pub enum StorageKey {
     /// Persistent: payout name configured by a developer, resolved through
     /// [`StorageKey::RecipientRegistry`] at withdrawal time.
     PayoutName(Address),
+    /// Optional freeze contract address. When set, `receive_payment`,
+    /// `batch_receive_payment`, and `withdraw_developer_balance` consult it
+    /// before proceeding. `None` means no freeze check is performed.
+    FreezeContract,
 }
 
 /// Accounting-only deduction recorded; does not imply a token transfer.

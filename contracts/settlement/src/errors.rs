@@ -63,6 +63,7 @@ use soroban_sdk::contracterror;
 /// | 53   | InvalidPrice                 | Price string failed validation                       |
 /// | 52   | RecipientRegistryNotSet      | A payout name is set but no recipient registry is configured |
 /// | 53   | PayoutNameNotFound           | The configured payout name no longer resolves in the registry |
+/// | 52   | SystemFrozen                 | System is globally frozen via the configured freeze contract |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -157,4 +158,6 @@ pub enum PriceRegistryError {
     InvalidOfferingId = 52,
     /// Price string is empty, non-visible ASCII, or not a valid decimal number.
     InvalidPrice = 53,
+    /// System is globally frozen via the configured freeze contract (code 52).
+    SystemFrozen = 52,
 }
