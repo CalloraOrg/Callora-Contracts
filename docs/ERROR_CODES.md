@@ -74,6 +74,8 @@ must not be reassigned once released.
 | 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
 | 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
 | 60 | `Frozen` | Vault | System is globally frozen via the configured freeze contract |
+| 59 | `SettlementEqualsRevenuePool` | Vault | Settlement and revenue pool addresses must be distinct |
+| 60 | `TooManyIds` | Vault | `prune_processed_requests` received more ids than `MAX_PRUNE_IDS` (50) allows; split into smaller batches |
 
 ## Settlement
 

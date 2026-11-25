@@ -162,6 +162,17 @@ pub const REQUEST_ID_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
 /// forced past `i128::MAX` in a single invocation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+/// Maximum number of request-id values permitted in a single
+/// [`CalloraVault::prune_processed_requests`] call.
+///
+/// Chosen to match [`MAX_BATCH_SIZE`] (50): each id may trigger a
+/// cross-contract call to the settlement contract, so an unbounded vector can
+/// exhaust the per-transaction instruction budget partway through, leaving
+/// storage in a partially-modified state.  Capping at 50 keeps the worst-case
+/// instruction cost of a single prune call within the same envelope as a full
+/// `batch_deduct`.
+pub const MAX_PRUNE_IDS: u32 = 50;
+
 /// Strkey of the all-zero contract address, rejected as a `withdraw_to` recipient.
 const ZERO_CONTRACT_ADDRESS: &str = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4";
 
@@ -2780,13 +2791,22 @@ impl CalloraVault {
     /// Remove processed-request markers for the given request IDs.
     ///
     /// Owner-only. Idempotent: removing a non-existent marker is a no-op.
+    /// An empty `ids` vector is accepted and treated as a no-op.
     ///
     /// ## Pause Policy
     /// This function is **ALLOWED when paused** for emergency recovery.
     ///
     /// ### Parameters
     /// - `caller` — must be the vault owner.
-    /// - `ids` — vector of request-id values to prune.
+    /// - `ids` — vector of request-id values to prune; must not exceed
+    ///   [`MAX_PRUNE_IDS`] entries.
+    ///
+    /// ### Errors
+    /// - [`VaultError::Unauthorized`] — `caller` is not the vault owner.
+    ///   Checked before the length guard so a non-owner never learns whether
+    ///   the vector would have been accepted.
+    /// - [`VaultError::TooManyIds`] — `ids.len() > MAX_PRUNE_IDS`.  No
+    ///   storage is touched and no events are emitted.
     ///
     /// ### Events
     /// Emits `request_id_pruned` for each successfully pruned marker.
@@ -2797,6 +2817,10 @@ impl CalloraVault {
     ) -> Result<(), VaultError> {
         caller.require_auth();
         Self::require_owner(env.clone(), caller)?;
+
+        if ids.len() > MAX_PRUNE_IDS {
+            return Err(VaultError::TooManyIds);
+        }
 
         for id in ids.iter() {
             let key = StorageKey::ProcessedRequest(id);

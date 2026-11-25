@@ -171,4 +171,7 @@ pub enum VaultError {
     SettlementEqualsRevenuePool = 59,
     /// System is globally frozen via the configured freeze contract (code 60).
     Frozen = 60,
+    /// `prune_processed_requests` received more ids than [`crate::MAX_PRUNE_IDS`]
+    /// allows (code 60).  Split the work into smaller batches.
+    TooManyIds = 60,
 }
