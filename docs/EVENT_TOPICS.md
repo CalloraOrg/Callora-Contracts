@@ -111,8 +111,9 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 49 | `upgrade_replaced`        | `event_upgrade_replaced`       | Live upgrade proposal replaced by a newer one |
 | 50 | `sweep_replaced`          | `event_sweep_replaced`         | Live sweep proposal replaced by a newer one   |
 | 51 | `proposal_expired`        | `event_proposal_expired`       | Expired timelock proposal pruned              |
+| 52 | `ownership_cancelled`     | `event_ownership_cancelled`    | Owner cancels a pending ownership transfer    |
 
-**Total: 51 topics**
+**Total: 52 topics**
 
 ---
 
@@ -235,7 +236,7 @@ Distribute:   GCONTRACT_DISTRIBUTE...
 
 **Vault-specific** (not shared with other contracts):
 `deduct`, `deposit`, `vault_paused`, `vault_unpaused`,
-`ownership_nominated`, `ownership_accepted`, `withdraw`, `withdraw_to`,
+`ownership_nominated`, `ownership_accepted`, `ownership_cancelled`, `withdraw`, `withdraw_to`,
 `set_authorized_caller`, `set_max_deduct`, `set_revenue_pool`,
 `clear_revenue_pool`, `set_settlement`, `metadata_set`, `metadata_updated`,
 `metadata_removed`, `price_set`, `price_removed`, `allowlist_add`,
