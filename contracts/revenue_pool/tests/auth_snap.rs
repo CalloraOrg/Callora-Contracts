@@ -13,7 +13,7 @@
 //! | Category                         | Entrypoints covered |
 //! |----------------------------------|---------------------|
 //! | Initialization                   | `init` |
-//! | Admin rotation                   | `set_admin`, `accept_admin`, `claim_admin`, `cancel_admin_transfer` |
+//! | Admin rotation                   | `set_admin`, `accept_admin`, `cancel_admin_transfer` |
 //! | Pause guardian                   | `set_pause_guardian`, `clear_pause_guardian` |
 //! | Circuit breaker                  | `pause`, `unpause` |
 //! | Yield management                 | `receive_payment`, `deposit_yield`, `set_max_distribute` |
@@ -127,21 +127,6 @@ fn accept_admin_requires_auth() {
     env.set_auths(&[]);
     let res = client.try_accept_admin(&pending);
     assert!(res.is_err(), "accept_admin must require auth");
-}
-
-/// Verify that `claim_admin` (alias for `accept_admin`) requires auth on `caller`.
-#[test]
-fn claim_admin_requires_auth() {
-    let env = Env::default();
-    let (admin, _, client, _, _, _) = setup_pool(&env);
-
-    env.mock_all_auths();
-    let pending = Address::generate(&env);
-    client.set_admin(&admin, &pending);
-
-    env.set_auths(&[]);
-    let res = client.try_claim_admin(&pending);
-    assert!(res.is_err(), "claim_admin must require auth");
 }
 
 /// Verify that `cancel_admin_transfer` requires auth on `caller`.
@@ -548,12 +533,12 @@ fn admin_with_auth_can_call_all_entrypoints() {
     client.cancel_admin_transfer(&admin);
 
     client.set_admin(&admin, &new_admin);
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);
 
     // Reset admin back for consistency.
     client.set_admin(&new_admin, &admin);
-    client.claim_admin(&admin);
+    client.accept_admin(&admin);
     assert_eq!(client.get_admin(), admin);
 
     // --- Pause guardian ---

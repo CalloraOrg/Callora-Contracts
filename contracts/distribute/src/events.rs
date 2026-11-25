@@ -65,15 +65,15 @@ pub fn event_admin_changed(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"admin_transfer_started"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via `set_admin`.
-/// The nominee must call `claim_admin` to complete the two-step transfer.
+/// The nominee must call `accept_admin` to complete the two-step transfer.
 pub fn event_admin_transfer_started(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_started")
 }
 
 /// Returns the Symbol for the `"admin_transfer_completed"` event topic.
 ///
-/// Emitted when the pending admin successfully claims ownership via
-/// `claim_admin`, completing the two-step admin handover.
+/// Emitted when the pending admin successfully accepts ownership via
+/// `accept_admin`, completing the two-step admin handover.
 pub fn event_admin_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_completed")
 }

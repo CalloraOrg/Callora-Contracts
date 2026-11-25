@@ -193,7 +193,7 @@ impl Distribute {
     // -----------------------------------------------------------------------
 
     /// Nominate a new admin. Only the current admin may call.
-    /// The nominee must call `claim_admin` to complete.
+    /// The nominee must call `accept_admin` to complete.
     ///
     /// # Panics
     /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
@@ -264,11 +264,6 @@ impl Distribute {
             ),
             (),
         );
-    }
-
-    /// Alias for `accept_admin`.
-    pub fn claim_admin(env: Env, caller: Address) {
-        Self::accept_admin(env, caller);
     }
 
     /// Cancel a pending admin transfer. Only the current admin may call.

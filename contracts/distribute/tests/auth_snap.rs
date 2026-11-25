@@ -9,7 +9,7 @@
 //! | Category              | Entrypoints covered                                               |
 //! |-----------------------|-------------------------------------------------------------------|
 //! | Initialization        | `init`                                                            |
-//! | Admin rotation        | `set_admin`, `accept_admin`, `claim_admin`, `cancel_admin_transfer` |
+//! | Admin rotation        | `set_admin`, `accept_admin`, `cancel_admin_transfer`              |
 //! | Circuit-breaker       | `pause`, `unpause`                                                |
 //! | Distribution cap      | `set_max_distribute`                                              |
 //! | Distribution          | `distribute`, `batch_distribute`                                  |
@@ -145,20 +145,6 @@ fn accept_admin_requires_auth() {
     env.set_auths(&[]);
     let result = client.try_accept_admin(&new_admin);
     assert!(result.is_err(), "accept_admin must require auth");
-}
-
-#[test]
-fn claim_admin_requires_auth() {
-    let env = Env::default();
-    let (_, admin, _, client, _) = setup(&env);
-
-    let new_admin = Address::generate(&env);
-    env.mock_all_auths();
-    client.set_admin(&admin, &new_admin);
-
-    env.set_auths(&[]);
-    let result = client.try_claim_admin(&new_admin);
-    assert!(result.is_err(), "claim_admin must require auth");
 }
 
 #[test]
