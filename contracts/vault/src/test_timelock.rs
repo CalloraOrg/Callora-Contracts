@@ -88,10 +88,9 @@ fn set_window_updates_storage_and_emits_event() {
 /// #1112 — default-to-custom: event payload must be (DEFAULT, new_window),
 /// not (new_window, new_window).
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_window_event_payload_default_to_custom() {
     let env = Env::default();
-    let (vault_addr, client, admin, _, _) = setup(&env);
+    let (_, client, admin, _, vault_addr) = setup(&env);
 
     let new_window = MIN_TIMELOCK_SECONDS + 7_200; // 1 h + 2 h = 3 h
     client.set_timelock_window(&admin, &new_window);
@@ -124,10 +123,9 @@ fn set_window_event_payload_default_to_custom() {
 /// #1112 — custom-to-custom: event payload carries the previously-set window,
 /// not the newly-set one, as the first element.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn set_window_event_payload_custom_to_custom() {
     let env = Env::default();
-    let (vault_addr, client, admin, _, _) = setup(&env);
+    let (_, client, admin, _, vault_addr) = setup(&env);
 
     // First change: default (172_800) → first_window.
     let first_window = MIN_TIMELOCK_SECONDS + 3_600; // 2 h
@@ -415,10 +413,9 @@ fn cancel_upgrade_removes_proposal() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn propose_sweep_stores_recipient_amount_and_deadline() {
     let env = Env::default();
-    let (vault_addr, client, admin, recipient, _) = setup(&env);
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
     let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
@@ -523,10 +520,9 @@ fn propose_sweep_rejects_non_positive_amount() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_sweep_removes_proposal() {
     let env = Env::default();
-    let (vault_addr, client, admin, recipient, _) = setup(&env);
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
     let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
@@ -637,10 +633,9 @@ fn propose_upgrade_rejects_timestamp_overflow() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn propose_sweep_rejects_timestamp_overflow() {
     let env = Env::default();
-    let (vault_addr, client, admin, recipient, _) = setup(&env);
+    let (_, client, admin, recipient, vault_addr) = setup(&env);
     let usdc = client.get_usdc_token();
     let stellar_admin = token::StellarAssetClient::new(&env, &usdc);
     stellar_admin.mint(&vault_addr, &1000);
