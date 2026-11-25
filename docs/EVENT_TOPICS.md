@@ -145,8 +145,12 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 21 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
 | 22 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
 | 23 | `deduction_recorded`         | `event_deduction_recorded`         | Vault accounting deduction recorded            |
+| 24 | `payout_name_set`            | `event_payout_name_set`            | Developer configures a registry payout name    |
+| 25 | `payout_name_cleared`        | `event_payout_name_cleared`        | Developer removes their registry payout name   |
+| 24 | `deduction_request_cleared`  | `event_deduction_request_cleared`  | Recorded deduction request marker cleared      |
 
-**Total: 23 topics**
+**Total: 25 topics**
+**Total: 24 topics**
 
 ---
 
@@ -251,7 +255,7 @@ Distribute:   GCONTRACT_DISTRIBUTE...
 `payment_received`, `balance_credited`, `developer_withdraw`,
 `daily_withdraw_cap_changed`, `claim_window_changed`, `vault_proposed`,
 `vault_accepted`, `developer_force_credited`, `admin_migration_proposed`,
-`admin_migration`, `developer_min_balance_changed`, `initialized`, `deduction_recorded`
+`admin_migration`, `developer_min_balance_changed`, `initialized`, `deduction_recorded`, `deduction_request_cleared`
 
 **Revenue Pool-only** (not emitted by any other contract):
 `pause_guardian_set`, `pause_guardian_cleared`,

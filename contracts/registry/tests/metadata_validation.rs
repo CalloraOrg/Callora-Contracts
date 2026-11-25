@@ -458,7 +458,6 @@ fn rejected_metadata_leaves_no_partial_state_gated() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_control_character_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -471,12 +470,14 @@ fn rejects_control_character_in_offering_id() {
         "control char offering id must be rejected with InvalidOfferingId, got {:?}",
         result
     );
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
     assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_line_break_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -485,11 +486,14 @@ fn rejects_line_break_in_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_non_ascii_multibyte_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -498,11 +502,14 @@ fn rejects_non_ascii_multibyte_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_leading_whitespace_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -511,11 +518,14 @@ fn rejects_leading_whitespace_in_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_trailing_whitespace_in_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -524,11 +534,14 @@ fn rejects_trailing_whitespace_in_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_whitespace_only_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -537,11 +550,14 @@ fn rejects_whitespace_only_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_empty_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -550,11 +566,14 @@ fn rejects_empty_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_over_length_offering_id() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
@@ -564,22 +583,39 @@ fn rejects_over_length_offering_id() {
 
     let result = client.try_register_offering(&admin, &developer, &oid, &meta);
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
+    assert_eq!(client.registered_count(), 0);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn rejects_invalid_offering_id_in_with_gate_variant() {
     let env = Env::default();
     let (admin, client, developer) = setup_registry(&env);
     let oid = metadata(&env, "bad\u{0001}id");
-    let token = Address::generate(&env);
     let meta = metadata(&env, "ipfs://cid");
 
-    let result =
-        client.try_register_offering_with_gate(&admin, &developer, &token, &100i128, &oid, &meta);
+    // Use a real SAC so the balance gate passes; only the offering id is invalid.
+    let owner = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(owner);
+    let token_addr = sac.address();
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&developer, &10_000);
+
+    let result = client.try_register_offering_with_gate(
+        &admin,
+        &developer,
+        &token_addr,
+        &100i128,
+        &oid,
+        &meta,
+    );
     assert!(matches!(result, Err(Ok(RegistryError::InvalidOfferingId))));
-    assert!(!client.is_offering_registered(&oid));
+    assert!(matches!(
+        client.try_is_offering_registered(&oid),
+        Err(Ok(RegistryError::InvalidOfferingId))
+    ));
     assert_eq!(client.registered_count(), 0);
 }
 

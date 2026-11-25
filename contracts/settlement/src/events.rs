@@ -24,7 +24,7 @@
 //!    byte-identity of the topic string.
 //! 4. Update `EVENT_SCHEMA.md` and `docs/EVENT_TOPICS.md`.
 
-use soroban_sdk::{Address, BytesN, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, String, Symbol};
 
 use crate::limits::MinBalanceChanged;
 use crate::types::{
@@ -97,6 +97,30 @@ pub fn emit_supported_token_removed(env: &Env, caller: &Address, token: &Address
     );
 }
 
+/// Returns the Symbol for the `payout_name_set` event topic.
+pub fn event_payout_name_set(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_set")
+}
+
+/// Emit `payout_name_set` when a developer configures a registry payout name.
+pub fn emit_payout_name_set(env: &Env, developer: &Address, name: &String) {
+    env.events().publish(
+        (event_payout_name_set(env), developer.clone()),
+        name.clone(),
+    );
+}
+
+/// Returns the Symbol for the `payout_name_cleared` event topic.
+pub fn event_payout_name_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_cleared")
+}
+
+/// Emit `payout_name_cleared` when a developer removes their payout name.
+pub fn emit_payout_name_cleared(env: &Env, developer: &Address) {
+    env.events()
+        .publish((event_payout_name_cleared(env), developer.clone()), ());
+}
+
 /// Returns the canonical Symbol for the `deduction_recorded` event topic.
 pub fn event_deduction_recorded(env: &Env) -> Symbol {
     Symbol::new(env, "deduction_recorded")
@@ -105,6 +129,17 @@ pub fn event_deduction_recorded(env: &Env) -> Symbol {
 /// Emit an accounting-only vault deduction after its replay marker is stored.
 pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
     env.events().publish((event_deduction_recorded(env),), data);
+}
+
+/// Returns the canonical Symbol for the `deduction_request_cleared` event topic.
+pub fn event_deduction_request_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "deduction_request_cleared")
+}
+
+/// Emit `deduction_request_cleared` when a recorded deduction request marker is removed.
+pub fn emit_deduction_request_cleared(env: &Env, request_id: u64) {
+    env.events()
+        .publish((event_deduction_request_cleared(env),), request_id);
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
@@ -808,6 +843,15 @@ mod tests {
         assert_eq!(
             event_deduction_recorded(&env),
             Symbol::new(&env, "deduction_recorded")
+        );
+    }
+
+    #[test]
+    fn test_event_deduction_request_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_deduction_request_cleared(&env),
+            Symbol::new(&env, "deduction_request_cleared")
         );
     }
 

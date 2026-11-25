@@ -40,6 +40,7 @@
 //! | `migrate`             | `emergency_migrated`| `(topic)`       | `target_version`     |
 //! | `authorize_upgrade`   | `upgrade_authorised`| `(topic, hash)` | `target_version`     |
 
+use callora_storage_migration::{AuthorizeOptions, MigrateOptions, MigrationKeys, StubError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
 };
@@ -127,6 +128,33 @@ fn event_upgrade_authorised(env: &Env) -> Symbol {
     Symbol::new(env, "upgrade_authorised")
 }
 
+impl From<StubError> for EmergencyError {
+    fn from(err: StubError) -> Self {
+        match err {
+            StubError::NotInitialized => EmergencyError::NotInitialized,
+            StubError::AlreadyInitialized => EmergencyError::AlreadyInitialized,
+            StubError::Unauthorized => EmergencyError::Unauthorized,
+            StubError::LegacyStateMissing => EmergencyError::LegacyStateMissing,
+            StubError::InvalidLegacyBalance => EmergencyError::InvalidLegacyBalance,
+            StubError::VersionMismatch => EmergencyError::VersionMismatch,
+            StubError::InvalidTargetVersion => EmergencyError::InvalidTargetVersion,
+            StubError::AlreadyMigrated => EmergencyError::AlreadyMigrated,
+            StubError::UpgradeNotAuthorized => EmergencyError::UpgradeNotAuthorized,
+            StubError::Overflow => EmergencyError::Overflow,
+            StubError::InvalidInitialVersion => EmergencyError::NotInitialized,
+            StubError::WasmHashZero => EmergencyError::NotInitialized,
+        }
+    }
+}
+
+const KEYS: MigrationKeys<StorageKey> = MigrationKeys::new(
+    StorageKey::Admin,
+    StorageKey::Version,
+    StorageKey::Legacy,
+    StorageKey::Current,
+    StorageKey::AuthorisedUpgrade,
+);
+
 // ─── Contract ─────────────────────────────────────────────────────────────────
 
 /// Emergency data migration and upgrade guard.
@@ -139,228 +167,77 @@ pub struct EmergencyMigrate;
 #[contractimpl]
 impl EmergencyMigrate {
     /// Initialise the emergency migration guard.
-    ///
-    /// # Arguments
-    ///
-    /// * `admin` — the administrator address; must authorise this call.
-    /// * `initial_version` — the version of the legacy state currently stored
-    ///   by the previous deployment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`EmergencyError::AlreadyInitialized`] if already initialised.
     pub fn init(env: Env, admin: Address, initial_version: u32) -> Result<(), EmergencyError> {
-        admin.require_auth();
-        if env.storage().instance().has(&StorageKey::Admin) {
-            return Err(EmergencyError::AlreadyInitialized);
-        }
-        env.storage().instance().set(&StorageKey::Admin, &admin);
-        env.storage()
-            .instance()
-            .set(&StorageKey::Version, &initial_version);
-        Ok(())
+        KEYS.init(&env, &admin, initial_version, None)
+            .map_err(Into::into)
     }
 
     /// Reshape legacy emergency state and advance the migration version.
-    ///
-    /// The operation is atomic from the caller's perspective: the current
-    /// record and version are written only after all validation passes.  The
-    /// target **must** be exactly one greater than `expected_version`,
-    /// preventing skipped migrations and replay of an already-completed
-    /// migration.
-    ///
-    /// # Arguments
-    ///
-    /// * `caller` — must be the configured administrator.
-    /// * `expected_version` — the version the contract should currently be at.
-    /// * `target_version` — the version to advance to; must equal
-    ///   `expected_version + 1`.
-    ///
-    /// # Returns
-    ///
-    /// The reshaped [`CurrentEmergency`] record.
-    ///
-    /// # Errors
-    ///
-    /// | Condition                              | Error                                 |
-    /// |----------------------------------------|---------------------------------------|
-    /// | Contract not initialised               | [`EmergencyError::NotInitialized`]    |
-    /// | Caller is not the admin                | [`EmergencyError::Unauthorized`]      |
-    /// | `expected_version` ≠ stored version    | [`EmergencyError::VersionMismatch`]   |
-    /// | `target_version` ≠ version + 1         | [`EmergencyError::InvalidTargetVersion`]|
-    /// | Migration already completed            | [`EmergencyError::AlreadyMigrated`]   |
-    /// | Legacy state not found                 | [`EmergencyError::LegacyStateMissing`]|
-    /// | Legacy balance is negative             | [`EmergencyError::InvalidLegacyBalance`]|
-    ///
-    /// # Events
-    ///
-    /// Emits `emergency_migrated` with `target_version` as data.
     pub fn migrate(
         env: Env,
         caller: Address,
         expected_version: u32,
         target_version: u32,
     ) -> Result<CurrentEmergency, EmergencyError> {
-        caller.require_auth();
-        require_admin(&env, &caller)?;
-
-        let version: u32 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Version)
-            .ok_or(EmergencyError::NotInitialized)?;
-
-        if version != expected_version {
-            return Err(EmergencyError::VersionMismatch);
-        }
-
-        let next_version = expected_version
-            .checked_add(1)
-            .ok_or(EmergencyError::Overflow)?;
-
-        if target_version != next_version {
-            return Err(EmergencyError::InvalidTargetVersion);
-        }
-
-        if env.storage().instance().has(&StorageKey::Current) {
-            return Err(EmergencyError::AlreadyMigrated);
-        }
-
-        let legacy: LegacyEmergency = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Legacy)
-            .ok_or(EmergencyError::LegacyStateMissing)?;
-
-        if legacy.balance < 0 {
-            return Err(EmergencyError::InvalidLegacyBalance);
-        }
-
-        let current = CurrentEmergency {
-            balance: legacy.balance,
-            last_updated: legacy.last_updated,
-            reserved: 0,
-        };
-
-        env.storage().instance().set(&StorageKey::Current, &current);
-        env.storage()
-            .instance()
-            .set(&StorageKey::Version, &target_version);
-
-        env.events()
-            .publish((event_emergency_migrated(&env),), target_version);
-
-        Ok(current)
+        KEYS.migrate(
+            &env,
+            &caller,
+            expected_version,
+            target_version,
+            &MigrateOptions {
+                ttl_extension: None,
+                remove_legacy: false,
+                event_topic: Some(event_emergency_migrated(&env)),
+            },
+            |legacy: LegacyEmergency| {
+                if legacy.balance < 0 {
+                    return Err(StubError::InvalidLegacyBalance);
+                }
+                Ok(CurrentEmergency {
+                    balance: legacy.balance,
+                    last_updated: legacy.last_updated,
+                    reserved: 0,
+                })
+            },
+        )
+        .map_err(Into::into)
     }
 
     /// Authorise a contract upgrade for the current migration version.
-    ///
-    /// This is a guard only — it does **not** call
-    /// `update_current_contract_wasm`.  The deployment tool must consume the
-    /// returned authorisation state and perform the platform upgrade in a
-    /// separate transaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `caller` — must be the configured administrator.
-    /// * `target_version` — must match the stored migration version.
-    /// * `wasm_hash` — the WASM hash to authorise for deployment.
-    ///
-    /// # Errors
-    ///
-    /// | Condition                              | Error                               |
-    /// |----------------------------------------|-------------------------------------|
-    /// | Contract not initialised               | [`EmergencyError::NotInitialized`]  |
-    /// | Caller is not the admin                | [`EmergencyError::Unauthorized`]    |
-    /// | `target_version` ≠ stored version      | [`EmergencyError::VersionMismatch`] |
-    ///
-    /// # Events
-    ///
-    /// Emits `upgrade_authorised` with `(topic, wasm_hash)` as topics and
-    /// `target_version` as data.
     pub fn authorize_upgrade(
         env: Env,
         caller: Address,
         target_version: u32,
         wasm_hash: BytesN<32>,
     ) -> Result<(), EmergencyError> {
-        caller.require_auth();
-        require_admin(&env, &caller)?;
-
-        let version: u32 = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Version)
-            .ok_or(EmergencyError::NotInitialized)?;
-
-        if target_version != version {
-            return Err(EmergencyError::VersionMismatch);
-        }
-
-        env.storage().instance().set(
-            &StorageKey::AuthorisedUpgrade,
-            &(target_version, wasm_hash.clone()),
-        );
-
-        env.events()
-            .publish((event_upgrade_authorised(&env), wasm_hash), target_version);
-
-        Ok(())
+        KEYS.authorize_upgrade(
+            &env,
+            &caller,
+            target_version,
+            &wasm_hash,
+            &AuthorizeOptions {
+                reject_zero_hash: false,
+                event_topic: Some(event_upgrade_authorised(&env)),
+            },
+        )
+        .map_err(Into::into)
     }
 
     /// Return the reshaped emergency state, if migration has completed.
-    ///
-    /// Returns `None` if migration has not yet run.
     pub fn get_current(env: Env) -> Option<CurrentEmergency> {
-        env.storage().instance().get(&StorageKey::Current)
+        KEYS.get_current(&env)
     }
 
     /// Return the stored migration version, if initialised.
-    ///
-    /// Returns `None` if the contract has not been initialised.
     pub fn version(env: Env) -> Option<u32> {
-        env.storage().instance().get(&StorageKey::Version)
+        KEYS.version(&env)
     }
 
     /// Check whether a WASM hash is authorised for the current migration
     /// version.
-    ///
-    /// Returns `true` only when:
-    /// - A version is stored.
-    /// - An authorised (version, hash) pair is stored.
-    /// - Both the stored version and the authorised version match, **and** the
-    ///   supplied hash matches the authorised hash.
     pub fn is_upgrade_authorised(env: Env, wasm_hash: BytesN<32>) -> bool {
-        let stored_version: Option<u32> = env.storage().instance().get(&StorageKey::Version);
-        let authorisation: Option<(u32, BytesN<32>)> =
-            env.storage().instance().get(&StorageKey::AuthorisedUpgrade);
-
-        match (stored_version, authorisation) {
-            (Some(version), Some((auth_version, auth_hash))) => {
-                version == auth_version && wasm_hash == auth_hash
-            }
-            _ => false,
-        }
+        KEYS.is_upgrade_authorized(&env, &wasm_hash)
     }
-}
-
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Verify that `caller` is the stored administrator.
-///
-/// Returns [`EmergencyError::NotInitialized`] if the contract has not been
-/// initialised, or [`EmergencyError::Unauthorized`] if `caller` is not the
-/// admin.
-fn require_admin(env: &Env, caller: &Address) -> Result<(), EmergencyError> {
-    let admin: Address = env
-        .storage()
-        .instance()
-        .get(&StorageKey::Admin)
-        .ok_or(EmergencyError::NotInitialized)?;
-    if caller != &admin {
-        return Err(EmergencyError::Unauthorized);
-    }
-    Ok(())
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -451,6 +328,41 @@ mod tests {
         assert_eq!(result.reserved, 0);
         assert_eq!(client.version(), Some(2));
         assert_eq!(client.get_current(), Some(result));
+    }
+
+    #[test]
+    fn backward_compatible_storage_layout_read() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env, 500, 42);
+        let client = EmergencyMigrateClient::new(&env, &contract);
+        let hash = BytesN::from_array(&env, &[0xAA; 32]);
+
+        env.as_contract(&contract, || {
+            env.storage().instance().set(&StorageKey::Admin, &admin);
+            env.storage().instance().set(&StorageKey::Version, &1u32);
+            env.storage().instance().set(
+                &StorageKey::Current,
+                &CurrentEmergency {
+                    balance: 500,
+                    last_updated: 42,
+                    reserved: 0,
+                },
+            );
+            env.storage()
+                .instance()
+                .set(&StorageKey::AuthorisedUpgrade, &(1u32, hash.clone()));
+        });
+
+        assert_eq!(client.version(), Some(1));
+        assert_eq!(
+            client.get_current(),
+            Some(CurrentEmergency {
+                balance: 500,
+                last_updated: 42,
+                reserved: 0,
+            })
+        );
+        assert!(client.is_upgrade_authorised(&hash));
     }
 
     #[test]

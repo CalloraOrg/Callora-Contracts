@@ -49,15 +49,16 @@ use soroban_sdk::contracterror;
 /// | 45   | InvalidRecipient               | Withdrawal recipient is the vault address or USDC token  |
 /// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
 /// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
-/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
-/// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
-/// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
 /// | 51   | ProposalNotFound               | No pending timelock proposal for the requested action    |
 /// | 52   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
 /// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
 /// | 54   | InvalidTimelockWindow          | Proposed timelock window is outside allowed bounds       |
 /// | 55   | BelowMinTransferAmount         | Amount is below the minimum transfer unit                |
+/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
+/// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
+/// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
 /// | 59   | SettlementEqualsRevenuePool    | Settlement and revenue pool must be distinct addresses   |
+/// | 60   | Frozen                         | System is globally frozen via the configured freeze contract |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -168,4 +169,9 @@ pub enum VaultError {
     ProposalExpired = 58,
     /// Settlement and revenue pool addresses must be distinct (code 59).
     SettlementEqualsRevenuePool = 59,
+    /// System is globally frozen via the configured freeze contract (code 60).
+    Frozen = 60,
+    /// `prune_processed_requests` received more ids than [`crate::MAX_PRUNE_IDS`]
+    /// allows (code 60).  Split the work into smaller batches.
+    TooManyIds = 60,
 }

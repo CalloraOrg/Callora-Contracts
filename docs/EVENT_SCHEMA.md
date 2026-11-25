@@ -1401,6 +1401,20 @@ and extended using `PERSISTENT_BUMP_THRESHOLD` / `PERSISTENT_BUMP_AMOUNT`
 treated as unused IDs. Markers begin with this upgrade; historical deductions
 made before replay protection was introduced cannot be deduplicated retroactively.
 
+### `deduction_request_cleared`
+
+Emitted once when `clear_deduction_request(request_id)` removes an existing
+`DeductionRequest(request_id)` persistent replay marker. Clearing an unknown
+or already-cleared `request_id` is a no-op and emits no event.
+
+| Index | Location | Type | Description |
+|-------|----------|------|-------------|
+| topic 0 | topics | Symbol | `"deduction_request_cleared"` |
+| `request_id` | data | u64 | Deduction request identifier whose replay marker was removed |
+
+Only the configured vault may authorize this entrypoint. Calling before
+initialization returns `NotInitialized` (1).
+
 ### `initialized`
 
 Emitted once by `init()` when the settlement contract is first configured.
@@ -1510,6 +1524,29 @@ remain stored, but future single and batch payments in that token are rejected.
 | topic 1 | topics   | Address | Admin that disabled the token |
 | topic 2 | topics   | Address | Token contract address |
 | data    | data     | Address | Token contract address |
+
+### `payout_name_set`
+
+Emitted when a developer configures the registry name used for future
+withdrawals. Resolution happens at withdrawal time, so the registry admin can
+rotate the destination without another `set_payout_name` call.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_set"` |
+| topic 1 | topics   | Address | Developer that set the name |
+| data    | data     | String  | Payout name (1-64 bytes) |
+
+### `payout_name_cleared`
+
+Emitted when a developer removes their payout name. Later withdrawals with
+`to = None` pay the developer directly again.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_cleared"` |
+| topic 1 | topics   | Address | Developer that cleared the name |
+| data    | data     | void    | Empty |
 
 ### `balance_credited`
 

@@ -20,6 +20,9 @@ use soroban_sdk::contracterror;
 /// | 10   | NoAdminTransferPending | No admin nomination is in progress                |
 /// | 11   | MigrationPending     | An authorized upgrade must be finalized first       |
 /// | 12-19 | (migration errors)  | Mapped from `StorageMigrationError`; see variants   |
+/// | 20   | CheckpointPruned     | Requested checkpoint ID was already pruned           |
+/// | 21   | PruneOutOfRange      | Prune boundary is backwards or past the latest ID   |
+/// | 22   | InvalidMaxRemove     | `max_remove` must be greater than zero              |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -62,4 +65,10 @@ pub enum CheckpointError {
     UnauthorizedUpgradeState = 18,
     /// Storage could not be validated after the upgrade (code 19).
     StorageUnreadable = 19,
+    /// Requested checkpoint ID was pruned rather than never created (code 20).
+    CheckpointPruned = 20,
+    /// Prune boundary is backwards or past the latest checkpoint (code 21).
+    PruneOutOfRange = 21,
+    /// `max_remove` was zero (code 22).
+    InvalidMaxRemove = 22,
 }

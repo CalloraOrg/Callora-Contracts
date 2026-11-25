@@ -10,7 +10,9 @@ use callora_storage_migration::{
     layout_hash, StorageMigrationError, StorageMigrationValidator, LEGACY_VERSION,
 };
 use errors::CheckpointError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol, Vec,
+};
 
 /// Storage-layout version recorded at init. Bump whenever the checkpoint
 /// storage schema changes.
@@ -27,6 +29,11 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// Maximum number of checkpoint records returned per page from
 /// [`CalloraCheckpoint::get_checkpoints_range`].
 pub const MAX_PAGE_SIZE: u32 = 100;
+
+/// Maximum number of checkpoint records a single
+/// [`CalloraCheckpoint::prune_before`] call may remove, regardless of the
+/// caller-supplied `max_remove`. Keeps pruning within a predictable budget.
+pub const MAX_PRUNE_BATCH: u32 = 100;
 
 /// TTL bump constants for persistent storage archival risk mitigation.
 /// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
@@ -66,6 +73,24 @@ pub enum StorageKey {
     PendingAdmin,
     /// Instance: next sequential checkpoint ID to assign (`u64`).
     NextCheckpointId,
+    /// Instance: running SHA-256 digest chain head over every checkpoint
+    /// included in the chain (`BytesN<32>`).
+    DigestHead,
+    /// Instance: chain head at the last pruned checkpoint (`BytesN<32>`).
+    ///
+    /// A consumer holding retained records can fold them from this value to
+    /// reproduce [`StorageKey::DigestHead`].
+    DigestAtBoundary,
+    /// Instance: first checkpoint ID that has not been pruned (`u64`).
+    ///
+    /// Monotonic; every ID below this boundary is gone from storage.
+    PrunedBefore,
+    /// Instance: first checkpoint ID included in the digest chain (`u64`).
+    ///
+    /// Checkpoints written before the digest feature existed (i.e. before a
+    /// migration finalized by [`CalloraCheckpoint::migrate`]) are excluded from
+    /// the chain; the chain starts at the first post-upgrade checkpoint.
+    ChainStartId,
     /// Persistent: an individual checkpoint record indexed by `u64` ID.
     Checkpoint(u64),
     /// Instance: cached count of total checkpoints (`u64`), kept in
@@ -189,6 +214,10 @@ impl CalloraCheckpoint {
         inst.set(&StorageKey::Admin, &admin);
         inst.set(&StorageKey::NextCheckpointId, &0u64);
         inst.set(&StorageKey::CheckpointCount, &0u64);
+        inst.set(&StorageKey::DigestHead, &Self::zero_digest(&env));
+        inst.set(&StorageKey::DigestAtBoundary, &Self::zero_digest(&env));
+        inst.set(&StorageKey::PrunedBefore, &1u64);
+        inst.set(&StorageKey::ChainStartId, &1u64);
         StorageMigrationValidator::record_deployed_schema(
             &env,
             STORAGE_MIGRATION_VERSION,
@@ -255,6 +284,67 @@ impl CalloraCheckpoint {
         Ok(next)
     }
 
+    // -----------------------------------------------------------------------
+    // Digest chain helpers
+    // -----------------------------------------------------------------------
+
+    /// The zero digest used as the chain seed before any checkpoint is hashed.
+    fn zero_digest(env: &Env) -> BytesN<32> {
+        BytesN::from_array(env, &[0u8; 32])
+    }
+
+    /// Read the current chain head, falling back to the zero seed for
+    /// contracts upgraded before the digest keys existed.
+    fn digest_head(env: &Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::DigestHead)
+            .unwrap_or_else(|| Self::zero_digest(env))
+    }
+
+    /// Read the chain head at the prune boundary.
+    fn digest_at_boundary(env: &Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&StorageKey::DigestAtBoundary)
+            .unwrap_or_else(|| Self::zero_digest(env))
+    }
+
+    /// Read the monotonic prune boundary. ID 1 is the default for contracts
+    /// that predate the pruning feature.
+    fn pruned_before(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::PrunedBefore)
+            .unwrap_or(1)
+    }
+
+    /// Read the first checkpoint ID included in the chain.
+    fn chain_start_id(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::ChainStartId)
+            .unwrap_or(1)
+    }
+
+    /// Fold one record into a chain head: `sha256(prev_head || xdr(record))`.
+    ///
+    /// The XDR encoding is the canonical `ScVal` encoding of the
+    /// [`CheckpointRecord`], so consumers can reproduce the chain off-chain
+    /// with the same preimage.
+    fn hash_record(env: &Env, prev_head: &BytesN<32>, record: &CheckpointRecord) -> BytesN<32> {
+        let mut preimage = Bytes::new(env);
+        preimage.append(&Bytes::from(prev_head));
+        preimage.append(&record.clone().to_xdr(env));
+        env.crypto().sha256(&preimage).into()
+    }
+
+    /// Advance the persistent chain head with a newly created record.
+    fn append_to_digest(env: &Env, record: &CheckpointRecord) {
+        let head = Self::hash_record(env, &Self::digest_head(env), record);
+        env.storage().instance().set(&StorageKey::DigestHead, &head);
+    }
+
     /// Append `checkpoint_id` to the persistent per-subject index for `subject`.
     ///
     /// Creates the index list on first use. After writing, the entry's TTL is
@@ -272,6 +362,35 @@ impl CalloraCheckpoint {
         env.storage()
             .persistent()
             .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+    }
+
+    /// Drop pruned IDs in `[from_id, to_id)` from a subject's index.
+    ///
+    /// Trimming the index keeps offset-based subject paging dense: a page
+    /// never comes back empty merely because it landed on pruned IDs.
+    fn remove_pruned_ids_from_subject_index(
+        env: &Env,
+        subject: &Address,
+        from_id: u64,
+        to_id: u64,
+    ) {
+        let key = StorageKey::SubjectIndex(subject.clone());
+        if let Some(ids) = env.storage().persistent().get::<_, Vec<u64>>(&key) {
+            let mut kept = Vec::new(env);
+            for id in ids.iter() {
+                if id < from_id || id >= to_id {
+                    kept.push_back(id);
+                }
+            }
+            if kept.is_empty() {
+                env.storage().persistent().remove(&key);
+            } else {
+                env.storage().persistent().set(&key, &kept);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -467,6 +586,7 @@ impl CalloraCheckpoint {
         // Maintain the per-subject index so get_checkpoints_for_subject can
         // return this subject's history without a full-range scan.
         Self::append_to_subject_index(&env, &subject, id);
+        Self::append_to_digest(&env, &record);
 
         env.events()
             .publish((events::event_checkpoint_created(&env), subject), record);
@@ -543,8 +663,10 @@ impl CalloraCheckpoint {
                 .persistent()
                 .extend_ttl(&key, LIFETIME_THRESHOLD, BUMP_AMOUNT);
 
-            // Maintain the per-subject index for each item.
+            // Maintain the per-subject index and digest chain for each item,
+            // in the same order as `items`.
             Self::append_to_subject_index(&env, &subject, id);
+            Self::append_to_digest(&env, &record);
 
             env.events().publish(
                 (events::event_checkpoint_created(&env), subject.clone()),
@@ -555,6 +677,112 @@ impl CalloraCheckpoint {
         }
 
         Ok(ids)
+    }
+
+    // -----------------------------------------------------------------------
+    // Pruning
+    // -----------------------------------------------------------------------
+
+    /// Permanently remove old checkpoint records, retaining a verifiable
+    /// digest chain over everything ever created.
+    ///
+    /// Records with `id < id` are removed, at most [`MAX_PRUNE_BATCH`] (and at
+    /// most `max_remove`) per call. The boundary only advances forward, so
+    /// repeated calls with the same `id` progressively finish a large prune.
+    ///
+    /// Alongside the records, the per-subject indexes are trimmed so offset
+    /// paging stays dense. The chain head itself is never rewritten: each
+    /// pruned chain record is folded into [`StorageKey::DigestAtBoundary`]
+    /// instead, which lets a consumer holding records from `PrunedBefore`
+    /// onward reproduce [`StorageKey::DigestHead`] by continuing the fold.
+    ///
+    /// Checkpoints created before the digest feature existed are outside the
+    /// chain: the chain starts at the first post-upgrade checkpoint recorded
+    /// in [`StorageKey::ChainStartId`]. Pruning such legacy records removes
+    /// them without changing either digest.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `id` -- Exclusive upper bound of the range to prune. Must satisfy
+    ///   `PrunedBefore <= id <= latest_id + 1`.
+    /// * `max_remove` -- Maximum records to remove in this call; capped at
+    ///   [`MAX_PRUNE_BATCH`].
+    ///
+    /// # Errors
+    /// * [`CheckpointError::Unauthorized`] -- caller is not the current admin.
+    /// * [`CheckpointError::NotInitialized`] -- contract not initialized.
+    /// * [`CheckpointError::MigrationPending`] -- an upgrade is not finalized.
+    /// * [`CheckpointError::PruneOutOfRange`] -- `id` is backwards or past the
+    ///   latest checkpoint.
+    /// * [`CheckpointError::InvalidMaxRemove`] -- `max_remove` is zero.
+    ///
+    /// # Events
+    /// Emits `checkpoints_pruned` with `(from_id, to_id)` as topics and the
+    /// digest at the new boundary as data.
+    pub fn prune_before(
+        env: Env,
+        caller: Address,
+        id: u64,
+        max_remove: u32,
+    ) -> Result<(), CheckpointError> {
+        Self::require_admin(&env, &caller)?;
+        Self::ensure_migration_finalized(&env)?;
+
+        if max_remove == 0 {
+            return Err(CheckpointError::InvalidMaxRemove);
+        }
+
+        let from_id = Self::pruned_before(&env);
+        let latest_id: u64 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::NextCheckpointId)
+            .unwrap_or(0);
+        let upper_bound = latest_id.saturating_add(1);
+        if id < from_id || id > upper_bound {
+            return Err(CheckpointError::PruneOutOfRange);
+        }
+
+        let effective_max = u64::from(max_remove.min(MAX_PRUNE_BATCH));
+        let to_id = id.min(from_id.saturating_add(effective_max));
+
+        let chain_start = Self::chain_start_id(&env);
+        let mut boundary = Self::digest_at_boundary(&env);
+        let mut touched_subjects: Vec<Address> = Vec::new(&env);
+
+        for current_id in from_id..to_id {
+            let key = StorageKey::Checkpoint(current_id);
+            if let Some(record) = env.storage().persistent().get::<_, CheckpointRecord>(&key) {
+                if current_id >= chain_start {
+                    boundary = Self::hash_record(&env, &boundary, &record);
+                }
+                if !touched_subjects
+                    .iter()
+                    .any(|subject| subject == record.subject)
+                {
+                    touched_subjects.push_back(record.subject.clone());
+                }
+                env.storage().persistent().remove(&key);
+            }
+        }
+
+        for subject in touched_subjects.iter() {
+            Self::remove_pruned_ids_from_subject_index(&env, &subject, from_id, to_id);
+        }
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::PrunedBefore, &to_id);
+        env.storage()
+            .instance()
+            .set(&StorageKey::DigestAtBoundary, &boundary);
+
+        env.events().publish(
+            (events::event_checkpoints_pruned(&env), from_id, to_id),
+            boundary,
+        );
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -572,15 +800,18 @@ impl CalloraCheckpoint {
     /// # Errors
     /// * [`CheckpointError::CheckpointNotFound`] -- no checkpoint exists with
     ///   the requested ID.
+    /// * [`CheckpointError::CheckpointPruned`] -- the ID existed but was pruned.
     pub fn get_checkpoint(env: Env, id: u64) -> Result<CheckpointRecord, CheckpointError> {
         Self::bump_instance(&env);
         Self::ensure_migration_finalized(&env)?;
         let key = StorageKey::Checkpoint(id);
-        let record = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(CheckpointError::CheckpointNotFound)?;
+        let record = env.storage().persistent().get(&key).ok_or_else(|| {
+            if id >= 1 && id < Self::pruned_before(&env) {
+                CheckpointError::CheckpointPruned
+            } else {
+                CheckpointError::CheckpointNotFound
+            }
+        })?;
 
         env.storage()
             .persistent()
@@ -754,10 +985,53 @@ impl CalloraCheckpoint {
         Self::bump_instance(&env);
         Self::ensure_migration_finalized(&env)?;
         let latest_id = Self::get_latest_checkpoint_id(env.clone())?;
-        if latest_id == 0 {
+        if latest_id == 0 || latest_id < Self::pruned_before(&env) {
             return Ok(None);
         }
         Ok(Some(Self::get_checkpoint(env, latest_id)?))
+    }
+
+    /// Return the current digest chain head over all chain checkpoints.
+    ///
+    /// Before any checkpoint is created this is the zero 32-byte digest.
+    /// Consumers can reproduce it by folding the records from
+    /// [`CalloraCheckpoint::get_digest_at_boundary`] forward, starting at
+    /// `max(`[`CalloraCheckpoint::get_pruned_before`],
+    /// [`CalloraCheckpoint::get_chain_start_id`])`.
+    pub fn get_digest_head(env: Env) -> Result<BytesN<32>, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(Self::digest_head(&env))
+    }
+
+    /// Return the chain head as of the last pruned chain checkpoint.
+    ///
+    /// This is the seed for an off-chain recomputation of
+    /// [`CalloraCheckpoint::get_digest_head`] from retained records.
+    pub fn get_digest_at_boundary(env: Env) -> Result<BytesN<32>, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(Self::digest_at_boundary(&env))
+    }
+
+    /// Return the first checkpoint ID that has not been pruned.
+    ///
+    /// Monotonic: all IDs below the returned value have been removed.
+    pub fn get_pruned_before(env: Env) -> Result<u64, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(Self::pruned_before(&env))
+    }
+
+    /// Return the first checkpoint ID included in the digest chain.
+    ///
+    /// Equals 1 for contracts initialized with digest support. After a
+    /// migration it is the first ID assigned post-upgrade; earlier checkpoints
+    /// are readable/prunable but are not part of the chain.
+    pub fn get_chain_start_id(env: Env) -> Result<u64, CheckpointError> {
+        Self::bump_instance(&env);
+        Self::ensure_migration_finalized(&env)?;
+        Ok(Self::chain_start_id(&env))
     }
 
     // -----------------------------------------------------------------------
@@ -790,7 +1064,13 @@ impl CalloraCheckpoint {
 
         let key = StorageKey::Checkpoint(checkpoint_id);
         if !env.storage().persistent().has(&key) {
-            return Err(CheckpointError::CheckpointNotFound);
+            return Err(
+                if checkpoint_id >= 1 && checkpoint_id < Self::pruned_before(&env) {
+                    CheckpointError::CheckpointPruned
+                } else {
+                    CheckpointError::CheckpointNotFound
+                },
+            );
         }
 
         env.storage()
@@ -940,6 +1220,18 @@ impl CalloraCheckpoint {
         env.storage()
             .instance()
             .remove(&callora_storage_migration::StorageKey::SmAuthorizedUpgrade);
+
+        // Checkpoints written before the digest feature existed are not part
+        // of the chain. Seed the new keys here so the chain starts at the
+        // first checkpoint created after this migration.
+        let inst = env.storage().instance();
+        if !inst.has(&StorageKey::DigestHead) {
+            inst.set(&StorageKey::DigestHead, &Self::zero_digest(&env));
+            inst.set(&StorageKey::DigestAtBoundary, &Self::zero_digest(&env));
+            inst.set(&StorageKey::PrunedBefore, &1u64);
+            let latest_id: u64 = inst.get(&StorageKey::NextCheckpointId).unwrap_or(0);
+            inst.set(&StorageKey::ChainStartId, &latest_id.saturating_add(1));
+        }
 
         Ok(())
     }

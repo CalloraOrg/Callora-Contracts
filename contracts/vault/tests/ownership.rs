@@ -11,7 +11,7 @@
 
 extern crate std;
 
-use callora_vault::{CalloraVault, CalloraVaultClient};
+use callora_vault::{CalloraVault, CalloraVaultClient, VaultError};
 use soroban_sdk::testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::{Address, Env, IntoVal, Symbol, Val};
 
@@ -88,15 +88,16 @@ fn test_nominate_then_accept_transfers_ownership_and_clears_pending() {
 /// Case 2: Accept without nomination.
 ///
 /// `accept_ownership()` called with no prior nomination must fail deterministically
-/// with the exact panic message `"no ownership transfer pending"`.
+/// with `VaultError::NoOwnershipTransferPending`.
 #[test]
-#[should_panic(expected = "no ownership transfer pending")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_accept_without_nomination_fails() {
     let env = Env::default();
     let (_owner, _vault, client) = setup(&env);
 
-    client.accept_ownership();
+    assert_eq!(
+        client.try_accept_ownership(),
+        Err(Ok(VaultError::NoOwnershipTransferPending))
+    );
 }
 
 /// Case 3: Auth enforcement.
@@ -156,7 +157,6 @@ fn test_accept_ownership_auth_enforcement() {
 /// canonical `"callora_v1"` version topic at index 1 and the correct address data
 /// in each event payload.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_ownership_events_and_version_topic() {
     let env = Env::default();
     let (owner, vault_address, client) = setup(&env);
@@ -210,8 +210,8 @@ fn test_ownership_events_and_version_topic() {
     let events_after = vault_events(&env, &vault_address);
     assert_eq!(
         events_after.len(),
-        2,
-        "accept_ownership must emit the second vault event"
+        1,
+        "accept_ownership must emit exactly one vault event"
     );
 
     let (contract_addr_acc, topics_acc, data_acc) = events_after.last().unwrap();

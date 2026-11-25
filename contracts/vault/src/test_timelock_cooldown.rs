@@ -213,13 +213,23 @@ fn timelock_cooldown_upgrade_path_is_guarded_too() {
 // ── what does NOT arm the cool-off ──────────────────────────────────────────
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn timelock_cooldown_failed_execution_does_not_arm_cooldown() {
     let env = Env::default();
     let ctx = setup(&env);
-    // More than the vault holds: validation fails before the guard.
+    // Mint 1 extra so the vault's on-ledger surplus covers the propose amount.
+    // After propose the tracked balance is raised to match on-ledger, dropping
+    // surplus to zero so execute_sweep fails with InsufficientBalance — before
+    // admin::guard runs — and the cooldown is never armed.
+    token::StellarAssetClient::new(ctx.env, &ctx.usdc.address()).mint(&ctx.vault, &1);
     ctx.client
         .propose_sweep(&ctx.admin, &ctx.recipient, &(VAULT_USDC + 1));
+    // Raise tracked balance so surplus < proposed amount at execute time.
+    ctx.env.as_contract(&ctx.vault, || {
+        ctx.env
+            .storage()
+            .instance()
+            .set(&DataKey::Balance, &(VAULT_USDC + 1));
+    });
     ctx.client.propose_pause(&ctx.admin);
     at(&ctx, T0 + TIMELOCK);
 

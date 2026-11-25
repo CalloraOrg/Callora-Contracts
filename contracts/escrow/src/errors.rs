@@ -20,6 +20,11 @@ use soroban_sdk::contracterror;
 /// | 10   | EscrowExists        | Escrow already exists for the given payment asset and recipient |
 /// | 11   | Paused              | Operation is rejected because the contract is paused         |
 /// | 12   | NotFound            | Escrow record not found for the given payment asset and recipient |
+/// | 13   | BatchEmpty          | `batch_release` called with an empty entries list            |
+/// | 14   | BatchTooLarge       | `batch_release` called with too many entries                 |
+/// | 15   | DuplicateEntry      | `batch_release` contains duplicate `(asset, recipient)` pair |
+/// | 16   | NotExpired          | Escrow has not yet reached its expiry timestamp              |
+/// | 17   | InvalidExpiry       | Supplied expiry timestamp is zero or not in the future       |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -56,4 +61,8 @@ pub enum EscrowError {
     /// A `batch_release` lists the same `(payment_asset, recipient)` pair
     /// twice (code 15).
     DuplicateEntry = 15,
+    /// Escrow has not yet reached its expiry timestamp (code 16).
+    NotExpired = 16,
+    /// Supplied expiry timestamp is zero or not in the future (code 17).
+    InvalidExpiry = 17,
 }
