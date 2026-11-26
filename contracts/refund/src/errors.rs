@@ -34,4 +34,6 @@ pub enum RefundError {
     DisputeWindowClosed = 14,
     /// Refund request has already been disputed once.
     AlreadyDisputed = 15,
+    /// Refund request has not outlived its configured lifetime yet.
+    NotExpired = 16,
 }

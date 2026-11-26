@@ -9,7 +9,7 @@
 ///   - Setting then clearing the freeze address disables the check.
 extern crate std;
 
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol, Vec};
 
 use crate::{CalloraVault, CalloraVaultClient, DataKey, VaultError};
@@ -68,12 +68,12 @@ fn setup(env: &Env) -> (CalloraVaultClient, Address, Address, Address, Address) 
     client.init(
         &owner,
         &usdc,
-        &0,
-        &owner,       // authorized caller == owner for simplicity
-        &1,
+        &Some(0),
+        &Some(owner.clone()), // authorized caller == owner for simplicity
+        &Some(1),
         &None,
-        &1_000_000_000i128,
-        &settlement_addr,
+        &Some(1_000_000_000i128),
+        &Some(settlement_addr),
     );
 
     // Fund the vault so deducts can succeed
@@ -209,14 +209,7 @@ fn set_freeze_contract_emits_event() {
     client.set_freeze_contract(&owner, &Some(freeze_addr.clone()));
 
     let events = env.events().all();
-    let found = events.iter().any(|e| {
-        if let soroban_sdk::Val::Symbol(s) = e.1.get(0).unwrap() {
-            s == Symbol::new(&env, "freeze_contract_set")
-        } else {
-            false
-        }
-    });
     // We just check the event was emitted — exact shape checked separately.
     // Using a relaxed assertion here because event inspection is environment-specific.
-    let _ = found; // prevent unused warning
+    assert!(!events.is_empty(), "expected a freeze_contract_set event");
 }

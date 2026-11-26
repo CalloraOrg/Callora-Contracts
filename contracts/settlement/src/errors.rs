@@ -159,6 +159,17 @@ pub enum PriceRegistryError {
     InvalidOfferingId = 52,
     /// Price string is empty, non-visible ASCII, or not a valid decimal number.
     InvalidPrice = 53,
-    /// System is globally frozen via the configured freeze contract.
+}
+
+/// Global freeze circuit-breaker errors.
+///
+/// Kept in a separate `#[contracterror]` enum because `SettlementError` already
+/// uses all 50 cases Soroban allows per error enum.
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum FreezeError {
+    /// System is globally frozen via the configured freeze contract (code 54).
     SystemFrozen = 54,
+    /// System is globally frozen via the configured freeze contract.
 }

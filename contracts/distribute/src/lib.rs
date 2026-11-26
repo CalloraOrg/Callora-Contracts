@@ -22,10 +22,12 @@ pub mod limits;
 
 use crate::errors::DistributeError;
 
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, token, Address, BytesN, Env, Map, Symbol, Vec,
+};
 
 // ---------------------------------------------------------------------------
-// Storage key constants
+// Storage key constants & typed keys
 // ---------------------------------------------------------------------------
 
 const ADMIN_KEY: &str = "admin";
@@ -34,6 +36,13 @@ const PAUSED_KEY: &str = "paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const VERSION_KEY: &str = "version";
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataKey {
+    ApprovedToken(Address),
+    MaxDistributeFor(Address),
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -107,6 +116,7 @@ impl Distribute {
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
+        inst.set(&DataKey::ApprovedToken(usdc_token.clone()), &true);
         inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
@@ -157,6 +167,32 @@ impl Distribute {
     fn validate_recipient(env: &Env, recipient: &Address, contract_self: &Address) {
         if recipient == contract_self {
             env.panic_with_error(DistributeError::InvalidRecipient);
+        }
+    }
+
+    fn is_approved_token_internal(env: &Env, token: &Address) -> bool {
+        let inst = env.storage().instance();
+        if inst.has(&DataKey::ApprovedToken(token.clone())) {
+            return true;
+        }
+        inst.get::<_, Address>(&Symbol::new(env, USDC_KEY))
+            .map(|usdc| usdc == *token)
+            .unwrap_or(false)
+    }
+
+    fn require_approved_token(env: &Env, token: &Address) {
+        if !Self::is_approved_token_internal(env, token) {
+            env.panic_with_error(DistributeError::UnsupportedToken);
+        }
+    }
+
+    fn max_distribute_for_internal(env: &Env, token: &Address) -> i128 {
+        let inst = env.storage().instance();
+        if let Some(cap) = inst.get::<_, i128>(&DataKey::MaxDistributeFor(token.clone())) {
+            cap
+        } else {
+            inst.get(&Symbol::new(env, MAX_DISTRIBUTE_KEY))
+                .unwrap_or(DEFAULT_MAX_DISTRIBUTE)
         }
     }
 
@@ -437,6 +473,132 @@ impl Distribute {
     }
 
     // -----------------------------------------------------------------------
+    // Approved tokens & per-token caps
+    // -----------------------------------------------------------------------
+
+    /// Add a token to the approved-token allowlist. Admin only.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::InvalidConfig` — token aliases the contract or admin.
+    /// * `DistributeError::TokenAlreadyApproved` — token is already approved.
+    ///
+    /// # Events
+    /// Emits `approved_token_added` with `caller` as topic and `token` as data.
+    pub fn add_approved_token(env: Env, caller: Address, token: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        let contract_addr = env.current_contract_address();
+        if token == contract_addr || token == caller {
+            env.panic_with_error(DistributeError::InvalidConfig);
+        }
+        if Self::is_approved_token_internal(&env, &token) {
+            env.panic_with_error(DistributeError::TokenAlreadyApproved);
+        }
+        let inst = env.storage().instance();
+        inst.set(&DataKey::ApprovedToken(token.clone()), &true);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_approved_token_added(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            token,
+        );
+    }
+
+    /// Remove a token from the approved-token allowlist. Admin only.
+    ///
+    /// The default USDC token configured at `init` cannot be removed.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::CannotRemoveDefaultToken` — `token` is the default USDC token.
+    /// * `DistributeError::UnsupportedToken` — `token` is not currently approved.
+    ///
+    /// # Events
+    /// Emits `approved_token_removed` with `caller` as topic and `token` as data.
+    pub fn remove_approved_token(env: Env, caller: Address, token: Address) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        let usdc_address: Address = env
+            .storage()
+            .instance()
+            .get(&Symbol::new(&env, USDC_KEY))
+            .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
+        if token == usdc_address {
+            env.panic_with_error(DistributeError::CannotRemoveDefaultToken);
+        }
+        if !Self::is_approved_token_internal(&env, &token) {
+            env.panic_with_error(DistributeError::UnsupportedToken);
+        }
+        let inst = env.storage().instance();
+        inst.remove(&DataKey::ApprovedToken(token.clone()));
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_approved_token_removed(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            token,
+        );
+    }
+
+    /// Return `true` if `token` is currently in the approved-token allowlist.
+    pub fn is_approved_token(env: Env, token: Address) -> bool {
+        let approved = Self::is_approved_token_internal(&env, &token);
+        Self::bump_instance_ttl(&env);
+        approved
+    }
+
+    /// Set the per-leg distribution cap for a specific approved token. Admin only.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::UnsupportedToken` — `token` is not approved.
+    /// * `DistributeError::CapNotPositive` — value ≤ 0.
+    ///
+    /// # Events
+    /// Emits `set_max_distribute_for` with `(caller, token)` as topics and
+    /// `(old_max, new_max)` as data.
+    pub fn set_max_distribute_for(
+        env: Env,
+        caller: Address,
+        token: Address,
+        max_distribute: i128,
+    ) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        Self::require_approved_token(&env, &token);
+        if max_distribute <= 0 {
+            env.panic_with_error(DistributeError::CapNotPositive);
+        }
+        let old_max = Self::max_distribute_for_internal(&env, &token);
+        let inst = env.storage().instance();
+        inst.set(&DataKey::MaxDistributeFor(token.clone()), &max_distribute);
+        inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (
+                events::event_set_max_distribute_for(&env),
+                events::event_version_v1(&env),
+                caller,
+                token,
+            ),
+            (old_max, max_distribute),
+        );
+    }
+
+    /// Return the per-leg distribution cap for `token`.
+    /// Falls back to the global `max_distribute` cap when unset.
+    pub fn get_max_distribute_for(env: Env, token: Address) -> i128 {
+        let cap = Self::max_distribute_for_internal(&env, &token);
+        Self::bump_instance_ttl(&env);
+        cap
+    }
+
+    // -----------------------------------------------------------------------
     // Distribution
     // -----------------------------------------------------------------------
 
@@ -609,6 +771,7 @@ impl Distribute {
             let (to, amount) = payments.get(i).expect("payment leg");
             let lifecycle = events::DistributionLifecycleEvent::new(
                 &env,
+                usdc_address.clone(),
                 amount,
                 events::DistributionMode::Batch,
                 i,
@@ -631,6 +794,169 @@ impl Distribute {
         );
     }
 
+    /// Distribute an approved token from this contract to a single recipient.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::Paused` — contract is paused.
+    /// * `DistributeError::UnsupportedToken` — `token` is not approved.
+    /// * `DistributeError::AmountNotPositive` — amount ≤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` — amount exceeds the per-token (or global) cap.
+    /// * `DistributeError::InvalidRecipient` — recipient is the contract itself.
+    /// * `DistributeError::InsufficientBalance` — contract holds less than `amount` of `token`.
+    ///
+    /// # Events
+    /// Emits `distribute_started`, `distribute`, and `distribute_completed`, with
+    /// `DistributionLifecycleEvent` (including `token`) on the lifecycle pair.
+    pub fn distribute_token(
+        env: Env,
+        caller: Address,
+        token: Address,
+        to: Address,
+        amount: i128,
+    ) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+        Self::require_approved_token(&env, &token);
+        if amount <= 0 {
+            env.panic_with_error(DistributeError::AmountNotPositive);
+        }
+        let max_distribute = Self::max_distribute_for_internal(&env, &token);
+        if amount > max_distribute {
+            env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
+        }
+        let contract_address = env.current_contract_address();
+        Self::validate_recipient(&env, &to, &contract_address);
+        let token_client = token::Client::new(&env, &token);
+        if token_client.balance(&contract_address) < amount {
+            env.panic_with_error(DistributeError::InsufficientBalance);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        let lifecycle = events::DistributionLifecycleEvent::new(
+            &env,
+            token.clone(),
+            amount,
+            events::DistributionMode::Single,
+            0,
+            1,
+        );
+        events::emit_distribute_started(&env, &to, &lifecycle);
+        token_client.transfer(&contract_address, &to, &amount);
+        events::emit_distribute(&env, &to, amount);
+        events::emit_distribute_completed(&env, &to, &lifecycle);
+    }
+
+    /// Distribute multiple approved tokens to multiple recipients in a single
+    /// atomic transaction.
+    ///
+    /// Each leg is a `(token, recipient, amount)` tuple. All legs are validated
+    /// and per-token totals and balances are checked before any transfer occurs;
+    /// a failure on any leg reverts the entire batch.
+    ///
+    /// # Panics
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::Paused` — contract is paused.
+    /// * `DistributeError::BatchEmpty` — no payment legs provided.
+    /// * `DistributeError::BatchTooLarge` — more than `MAX_BATCH_SIZE` legs.
+    /// * `DistributeError::UnsupportedToken` — any leg specifies an unapproved token.
+    /// * `DistributeError::AmountNotPositive` — any leg has amount ≤ 0.
+    /// * `DistributeError::AmountExceedsMaxDistribute` — any leg exceeds its token's cap.
+    /// * `DistributeError::InvalidRecipient` — any leg targets the contract itself.
+    /// * `DistributeError::Overflow` — any per-token total overflows `i128`.
+    /// * `DistributeError::InsufficientBalance` — contract holds less than a token's total.
+    pub fn batch_distribute_multi(
+        env: Env,
+        caller: Address,
+        payments: Vec<(Address, Address, i128)>,
+    ) {
+        caller.require_auth();
+        Self::require_not_paused(&env);
+        Self::require_admin(&env, &caller);
+
+        let n = payments.len();
+        if n == 0 {
+            env.panic_with_error(DistributeError::BatchEmpty);
+        }
+        if n > limits::MAX_BATCH_SIZE {
+            env.panic_with_error(DistributeError::BatchTooLarge);
+        }
+
+        let contract_address = env.current_contract_address();
+
+        // Phase 1 — validate all legs and accumulate per-token totals
+        let mut token_totals: Map<Address, i128> = Map::new(&env);
+        for i in 0..n {
+            let (token, to, amount) = payments.get(i).expect("payment leg");
+            Self::require_approved_token(&env, &token);
+            if amount <= 0 {
+                env.panic_with_error(DistributeError::AmountNotPositive);
+            }
+            let max_distribute = Self::max_distribute_for_internal(&env, &token);
+            if amount > max_distribute {
+                env.panic_with_error(DistributeError::AmountExceedsMaxDistribute);
+            }
+            Self::validate_recipient(&env, &to, &contract_address);
+            let prev = token_totals.get(token.clone()).unwrap_or(0);
+            let next = prev
+                .checked_add(amount)
+                .unwrap_or_else(|| env.panic_with_error(DistributeError::Overflow));
+            token_totals.set(token, next);
+        }
+
+        // Phase 2 — check each token's balance before any transfer
+        for (token, total) in token_totals.iter() {
+            let token_client = token::Client::new(&env, &token);
+            if token_client.balance(&contract_address) < total {
+                env.panic_with_error(DistributeError::InsufficientBalance);
+            }
+        }
+
+        env.storage()
+            .instance()
+            .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+
+        // Phase 3 — emit batch started event
+        env.events().publish(
+            (
+                events::event_batch_distribute_started(&env),
+                events::event_version_v1(&env),
+                caller.clone(),
+            ),
+            (token_totals.clone(), n),
+        );
+
+        // Phase 4 — execute transfers in order with per-leg lifecycle events
+        for i in 0..n {
+            let (token, to, amount) = payments.get(i).expect("payment leg");
+            let lifecycle = events::DistributionLifecycleEvent::new(
+                &env,
+                token.clone(),
+                amount,
+                events::DistributionMode::Batch,
+                i,
+                n,
+            );
+            events::emit_distribute_started(&env, &to, &lifecycle);
+            token::Client::new(&env, &token).transfer(&contract_address, &to, &amount);
+            events::emit_distribute(&env, &to, amount);
+            events::emit_distribute_completed(&env, &to, &lifecycle);
+        }
+
+        // Phase 5 — emit batch completed event
+        env.events().publish(
+            (
+                events::event_batch_distribute_completed(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            (token_totals, n),
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Balance view
     // -----------------------------------------------------------------------
@@ -638,7 +964,7 @@ impl Distribute {
     /// Return this contract's on-ledger USDC balance.
     ///
     /// # Panics
-    /// * `DistributeError::NotInitialized` â€” called before `init`.
+    /// * `DistributeError::NotInitialized` — called before `init`.
     pub fn balance(env: Env) -> i128 {
         let usdc_addr: Address = env
             .storage()
@@ -647,6 +973,18 @@ impl Distribute {
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized));
         let usdc = token::Client::new(&env, &usdc_addr);
         let balance = usdc.balance(&env.current_contract_address());
+        Self::bump_instance_ttl(&env);
+        balance
+    }
+
+    /// Return this contract's on-ledger balance for an arbitrary token.
+    ///
+    /// # Panics
+    /// * `DistributeError::NotInitialized` — called before `init`.
+    pub fn balance_of(env: Env, token: Address) -> i128 {
+        let _ = Self::admin(&env);
+        let token_client = token::Client::new(&env, &token);
+        let balance = token_client.balance(&env.current_contract_address());
         Self::bump_instance_ttl(&env);
         balance
     }

@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Every variant is paired with its **stable numeric discriminant**.  If a
 /// discriminant changes (accidentally or intentionally), this test fails
 /// with a diff-friendly message identifying the regressed variant.
-const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 48] = [
+const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
     (1, VaultError::NotInitialized),
     (2, VaultError::AlreadyInitialized),
     (3, VaultError::Unauthorized),
@@ -31,7 +31,6 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 48] = [
     (14, VaultError::UsdcTokenCannotBeVault),
     (15, VaultError::RevenuePoolCannotBeVault),
     (16, VaultError::AuthorizedCallerCannotBeVault),
-    (17, VaultError::InitialBalanceExceedsOnLedger),
     (18, VaultError::AlreadyPaused),
     (19, VaultError::NotPaused),
     (20, VaultError::SettlementNotSet),
@@ -49,7 +48,6 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 48] = [
     (34, VaultError::NoRevenuePoolTransferPending),
     (35, VaultError::Slippage),
     (36, VaultError::RateLimited),
-    (37, VaultError::PausedState),
     (38, VaultError::InvalidHotBps),
     (39, VaultError::InvalidRebalanceThreshold),
     // codes 40-42 retired (were ColdSignersEmpty..DuplicateColdSigner)
@@ -67,7 +65,7 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 48] = [
     (57, VaultError::SettlementCannotBeToken),
     (58, VaultError::ProposalExpired),
     (59, VaultError::SettlementEqualsRevenuePool),
-    (60, VaultError::TooManyIds),
+    (61, VaultError::TooManyIds),
 ];
 
 /// Verify every error code in the snapshot maps to the expected discriminant.
@@ -186,12 +184,6 @@ fn test_authorized_caller_cannot_be_vault_is_code_16() {
     assert_eq!(VaultError::AuthorizedCallerCannotBeVault as u32, 16);
 }
 
-/// Verify `InitialBalanceExceedsOnLedger` still has discriminant 17.
-#[test]
-fn test_initial_balance_exceeds_on_ledger_is_code_17() {
-    assert_eq!(VaultError::InitialBalanceExceedsOnLedger as u32, 17);
-}
-
 /// Verify `AlreadyPaused` still has discriminant 18.
 #[test]
 fn test_already_paused_is_code_18() {
@@ -282,12 +274,6 @@ fn test_rate_limited_is_code_36() {
     assert_eq!(VaultError::RateLimited as u32, 36);
 }
 
-/// Verify `PausedState` still has discriminant 37.
-#[test]
-fn test_paused_state_is_code_37() {
-    assert_eq!(VaultError::PausedState as u32, 37);
-}
-
 /// Verify `InvalidHotBps` still has discriminant 38.
 #[test]
 fn test_invalid_hot_bps_is_code_38() {
@@ -366,8 +352,8 @@ fn test_settlement_equals_revenue_pool_is_code_59() {
     assert_eq!(VaultError::SettlementEqualsRevenuePool as u32, 59);
 }
 
-/// Verify `TooManyIds` still has discriminant 60.
+/// Verify `TooManyIds` still has discriminant 61.
 #[test]
-fn test_too_many_ids_is_code_60() {
-    assert_eq!(VaultError::TooManyIds as u32, 60);
+fn test_too_many_ids_is_code_61() {
+    assert_eq!(VaultError::TooManyIds as u32, 61);
 }

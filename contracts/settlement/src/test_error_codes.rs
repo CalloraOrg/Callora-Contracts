@@ -71,7 +71,7 @@ fn settlement_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 51);
+    assert_eq!(seen.len(), 50);
 }
 
 #[test]

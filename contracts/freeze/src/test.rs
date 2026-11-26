@@ -145,6 +145,7 @@ fn test_freeze_error_codes_stability_and_uniqueness() {
         (4, FreezeError::AlreadyFrozen),
         (5, FreezeError::NotFrozen),
         (6, FreezeError::Overflow),
+        (7, FreezeError::FreezeUntilNotInFuture),
     ];
 
     let mut seen = BTreeSet::new();
@@ -156,7 +157,7 @@ fn test_freeze_error_codes_stability_and_uniqueness() {
         );
     }
 
-    assert_eq!(seen.len(), 6);
+    assert_eq!(seen.len(), 7);
 }
 
 #[test]
@@ -169,6 +170,7 @@ fn test_error_code_docs_coverage() {
         "| 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |",
         "| 5 | `NotFrozen` | Freeze | Contract is not currently frozen |",
         "| 6 | `Overflow` | Freeze | Arithmetic overflow detected |",
+        "| 7 | `FreezeUntilNotInFuture` | Freeze | `freeze_until` deadline is not in the future (`until <= now`) |",
     ];
 
     for line in expected_lines {
@@ -229,6 +231,7 @@ fn test_freeze_emits_freeze_set_event() {
     let payload = FreezeSetEvent::try_from_val(&env, &evt.2).unwrap();
     assert_eq!(payload.reason, reason);
     assert_eq!(payload.frozen_at, env.ledger().timestamp());
+    assert_eq!(payload.freeze_until, None);
 }
 
 /// `unfreeze` must emit exactly one `freeze_cleared` event.
@@ -632,4 +635,220 @@ fn test_freeze_succeeds_after_90_idle_days() {
     let reason = Symbol::new(&env, "after_idle");
     client.freeze(&admin, &reason);
     assert!(client.is_frozen());
+}
+
+// ---------------------------------------------------------------------------
+// Timed freeze (`freeze_until`) tests
+// ---------------------------------------------------------------------------
+
+/// A freeze with `until = T` is frozen for `now < T` and unfrozen at
+/// `now >= T`, with no admin action and no state write required.
+#[test]
+fn test_freeze_until_lapses_at_deadline() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let until = now + 100;
+    let reason = Symbol::new(&env, "timed");
+    client.freeze_until(&admin, &reason, &until);
+
+    assert!(client.is_frozen());
+
+    // Status before the deadline exposes the deadline.
+    let status = client.get_freeze_status();
+    assert!(status.frozen);
+    assert_eq!(status.until, Some(until));
+    assert_eq!(status.reason, Some(reason));
+
+    // Just before the deadline: still frozen.
+    env.ledger().set_timestamp(until - 1);
+    assert!(client.is_frozen());
+    assert!(client.get_freeze_status().frozen);
+
+    // Exactly at the deadline: lapsed.
+    env.ledger().set_timestamp(until);
+    assert!(!client.is_frozen());
+    let status = client.get_freeze_status();
+    assert!(!status.frozen);
+    // The stored deadline is still reported for monitors.
+    assert_eq!(status.until, Some(until));
+
+    // After the deadline: still unfrozen.
+    env.ledger().set_timestamp(until + 1);
+    assert!(!client.is_frozen());
+    assert!(!client.get_freeze_status().frozen);
+}
+
+/// `freeze_until` rejects deadlines that are not strictly in the future.
+#[test]
+fn test_freeze_until_rejects_past_and_present_deadline() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let reason = Symbol::new(&env, "timed");
+
+    // until == now → error.
+    assert_eq!(
+        client.try_freeze_until(&admin, &reason, &now),
+        Err(Ok(FreezeError::FreezeUntilNotInFuture))
+    );
+
+    // until < now → error.
+    assert_eq!(
+        client.try_freeze_until(&admin, &reason, &(now - 1)),
+        Err(Ok(FreezeError::FreezeUntilNotInFuture))
+    );
+
+    assert!(!client.is_frozen());
+}
+
+/// After a timed freeze lapses, `freeze` and `freeze_until` succeed again
+/// (no `AlreadyFrozen`).
+#[test]
+fn test_refreeze_after_lapse_succeeds() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let until = now + 50;
+    client.freeze_until(&admin, &Symbol::new(&env, "first"), &until);
+
+    env.ledger().set_timestamp(until);
+    assert!(!client.is_frozen());
+
+    // Indefinite re-freeze succeeds and clears the deadline.
+    client.freeze(&admin, &Symbol::new(&env, "second"));
+    assert!(client.is_frozen());
+    let status = client.get_freeze_status();
+    assert!(status.frozen);
+    assert_eq!(status.until, None);
+
+    // Advance far past the old deadline; indefinite freeze must persist.
+    env.ledger().set_timestamp(until + 10_000);
+    assert!(client.is_frozen());
+}
+
+/// An indefinite `freeze` after a lapsed timed freeze also succeeds.
+#[test]
+fn test_freeze_until_then_indefinite_freeze_after_lapse() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    client.freeze_until(&admin, &Symbol::new(&env, "timed"), &(now + 10));
+    env.ledger().set_timestamp(now + 10);
+    assert!(!client.is_frozen());
+
+    client.freeze(&admin, &Symbol::new(&env, "indefinite"));
+    assert!(client.is_frozen());
+    assert_eq!(client.get_freeze_status().until, None);
+}
+
+/// The freeze operator may initiate a timed freeze.
+#[test]
+fn test_operator_can_freeze_until() {
+    let (env, admin, client) = setup();
+    let operator = Address::generate(&env);
+    client.init(&admin);
+    client.set_freeze_operator(&admin, &Some(operator.clone()));
+
+    let now = env.ledger().timestamp();
+    let until = now + 200;
+    let reason = Symbol::new(&env, "op_timed");
+    client.freeze_until(&operator, &reason, &until);
+
+    assert!(client.is_frozen());
+    let status = client.get_freeze_status();
+    assert_eq!(status.until, Some(until));
+
+    // Unauthorized caller cannot initiate a timed freeze.
+    let stranger = Address::generate(&env);
+    client.unfreeze(&admin);
+    assert_eq!(
+        client.try_freeze_until(&stranger, &reason, &(now + 300)),
+        Err(Ok(FreezeError::Unauthorized))
+    );
+}
+
+/// `unfreeze` before the deadline clears the freeze and the stored deadline.
+#[test]
+fn test_unfreeze_before_deadline_clears_until() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let until = now + 100;
+    client.freeze_until(&admin, &Symbol::new(&env, "timed"), &until);
+    assert!(client.is_frozen());
+
+    client.unfreeze(&admin);
+    assert!(!client.is_frozen());
+
+    let status = client.get_freeze_status();
+    assert!(!status.frozen);
+    assert_eq!(status.until, None);
+    assert!(status.reason.is_none());
+    assert!(status.frozen_at.is_none());
+}
+
+/// `unfreeze` on a lapsed freeze returns `NotFrozen` (already inactive).
+#[test]
+fn test_unfreeze_after_lapse_returns_not_frozen() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let until = now + 50;
+    client.freeze_until(&admin, &Symbol::new(&env, "timed"), &until);
+
+    env.ledger().set_timestamp(until);
+    assert!(!client.is_frozen());
+    assert_eq!(
+        client.try_unfreeze(&admin),
+        Err(Ok(FreezeError::NotFrozen))
+    );
+}
+
+/// `freeze_until` emits `freeze_set` with the deadline in the payload.
+#[test]
+fn test_freeze_until_emits_event_with_deadline() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    let until = now + 500;
+    let reason = Symbol::new(&env, "timed_event");
+    client.freeze_until(&admin, &reason, &until);
+
+    let events = env.events().all();
+    let evt = events.last().expect("expected at least one event");
+    let topic0 = Symbol::try_from_val(&env, &evt.1.get(0).unwrap()).unwrap();
+    assert_eq!(topic0, Symbol::new(&env, "freeze_set"));
+
+    let payload = FreezeSetEvent::try_from_val(&env, &evt.2).unwrap();
+    assert_eq!(payload.reason, reason);
+    assert_eq!(payload.frozen_at, now);
+    assert_eq!(payload.freeze_until, Some(until));
+}
+
+/// While a timed freeze is active, a second `freeze_until` (or `freeze`)
+/// still fails with `AlreadyFrozen`.
+#[test]
+fn test_freeze_until_while_active_returns_already_frozen() {
+    let (env, admin, client) = setup();
+    client.init(&admin);
+
+    let now = env.ledger().timestamp();
+    client.freeze_until(&admin, &Symbol::new(&env, "first"), &(now + 100));
+
+    assert_eq!(
+        client.try_freeze_until(&admin, &Symbol::new(&env, "second"), &(now + 200)),
+        Err(Ok(FreezeError::AlreadyFrozen))
+    );
+    assert_eq!(
+        client.try_freeze(&admin, &Symbol::new(&env, "second")),
+        Err(Ok(FreezeError::AlreadyFrozen))
+    );
 }

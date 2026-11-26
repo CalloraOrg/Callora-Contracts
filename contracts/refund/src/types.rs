@@ -25,6 +25,8 @@ pub enum StorageKey {
 pub struct RefundConfig {
     pub fee_bps: u32,
     pub min_refund_amount: i128,
+    /// Lifetime of a `Pending` request in seconds. `0` disables expiry.
+    pub request_lifetime_secs: u64,
 }
 
 /// Status of a refund request.
@@ -36,6 +38,7 @@ pub enum RefundStatus {
     Rejected = 2,
     Processed = 3,
     Disputed = 4,
+    Expired = 5,
 }
 
 /// Refund request data.
