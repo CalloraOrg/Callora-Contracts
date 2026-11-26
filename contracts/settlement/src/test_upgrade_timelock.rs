@@ -159,12 +159,11 @@ fn test_execute_upgrade_fails_when_no_pending() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_execute_upgrade_clears_proposal_after_success() {
-    // NOTE: In the Soroban test environment `update_current_contract_wasm` is a
-    // no-op mock, so we can verify state transitions without actual WASM.
     let (env, client, admin, _vault) = setup();
-    let hash = dummy_hash(&env);
+    let hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
     client.propose_upgrade(&admin, &hash);
 
     env.ledger()
@@ -172,27 +171,38 @@ fn test_execute_upgrade_clears_proposal_after_success() {
 
     client.execute_upgrade(&admin);
 
-    // Proposal must be gone after execution.
+    // Proposal must be gone after execution and version recorded.
     assert!(
         client.get_pending_upgrade().is_none(),
         "pending proposal should be cleared after execution"
     );
+    assert_eq!(client.get_version(), Some(hash));
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn test_execute_upgrade_at_exact_deadline() {
-    // Execute_after is the earliest inclusive timestamp, so `now == execute_after` should pass.
+    // Execute_after is the earliest inclusive timestamp: one second before
+    // must fail, and `now == execute_after` must succeed.
     let (env, client, admin, _vault) = setup();
-    let hash = dummy_hash(&env);
+    let hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
     client.propose_upgrade(&admin, &hash);
 
     env.ledger()
-        .with_mut(|l| l.timestamp += UPGRADE_TIMELOCK_SECONDS);
+        .with_mut(|l| l.timestamp += UPGRADE_TIMELOCK_SECONDS - 1);
+    let early = client.try_execute_upgrade(&admin).unwrap_err().unwrap();
+    assert_eq!(
+        early,
+        soroban_sdk::Error::from_contract_error(SettlementError::UpgradeTimelockNotExpired as u32)
+    );
 
-    // Should not panic.
+    env.ledger().with_mut(|l| l.timestamp += 1);
+
+    // Should not panic at `now == execute_after`.
     client.execute_upgrade(&admin);
     assert!(client.get_pending_upgrade().is_none());
+    assert_eq!(client.get_version(), Some(hash));
 }
 
 // ─── cancel_upgrade ─────────────────────────────────────────────────────────

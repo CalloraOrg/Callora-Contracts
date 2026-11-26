@@ -620,20 +620,33 @@ mod event_tests {
 
     // ─── upgraded ─────────────────────────────────────────────────────────────
 
-    /// `upgrade` emits exactly one `upgraded` event with topic[1]=admin.
+    /// `upgrade` (deprecated alias for `propose_upgrade`) emits `upgrade_proposed`
+    /// with topic[1]=admin, and `execute_upgrade` after the timelock updates the
+    /// contract version and clears the pending proposal.
     #[test]
-    #[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
     fn test_upgrade_emits_upgraded_event() {
+        use crate::timelock::UPGRADE_TIMELOCK_SECONDS;
+        use soroban_sdk::testutils::Ledger as _;
+
         let (env, contract, admin, _, _) = setup();
         let client = CalloraSettlementClient::new(&env, &contract);
-        let fake_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+        let wasm_hash = env
+            .deployer()
+            .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
 
-        client.upgrade(&admin, &fake_hash);
+        client.upgrade(&admin, &wasm_hash);
 
         let all = env.events().all();
-        let evs = filter_by_topic(&env, &all, "upgraded");
-        assert_eq!(evs.len(), 1);
-        assert_eq!(topic1_addr(&env, &evs[0]), admin);
+        let proposed = filter_by_topic(&env, &all, "upgrade_proposed");
+        assert_eq!(proposed.len(), 1);
+        assert_eq!(topic1_addr(&env, &proposed[0]), admin);
+
+        env.ledger()
+            .with_mut(|l| l.timestamp += UPGRADE_TIMELOCK_SECONDS);
+        client.execute_upgrade(&admin);
+
+        assert_eq!(client.get_version(), Some(wasm_hash));
+        assert!(client.get_pending_upgrade().is_none());
     }
 
     // ─── admin_broadcast ──────────────────────────────────────────────────────
