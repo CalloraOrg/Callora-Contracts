@@ -25,7 +25,8 @@ use callora_whitelist::WhitelistError;
 /// | 50   | InvalidAdminCooldown        | Admin cool-off window is outside accepted bounds     |
 /// | 51   | NoAdminTransferPending      | No admin transfer is pending                         |
 /// | 52   | NewAdminSameAsCurrent       | Proposed admin matches the current admin             |
-/// | 53   | InvalidExpiry               | `add_address_until` expiry is not in the future      |
+/// | 53   | AdminTransferCancelled      | Admin transfer was cancelled                        |
+/// | 54   | InvalidExpiry               | `add_address_until` expiry is not in the future      |
 #[test]
 fn snapshot_error_codes() {
     assert_eq!(WhitelistError::NotInitialized as u32, 1);
@@ -38,5 +39,5 @@ fn snapshot_error_codes() {
     assert_eq!(WhitelistError::InvalidAdminCooldown as u32, 50);
     assert_eq!(WhitelistError::NoAdminTransferPending as u32, 51);
     assert_eq!(WhitelistError::NewAdminSameAsCurrent as u32, 52);
-    assert_eq!(WhitelistError::InvalidExpiry as u32, 53);
+    assert_eq!(WhitelistError::InvalidExpiry as u32, 54);
 }

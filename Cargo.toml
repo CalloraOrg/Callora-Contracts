@@ -31,6 +31,7 @@ members = [
     "contracts/settlement",
     "contracts/stake",
     "contracts/storage_migration",
+    "contracts/tests",
     "contracts/topics",
     "contracts/upgrade",
     "contracts/validators",
@@ -40,17 +41,23 @@ members = [
 ]
 
 default-members = [
+    ".",
+    "contracts/admin",
+    "contracts/allowlist",
     "contracts/batch_claim",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
     "contracts/emergency",
+    "contracts/errors",
     "contracts/escrow",
+    "contracts/fee",
     "contracts/freeze",
     "contracts/helpers",
     "contracts/hot",
     "contracts/limits",
     "contracts/migrate",
+    "contracts/recipient",
     "contracts/registry",
     "contracts/refund",
     "contracts/rescue",
@@ -74,6 +81,10 @@ callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
 callora-distribute = { path = "contracts/distribute" }
 callora-vault = { path = "contracts/vault" }
+callora-escrow = { path = "contracts/escrow" }
+callora-refund = { path = "contracts/refund" }
+callora-upgrade = { path = "contracts/upgrade" }
+callora-freeze = { path = "contracts/freeze" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]

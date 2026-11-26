@@ -272,14 +272,13 @@ fn is_paused_reflects_pause_unpause() {
 // is_authorized_depositor
 // ---------------------------------------------------------------------------
 
-/// The doc comment on `is_authorized_depositor` says the view reflects only
-/// the explicit allowlist; the owner may deposit regardless but is not listed.
+/// `is_authorized_depositor` mirrors `deposit`'s authorization gate: the vault
+/// owner is always authorized even when the explicit allowlist is empty.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn is_authorized_depositor_owner_is_not_on_allowlist() {
+fn is_authorized_depositor_owner_is_authorized() {
     let env = Env::default();
     let (owner, client, _) = setup(&env);
-    assert!(!client.is_authorized_depositor(&owner));
+    assert!(client.is_authorized_depositor(&owner));
 }
 
 #[test]

@@ -96,6 +96,41 @@ fn migrate_reshapes_data_and_advances_version() {
 }
 
 #[test]
+fn backward_compatible_storage_layout_read() {
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 1_000, 42);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+    let hash = BytesN::from_array(&env, &[0xAA; 32]);
+
+    env.as_contract(&contract, || {
+        env.storage().instance().set(&StorageKey::Admin, &admin);
+        env.storage().instance().set(&StorageKey::Version, &1u32);
+        env.storage().instance().set(
+            &StorageKey::Current,
+            &CurrentStake {
+                total_staked: 1_000,
+                last_checkpoint: 42,
+                reserve: 0,
+            },
+        );
+        env.storage()
+            .instance()
+            .set(&StorageKey::AuthorisedUpgrade, &(1u32, hash.clone()));
+    });
+
+    assert_eq!(client.version(), Some(1));
+    assert_eq!(
+        client.get_current(),
+        Some(CurrentStake {
+            total_staked: 1_000,
+            last_checkpoint: 42,
+            reserve: 0,
+        })
+    );
+    assert!(client.is_upgrade_authorised(&hash));
+}
+
+#[test]
 fn migrate_preserves_zero_stake() {
     let env = Env::default();
     let (admin, contract) = setup(&env, 0, 100);
@@ -403,7 +438,7 @@ fn migrate_emits_stake_migrated_event() {
     let expected_topic = Symbol::new(&env, "stake_migrated");
     let has_event = all_events
         .into_iter()
-        .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
+        .any(|(_addr, topics, _data)| topics.contains(expected_topic.to_val()));
     assert!(has_event, "stake_migrated event must be emitted");
 }
 
@@ -420,7 +455,7 @@ fn authorize_upgrade_emits_upg_authorised_event() {
     let expected_topic = Symbol::new(&env, "upg_authorised");
     let has_event = all_events
         .into_iter()
-        .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
+        .any(|(_addr, topics, _data)| topics.contains(expected_topic.to_val()));
     assert!(has_event, "upg_authorised event must be emitted");
 }
 

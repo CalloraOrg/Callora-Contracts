@@ -2,7 +2,11 @@
 
 extern crate std;
 
-use callora_stake::{CalloraStake, CalloraStakeClient, SUPPORTED_CAPABILITIES};
+use callora_stake::{
+    CalloraStake, CalloraStakeClient, CAP_DELEGATION, CAP_REWARDS, CAP_SLASHING,
+    CAP_STAKE_UNSTAKE, CAP_STAKE_VIEW, CAP_WITHDRAW_TIMELOCK, IMPLEMENTED_CAPABILITIES,
+    SUPPORTED_CAPABILITIES,
+};
 use soroban_sdk::Env;
 
 fn create_contract(env: &Env) -> CalloraStakeClient<'_> {
@@ -17,15 +21,15 @@ fn capabilities_does_not_require_auth() {
 
     env.set_auths(&[]);
     let caps = client.capabilities();
-    assert_eq!(caps, 0);
+    assert_eq!(caps, IMPLEMENTED_CAPABILITIES);
 }
 
 #[test]
-fn capabilities_returns_zero() {
+fn capabilities_returns_implemented_mask() {
     let env = Env::default();
     let client = create_contract(&env);
 
-    assert_eq!(client.capabilities(), 0);
+    assert_eq!(client.capabilities(), CAP_STAKE_UNSTAKE | CAP_STAKE_VIEW);
 }
 
 #[test]
@@ -38,9 +42,8 @@ fn capabilities_are_subset_of_reserved_mask() {
 }
 
 /// Every set bit must map to an exported entrypoint on the generated client.
-/// Today the contract exports only `capabilities`, which is not a stake feature
-/// bit, so the expected mask is 0. This test keeps the advertised bits in
-/// step with the actual entrypoints as they are added.
+/// This test keeps the advertised bits in step with the actual entrypoints
+/// as they are added.
 #[test]
 fn capability_bits_map_to_entrypoints() {
     let env = Env::default();
@@ -48,17 +51,16 @@ fn capability_bits_map_to_entrypoints() {
 
     let caps = client.capabilities();
 
-    // Bit 0 -> stake/unstake entrypoints must exist in the generated client.
-    // None are exported today, so the bit must be clear.
-    assert_eq!(caps & (1 << 0), 0);
-    // Bit 1 -> delegation entrypoint must exist.
-    assert_eq!(caps & (1 << 1), 0);
-    // Bit 2 -> rewards entrypoint must exist.
-    assert_eq!(caps & (1 << 2), 0);
-    // Bit 3 -> slashing entrypoint must exist.
-    assert_eq!(caps & (1 << 3), 0);
-    // Bit 4 -> withdraw timelock entrypoint must exist.
-    assert_eq!(caps & (1 << 4), 0);
-    // Bit 5 -> stake view entrypoint must exist.
-    assert_eq!(caps & (1 << 5), 0);
+    // Bit 0 -> stake/unstake entrypoints are exported.
+    assert_eq!(caps & CAP_STAKE_UNSTAKE, CAP_STAKE_UNSTAKE);
+    // Bit 1 -> delegation entrypoint is not yet exported.
+    assert_eq!(caps & CAP_DELEGATION, 0);
+    // Bit 2 -> rewards entrypoint is not yet exported.
+    assert_eq!(caps & CAP_REWARDS, 0);
+    // Bit 3 -> slashing entrypoint is not yet exported.
+    assert_eq!(caps & CAP_SLASHING, 0);
+    // Bit 4 -> withdraw timelock entrypoint is not yet exported.
+    assert_eq!(caps & CAP_WITHDRAW_TIMELOCK, 0);
+    // Bit 5 -> stake view entrypoints (get_stake, total_staked, get_token) are exported.
+    assert_eq!(caps & CAP_STAKE_VIEW, CAP_STAKE_VIEW);
 }

@@ -7,9 +7,10 @@
 extern crate std;
 
 use callora_emergency::{
-    CalloraEmergency, CalloraEmergencyClient, ALL_CAPABILITIES, CAP_EMERGENCY_DRAIN_CANCEL,
-    CAP_EMERGENCY_DRAIN_EXECUTE, CAP_EMERGENCY_DRAIN_PROPOSE, CAP_EMERGENCY_PAUSE,
-    CAP_EMERGENCY_UNPAUSE, CAP_PENDING_DRAIN_VIEW,
+    CalloraEmergency, CalloraEmergencyClient, ALL_CAPABILITIES, CAP_CONTRACT_REGISTRY,
+    CAP_EMERGENCY_DRAIN_CANCEL, CAP_EMERGENCY_DRAIN_EXECUTE, CAP_EMERGENCY_DRAIN_PROPOSE,
+    CAP_EMERGENCY_PAUSE, CAP_EMERGENCY_UNPAUSE, CAP_GUARDIAN_ROLE, CAP_PAUSE_COORDINATOR,
+    CAP_PENDING_DRAIN_VIEW,
 };
 use soroban_sdk::Env;
 
@@ -56,6 +57,9 @@ fn each_documented_emergency_bit_is_set() {
         ("CAP_EMERGENCY_DRAIN_EXECUTE", CAP_EMERGENCY_DRAIN_EXECUTE),
         ("CAP_EMERGENCY_DRAIN_CANCEL", CAP_EMERGENCY_DRAIN_CANCEL),
         ("CAP_PENDING_DRAIN_VIEW", CAP_PENDING_DRAIN_VIEW),
+        ("CAP_PAUSE_COORDINATOR", CAP_PAUSE_COORDINATOR),
+        ("CAP_GUARDIAN_ROLE", CAP_GUARDIAN_ROLE),
+        ("CAP_CONTRACT_REGISTRY", CAP_CONTRACT_REGISTRY),
     ] {
         assert_ne!(caps & bit, 0, "missing capability bit {name} ({bit:#x})");
     }
@@ -69,7 +73,7 @@ fn each_documented_emergency_bit_is_set() {
 fn reserved_high_bits_remain_zero() {
     let env = Env::default();
     let caps = client(&env).capabilities();
-    assert_eq!(caps >> 6, 0, "reserved bits 6–63 must remain clear");
+    assert_eq!(caps >> 9, 0, "reserved bits 9–63 must remain clear");
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +109,9 @@ fn all_defined_bits_are_distinct_powers_of_two() {
         CAP_EMERGENCY_DRAIN_EXECUTE,
         CAP_EMERGENCY_DRAIN_CANCEL,
         CAP_PENDING_DRAIN_VIEW,
+        CAP_PAUSE_COORDINATOR,
+        CAP_GUARDIAN_ROLE,
+        CAP_CONTRACT_REGISTRY,
     ];
     for &b in &bits {
         // Must be a power of two (exactly one bit set).
