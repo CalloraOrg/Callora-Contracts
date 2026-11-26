@@ -40,6 +40,10 @@ pub const MAX_PENDING_REFUNDS_PAGE_SIZE: u32 = 50;
 /// configures one via [`RefundContract::set_dispute_window`].
 pub const DEFAULT_DISPUTE_WINDOW_SECS: u64 = 604_800;
 
+/// Default dispute window in seconds (7 days) used when the admin has not
+/// configured one via [`RefundContract::set_dispute_window`].
+pub const DEFAULT_DISPUTE_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
 #[contract]
 pub struct RefundContract;
 
@@ -51,6 +55,8 @@ impl RefundContract {
     /// * `admin` - Address that will hold admin privileges; must authorize.
     /// * `fee_bps` - Fee rate in basis points (0-10000).
     /// * `min_refund_amount` - Minimum refund amount allowed (>= 0).
+    /// * `request_lifetime_secs` - Seconds a `Pending` request stays actionable
+    ///   before anyone may expire it; `0` disables expiry.
     ///
     /// # Errors
     /// * `AlreadyInitialized` - Contract already initialized.
@@ -61,6 +67,7 @@ impl RefundContract {
         admin: Address,
         fee_bps: u32,
         min_refund_amount: i128,
+        request_lifetime_secs: u64,
     ) -> Result<(), RefundError> {
         admin.require_auth();
 
@@ -83,12 +90,19 @@ impl RefundContract {
             &RefundConfig {
                 fee_bps,
                 min_refund_amount,
+                request_lifetime_secs,
             },
         );
 
         Self::bump_instance_ttl(&env);
 
-        Self::emit_initialized(&env, &admin, fee_bps, min_refund_amount);
+        Self::emit_initialized(
+            &env,
+            &admin,
+            fee_bps,
+            min_refund_amount,
+            request_lifetime_secs,
+        );
 
         Ok(())
     }
@@ -114,7 +128,8 @@ impl RefundContract {
     /// # Bounded Cost
     /// When the requester's index reaches [`MAX_REQUESTER_REFUNDS`], eviction scans
     /// at most [`MAX_REQUESTER_REFUNDS`] (100) records in index order (oldest first).
-    /// Only finished requests (`Rejected` or `Processed`) are eligible for eviction.
+    /// Only finished requests (`Rejected`, `Processed` or `Expired`) are eligible
+    /// for eviction.
     /// The scan inspects at most 100 persistent entries (O(N) with N <= 100), placing
     /// a deterministic bound on CPU instructions and storage operations. If all slots
     /// are occupied by open requests (`Pending` or `Approved`), the transaction aborts
@@ -163,6 +178,7 @@ impl RefundContract {
                 {
                     if existing_req.status == RefundStatus::Rejected
                         || existing_req.status == RefundStatus::Processed
+                        || existing_req.status == RefundStatus::Expired
                     {
                         eviction_index = Some(i);
                         break;
@@ -251,7 +267,8 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status
+    ///   (an expired request cannot be approved).
     pub fn approve_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         Self::approve_refund_internal(&env, &admin, request_id, None)
     }
@@ -266,7 +283,8 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status
+    ///   (an expired request cannot be approved).
     /// * `ApprovedAmountInvalid` - `approved_amount <= 0` or `> request.amount`.
     pub fn approve_refund_partial(
         env: Env,
@@ -362,7 +380,8 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Pending or Disputed status.
+    /// * `InvalidStatus` - Request is not in Pending or Disputed status
+    ///   (an expired request cannot be rejected).
     pub fn reject_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
@@ -404,6 +423,81 @@ impl RefundContract {
             0,
             0,
             RefundStatus::Rejected,
+        );
+
+        Ok(())
+    }
+
+    /// Expire a `Pending` refund request that outlived the configured lifetime.
+    ///
+    /// Permissionless: any caller may expire a stale request. The lifetime is
+    /// read from [`RefundConfig::request_lifetime_secs`]; `0` disables expiry,
+    /// so such a request can never be expired. A request becomes expirable once
+    /// `now >= created_at + request_lifetime_secs` (the exact boundary is
+    /// inclusive). Expiry frees the requester's open-request slot and removes
+    /// the id from the global pending index, but the record stays readable
+    /// through [`Self::get_refund_request`].
+    ///
+    /// # Arguments
+    /// * `request_id` - ID of the refund request to expire.
+    ///
+    /// # Errors
+    /// * `NotInitialized` - Contract not initialized.
+    /// * `NotFound` - Refund request not found.
+    /// * `InvalidStatus` - Request is not in `Pending` status.
+    /// * `NotExpired` - Lifetime is `0` or the request is younger than it.
+    /// * `Overflow` - `created_at + request_lifetime_secs` overflowed.
+    pub fn expire_refund(env: Env, request_id: u64) -> Result<(), RefundError> {
+        Self::ensure_initialized(&env)?;
+        Self::bump_instance_ttl(&env);
+
+        let key = StorageKey::PendingRefund(request_id);
+        let mut request: RefundRequest = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(RefundError::NotFound)?;
+
+        if request.status != RefundStatus::Pending {
+            return Err(RefundError::InvalidStatus);
+        }
+
+        let config: RefundConfig = env
+            .storage()
+            .instance()
+            .get(&StorageKey::RefundConfig)
+            .ok_or(RefundError::NotInitialized)?;
+        if config.request_lifetime_secs == 0 {
+            return Err(RefundError::NotExpired);
+        }
+
+        let expires_at = request
+            .created_at
+            .checked_add(config.request_lifetime_secs)
+            .ok_or(RefundError::Overflow)?;
+        let now = env.ledger().timestamp();
+        if now < expires_at {
+            return Err(RefundError::NotExpired);
+        }
+
+        request.status = RefundStatus::Expired;
+        request.processed_at = Some(now);
+        env.storage().persistent().set(&key, &request);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
+
+        Self::remove_from_pending_index(&env, request_id);
+
+        Self::emit_refund_expired(
+            &env,
+            request_id,
+            &request.requester,
+            &request.token,
+            request.amount,
+            now,
         );
 
         Ok(())
@@ -521,7 +615,8 @@ impl RefundContract {
     /// * `NotInitialized` - Contract not initialized.
     /// * `Unauthorized` - Caller is not the admin.
     /// * `NotFound` - Refund request not found.
-    /// * `InvalidStatus` - Request is not in Approved status.
+    /// * `InvalidStatus` - Request is not in Approved status (an expired
+    ///   request cannot be processed).
     /// * `Overflow` - Total refunds counter or fee calculation would overflow.
     /// * `InsufficientBalance` - Contract token balance is below net payout amount.
     pub fn process_refund(env: Env, admin: Address, request_id: u64) -> Result<(), RefundError> {
@@ -710,6 +805,8 @@ impl RefundContract {
     /// * `admin` - Admin address; must authorize and match stored admin.
     /// * `fee_bps` - New fee rate in basis points (0-10000).
     /// * `min_refund_amount` - New minimum refund amount (>= 0).
+    /// * `request_lifetime_secs` - New `Pending` request lifetime in seconds;
+    ///   `0` disables expiry.
     ///
     /// # Errors
     /// * `NotInitialized` - Contract not initialized.
@@ -721,6 +818,7 @@ impl RefundContract {
         admin: Address,
         fee_bps: u32,
         min_refund_amount: i128,
+        request_lifetime_secs: u64,
     ) -> Result<(), RefundError> {
         admin.require_auth();
         Self::ensure_initialized(&env)?;
@@ -742,10 +840,17 @@ impl RefundContract {
             &RefundConfig {
                 fee_bps,
                 min_refund_amount,
+                request_lifetime_secs,
             },
         );
 
-        Self::emit_config_updated(&env, &admin, fee_bps, min_refund_amount);
+        Self::emit_config_updated(
+            &env,
+            &admin,
+            fee_bps,
+            min_refund_amount,
+            request_lifetime_secs,
+        );
 
         Ok(())
     }
@@ -1007,10 +1112,10 @@ impl RefundContract {
 
     /// Remove `request_id` from the global pending index if it is present.
     ///
-    /// Shared by [`Self::approve_refund`] and [`Self::reject_refund`] so that
-    /// any future terminal transition (e.g. an `Expired` status) can reuse the
-    /// same helper to keep the index consistent. The index is sorted, so the
-    /// entry is located with a binary search.
+    /// Shared by [`Self::approve_refund`], [`Self::reject_refund`] and
+    /// [`Self::expire_refund`] so that every terminal transition keeps the
+    /// index consistent. The index is sorted, so the entry is located with a
+    /// binary search.
     fn remove_from_pending_index(env: &Env, request_id: u64) {
         let key = StorageKey::PendingIndex;
         let mut index: soroban_sdk::Vec<u64> = env
@@ -1062,13 +1167,20 @@ impl RefundContract {
     /// initial fee/minimum-amount policy without polling storage.
     ///
     /// Topic: `("initialized",)`. Data: [`InitializedEvent`].
-    fn emit_initialized(env: &Env, admin: &Address, fee_bps: u32, min_refund_amount: i128) {
+    fn emit_initialized(
+        env: &Env,
+        admin: &Address,
+        fee_bps: u32,
+        min_refund_amount: i128,
+        request_lifetime_secs: u64,
+    ) {
         env.events().publish(
             (Symbol::new(env, "initialized"),),
             InitializedEvent {
                 admin: admin.clone(),
                 fee_bps,
                 min_refund_amount,
+                request_lifetime_secs,
             },
         );
     }
@@ -1105,15 +1217,17 @@ impl RefundContract {
     /// Publish the `"refund_processed"` event.
     ///
     /// **What**: Records a status transition on an existing refund request.
-    /// **How**: Called from three admin-only entrypoints, once each, with the
+    /// **How**: Called from the admin decision entrypoints, once each, with the
     /// terminal or intermediate status the request just moved to:
     /// [`Self::approve_refund`] (`status = Approved`),
-    /// [`Self::reject_refund`] (`status = Rejected`), and
+    /// [`Self::reject_refund`] (`status = Rejected`),
+    /// [`Self::dispute_refund`] (`status = Disputed`), and
     /// [`Self::process_refund`] (`status = Processed`).
-    /// **Why**: A single topic covering all three transitions lets indexers
+    /// **Why**: A single topic covering these transitions lets indexers
     /// reconstruct the full request lifecycle by filtering on `request_id` and
-    /// reading `status` from the payload, instead of subscribing to three
-    /// separate topics.
+    /// reading `status` from the payload, instead of subscribing to a separate
+    /// topic per transition. The permissionless `Expired` transition has its
+    /// own `"refund_expired"` topic because no admin decision is involved.
     ///
     /// Topic: `("refund_processed",)`. Data: [`RefundProcessedEvent`].
     fn emit_refund_processed(
@@ -1136,6 +1250,37 @@ impl RefundContract {
                 fee,
                 net,
                 status,
+            },
+        );
+    }
+
+    /// Publish the `"refund_expired"` event.
+    ///
+    /// **What**: Records that a stale `Pending` request lapsed and moved to
+    /// `Expired` without an admin decision.
+    /// **How**: Called from [`Self::expire_refund`], the permissionless
+    /// entrypoint any caller may invoke once the request lifetime elapsed.
+    /// **Why**: Lets requesters and indexers see that a request is no longer
+    /// actionable, and lets the requester open a fresh request in the freed
+    /// slot.
+    ///
+    /// Topic: `("refund_expired",)`. Data: [`RefundExpiredEvent`].
+    fn emit_refund_expired(
+        env: &Env,
+        request_id: u64,
+        requester: &Address,
+        token: &Address,
+        amount: i128,
+        expired_at: u64,
+    ) {
+        env.events().publish(
+            (Symbol::new(env, "refund_expired"),),
+            RefundExpiredEvent {
+                request_id,
+                requester: requester.clone(),
+                token: token.clone(),
+                amount,
+                expired_at,
             },
         );
     }
@@ -1176,13 +1321,20 @@ impl RefundContract {
     /// their next storage read.
     ///
     /// Topic: `("config_updated",)`. Data: [`RefundConfigUpdatedEvent`].
-    fn emit_config_updated(env: &Env, admin: &Address, fee_bps: u32, min_refund_amount: i128) {
+    fn emit_config_updated(
+        env: &Env,
+        admin: &Address,
+        fee_bps: u32,
+        min_refund_amount: i128,
+        request_lifetime_secs: u64,
+    ) {
         env.events().publish(
             (Symbol::new(env, "config_updated"),),
             RefundConfigUpdatedEvent {
                 admin: admin.clone(),
                 fee_bps,
                 min_refund_amount,
+                request_lifetime_secs,
             },
         );
     }
@@ -1201,6 +1353,8 @@ pub struct InitializedEvent {
     pub fee_bps: u32,
     /// Minimum refund amount accepted by [`RefundContract::request_refund`].
     pub min_refund_amount: i128,
+    /// Configured `Pending` request lifetime in seconds (`0` = no expiry).
+    pub request_lifetime_secs: u64,
 }
 
 /// Payload for the `"refund_requested"` event.
@@ -1245,8 +1399,27 @@ pub struct RefundProcessedEvent {
     pub fee: i128,
     /// Net amount transferred to the requester.
     pub net: i128,
-    /// New status of the request: `Approved`, `Rejected`, or `Processed`.
+    /// New status of the request: `Approved`, `Rejected`, `Disputed`, or `Processed`.
     pub status: RefundStatus,
+}
+
+/// Payload for the `"refund_expired"` event.
+///
+/// Published by [`RefundContract::emit_refund_expired`] when a `Pending`
+/// request outlives its configured lifetime and any caller expires it.
+#[soroban_sdk::contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundExpiredEvent {
+    /// ID of the expired refund request.
+    pub request_id: u64,
+    /// Address that submitted the original request.
+    pub requester: Address,
+    /// Token contract address the refund would have been paid in.
+    pub token: Address,
+    /// Amount that was requested, in the token's smallest unit.
+    pub amount: i128,
+    /// Ledger timestamp at which the request was expired.
+    pub expired_at: u64,
 }
 
 /// Payload for the `"fees_withdrawn"` event.
@@ -1279,4 +1452,6 @@ pub struct RefundConfigUpdatedEvent {
     pub fee_bps: u32,
     /// New minimum refund amount.
     pub min_refund_amount: i128,
+    /// New `Pending` request lifetime in seconds (`0` = no expiry).
+    pub request_lifetime_secs: u64,
 }
