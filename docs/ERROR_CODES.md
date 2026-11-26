@@ -131,6 +131,7 @@ must not be reassigned once released.
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
 | 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
 | 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
+| 54 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
 
 ## Revenue Pool
 

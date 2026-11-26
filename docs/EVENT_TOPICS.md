@@ -149,9 +149,9 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 24 | `payout_name_set`            | `event_payout_name_set`            | Developer configures a registry payout name    |
 | 25 | `payout_name_cleared`        | `event_payout_name_cleared`        | Developer removes their registry payout name   |
 | 24 | `deduction_request_cleared`  | `event_deduction_request_cleared`  | Recorded deduction request marker cleared      |
+| 26 | `freeze_contract_set`        | `event_freeze_contract_set`        | Admin sets or clears the freeze circuit-breaker address |
 
-**Total: 25 topics**
-**Total: 24 topics**
+**Total: 26 topics**
 
 ---
 

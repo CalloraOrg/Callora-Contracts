@@ -144,12 +144,13 @@ pub enum SettlementError {
     PayoutNameNotFound = 53,
 }
 
-/// Additional price-registry error codes (`52..=53`).
+/// Error codes that do not fit in [`SettlementError`].
 ///
 /// Defined as a separate `#[contracterror]` enum because Soroban's XDR
 /// `ScSpecUdtErrorEnumV0` caps each enum at 50 cases (`SettlementError`
-/// already has 50 active variants). On-chain and in `try_*` client calls,
-/// these emit the exact same `u32` contract error codes `52` and `53`.
+/// already has 50 active variants). `SystemFrozen` (code `54`) also lives
+/// here: `SettlementError` has no free case left and sharing code `52` with
+/// `RecipientRegistryNotSet` would make the wire code ambiguous.
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -170,4 +171,5 @@ pub enum PriceRegistryError {
 pub enum FreezeError {
     /// System is globally frozen via the configured freeze contract (code 54).
     SystemFrozen = 54,
+    /// System is globally frozen via the configured freeze contract.
 }

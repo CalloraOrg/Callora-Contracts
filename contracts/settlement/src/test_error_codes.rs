@@ -1,69 +1,70 @@
 extern crate std;
 
-use crate::SettlementError;
+use crate::{PriceRegistryError, SettlementError};
 use std::collections::BTreeSet;
 
 #[test]
 fn settlement_error_codes_are_stable_and_unique() {
-    let mappings = [
-        (1_u32, SettlementError::NotInitialized),
-        (2, SettlementError::AlreadyInitialized),
-        (3, SettlementError::Unauthorized),
-        (4, SettlementError::AmountNotPositive),
-        (5, SettlementError::DeveloperRequired),
-        (6, SettlementError::DeveloperMustBeNone),
-        (7, SettlementError::PoolOverflow),
-        (8, SettlementError::DeveloperOverflow),
-        (9, SettlementError::UsdcTokenNotConfigured),
-        (10, SettlementError::InsufficientDeveloperBalance),
-        (11, SettlementError::DeveloperBalanceUnderflow),
-        (12, SettlementError::InsufficientContractBalance),
-        (13, SettlementError::DailyWithdrawCapExceeded),
+    let mappings: [(u32, u32); 51] = [
+        (1, SettlementError::NotInitialized as u32),
+        (2, SettlementError::AlreadyInitialized as u32),
+        (3, SettlementError::Unauthorized as u32),
+        (4, SettlementError::AmountNotPositive as u32),
+        (5, SettlementError::DeveloperRequired as u32),
+        (6, SettlementError::DeveloperMustBeNone as u32),
+        (7, SettlementError::PoolOverflow as u32),
+        (8, SettlementError::DeveloperOverflow as u32),
+        (9, SettlementError::UsdcTokenNotConfigured as u32),
+        (10, SettlementError::InsufficientDeveloperBalance as u32),
+        (11, SettlementError::DeveloperBalanceUnderflow as u32),
+        (12, SettlementError::InsufficientContractBalance as u32),
+        (13, SettlementError::DailyWithdrawCapExceeded as u32),
         // code 14 retired (was GasExhaustionRisk)
         // code 15 retired (was ReasonTooLong)
-        (16, SettlementError::MigrationSameAddress),
-        (17, SettlementError::InvalidMigrationTarget),
-        (18, SettlementError::NoDeveloperBalance),
-        (19, SettlementError::TimelockOverflow),
-        (20, SettlementError::MigrationNotFound),
-        (21, SettlementError::TimelockNotExpired),
-        (22, SettlementError::MigrationBalanceChanged),
+        (16, SettlementError::MigrationSameAddress as u32),
+        (17, SettlementError::InvalidMigrationTarget as u32),
+        (18, SettlementError::NoDeveloperBalance as u32),
+        (19, SettlementError::TimelockOverflow as u32),
+        (20, SettlementError::MigrationNotFound as u32),
+        (21, SettlementError::TimelockNotExpired as u32),
+        (22, SettlementError::MigrationBalanceChanged as u32),
         // code 23 retired (was OverDraft)
-        (24, SettlementError::InvalidClaimWindow),
-        (25, SettlementError::ClaimWindowClosed),
-        (26, SettlementError::MinBalanceViolation),
-        (27, SettlementError::ReplayDetected),
-        (28, SettlementError::BatchEmpty),
-        (29, SettlementError::BatchTooLarge),
-        (30, SettlementError::DeveloperFrozen),
-        (31, SettlementError::DeveloperNotFrozen),
-        (32, SettlementError::FreezeUnauthorized),
-        (33, SettlementError::WriteRateLimitExceeded),
-        (34, SettlementError::InvalidConfigDistinct),
-        (35, SettlementError::InvalidConfigAdminContract),
-        (36, SettlementError::InvalidConfigVaultContract),
-        (37, SettlementError::InvalidUsdcToken),
-        (38, SettlementError::InvalidRecipient),
-        (39, SettlementError::NoAdminTransferPending),
-        (40, SettlementError::InvalidVault),
-        (41, SettlementError::NoVaultRotationPending),
-        (42, SettlementError::BroadcastMessageTooLong),
-        (43, SettlementError::CrossTenantBatch),
-        (44, SettlementError::NoUpgradePending),
-        (45, SettlementError::ZeroWasmHash),
-        (46, SettlementError::UpgradeTimelockNotExpired),
-        (47, SettlementError::UnsupportedToken),
-        (48, SettlementError::DuplicateRequestId),
-        (49, SettlementError::LengthMismatch),
-        (50, SettlementError::InvalidCursor),
-        (51, SettlementError::TooManyResults),
-        (52, SettlementError::RecipientRegistryNotSet),
-        (53, SettlementError::PayoutNameNotFound),
+        (24, SettlementError::InvalidClaimWindow as u32),
+        (25, SettlementError::ClaimWindowClosed as u32),
+        (26, SettlementError::MinBalanceViolation as u32),
+        (27, SettlementError::ReplayDetected as u32),
+        (28, SettlementError::BatchEmpty as u32),
+        (29, SettlementError::BatchTooLarge as u32),
+        (30, SettlementError::DeveloperFrozen as u32),
+        (31, SettlementError::DeveloperNotFrozen as u32),
+        (32, SettlementError::FreezeUnauthorized as u32),
+        (33, SettlementError::WriteRateLimitExceeded as u32),
+        (34, SettlementError::InvalidConfigDistinct as u32),
+        (35, SettlementError::InvalidConfigAdminContract as u32),
+        (36, SettlementError::InvalidConfigVaultContract as u32),
+        (37, SettlementError::InvalidUsdcToken as u32),
+        (38, SettlementError::InvalidRecipient as u32),
+        (39, SettlementError::NoAdminTransferPending as u32),
+        (40, SettlementError::InvalidVault as u32),
+        (41, SettlementError::NoVaultRotationPending as u32),
+        (42, SettlementError::BroadcastMessageTooLong as u32),
+        (43, SettlementError::CrossTenantBatch as u32),
+        (44, SettlementError::NoUpgradePending as u32),
+        (45, SettlementError::ZeroWasmHash as u32),
+        (46, SettlementError::UpgradeTimelockNotExpired as u32),
+        (47, SettlementError::UnsupportedToken as u32),
+        (48, SettlementError::DuplicateRequestId as u32),
+        (49, SettlementError::LengthMismatch as u32),
+        (50, SettlementError::InvalidCursor as u32),
+        (51, SettlementError::TooManyResults as u32),
+        (52, SettlementError::RecipientRegistryNotSet as u32),
+        (53, SettlementError::PayoutNameNotFound as u32),
+        (54, PriceRegistryError::SystemFrozen as u32),
     ];
 
     let mut seen = BTreeSet::new();
-    for (expected_code, variant) in mappings {
-        assert_eq!(variant as u32, expected_code);
+    for (expected_code, actual_code) in mappings {
+        assert_eq!(actual_code, expected_code);
         assert!(
             seen.insert(expected_code),
             "duplicate settlement error code {expected_code}"
@@ -127,7 +128,7 @@ fn error_code_docs_list_every_settlement_code() {
         "| 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |",
         "| 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |",
         "| 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |",
-        "| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |",
+        "| 54 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |",
     ];
 
     for line in expected_lines {
