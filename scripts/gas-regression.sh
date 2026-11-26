@@ -50,8 +50,23 @@ cargo test -p callora-vault -- gas_budget --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   > "${MEASUREMENTS_PATH}" || true
 
-# Harvest callora-allowlist gas snapshot metrics (appended to same file)
-cargo test -p callora-allowlist -- gas_snap --nocapture 2>/dev/null \
+# Harvest callora-distribute gas snapshot metrics (appended to same file)
+cargo test -p callora-distribute -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
+# Harvest callora-escrow gas snapshot metrics (appended to same file)
+cargo test -p callora-escrow -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
+# Harvest callora-refund gas snapshot metrics (appended to same file)
+cargo test -p callora-refund -- gas_snap --nocapture 2>/dev/null \
+  | grep '^{"contract"' \
+  >> "${MEASUREMENTS_PATH}" || true
+
+# Harvest callora-batch-claim gas snapshot metrics (appended to same file)
+cargo test -p callora-batch-claim -- gas_snap --nocapture 2>/dev/null \
   | grep '^{"contract"' \
   >> "${MEASUREMENTS_PATH}" || true
 
@@ -71,7 +86,7 @@ cargo test -p callora-settlement --test gas_regression -- --ignored --nocapture 
   >> "${MEASUREMENTS_PATH}" || true
 
 if [[ ! -s "${MEASUREMENTS_PATH}" ]]; then
-  err "No gas measurements found. Ensure gas_budget (callora-vault), gas_snap (callora-allowlist), gas_snap (callora-limits), gas_budget (callora-cold), and gas_regression (callora-settlement) tests emit JSON lines."
+  err "No gas measurements found. Ensure gas_budget (callora-vault), gas_snap (callora-distribute), gas_snap (callora-escrow), gas_snap (callora-refund), gas_snap (callora-batch-claim), gas_snap (callora-limits), gas_budget (callora-cold), and gas_regression (callora-settlement) tests emit JSON lines."
   exit 2
 fi
 

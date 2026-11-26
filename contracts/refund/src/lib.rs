@@ -36,6 +36,10 @@ pub const MAX_REQUESTER_REFUNDS_PAGE_SIZE: u32 = 50;
 /// Maximum page size for the global pending index reads.
 pub const MAX_PENDING_REFUNDS_PAGE_SIZE: u32 = 50;
 
+/// Default dispute window after a rejection (7 days), used until the admin
+/// configures one via [`RefundContract::set_dispute_window`].
+pub const DEFAULT_DISPUTE_WINDOW_SECS: u64 = 604_800;
+
 #[contract]
 pub struct RefundContract;
 

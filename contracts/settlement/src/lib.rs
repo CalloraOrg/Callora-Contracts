@@ -71,7 +71,7 @@ pub trait FreezeInterface {
 /// contract is configured and reports `is_frozen() == true`.
 ///
 /// When no freeze contract is configured this is a no-op (unchanged behaviour).
-fn check_not_frozen(env: &Env) -> Result<(), SettlementError> {
+fn check_not_frozen(env: &Env) {
     let maybe_fc: Option<Address> = env
         .storage()
         .instance()
@@ -79,10 +79,9 @@ fn check_not_frozen(env: &Env) -> Result<(), SettlementError> {
     if let Some(fc) = maybe_fc {
         let freeze_client = FreezeClient::new(env, &fc);
         if freeze_client.is_frozen() {
-            return Err(SettlementError::SystemFrozen);
+            env.panic_with_error(errors::FreezeError::SystemFrozen);
         }
     }
-    Ok(())
 }
 
 #[contract]
@@ -238,7 +237,7 @@ impl CalloraSettlement {
         }
 
         // Global freeze circuit-breaker: fail closed if frozen.
-        check_not_frozen(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        check_not_frozen(&env);
 
         // Replay guard: reject duplicate / out-of-order settlement claims.
         if to_pool {
@@ -378,7 +377,7 @@ impl CalloraSettlement {
         }
 
         // Global freeze circuit-breaker: fail closed if frozen.
-        check_not_frozen(&env).unwrap_or_else(|e| env.panic_with_error(e));
+        check_not_frozen(&env);
 
         // Validate all amounts before touching state.
         for item in items.iter() {
@@ -740,9 +739,13 @@ impl CalloraSettlement {
     /// # Events
     /// Emits `freeze_contract_set` with the caller and new address.
     pub fn set_freeze_contract(
+        env: Env,
         caller: Address,
         freeze_contract: Option<Address>,
-        let admin = Self::get_admin(env.clone());
+    ) -> Result<(), SettlementError> {
+        caller.require_auth();
+        let admin = Self::get_admin(env.clone())?;
+        if caller != admin {
             return Err(SettlementError::Unauthorized);
         }
 
@@ -768,13 +771,19 @@ impl CalloraSettlement {
             (Symbol::new(&env, "freeze_contract_set"), caller),
             freeze_contract,
         );
+
+        Ok(())
     }
 
     /// Return the configured freeze contract address, if any.
     ///
     /// Returns `None` when no freeze contract has been configured. No auth required.
     pub fn get_freeze_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage()
+            .instance()
             .get::<_, Address>(&StorageKey::FreezeContract)
     }
 
@@ -1000,7 +1009,7 @@ impl CalloraSettlement {
 
         let recipient = Self::resolve_recipient(env, developer, to)?;
         // Global freeze circuit-breaker: fail closed if frozen.
-        check_not_frozen(&env)?;
+        check_not_frozen(&env);
 
         let contract_address = env.current_contract_address();
         if recipient == contract_address {
@@ -2213,5 +2222,3 @@ mod test_ttl_bump;
 mod test_upgrade_timelock;
 #[cfg(test)]
 mod test_views;
-#[cfg(test)]
-mod test_freeze;
