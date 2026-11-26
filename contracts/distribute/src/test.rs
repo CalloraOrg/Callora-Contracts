@@ -425,17 +425,11 @@ fn require_auth_on_all_state_changing_functions() {
         "non-admin should not be able to cancel_admin_transfer"
     );
 
-    // accept_admin / claim_admin (no pending transfer — auth checked first)
+    // accept_admin (no pending transfer — auth checked first)
     let result = client.try_accept_admin(&intruder);
     assert!(
         result.is_err(),
         "non-admin should not be able to accept_admin"
-    );
-
-    let result = client.try_claim_admin(&intruder);
-    assert!(
-        result.is_err(),
-        "non-admin should not be able to claim_admin"
     );
 
     // upgrade (auth checked before wasm verification)
@@ -727,31 +721,6 @@ fn get_pending_admin_returns_none_after_claim() {
 
     let pending = client.get_pending_admin();
     assert_eq!(pending, None);
-}
-
-#[test]
-fn claim_admin_alias_works() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    let usdc_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let contract_addr = env.register(Distribute, ());
-    let client = DistributeClient::new(&env, &contract_addr);
-
-    client.init(&admin, &usdc_addr);
-    client.set_admin(&admin, &new_admin);
-    env.events().all();
-
-    // Use claim_admin instead of accept_admin
-    client.claim_admin(&new_admin);
-
-    let events = env.events().all();
-    let event = events.last().unwrap();
-    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
 }
 
 #[test]

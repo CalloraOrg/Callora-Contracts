@@ -192,7 +192,6 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 |----------|-------------------|-------|---------------|----------------|--------|
 | `set_admin` | `caller` | ✅ | ❌ | ❌ | ❌ |
 | `accept_admin` | `caller` | ❌ | ✅ | ❌ | ❌ |
-| `claim_admin` (alias of `accept_admin`) | `caller` | ❌ | ✅ | ❌ | ❌ |
 | `cancel_admin_transfer` | `caller` | ✅ | ❌ | ❌ | ❌ |
 | `set_pause_guardian` | `caller` | ✅ | ❌ | ❌ | ❌ |
 | `clear_pause_guardian` | `caller` | ✅ | ❌ | ❌ | ❌ |

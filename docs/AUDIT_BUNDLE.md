@@ -233,7 +233,7 @@ The following auth matrix covers every mutating entrypoint in the audited contra
 #### contracts/revenue_pool/src/lib.rs
 - `init` → admin (`admin.require_auth()`)
 - `set_admin` → current admin (`caller.require_auth()` + admin check)
-- `accept_admin` / `claim_admin` → pending admin (`caller.require_auth()` + pending check)
+- `accept_admin` → pending admin (`caller.require_auth()` + pending check)
 - `cancel_admin_transfer` → current admin (`caller.require_auth()` + admin check)
 - `set_pause_guardian` → current admin (`caller.require_auth()` + admin check)
 - `clear_pause_guardian` → current admin (`caller.require_auth()` + admin check)

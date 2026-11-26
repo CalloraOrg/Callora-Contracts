@@ -29,10 +29,10 @@ pool.set_admin(current_admin_address, proposed_new_admin_address);
  
 ### Step 2: Acceptance
  
-The nominated successor must explicitly claim the admin role by calling `claim_admin`.
+The nominated successor must explicitly accept the admin role by calling `accept_admin`.
  
 ```rust
-pool.claim_admin(proposed_new_admin_address);
+pool.accept_admin(proposed_new_admin_address);
 ```
  
 - **Action**: Updates `ADMIN` to the caller's address and clears `PENDING_ADMIN`.
@@ -44,7 +44,7 @@ pool.claim_admin(proposed_new_admin_address);
  
 - **No Accidental Lockouts**: If an incorrect address is nominated in Step 1, the transfer will never be completed because only the nominated address can claim the role. The current admin can overwrite the nomination at any time by calling `set_admin` again with a different address.
 - **Audit Trails**: Both steps of the rotation are explicitly logged via contract events, providing a clear audit trail for operations and indexers.
-- **Immediate Effect**: Once `claim_admin` succeeds, the old admin immediately loses all administrative privileges.
+- **Immediate Effect**: Once `accept_admin` succeeds, the old admin immediately loses all administrative privileges.
  
 ## Emergency Procedures
 

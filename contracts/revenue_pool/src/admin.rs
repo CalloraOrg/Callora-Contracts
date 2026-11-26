@@ -6,7 +6,7 @@
 //!
 //! Admin transfers follow a propose-then-accept pattern:
 //! 1. Current admin calls `set_admin` to nominate a pending admin.
-//! 2. The nominated admin calls `claim_admin` to accept the role.
+//! 2. The nominated admin calls `accept_admin` to accept the role.
 //!
 //! This prevents accidental transfers to an unreachable or mistyped address.
 //!
