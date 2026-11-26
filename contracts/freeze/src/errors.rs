@@ -11,4 +11,7 @@ pub enum FreezeError {
     AlreadyFrozen = 4,
     NotFrozen = 5,
     Overflow = 6,
+    /// `freeze_until` was called with a deadline that is not in the future
+    /// (`until <= env.ledger().timestamp()`).
+    FreezeUntilNotInFuture = 7,
 }

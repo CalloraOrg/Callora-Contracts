@@ -11,12 +11,15 @@
 //! | Initialization        | `init`                                                            |
 //! | Admin rotation        | `set_admin`, `accept_admin`, `claim_admin`, `cancel_admin_transfer` |
 //! | Circuit-breaker       | `pause`, `unpause`                                                |
-//! | Distribution cap      | `set_max_distribute`                                              |
-//! | Distribution          | `distribute`, `batch_distribute`                                  |
+//! | Distribution cap      | `set_max_distribute`, `set_max_distribute_for`                    |
+//! | Approved tokens       | `add_approved_token`, `remove_approved_token`                     |
+//! | Distribution          | `distribute`, `batch_distribute`, `distribute_token`,             |
+//! |                       | `batch_distribute_multi`                                          |
 //! | Upgrade               | `upgrade`                                                         |
 //! | Read-only views       | `get_admin`, `get_usdc_token`, `get_pending_admin`,               |
-//! |                       | `get_paused`, `get_max_distribute`, `get_max_batch_size`,         |
-//! |                       | `balance`, `get_version`, `version`                               |
+//! |                       | `get_paused`, `get_max_distribute`, `get_max_distribute_for`,     |
+//! |                       | `get_max_batch_size`, `is_approved_token`, `balance`,             |
+//! |                       | `balance_of`, `get_version`, `version`                            |
 
 #![cfg(test)]
 
@@ -252,6 +255,65 @@ fn batch_distribute_requires_auth() {
     assert!(result.is_err(), "batch_distribute must require auth");
 }
 
+#[test]
+fn multi_token_entrypoints_require_auth() {
+    let env = Env::default();
+    let (contract_addr, admin, usdc_addr, client, usdc_sac) = setup(&env);
+
+    env.mock_all_auths();
+    let (token2_addr, token2_sac) = create_usdc(&env, admin.clone());
+    usdc_sac.mint(&contract_addr, &1_000);
+    token2_sac.mint(&contract_addr, &1_000);
+
+    // add_approved_token
+    env.set_auths(&[]);
+    assert!(
+        client.try_add_approved_token(&admin, &token2_addr).is_err(),
+        "add_approved_token must require auth"
+    );
+
+    // Approve token2 under auth so we can test the remaining entrypoints
+    env.mock_all_auths();
+    client.add_approved_token(&admin, &token2_addr);
+
+    // remove_approved_token
+    env.set_auths(&[]);
+    assert!(
+        client
+            .try_remove_approved_token(&admin, &token2_addr)
+            .is_err(),
+        "remove_approved_token must require auth"
+    );
+
+    // set_max_distribute_for
+    assert!(
+        client
+            .try_set_max_distribute_for(&admin, &token2_addr, &500)
+            .is_err(),
+        "set_max_distribute_for must require auth"
+    );
+
+    // distribute_token
+    let recipient = Address::generate(&env);
+    assert!(
+        client
+            .try_distribute_token(&admin, &token2_addr, &recipient, &100)
+            .is_err(),
+        "distribute_token must require auth"
+    );
+
+    // batch_distribute_multi
+    let mut payments = Vec::new(&env);
+    payments.push_back((usdc_addr, recipient.clone(), 100_i128));
+    payments.push_back((token2_addr, recipient, 100_i128));
+    assert!(
+        client
+            .try_batch_distribute_multi(&admin, &payments)
+            .is_err(),
+        "batch_distribute_multi must require auth"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Upgrade
 // ---------------------------------------------------------------------------
@@ -292,8 +354,15 @@ fn read_only_views_do_not_require_auth() {
         i128::MAX,
         "get_max_distribute default"
     );
+    assert_eq!(
+        client.get_max_distribute_for(&usdc_addr),
+        i128::MAX,
+        "get_max_distribute_for default"
+    );
+    assert!(client.is_approved_token(&usdc_addr), "is_approved_token");
     let _ = client.get_max_batch_size();
     assert_eq!(client.balance(), 500, "balance");
+    assert_eq!(client.balance_of(&usdc_addr), 500, "balance_of");
     assert_eq!(client.get_version(), None, "get_version — never upgraded");
     let _ = client.version();
 }

@@ -7,8 +7,9 @@ fn setup() -> (Env, CalloraRegistryClient<'static>, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
-    let catalog = env.register_contract(None, callora_registry::catalog::MockCatalog);
-    let contract_id = env.register_contract(None, CalloraRegistry);
+    // `init` only stores the catalog address; a plain address is enough here.
+    let catalog = Address::generate(&env);
+    let contract_id = env.register(CalloraRegistry, ());
     let client = CalloraRegistryClient::new(&env, &contract_id);
     client.init(&admin, &catalog);
     (env, client, admin, catalog)

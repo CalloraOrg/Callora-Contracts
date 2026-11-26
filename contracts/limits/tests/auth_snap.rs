@@ -32,9 +32,14 @@ use soroban_sdk::{Address, Env};
 fn setup_vault(env: &Env) -> (Address, CalloraVaultClient<'_>) {
     env.mock_all_auths();
     let owner = Address::generate(env);
+    let usdc = env
+        .register_stellar_asset_contract_v2(owner.clone())
+        .address();
     let addr = env.register(CalloraVault, ());
     let client = CalloraVaultClient::new(env, &addr);
-    client.init(&owner);
+    client.init(
+        &owner, &usdc, &None, &None, &None, &None, &None, &None,
+    );
     (owner, client)
 }
 

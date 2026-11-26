@@ -481,7 +481,7 @@ fn prune_exactly_at_cap_succeeds() {
     let (client, owner) = setup_vault(&env, 10_000);
 
     // Record MAX_PRUNE_IDS (50) distinct processed markers.
-    let cap = callora_vault::MAX_PRUNE_IDS as u64;
+    let cap = MAX_PRUNE_IDS as u64;
     for i in 1..=cap {
         client.deduct(&owner, &1i128, &i);
     }
@@ -507,7 +507,7 @@ fn prune_one_over_cap_returns_too_many_ids() {
     let (client, owner) = setup_vault(&env, 10_000);
 
     // Record MAX_PRUNE_IDS + 1 markers.
-    let cap = callora_vault::MAX_PRUNE_IDS as u64;
+    let cap = MAX_PRUNE_IDS as u64;
     for i in 1..=(cap + 1) {
         client.deduct(&owner, &1i128, &i);
     }
@@ -539,7 +539,7 @@ fn prune_one_over_cap_non_owner_still_gets_unauthorized() {
     let stranger = Address::generate(&env);
 
     // Build an oversized ids vector (cap + 1).
-    let cap = callora_vault::MAX_PRUNE_IDS as u64;
+    let cap = MAX_PRUNE_IDS as u64;
     let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
     for i in 1..=(cap + 1) {
         ids.push_back(i);
@@ -559,7 +559,7 @@ fn prune_oversized_leaves_processed_markers_intact() {
     let env = Env::default();
     let (client, owner) = setup_vault(&env, 10_000);
 
-    let cap = callora_vault::MAX_PRUNE_IDS as u64;
+    let cap = MAX_PRUNE_IDS as u64;
     // Write markers for a handful of ids that will be in the oversized list.
     for i in 1..=5u64 {
         client.deduct(&owner, &1i128, &i);

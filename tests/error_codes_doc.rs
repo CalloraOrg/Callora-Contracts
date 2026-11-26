@@ -167,7 +167,6 @@ fn error_codes_doc_matches_contract_enums() {
         VaultError::UsdcTokenCannotBeVault,
         VaultError::RevenuePoolCannotBeVault,
         VaultError::AuthorizedCallerCannotBeVault,
-        VaultError::InitialBalanceExceedsOnLedger,
         VaultError::AlreadyPaused,
         VaultError::NotPaused,
         VaultError::SettlementNotSet,
@@ -184,7 +183,6 @@ fn error_codes_doc_matches_contract_enums() {
         VaultError::NoRevenuePoolTransferPending,
         VaultError::Slippage,
         VaultError::RateLimited,
-        VaultError::PausedState,
         VaultError::InvalidHotBps,
         VaultError::InvalidRebalanceThreshold,
         VaultError::ExceedsReserveCap,
@@ -202,6 +200,8 @@ fn error_codes_doc_matches_contract_enums() {
         VaultError::SettlementCannotBeToken,
         VaultError::ProposalExpired,
         VaultError::SettlementEqualsRevenuePool,
+        VaultError::Frozen,
+        VaultError::TooManyIds,
     ];
     for &v in &vault_variants {
         match v {
@@ -220,7 +220,6 @@ fn error_codes_doc_matches_contract_enums() {
             | VaultError::UsdcTokenCannotBeVault
             | VaultError::RevenuePoolCannotBeVault
             | VaultError::AuthorizedCallerCannotBeVault
-            | VaultError::InitialBalanceExceedsOnLedger
             | VaultError::AlreadyPaused
             | VaultError::NotPaused
             | VaultError::SettlementNotSet
@@ -237,7 +236,6 @@ fn error_codes_doc_matches_contract_enums() {
             | VaultError::NoRevenuePoolTransferPending
             | VaultError::Slippage
             | VaultError::RateLimited
-            | VaultError::PausedState
             | VaultError::InvalidHotBps
             | VaultError::InvalidRebalanceThreshold
             | VaultError::ExceedsReserveCap
@@ -254,7 +252,9 @@ fn error_codes_doc_matches_contract_enums() {
             | VaultError::SettlementCannotBeVault
             | VaultError::SettlementCannotBeToken
             | VaultError::ProposalExpired
-            | VaultError::SettlementEqualsRevenuePool => {}
+            | VaultError::SettlementEqualsRevenuePool
+            | VaultError::Frozen
+            | VaultError::TooManyIds => {}
         }
     }
     assert_section_matches(&sections, "Vault", &vault_variants, |e| e as u32);
@@ -273,7 +273,6 @@ fn error_codes_doc_matches_contract_enums() {
         SettlementError::DeveloperBalanceUnderflow,
         SettlementError::InsufficientContractBalance,
         SettlementError::DailyWithdrawCapExceeded,
-        SettlementError::GasExhaustionRisk,
         SettlementError::MigrationSameAddress,
         SettlementError::InvalidMigrationTarget,
         SettlementError::NoDeveloperBalance,
@@ -281,7 +280,6 @@ fn error_codes_doc_matches_contract_enums() {
         SettlementError::MigrationNotFound,
         SettlementError::TimelockNotExpired,
         SettlementError::MigrationBalanceChanged,
-        SettlementError::OverDraft,
         SettlementError::InvalidClaimWindow,
         SettlementError::ClaimWindowClosed,
         SettlementError::MinBalanceViolation,
@@ -310,6 +308,8 @@ fn error_codes_doc_matches_contract_enums() {
         SettlementError::LengthMismatch,
         SettlementError::InvalidCursor,
         SettlementError::TooManyResults,
+        SettlementError::RecipientRegistryNotSet,
+        SettlementError::PayoutNameNotFound,
     ];
     for &v in &settlement_variants {
         match v {
@@ -326,7 +326,6 @@ fn error_codes_doc_matches_contract_enums() {
             | SettlementError::DeveloperBalanceUnderflow
             | SettlementError::InsufficientContractBalance
             | SettlementError::DailyWithdrawCapExceeded
-            | SettlementError::GasExhaustionRisk
             | SettlementError::MigrationSameAddress
             | SettlementError::InvalidMigrationTarget
             | SettlementError::NoDeveloperBalance
@@ -334,7 +333,6 @@ fn error_codes_doc_matches_contract_enums() {
             | SettlementError::MigrationNotFound
             | SettlementError::TimelockNotExpired
             | SettlementError::MigrationBalanceChanged
-            | SettlementError::OverDraft
             | SettlementError::InvalidClaimWindow
             | SettlementError::ClaimWindowClosed
             | SettlementError::MinBalanceViolation
@@ -362,7 +360,9 @@ fn error_codes_doc_matches_contract_enums() {
             | SettlementError::DuplicateRequestId
             | SettlementError::LengthMismatch
             | SettlementError::InvalidCursor
-            | SettlementError::TooManyResults => {}
+            | SettlementError::TooManyResults
+            | SettlementError::RecipientRegistryNotSet
+            | SettlementError::PayoutNameNotFound => {}
         }
     }
     assert_section_matches(&sections, "Settlement", &settlement_variants, |e| e as u32);
@@ -516,6 +516,8 @@ fn error_codes_doc_matches_contract_enums() {
         EscrowError::BatchEmpty,
         EscrowError::BatchTooLarge,
         EscrowError::DuplicateEntry,
+        EscrowError::NotExpired,
+        EscrowError::InvalidExpiry,
     ];
     for &v in &escrow_variants {
         match v {
@@ -533,7 +535,9 @@ fn error_codes_doc_matches_contract_enums() {
             | EscrowError::NotFound
             | EscrowError::BatchEmpty
             | EscrowError::BatchTooLarge
-            | EscrowError::DuplicateEntry => {}
+            | EscrowError::DuplicateEntry
+            | EscrowError::NotExpired
+            | EscrowError::InvalidExpiry => {}
         }
     }
     assert_section_matches(&sections, "Escrow", &escrow_variants, |e| e as u32);
@@ -572,6 +576,7 @@ fn error_codes_doc_matches_contract_enums() {
             | RefundError::TooManyOpenRequests
             | RefundError::ApprovedAmountInvalid
             | RefundError::DisputeWindowClosed
+            | RefundError::AlreadyDisputed => {}
             | RefundError::AlreadyDisputed
             | RefundError::NotExpired => {}
         }

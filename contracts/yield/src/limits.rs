@@ -119,7 +119,7 @@ const STORAGE_MIGRATION_VERSION: u32 = 2;
 /// (`StorageMigrationError::SilentLayoutChange`).
 const STORAGE_LAYOUT_DESCRIPTOR: &str = concat!(
     "callora-yield-limits:v2:",
-    "StorageKey[Admin,PendingAdmin,DefaultLimits,AccountLimits,AccountState,WasmVersion,Operator];",
+    "StorageKey[Admin,PendingAdmin,DefaultLimits,AccountLimits,AccountState,WasmVersion,Operator,WindowLedgers,WindowLimits,WindowState];",
     "AccountLimits[max_bets:u32,max_positions:u32,max_subscriptions:u32];",
     "AccountState[bets:u32,positions:u32,subscriptions:u32]"
 );
@@ -261,6 +261,13 @@ pub enum StorageKey {
     /// admin may register or remove them. Appended last so the discriminants of
     /// every pre-existing key stay stable across the v1 → v2 layout change.
     Operator(Address),
+    /// Global rolling-window length in ledgers (`u32`, instance storage).
+    /// `0` disables rolling windows.
+    WindowLedgers,
+    /// Global per-window open caps (`WindowLimits`, instance storage).
+    WindowLimits,
+    /// Per-account rolling-window counters (`WindowState`, persistent storage).
+    WindowState(Address),
 }
 
 // ---------------------------------------------------------------------
@@ -732,6 +739,135 @@ pub fn reset_account_counters(env: &Env, account: &Address) -> AccountState {
 }
 
 // ---------------------------------------------------------------------
+// Free functions — rolling-window helpers (Issue #1522)
+// ---------------------------------------------------------------------
+
+/// Read the global rolling-window length in ledgers and extend instance TTL.
+///
+/// Returns `0` (windows disabled) when the admin has not configured one.
+pub fn read_window_ledgers(env: &Env) -> u32 {
+    let window_ledgers = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&StorageKey::WindowLedgers)
+        .unwrap_or(0);
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    window_ledgers
+}
+
+/// Persist the global rolling-window length and extend instance TTL.
+///
+/// # Errors
+/// - [`YieldLimitError::InvalidLimit`] — value is neither `0` nor within
+///   [`MIN_WINDOW_LEDGERS`]`..=`[`MAX_WINDOW_LEDGERS`].
+pub fn write_window_ledgers(env: &Env, window_ledgers: u32) -> Result<(), YieldLimitError> {
+    if !is_valid_window_ledgers(window_ledgers) {
+        return Err(YieldLimitError::InvalidLimit);
+    }
+    env.storage()
+        .instance()
+        .set(&StorageKey::WindowLedgers, &window_ledgers);
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    Ok(())
+}
+
+/// Read the global per-window caps, falling back to
+/// [`DEFAULT_WINDOW_LIMITS`], and extend instance TTL.
+pub fn read_window_limits(env: &Env) -> WindowLimits {
+    let caps: WindowLimits = env
+        .storage()
+        .instance()
+        .get::<_, WindowLimits>(&StorageKey::WindowLimits)
+        .unwrap_or(DEFAULT_WINDOW_LIMITS);
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    caps
+}
+
+/// Persist the global per-window caps and extend instance TTL.
+///
+/// # Errors
+/// - [`YieldLimitError::InvalidLimit`] — any cap exceeds [`MAX_CAP`].
+pub fn write_window_limits(env: &Env, caps: &WindowLimits) -> Result<(), YieldLimitError> {
+    if !caps.is_valid() {
+        return Err(YieldLimitError::InvalidLimit);
+    }
+    env.storage()
+        .instance()
+        .set(&StorageKey::WindowLimits, caps);
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+    Ok(())
+}
+
+/// Read an account's rolling-window counters, returning a zero state when no
+/// window has been recorded. Bumps persistent TTL on read.
+pub fn read_window_state(env: &Env, account: &Address) -> WindowState {
+    let key = StorageKey::WindowState(account.clone());
+    match env.storage().persistent().get::<_, WindowState>(&key) {
+        Some(state) => {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, STATE_BUMP_THRESHOLD, STATE_BUMP_AMOUNT);
+            state
+        }
+        None => WindowState::zero(),
+    }
+}
+
+/// Persist an account's rolling-window counters and bump persistent TTL.
+pub fn write_window_state(env: &Env, account: &Address, state: &WindowState) {
+    let key = StorageKey::WindowState(account.clone());
+    env.storage().persistent().set(&key, state);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, STATE_BUMP_THRESHOLD, STATE_BUMP_AMOUNT);
+}
+
+/// Return the account's counters as of the current window.
+///
+/// A state whose window has already elapsed (or that was never recorded) is
+/// reported as zero without writing storage, so read-only gates never mutate
+/// ledger state.
+pub fn effective_window_state(
+    env: &Env,
+    account: &Address,
+    window_ledgers: u32,
+) -> WindowState {
+    let state = read_window_state(env, account);
+    if state.window_start == 0 || state.is_expired(env.ledger().sequence(), window_ledgers) {
+        WindowState::zero()
+    } else {
+        state
+    }
+}
+
+/// Load an account's window state for a counter mutation, lazily rolling the
+/// window when it has elapsed.
+///
+/// Returns the state to mutate and whether a roll happened, so the caller can
+/// emit a `window_rolled` event.
+pub fn load_window_for_mutation(
+    env: &Env,
+    account: &Address,
+    window_ledgers: u32,
+) -> (WindowState, bool) {
+    let mut state = read_window_state(env, account);
+    let current = env.ledger().sequence();
+    let rolled = state.window_start == 0 || state.is_expired(current, window_ledgers);
+    if rolled {
+        state.roll(current);
+    }
+    (state, rolled)
+}
+
+// ---------------------------------------------------------------------
 // Free functions — gate checks
 // ---------------------------------------------------------------------
 
@@ -1070,11 +1206,17 @@ impl CalloraYieldLimits {
     /// Existing window counters are left untouched; the next mutation rolls
     /// them lazily against the new length.
     pub fn set_window_ledgers(
+        env: Env,
+        caller: Address,
         window_ledgers: u32,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
         write_window_ledgers(&env, window_ledgers)?;
+        env.events().publish(
             (events::event_window_ledgers_set(&env), caller),
             window_ledgers,
         );
+        Ok(())
     }
 
     /// Set the global per-window caps (admin only).
@@ -1082,18 +1224,24 @@ impl CalloraYieldLimits {
     /// Window caps apply only while [`Self::set_window_ledgers`] is non-zero.
     /// A cap of `0` blocks all opens of that kind inside a window.
     pub fn set_window_limits(
+        env: Env,
+        caller: Address,
         max_bets: u32,
         max_positions: u32,
         max_subscriptions: u32,
+    ) -> Result<(), YieldLimitError> {
+        require_admin(&env, &caller)?;
         let caps = WindowLimits {
             max_bets,
             max_positions,
             max_subscriptions,
         };
         write_window_limits(&env, &caps)?;
+        env.events().publish(
             (events::event_window_limits_set(&env), caller, caps.clone()),
             caps,
         );
+        Ok(())
     }
 
     // -----------------------------------------------------------------
@@ -1174,10 +1322,10 @@ impl CalloraYieldLimits {
         if window_ledgers != 0 {
             let window_caps = read_window_limits(&env);
             let (mut window_state, rolled) =
-                load_window_for_mutation(&env, &caller, window_ledgers);
+                load_window_for_mutation(&env, &account, window_ledgers);
             if rolled {
                 env.events().publish(
-                    (events::event_window_rolled(&env), caller.clone()),
+                    (events::event_window_rolled(&env), account.clone()),
                     (window_state.window_start, window_ledgers),
                 );
             }
@@ -1185,7 +1333,7 @@ impl CalloraYieldLimits {
                 return Err(YieldLimitError::BetsWindowCap);
             }
             window_state.add_bet()?;
-            write_window_state(&env, &caller, &window_state);
+            write_window_state(&env, &account, &window_state);
         }
 
         state.add_bet()?;
@@ -1228,10 +1376,10 @@ impl CalloraYieldLimits {
         if window_ledgers != 0 {
             let window_caps = read_window_limits(&env);
             let (mut window_state, rolled) =
-                load_window_for_mutation(&env, &caller, window_ledgers);
+                load_window_for_mutation(&env, &account, window_ledgers);
             if rolled {
                 env.events().publish(
-                    (events::event_window_rolled(&env), caller.clone()),
+                    (events::event_window_rolled(&env), account.clone()),
                     (window_state.window_start, window_ledgers),
                 );
             }
@@ -1239,7 +1387,7 @@ impl CalloraYieldLimits {
                 return Err(YieldLimitError::PositionsWindowCap);
             }
             window_state.add_position()?;
-            write_window_state(&env, &caller, &window_state);
+            write_window_state(&env, &account, &window_state);
         }
 
         state.add_position()?;
@@ -1290,10 +1438,10 @@ impl CalloraYieldLimits {
         if window_ledgers != 0 {
             let window_caps = read_window_limits(&env);
             let (mut window_state, rolled) =
-                load_window_for_mutation(&env, &caller, window_ledgers);
+                load_window_for_mutation(&env, &account, window_ledgers);
             if rolled {
                 env.events().publish(
-                    (events::event_window_rolled(&env), caller.clone()),
+                    (events::event_window_rolled(&env), account.clone()),
                     (window_state.window_start, window_ledgers),
                 );
             }
@@ -1301,7 +1449,7 @@ impl CalloraYieldLimits {
                 return Err(YieldLimitError::SubscriptionsWindowCap);
             }
             window_state.add_subscription()?;
-            write_window_state(&env, &caller, &window_state);
+            write_window_state(&env, &account, &window_state);
         }
 
         state.add_subscription()?;
