@@ -9,7 +9,7 @@
 //! | Event topic            | Emitting entrypoint      | Topics                                    | Data                                |
 //! |------------------------|--------------------------|-------------------------------------------|-------------------------------------|
 //! | `freeze_initialized`   | `init`                   | `(topic, callora_v1, admin)`              | `()`                                |
-//! | `freeze_set`           | `freeze`                 | `(topic, callora_v1, caller)`             | `FreezeSetEvent { reason, frozen_at }` |
+//! | `freeze_set`           | `freeze` / `freeze_until` | `(topic, callora_v1, caller)`      | `FreezeSetEvent { reason, frozen_at, freeze_until }` |
 //! | `freeze_cleared`       | `unfreeze`               | `(topic, callora_v1, caller)`             | `()`                                |
 //! | `freeze_operator_set`  | `set_freeze_operator`    | `(topic, callora_v1, caller)`             | `FreezeOperatorSetEvent { old_operator, new_operator }` |
 
@@ -30,6 +30,9 @@ pub struct FreezeSetEvent {
     pub reason: Symbol,
     /// Ledger timestamp at the moment of freeze (`env.ledger().timestamp()`).
     pub frozen_at: u64,
+    /// Optional ledger timestamp at which the freeze lapses automatically.
+    /// `None` for an indefinite freeze (the `freeze` entrypoint).
+    pub freeze_until: Option<u64>,
 }
 
 /// Payload for the `freeze_operator_set` event.
@@ -106,11 +109,22 @@ pub fn emit_freeze_initialized(env: &Env, admin: &Address) {
 /// Emits the `freeze_set` event.
 ///
 /// Topic tuple: `(freeze_set, callora_v1, caller)`.
-/// Data: [`FreezeSetEvent`] with `reason` and `frozen_at`.
-pub fn emit_freeze_set(env: &Env, caller: &Address, reason: Symbol, frozen_at: u64) {
+/// Data: [`FreezeSetEvent`] with `reason`, `frozen_at`, and the optional
+/// `freeze_until` deadline (`None` for an indefinite freeze).
+pub fn emit_freeze_set(
+    env: &Env,
+    caller: &Address,
+    reason: Symbol,
+    frozen_at: u64,
+    freeze_until: Option<u64>,
+) {
     env.events().publish(
         (event_freeze_set(env), event_version_v1(env), caller.clone()),
-        FreezeSetEvent { reason, frozen_at },
+        FreezeSetEvent {
+            reason,
+            frozen_at,
+            freeze_until,
+        },
     );
 }
 

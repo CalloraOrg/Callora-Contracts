@@ -248,3 +248,4 @@ must not be reassigned once released.
 | 10 | `InsufficientBalance` | Refund | Contract token balance or accumulated fees are insufficient for payout or withdrawal |
 | 11 | `InvalidRecipient` | Refund | Recipient address is invalid (e.g. self or token address) |
 | 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open refund requests |
+| 7 | `FreezeUntilNotInFuture` | Freeze | `freeze_until` deadline is not in the future (`until <= now`) |
