@@ -21,6 +21,10 @@ pub const MAX_DESC_LEN: u32 = 256;
 /// Keeping the bound small makes per-user temporary storage predictable.
 pub const MAX_ERROR_HISTORY: u32 = 8;
 
+/// Maximum number of error codes returned in a single page by
+/// [`ErrorsContract::list_error_codes`].
+pub const MAX_PAGE_LIMIT: u32 = 100;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -37,6 +41,10 @@ pub enum Error {
     AlreadyRegistered = 7,
     /// `update_error` was called for a code that was never registered.
     NotRegistered = 8,
+    /// `deprecate_error` was called for a code that has already been deprecated.
+    AlreadyDeprecated = 9,
+    /// `log_error` was called with a code that has been deprecated.
+    DeprecatedErrorCode = 10,
 }
 
 #[contracttype]
@@ -47,6 +55,12 @@ pub enum DataKey {
     /// Bounded oldest-to-newest history of codes logged by a user.
     /// Appended last so existing XDR discriminants stay stable.
     ErrHistory(Address),
+    /// Total count of unique registered error codes.
+    CodeCount,
+    /// Registration order index (0-based) -> error code.
+    CodeAt(u32),
+    /// Deprecation flag for a registered error code.
+    Deprecated(u32),
 }
 
 /// Ledger cadence used across the workspace for TTL policy.
@@ -154,6 +168,22 @@ impl ErrorsContract {
             .persistent()
             .extend_ttl(&key, REGISTRY_TTL_THRESHOLD, REGISTRY_TTL_BUMP);
 
+        // Append to registered code index for list_error_codes
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CodeCount)
+            .unwrap_or(0);
+        let at_key = DataKey::CodeAt(count);
+        env.storage().persistent().set(&at_key, &code);
+        env.storage()
+            .persistent()
+            .extend_ttl(&at_key, REGISTRY_TTL_THRESHOLD, REGISTRY_TTL_BUMP);
+        let new_count = count.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::CodeCount, &new_count);
+
         events::emit_error_registered(&env, &admin, code, &desc);
         Ok(())
     }
@@ -204,11 +234,55 @@ impl ErrorsContract {
         Ok(())
     }
 
+    /// Mark an existing error code as deprecated (admin only).
+    ///
+    /// Deprecating a code retains its persistent description entry so past references
+    /// and [`Self::get_error_description`] lookups continue to resolve. However,
+    /// subsequent [`Self::log_error`] calls for the code will be rejected with
+    /// [`Error::DeprecatedErrorCode`].
+    ///
+    /// # Errors
+    /// * [`Error::NotInitialized`] when the contract has not been initialized.
+    /// * [`Error::Unauthorized`] when `admin` is not the stored admin address.
+    /// * [`Error::NotRegistered`] when `code` has not been registered.
+    /// * [`Error::AlreadyDeprecated`] when `code` is already deprecated.
+    pub fn deprecate_error(env: Env, admin: Address, code: u32) -> Result<(), Error> {
+        admin.require_auth();
+        Self::bump_instance(&env);
+
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        let reg_key = DataKey::ErrorReg(code);
+        if !env.storage().persistent().has(&reg_key) {
+            return Err(Error::NotRegistered);
+        }
+
+        let dep_key = DataKey::Deprecated(code);
+        if env.storage().persistent().has(&dep_key) {
+            return Err(Error::AlreadyDeprecated);
+        }
+
+        env.storage().persistent().set(&dep_key, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&dep_key, REGISTRY_TTL_THRESHOLD, REGISTRY_TTL_BUMP);
+
+        events::emit_error_deprecated(&env, &admin, code);
+        Ok(())
+    }
+
     /// Return the description registered for `code`, or `None` when the code is
     /// unknown.
     ///
     /// A successful lookup refreshes the registry entry's TTL, so codes that
-    /// integrators actively resolve stay available.
+    /// integrators actively resolve stay available. Deprecated codes still resolve.
     pub fn get_error_description(env: Env, code: u32) -> Option<String> {
         Self::bump_instance(&env);
         let key = DataKey::ErrorReg(code);
@@ -223,12 +297,13 @@ impl ErrorsContract {
 
     /// Log an error for `user`.
     ///
-    /// Only codes previously defined by [`Self::register_error`] are accepted;
-    /// anything else returns [`Error::UnknownErrorCode`] so consumers can trust
-    /// that every logged code resolves to a known description. On success the
-    /// code is stored as the user's most recent error, appended to their
-    /// bounded history (see [`Self::get_error_history`]), and an `error_logged`
-    /// event is published.
+    /// Only codes previously defined by [`Self::register_error`] and not retired
+    /// by [`Self::deprecate_error`] are accepted. Anything unregistered returns
+    /// [`Error::UnknownErrorCode`], while deprecated codes return
+    /// [`Error::DeprecatedErrorCode`].
+    /// On success the code is stored as the user's most recent error, appended
+    /// to their bounded history (see [`Self::get_error_history`]), and an
+    /// `error_logged` event is published.
     ///
     /// Both temporary entries expire after roughly eight minutes
     /// (`RECENT_ERR_TTL_LEDGERS` ledgers) unless another log refreshes them.
@@ -242,6 +317,12 @@ impl ErrorsContract {
         // temporary entry so a failed call leaves the history untouched.
         if !env.storage().persistent().has(&reg_key) {
             return Err(Error::UnknownErrorCode);
+        }
+
+        // Deprecated codes are rejected with a typed error.
+        let dep_key = DataKey::Deprecated(code);
+        if env.storage().persistent().has(&dep_key) {
+            return Err(Error::DeprecatedErrorCode);
         }
 
         // A code that is actively logged is actively used — keep it warm.
@@ -305,6 +386,58 @@ impl ErrorsContract {
             .temporary()
             .get(&DataKey::ErrHistory(user))
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Return a paginated list of registered error codes and their deprecation
+    /// flags in registration order.
+    ///
+    /// Up to [`MAX_PAGE_LIMIT`] entries are returned starting from `cursor`.
+    /// Reading refreshes the TTL of each indexed entry, its deprecation flag,
+    /// and its underlying error description. A `cursor` at or past the total
+    /// number of registered codes returns an empty vector.
+    pub fn list_error_codes(env: Env, cursor: u32, limit: u32) -> Vec<(u32, bool)> {
+        Self::bump_instance(&env);
+        let mut list = Vec::new(&env);
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CodeCount)
+            .unwrap_or(0);
+        if cursor >= count || limit == 0 {
+            return list;
+        }
+
+        let page_limit = limit.min(MAX_PAGE_LIMIT);
+        let end = cursor.saturating_add(page_limit).min(count);
+        for i in cursor..end {
+            let at_key = DataKey::CodeAt(i);
+            if let Some(code) = env.storage().persistent().get::<_, u32>(&at_key) {
+                env.storage().persistent().extend_ttl(
+                    &at_key,
+                    REGISTRY_TTL_THRESHOLD,
+                    REGISTRY_TTL_BUMP,
+                );
+                let dep_key = DataKey::Deprecated(code);
+                let deprecated = env.storage().persistent().has(&dep_key);
+                if deprecated {
+                    env.storage().persistent().extend_ttl(
+                        &dep_key,
+                        REGISTRY_TTL_THRESHOLD,
+                        REGISTRY_TTL_BUMP,
+                    );
+                }
+                let reg_key = DataKey::ErrorReg(code);
+                if env.storage().persistent().has(&reg_key) {
+                    env.storage().persistent().extend_ttl(
+                        &reg_key,
+                        REGISTRY_TTL_THRESHOLD,
+                        REGISTRY_TTL_BUMP,
+                    );
+                }
+                list.push_back((code, deprecated));
+            }
+        }
+        list
     }
 }
 

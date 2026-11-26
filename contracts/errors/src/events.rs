@@ -27,6 +27,7 @@
 //! |----------------------|-------------------------------------------------------------|
 //! | `"error_registered"` | Admin registers a new error code (`register_error`)         |
 //! | `"error_updated"`    | Admin replaces an existing error description (`update_error`) |
+//! | `"error_deprecated"` | Admin marks an error code as retired (`deprecate_error`)     |
 
 use soroban_sdk::{Address, Env, String, Symbol};
 
@@ -44,6 +45,13 @@ pub fn event_error_registered(env: &Env) -> Symbol {
 /// Emitted once per successful [`crate::ErrorsContract::update_error`].
 pub fn event_error_updated(env: &Env) -> Symbol {
     Symbol::new(env, "error_updated")
+}
+
+/// Returns the Symbol for the canonical `"error_deprecated"` event topic.
+///
+/// Emitted once per successful [`crate::ErrorsContract::deprecate_error`].
+pub fn event_error_deprecated(env: &Env) -> Symbol {
+    Symbol::new(env, "error_deprecated")
 }
 
 // ─── Emit helpers ────────────────────────────────────────────────────────────
@@ -96,6 +104,25 @@ pub fn emit_error_updated(env: &Env, admin: &Address, code: u32, desc: &String) 
     );
 }
 
+/// Emit `"error_deprecated"` when the admin retires an error code.
+///
+/// **What**: Publishes the deprecation event containing the retired code.
+///
+/// **How**: Calls `env.events().publish()` with topic
+/// `(error_deprecated, admin)` and payload `code`.
+///
+/// **Why**: Consumers and indexers must know when an error code is retired so
+/// they can flag or migrate callers away from it.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `admin` - Admin address that performed the deprecation.
+/// * `code` - The deprecated `u32` error code.
+pub fn emit_error_deprecated(env: &Env, admin: &Address, code: u32) {
+    env.events()
+        .publish((event_error_deprecated(env), admin.clone()), code);
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -124,6 +151,15 @@ mod tests {
         assert_eq!(
             event_error_updated(&env),
             Symbol::new(&env, "error_updated")
+        );
+    }
+
+    #[test]
+    fn test_event_error_deprecated_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_error_deprecated(&env),
+            Symbol::new(&env, "error_deprecated")
         );
     }
 }

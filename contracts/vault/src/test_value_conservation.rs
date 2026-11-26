@@ -23,7 +23,7 @@
 extern crate std;
 
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
-use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
+use soroban_sdk::{Address, Env, Error, InvokeError, Vec, token};
 
 use super::*;
 use callora_settlement::CalloraSettlement;
@@ -516,9 +516,11 @@ fn concurrent_sources_cannot_double_spend_deficit() {
     env.mock_all_auths();
 
     // First caller takes the whole 100.
-    assert!(client
-        .try_batch_deduct(&owner, &items_from(&env, &[100]))
-        .is_ok());
+    assert!(
+        client
+            .try_batch_deduct(&owner, &items_from(&env, &[100]))
+            .is_ok()
+    );
     assert_eq!(client.balance(), 0);
 
     // Second caller now has nothing left → atomic failure, nothing changes.
@@ -564,14 +566,18 @@ fn retry_of_failed_batch_does_not_corrupt_value() {
     env.mock_all_auths();
 
     // Failed attempt: includes an over-cap item.
-    assert!(client
-        .try_batch_deduct(&owner, &items_from(&env, &[100, 100, 500]))
-        .is_err());
+    assert!(
+        client
+            .try_batch_deduct(&owner, &items_from(&env, &[100, 100, 500]))
+            .is_err()
+    );
 
     // Corrected retry succeeds.
-    assert!(client
-        .try_batch_deduct(&owner, &items_from(&env, &[100, 100, 100]))
-        .is_ok());
+    assert!(
+        client
+            .try_batch_deduct(&owner, &items_from(&env, &[100, 100, 100]))
+            .is_ok()
+    );
     assert_eq!(client.balance(), 200);
     assert_eq!(usdc.balance(&settlement), 300);
 }
@@ -589,9 +595,11 @@ fn cancel_sweep_before_execution_conserves_value() {
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
-    assert!(client
-        .try_propose_sweep(&owner, &recipient, &40i128)
-        .is_ok());
+    assert!(
+        client
+            .try_propose_sweep(&owner, &recipient, &40i128)
+            .is_ok()
+    );
     let before = snapshot(&usdc, &client.address, &client, &settlement);
 
     // Cancel before the timelock elapses.
@@ -608,26 +616,35 @@ fn cancel_sweep_before_execution_conserves_value() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn execute_sweep_conserves_value_to_recipient() {
     let env = Env::default();
     let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 100, 140, 1_000);
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
-    assert!(client
-        .try_propose_sweep(&owner, &recipient, &40i128)
-        .is_ok());
+    assert!(
+        client
+            .try_propose_sweep(&owner, &recipient, &40i128)
+            .is_ok()
+    );
     let vault = client.address.clone();
+    let vault_before = usdc.balance(&vault);
+    let recip_before = usdc.balance(&recipient);
 
     // Advance ledger past the default timelock so the sweep may execute.
-    // The default timelock window is 172800s; jump well past it.
-    env.ledger().set_timestamp(1_000_000);
+    // The default timelock window is 172800s; advance just past it within grace period.
+    env.ledger()
+        .set_timestamp(timelock::DEFAULT_TIMELOCK_SECONDS + 1);
     assert!(client.try_execute_sweep(&owner).is_ok()); // 40 moved to recipient, tracked balance untouched by sweep (sweep recovers
-                                                       // on-ledger surplus, it does not touch `DataKey::Balance`).
+    // on-ledger surplus, it does not touch `DataKey::Balance`).
     assert_eq!(usdc.balance(&recipient), 40);
     assert_eq!(usdc.balance(&vault), 100);
     assert_eq!(client.balance(), 100);
+    assert_eq!(
+        usdc.balance(&vault) + usdc.balance(&recipient),
+        vault_before + recip_before,
+        "total on-ledger value across vault and recipient must be conserved"
+    );
 }
 
 #[test]
@@ -645,7 +662,6 @@ fn propose_sweep_fails_when_amount_exceeds_current_surplus() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
     let env = Env::default();
     // Tracked = 100, on-ledger = 140 -> surplus = 40.
@@ -653,16 +669,23 @@ fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
-    assert!(client
-        .try_propose_sweep(&owner, &recipient, &40i128)
-        .is_ok());
+    assert!(
+        client
+            .try_propose_sweep(&owner, &recipient, &40i128)
+            .is_ok()
+    );
 
     // Reduce surplus before execution by distributing 10 surplus USDC to another address
     let other = Address::generate(&env);
     client.distribute(&owner, &other, &10i128);
     // Now on-ledger = 130, tracked = 100 -> surplus = 30 < 40.
 
-    env.ledger().set_timestamp(1_000_000);
+    let vault_before = usdc.balance(&client.address);
+    let recip_before = usdc.balance(&recipient);
+    let other_before = usdc.balance(&other);
+
+    env.ledger()
+        .set_timestamp(timelock::DEFAULT_TIMELOCK_SECONDS + 1);
     let res = client.try_execute_sweep(&owner);
     assert!(is_vault_err(res, VaultError::InsufficientBalance as u32));
 
@@ -670,10 +693,14 @@ fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
     assert!(client.get_pending_sweep().is_some());
     assert_eq!(client.balance(), 100);
     assert_eq!(usdc.balance(&client.address), 130);
+    assert_eq!(
+        usdc.balance(&client.address) + usdc.balance(&recipient) + usdc.balance(&other),
+        vault_before + recip_before + other_before,
+        "failed sweep must conserve all value"
+    );
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn successful_sweep_leaves_balance_untouched() {
     let env = Env::default();
     // Tracked = 500, on-ledger = 800 -> surplus = 300.
@@ -681,11 +708,17 @@ fn successful_sweep_leaves_balance_untouched() {
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
-    assert!(client
-        .try_propose_sweep(&owner, &recipient, &200i128)
-        .is_ok());
+    assert!(
+        client
+            .try_propose_sweep(&owner, &recipient, &200i128)
+            .is_ok()
+    );
 
-    env.ledger().set_timestamp(1_000_000);
+    let vault_before = usdc.balance(&client.address);
+    let recip_before = usdc.balance(&recipient);
+
+    env.ledger()
+        .set_timestamp(timelock::DEFAULT_TIMELOCK_SECONDS + 1);
     assert!(client.try_execute_sweep(&owner).is_ok());
 
     // Tracked balance must remain exactly 500 (untouched).
@@ -693,10 +726,14 @@ fn successful_sweep_leaves_balance_untouched() {
     // On-ledger USDC balance drops by 200 (800 -> 600).
     assert_eq!(usdc.balance(&client.address), 600);
     assert_eq!(usdc.balance(&recipient), 200);
+    assert_eq!(
+        usdc.balance(&client.address) + usdc.balance(&recipient),
+        vault_before + recip_before,
+        "value before == value after sweep"
+    );
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn withdrawal_between_proposal_and_execution_specifically() {
     let env = Env::default();
     // Tracked = 100, on-ledger = 140 -> surplus = 40.
@@ -705,17 +742,24 @@ fn withdrawal_between_proposal_and_execution_specifically() {
 
     let recipient = Address::generate(&env);
     // Propose sweeping the maximum surplus (40).
-    assert!(client
-        .try_propose_sweep(&owner, &recipient, &40i128)
-        .is_ok());
+    assert!(
+        client
+            .try_propose_sweep(&owner, &recipient, &40i128)
+            .is_ok()
+    );
 
     // Intervening operation reduces available surplus (e.g. distribute 15 surplus USDC).
     let drain_addr = Address::generate(&env);
     client.distribute(&owner, &drain_addr, &15i128);
     // Surplus is now 125 - 100 = 25.
 
-    // Advance time past timelock window.
-    env.ledger().set_timestamp(1_000_000);
+    let vault_before = usdc.balance(&client.address);
+    let recip_before = usdc.balance(&recipient);
+    let drain_before = usdc.balance(&drain_addr);
+
+    // Advance time past timelock window within grace period.
+    env.ledger()
+        .set_timestamp(timelock::DEFAULT_TIMELOCK_SECONDS + 1);
 
     // Execution must fail without consuming proposal or modifying tracked balance.
     let res = client.try_execute_sweep(&owner);
@@ -723,4 +767,9 @@ fn withdrawal_between_proposal_and_execution_specifically() {
     assert!(client.get_pending_sweep().is_some());
     assert_eq!(client.balance(), 100);
     assert_eq!(usdc.balance(&client.address), 125);
+    assert_eq!(
+        usdc.balance(&client.address) + usdc.balance(&recipient) + usdc.balance(&drain_addr),
+        vault_before + recip_before + drain_before,
+        "total on-ledger value is conserved"
+    );
 }

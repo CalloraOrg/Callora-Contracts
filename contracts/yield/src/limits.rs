@@ -346,6 +346,22 @@ impl WindowLimits {
     }
 }
 
+/// Remaining state capacity for an account across all concurrent limit dimensions.
+///
+/// Each field indicates how many more operations of that kind an account can
+/// open before reaching its effective limit. Saturating subtraction guarantees
+/// that values never underflow, even if caps are reduced below active counts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemainingCapacity {
+    /// Remaining open-bet capacity before reaching `max_bets`.
+    pub bets: u32,
+    /// Remaining open-position capacity before reaching `max_positions`.
+    pub positions: u32,
+    /// Remaining active-subscription capacity before reaching `max_subscriptions`.
+    pub subscriptions: u32,
+}
+
 /// Per-account rolling-window counters.
 ///
 /// `window_start` is the ledger sequence at which the current window began.
@@ -1503,6 +1519,20 @@ impl CalloraYieldLimits {
     /// Read the live per-account counters.
     pub fn get_account_state(env: Env, account: Address) -> AccountState {
         read_account_state(&env, &account)
+    }
+
+    /// Read the remaining state capacity for `account`.
+    ///
+    /// Computes `saturating_sub(cap, state)` for each dimension against the account's
+    /// effective caps (explicit override or default). Does not require auth and never underflows.
+    pub fn get_remaining_capacity(env: Env, account: Address) -> RemainingCapacity {
+        let limits = read_account_limits(&env, &account);
+        let state = read_account_state(&env, &account);
+        RemainingCapacity {
+            bets: limits.max_bets.saturating_sub(state.bets),
+            positions: limits.max_positions.saturating_sub(state.positions),
+            subscriptions: limits.max_subscriptions.saturating_sub(state.subscriptions),
+        }
     }
 
     /// Return `true` when `operator` may mutate counters.

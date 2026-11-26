@@ -6,12 +6,13 @@
 
 extern crate std;
 
-use crate::limits::{
-    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, WindowLimits,
-    WindowState, DEFAULT_LIMITS, DEFAULT_WINDOW_LIMITS, MAX_CAP, MAX_WINDOW_LEDGERS,
     MAX_BATCH_CLEAR,
-};
 use crate::YieldLimitError;
+use crate::limits::{
+    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, DEFAULT_LIMITS,
+    DEFAULT_WINDOW_LIMITS, MAX_BATCH_CLEAR, MAX_CAP, MAX_WINDOW_LEDGERS, RemainingCapacity,
+    WindowLimits, WindowState,
+};
 use soroban_sdk::testutils::{Address as _, Events as _};
 use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, TryFromVal, Val, Vec as SorobanVec};
 
@@ -910,11 +911,11 @@ fn mutator_count_matches_documented_surface() {
 mod operator_gating {
     extern crate std;
 
-    use crate::limits::{
-        AccountLimits, CalloraYieldLimits, CalloraYieldLimitsClient, StorageKey, CAPS_BUMP_AMOUNT,
-        CAPS_BUMP_THRESHOLD,
-    };
     use crate::YieldLimitError;
+    use crate::limits::{
+        AccountLimits, CAPS_BUMP_AMOUNT, CAPS_BUMP_THRESHOLD, CalloraYieldLimits,
+        CalloraYieldLimitsClient, StorageKey,
+    };
     use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
@@ -1201,5 +1202,88 @@ mod operator_gating {
         client.clear_account_limits(&admin, &account);
         assert!(!instance_has(&env, &client, &key));
         assert!(!persistent_has(&env, &client, &key));
+    }
+
+    // ── RemainingCapacity view tests (Issue #1487) ──────────────────────
+
+    #[test]
+    fn remaining_capacity_default_caps_zero_state() {
+        let env = Env::default();
+        let (_, _, client, user) = setup_with_user(&env);
+
+        let capacity = client.get_remaining_capacity(&user);
+        assert_eq!(capacity.bets, DEFAULT_LIMITS.max_bets);
+        assert_eq!(capacity.positions, DEFAULT_LIMITS.max_positions);
+        assert_eq!(capacity.subscriptions, DEFAULT_LIMITS.max_subscriptions);
+    }
+
+    #[test]
+    fn remaining_capacity_per_account_override() {
+        let env = Env::default();
+        let (_, admin, client, user) = setup_with_user(&env);
+
+        client.set_account_limits(&admin, &user, &15, &10, &5);
+        let capacity = client.get_remaining_capacity(&user);
+        assert_eq!(capacity.bets, 15);
+        assert_eq!(capacity.positions, 10);
+        assert_eq!(capacity.subscriptions, 5);
+    }
+
+    #[test]
+    fn remaining_capacity_drops_after_mutations() {
+        let env = Env::default();
+        let (_, admin, client, user) = setup_with_user(&env);
+
+        client.set_account_limits(&admin, &user, &5, &5, &5);
+        client.place_bet(&admin, &user);
+        client.open_position(&admin, &user);
+        client.subscribe(&admin, &user);
+
+        let capacity = client.get_remaining_capacity(&user);
+        assert_eq!(capacity.bets, 4);
+        assert_eq!(capacity.positions, 4);
+        assert_eq!(capacity.subscriptions, 4);
+    }
+
+    #[test]
+    fn remaining_capacity_zero_cap_is_zero() {
+        let env = Env::default();
+        let (_, admin, client, user) = setup_with_user(&env);
+
+        client.set_account_limits(&admin, &user, &0, &0, &0);
+        let capacity = client.get_remaining_capacity(&user);
+        assert_eq!(capacity.bets, 0);
+        assert_eq!(capacity.positions, 0);
+        assert_eq!(capacity.subscriptions, 0);
+    }
+
+    #[test]
+    fn remaining_capacity_saturates_to_zero_when_cap_lowered_below_state() {
+        let env = Env::default();
+        let (_, admin, client, user) = setup_with_user(&env);
+
+        client.set_account_limits(&admin, &user, &10, &10, &10);
+        for _ in 0..5 {
+            client.place_bet(&admin, &user);
+        }
+        // State is 5 bets. Lower cap to 2.
+        client.set_account_limits(&admin, &user, &2, &10, &10);
+        let capacity = client.get_remaining_capacity(&user);
+        assert_eq!(capacity.bets, 0);
+        assert_eq!(capacity.positions, 10);
+        assert_eq!(capacity.subscriptions, 10);
+    }
+
+    #[test]
+    fn remaining_capacity_view_requires_no_auth() {
+        let env = Env::default();
+        let contract = env.register(CalloraYieldLimits, ());
+        let client = CalloraYieldLimitsClient::new(&env, &contract);
+        let admin = Address::generate(&env);
+        env.mock_all_auths();
+        client.init(&admin);
+        let account = Address::generate(&env);
+        let capacity = client.get_remaining_capacity(&account);
+        assert_eq!(capacity.bets, DEFAULT_LIMITS.max_bets);
     }
 }
