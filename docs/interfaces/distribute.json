@@ -22,15 +22,6 @@
       "events": ["admin_transfer_accepted"]
     },
     {
-      "name": "claim_admin",
-      "params": [
-        { "name": "caller", "type": "Address" }
-      ],
-      "access": "pending admin only",
-      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
-      "events": ["admin_transfer_accepted"]
-    },
-    {
       "name": "cancel_admin_transfer",
       "params": [
         { "name": "caller", "type": "Address" }

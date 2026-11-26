@@ -55,7 +55,9 @@
 /// for triggering a bump is `REQUEST_ID_BUMP_THRESHOLD`. Because they are
 /// persistent, they do not silently archive; an owner can explicitly prune old
 /// markers using `prune_processed_requests` so an id can be reused.
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractclient, contractimpl, contracttype, Address, BytesN, Env, Symbol, Vec,
+};
 
 pub mod admin;
 pub mod timelock;

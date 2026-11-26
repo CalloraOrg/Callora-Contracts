@@ -6,6 +6,7 @@
 
 extern crate std;
 
+    MAX_BATCH_CLEAR,
 use crate::YieldLimitError;
 use crate::limits::{
     AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, DEFAULT_LIMITS,

@@ -818,6 +818,34 @@ pub fn emit_upgrade_cancelled(env: &Env, caller: &Address, payload: UpgradeCance
         .publish((event_upgrade_cancelled(env), caller.clone()), payload);
 }
 
+/// Returns the Symbol for the `"freeze_contract_set"` event topic.
+pub fn event_freeze_contract_set(env: &Env) -> Symbol {
+    Symbol::new(env, "freeze_contract_set")
+}
+
+/// Emit `"freeze_contract_set"` when the admin sets or clears the freeze
+/// circuit-breaker address.
+///
+/// **What**: Records the new cross-contract address consulted before payouts,
+/// or `None` when the circuit-breaker is disabled.
+///
+/// **How**: `env.events().publish()` with topic `(freeze_contract_set, caller)`
+/// and payload `Option<Address>`.
+///
+/// **Why**: Lets operators and indexers confirm which contract gates payouts
+/// and when the gate was removed.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address making the change.
+/// * `freeze_contract` - New freeze contract address, or `None` to clear it.
+pub fn emit_freeze_contract_set(env: &Env, caller: &Address, freeze_contract: &Option<Address>) {
+    env.events().publish(
+        (event_freeze_contract_set(env), caller.clone()),
+        freeze_contract.clone(),
+    );
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1016,11 +1044,53 @@ mod tests {
     }
 
     #[test]
+    fn test_event_freeze_contract_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_freeze_contract_set(&env),
+            Symbol::new(&env, "freeze_contract_set")
+        );
+    }
+
+    #[test]
     fn test_event_upgrade_cancelled_bytes() {
         let env = Env::default();
         assert_eq!(
             event_upgrade_cancelled(&env),
             Symbol::new(&env, "upgrade_cancelled")
+        );
+    }
+
+    #[test]
+    fn test_event_price_set_bytes() {
+        let env = Env::default();
+        assert_eq!(event_price_set(&env), Symbol::new(&env, "price_set"));
+    }
+
+    #[test]
+    fn test_event_price_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_price_removed(&env),
+            Symbol::new(&env, "price_removed")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_added_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_added(&env),
+            Symbol::new(&env, "supported_token_added")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_removed(&env),
+            Symbol::new(&env, "supported_token_removed")
         );
     }
 }

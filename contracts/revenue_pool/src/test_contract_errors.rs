@@ -78,13 +78,13 @@ fn admin_transfer_errors_are_typed() {
         Err(Ok(RevenuePoolError::Unauthorized.into()))
     );
     assert_eq!(
-        client.try_claim_admin(&candidate),
+        client.try_accept_admin(&candidate),
         Err(Ok(RevenuePoolError::NoAdminTransferPending.into()))
     );
 
     client.set_admin(&admin, &candidate);
     assert_eq!(
-        client.try_claim_admin(&attacker),
+        client.try_accept_admin(&attacker),
         Err(Ok(RevenuePoolError::Unauthorized.into()))
     );
 }

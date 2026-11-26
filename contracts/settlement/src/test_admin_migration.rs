@@ -81,13 +81,12 @@ fn execution_requires_timelock_and_succeeds_at_boundary() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn execution_adds_to_destination_and_leaves_later_source_credits() {
     let (env, contract, admin, vault, from, to, token) = setup();
     let client = CalloraSettlementClient::new(&env, &contract);
     client.receive_payment(&vault, &40i128, &false, &Some(to.clone()), &token, &1u32);
     client.propose_balance_migration(&admin, &from, &to);
-    client.receive_payment(&vault, &25i128, &false, &Some(from.clone()), &token, &2u32);
+    client.receive_payment(&vault, &25i128, &false, &Some(from.clone()), &token, &101u32);
     env.ledger()
         .set_timestamp(1_700_000_000 + DEVELOPER_MIGRATION_TIMELOCK_SECONDS);
 

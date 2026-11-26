@@ -16,6 +16,7 @@ pub enum DistributionMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DistributionLifecycleEvent {
     pub version: u32,
+    pub token: Address,
     pub amount: i128,
     pub mode: DistributionMode,
     pub batch_index: u32,
@@ -27,6 +28,7 @@ pub struct DistributionLifecycleEvent {
 impl DistributionLifecycleEvent {
     pub fn new(
         env: &Env,
+        token: Address,
         amount: i128,
         mode: DistributionMode,
         batch_index: u32,
@@ -34,6 +36,7 @@ impl DistributionLifecycleEvent {
     ) -> Self {
         Self {
             version: DISTRIBUTION_EVENT_VERSION,
+            token,
             amount,
             mode,
             batch_index,
@@ -65,15 +68,15 @@ pub fn event_admin_changed(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"admin_transfer_started"` event topic.
 ///
 /// Emitted when the current admin nominates a new admin via `set_admin`.
-/// The nominee must call `claim_admin` to complete the two-step transfer.
+/// The nominee must call `accept_admin` to complete the two-step transfer.
 pub fn event_admin_transfer_started(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_started")
 }
 
 /// Returns the Symbol for the `"admin_transfer_completed"` event topic.
 ///
-/// Emitted when the pending admin successfully claims ownership via
-/// `claim_admin`, completing the two-step admin handover.
+/// Emitted when the pending admin successfully accepts ownership via
+/// `accept_admin`, completing the two-step admin handover.
 pub fn event_admin_transfer_completed(env: &Env) -> Symbol {
     Symbol::new(env, "admin_transfer_completed")
 }
@@ -98,6 +101,27 @@ pub fn event_pause_set(env: &Env) -> Symbol {
 /// Emitted when the admin updates the per-leg maximum distribute cap.
 pub fn event_set_max_distribute(env: &Env) -> Symbol {
     Symbol::new(env, "set_max_distribute")
+}
+
+/// Returns the Symbol for the `"set_max_distribute_for"` event topic.
+///
+/// Emitted when the admin updates the per-token maximum distribute cap.
+pub fn event_set_max_distribute_for(env: &Env) -> Symbol {
+    Symbol::new(env, "set_max_distribute_for")
+}
+
+/// Returns the Symbol for the `"approved_token_added"` event topic.
+///
+/// Emitted when the admin adds a token to the approved-token allowlist.
+pub fn event_approved_token_added(env: &Env) -> Symbol {
+    Symbol::new(env, "approved_token_added")
+}
+
+/// Returns the Symbol for the `"approved_token_removed"` event topic.
+///
+/// Emitted when the admin removes a token from the approved-token allowlist.
+pub fn event_approved_token_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "approved_token_removed")
 }
 
 /// Returns the Symbol for the `"distribute"` event topic.
@@ -359,14 +383,41 @@ mod tests {
     /// Verifies DistributionLifecycleEvent constructor populates all fields.
     #[test]
     fn test_distribution_lifecycle_event_new() {
+        use soroban_sdk::testutils::Address as _;
         let env = Env::default();
-        let payload = DistributionLifecycleEvent::new(&env, 500_000, DistributionMode::Batch, 2, 5);
+        let token = Address::generate(&env);
+        let payload = DistributionLifecycleEvent::new(
+            &env,
+            token.clone(),
+            500_000,
+            DistributionMode::Batch,
+            2,
+            5,
+        );
         assert_eq!(payload.version, DISTRIBUTION_EVENT_VERSION);
+        assert_eq!(payload.token, token);
         assert_eq!(payload.amount, 500_000);
         assert_eq!(payload.mode, DistributionMode::Batch);
         assert_eq!(payload.batch_index, 2);
         assert_eq!(payload.batch_size, 5);
         assert_eq!(payload.ledger_sequence, env.ledger().sequence());
         assert_eq!(payload.timestamp, env.ledger().timestamp());
+    }
+
+    #[test]
+    fn test_multi_token_event_symbols() {
+        let env = Env::default();
+        assert_eq!(
+            event_approved_token_added(&env),
+            Symbol::new(&env, "approved_token_added")
+        );
+        assert_eq!(
+            event_approved_token_removed(&env),
+            Symbol::new(&env, "approved_token_removed")
+        );
+        assert_eq!(
+            event_set_max_distribute_for(&env),
+            Symbol::new(&env, "set_max_distribute_for")
+        );
     }
 }

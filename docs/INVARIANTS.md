@@ -837,7 +837,7 @@ Nothing relies on a getter's side effect any more.
 | Per-developer config | `set_daily_withdraw_cap`, `set_developer_min_balance`, `set_developer_claim_window`, `clear_developer_claim_window` |
 | Token config | `set_usdc_token`, `add_supported_token`, `remove_supported_token` |
 | Admin / vault | `set_admin`, `accept_admin`, `cancel_admin_transfer`, `propose_vault`, `accept_vault`, `broadcast` |
-| Migration | `propose_balance_migration`, `execute_balance_migration`, `migrate_developer_balance` (`migrate_single_dev_v2`), `migrate_v1_to_v2`, `migrate_v1_to_v2_page`, `migrate_index_to_pages` |
+| Migration | `propose_balance_migration`, `execute_balance_migration`, `migrate_developer_balance`, `migrate_v1_to_v2`, `migrate_v1_to_v2_page`, `migrate_index_to_pages` |
 | Freeze / prices | `freeze_developer`, `unfreeze_developer`, `set_price`, `remove_price` |
 | Upgrade | `propose_upgrade`, `execute_upgrade`, `cancel_upgrade`, `upgrade` |
 

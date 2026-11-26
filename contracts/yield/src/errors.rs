@@ -18,6 +18,9 @@
 //! | 10   | UpgradeRejected       | Storage-migration validator rejected the pending upgrade      |
 //! | 11   | EmptyBatch            | `batch_clear_accounts` was called with no accounts            |
 //! | 12   | BatchTooLarge         | `batch_clear_accounts` exceeded the batch size cap            |
+//! | 13   | BetsWindowCap         | Per-window bet cap reached                                    |
+//! | 14   | PositionsWindowCap    | Per-window position cap reached                               |
+//! | 15   | SubscriptionsWindowCap| Per-window subscription cap reached                          |
 //!
 //! All variants implement [`Copy`] + [`PartialEq`] so they can be returned by
 //! value or pinned in arrays without allocation.
@@ -77,4 +80,14 @@ pub enum YieldLimitError {
     EmptyBatch = 11,
     /// `batch_clear_accounts` exceeded [`crate::limits::MAX_BATCH_CLEAR`] (code 12).
     BatchTooLarge = 12,
+    /// `place_bet` would exceed the account's per-window bet cap (code 13).
+    ///
+    /// Returned by [`crate::limits::place_bet`] when rolling windows are
+    /// enabled and the account has already opened `max_bets` bets in the
+    /// current window.
+    BetsWindowCap = 13,
+    /// `open_position` would exceed the account's per-window position cap (code 14).
+    PositionsWindowCap = 14,
+    /// `subscribe` would exceed the account's per-window subscription cap (code 15).
+    SubscriptionsWindowCap = 15,
 }

@@ -297,7 +297,7 @@ fn admin_rotation_preserves_pause_guardian() {
     client.set_pause_guardian(&admin, &guardian);
 
     client.set_admin(&admin, &new_admin);
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
 
     assert_eq!(client.get_admin(), new_admin.clone());
     assert_eq!(client.get_pause_guardian(), Some(guardian.clone()));
@@ -324,7 +324,7 @@ fn set_admin_two_step_transfers_control() {
     client.set_admin(&admin, &new_admin);
     assert_eq!(client.get_admin(), admin);
 
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);
 
     client.distribute(&new_admin, &developer, &100);
@@ -348,7 +348,7 @@ fn set_admin_unauthorized_panics() {
 
 #[test]
 #[should_panic]
-fn claim_admin_wrong_address_panics() {
+fn accept_admin_wrong_address_panics() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -359,7 +359,7 @@ fn claim_admin_wrong_address_panics() {
 
     client.init(&admin, &usdc);
     client.set_admin(&admin, &new_admin);
-    client.claim_admin(&attacker);
+    client.accept_admin(&attacker);
 }
 
 #[test]
@@ -383,7 +383,7 @@ fn admin_transfer_emits_events() {
     assert_eq!(event_name, Symbol::new(&env, "admin_transfer_started"));
 
     // Step 2 event
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
     let events = env.events().all();
     let transfer_completed = events.last().unwrap();
 
@@ -538,7 +538,7 @@ fn receive_payment_emits_event_for_admin() {
 
 #[test]
 #[should_panic]
-fn claim_admin_without_pending_panics() {
+fn accept_admin_without_pending_panics() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -547,12 +547,12 @@ fn claim_admin_without_pending_panics() {
     let (usdc, _, _) = create_usdc(&env, &admin);
 
     client.init(&admin, &usdc);
-    client.claim_admin(&candidate);
+    client.accept_admin(&candidate);
 }
 
 #[test]
 #[should_panic]
-fn claim_admin_wrong_caller_panics() {
+fn accept_admin_wrong_caller_panics() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -563,7 +563,7 @@ fn claim_admin_wrong_caller_panics() {
 
     client.init(&admin, &usdc);
     client.set_admin(&admin, &pending_admin);
-    client.claim_admin(&attacker);
+    client.accept_admin(&attacker);
 }
 
 #[test]
@@ -667,7 +667,7 @@ fn admin_transfer_completed_event_topics_and_data() {
 
     client.init(&admin, &usdc);
     client.set_admin(&admin, &new_admin);
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
 
     let events = env.events().all();
     let ev = events.last().unwrap();
@@ -920,7 +920,7 @@ fn get_admin_reflects_updated_admin_after_transfer() {
     assert_eq!(client.get_admin(), admin);
 
     // After claim: admin updated
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);
 }
 
@@ -963,7 +963,7 @@ fn get_usdc_token_is_immutable_after_init() {
 
     // Admin transfer must not affect the token address
     client.set_admin(&admin, &new_admin);
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
 
     assert_eq!(client.get_usdc_token(), token_before);
 }
@@ -1327,8 +1327,8 @@ fn state_persists_after_ledger_advance() {
     let new_admin = Address::generate(&env);
     client.set_admin(&admin, &new_admin);
 
-    // claim_admin extends TTL
-    client.claim_admin(&new_admin);
+    // accept_admin extends TTL
+    client.accept_admin(&new_admin);
     assert_eq!(client.get_admin(), new_admin);
 
     // batch_distribute extends TTL

@@ -32,7 +32,6 @@ must not be reassigned once released.
 | 14 | `UsdcTokenCannotBeVault` | Vault | USDC token address cannot be the vault contract |
 | 15 | `RevenuePoolCannotBeVault` | Vault | Revenue pool address cannot be the vault contract |
 | 16 | `AuthorizedCallerCannotBeVault` | Vault | Authorized caller cannot be the vault contract |
-| 17 | `InitialBalanceExceedsOnLedger` | Vault | Initial tracked balance exceeds on-ledger USDC |
 | 18 | `AlreadyPaused` | Vault | Contract is already paused |
 | 19 | `NotPaused` | Vault | Contract is not paused |
 | 20 | `SettlementNotSet` | Vault | Settlement address has not been configured |
@@ -52,7 +51,6 @@ must not be reassigned once released.
 | 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |
 | 35 | `Slippage` | Vault | Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit |
 | 36 | `RateLimited` | Vault | Developer exceeded the configured rate limit |
-| 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
 | 38 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
 | 39 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
 | 40 | _reserved_ (was `ColdSignersEmpty`) | Vault | Retired: never returned; removed to keep `VaultError` within the 50-case contract error spec limit |
@@ -74,7 +72,7 @@ must not be reassigned once released.
 | 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
 | 60 | `Frozen` | Vault | System is globally frozen via the configured freeze contract |
 | 59 | `SettlementEqualsRevenuePool` | Vault | Settlement and revenue pool addresses must be distinct |
-| 60 | `TooManyIds` | Vault | `prune_processed_requests` received more ids than `MAX_PRUNE_IDS` (50) allows; split into smaller batches |
+| 61 | `TooManyIds` | Vault | `prune_processed_requests` received more ids than `MAX_PRUNE_IDS` (50) allows; split into smaller batches |
 
 ## Settlement
 
@@ -131,11 +129,9 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
-| 52 | `InvalidOfferingId` | Settlement | Offering ID failed `callora-validators` validation |
-| 53 | `InvalidPrice` | Settlement | Price string failed validation |
 | 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
 | 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
-| 52 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
+| 54 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
 
 ## Revenue Pool
 
@@ -223,6 +219,7 @@ must not be reassigned once released.
 | 13 | `ApprovedAmountInvalid` | Refund | Partial approved amount is `<= 0` or `> request.amount` |
 | 14 | `DisputeWindowClosed` | Refund | Dispute was submitted after the configured dispute window elapsed |
 | 15 | `AlreadyDisputed` | Refund | Request has already been disputed once |
+| 16 | `NotExpired` | Refund | Request lifetime is `0` or the request is younger than the configured lifetime |
 
 ## Escrow
 
@@ -241,6 +238,8 @@ must not be reassigned once released.
 | 13 | `BatchEmpty` | Escrow | `batch_release` was called with an empty `entries` list |
 | 14 | `BatchTooLarge` | Escrow | `batch_release` exceeded `MAX_BATCH_RELEASE` entries |
 | 15 | `DuplicateEntry` | Escrow | `batch_release` lists the same `(payment_asset, recipient)` pair twice |
+| 16 | `NotExpired` | Escrow | Escrow has not yet reached its expiry timestamp |
+| 17 | `InvalidExpiry` | Escrow | Supplied expiry timestamp is zero or not in the future |
 
 
 | 5 | `FeeTooHigh` | Refund | Fee basis points exceeds maximum (10000) |
@@ -248,3 +247,4 @@ must not be reassigned once released.
 | 10 | `InsufficientBalance` | Refund | Contract token balance or accumulated fees are insufficient for payout or withdrawal |
 | 11 | `InvalidRecipient` | Refund | Recipient address is invalid (e.g. self or token address) |
 | 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open refund requests |
+| 7 | `FreezeUntilNotInFuture` | Freeze | `freeze_until` deadline is not in the future (`until <= now`) |
