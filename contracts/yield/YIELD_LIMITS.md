@@ -87,6 +87,7 @@ decrement-only, so it cannot be used to mint headroom either.
 | `get_default_limits()`                                    | Global cap defaults (fallback to `DEFAULT_LIMITS`).             |
 | `get_account_limits(account)`                             | Effective caps for the account (per-account override → default). |
 | `get_account_state(account)`                              | Live counters for the account (zeroed if absent).               |
+| `get_remaining_capacity(account)`                         | Remaining headroom (`saturating_sub(cap, state)`) per kind.     |
 | `get_operator(operator)`                                  | `true` when the address is a registered operator.                |
 | `can_place_bet(account)` / `can_open_position(account)` / |                                                              |
 | `can_subscribe(account)`                                  | Dry-run gate checks (concurrent **and** window aware).         |

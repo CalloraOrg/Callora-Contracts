@@ -41,8 +41,8 @@ pub mod views;
 
 pub use errors::YieldLimitError;
 pub use limits::{
-    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, WindowLimits,
-    WindowState,
+    AccountLimits, AccountState, CalloraYieldLimits, CalloraYieldLimitsClient, RemainingCapacity,
+    WindowLimits, WindowState,
 };
 
 #[cfg(test)]
