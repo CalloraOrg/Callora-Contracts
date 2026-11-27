@@ -3,6 +3,14 @@
   "source": "contracts/distribute/src/lib.rs",
   "functions": [
     {
+      "name": "simulate_batch_distribute",
+      "params": [{ "name": "payments", "type": "Vec<(Address, i128)>" }],
+      "returns": "BatchSimulation",
+      "access": "public, no authorization required",
+      "events": [],
+      "description": "Collects local batch validation errors without transfers or Distribute storage/TTL writes. The external token balance view may refresh token TTL. See docs/DISTRIBUTE_VS_REVENUE_POOL.md for ordering, totals, and authorization/transfer limitations."
+    },
+    {
       "name": "set_admin",
       "params": [
         { "name": "caller", "type": "Address" },
@@ -18,7 +26,7 @@
         { "name": "caller", "type": "Address" }
       ],
       "access": "pending admin only",
-      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
+      "panics_or_errors": ["Unauthorized", "NoAdminTransferPending"],
       "events": ["admin_transfer_accepted"]
     },
     {
@@ -27,13 +35,43 @@
         { "name": "caller", "type": "Address" }
       ],
       "access": "current admin only",
-      "panics_or_errors": ["Unauthorized", "NoPendingAdmin"],
+      "panics_or_errors": ["Unauthorized", "NoAdminTransferPending"],
       "events": ["admin_transfer_cancelled"]
     }
   ],
+  "types": {
+    "BatchSimulation": {
+      "ok": "bool",
+      "total": "i128",
+      "legs": "u32",
+      "contract_balance": "i128",
+      "paused": "bool",
+      "errors": "Vec<u32> (DistributeError codes from contracts/distribute/src/errors.rs)"
+    }
+  },
   "errors": [
-    { "name": "Unauthorized", "code": 1, "description": "Caller is not authorized for this operation" },
-    { "name": "NoPendingAdmin", "code": 2, "description": "No pending admin transfer exists" }
+    { "name": "NotInitialized", "code": 1 },
+    { "name": "AlreadyInitialized", "code": 2 },
+    { "name": "Unauthorized", "code": 3 },
+    { "name": "Paused", "code": 4 },
+    { "name": "AccountLimitExceeded", "code": 5, "description": "Reserved legacy code" },
+    { "name": "AccountStateEmpty", "code": 6, "description": "Reserved legacy code" },
+    { "name": "BatchEmpty", "code": 7 },
+    { "name": "BatchTooLarge", "code": 8 },
+    { "name": "Overflow", "code": 9 },
+    { "name": "CapNotPositive", "code": 10 },
+    { "name": "NewAdminSameAsCurrent", "code": 11 },
+    { "name": "NoAdminTransferPending", "code": 12 },
+    { "name": "InvalidConfig", "code": 13 },
+    { "name": "InvalidRecipient", "code": 14 },
+    { "name": "AmountNotPositive", "code": 15 },
+    { "name": "AmountExceedsMaxDistribute", "code": 16 },
+    { "name": "InsufficientBalance", "code": 17 },
+    { "name": "AlreadyPaused", "code": 18 },
+    { "name": "NotPaused", "code": 19 },
+    { "name": "UnsupportedToken", "code": 20 },
+    { "name": "CannotRemoveDefaultToken", "code": 21 },
+    { "name": "TokenAlreadyApproved", "code": 22 }
   ],
   "events": [
     { "name": "admin_transfer_proposed", "source": "contracts/distribute/src/events.rs" },

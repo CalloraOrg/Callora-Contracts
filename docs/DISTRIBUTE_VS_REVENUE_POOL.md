@@ -37,6 +37,40 @@ When a fix applies to shared behaviour (e.g. duplicate recipient checks), it
 MUST be applied to `callora-distribute` first. Applying it only to the
 revenue pool is not sufficient and will be treated as an incomplete fix.
 
+## Batch preflight (Distribute only)
+
+`simulate_batch_distribute(payments: Vec<(Address, i128)>) -> BatchSimulation`
+is a public, authorization-free view. It returns `ok`, `total`, `legs`,
+`contract_balance`, `paused`, and `errors: Vec<u32>`. Unlike Distribute's other
+views, it does not refresh Distribute's instance TTL. It does not write its
+storage, transfer tokens, or emit events.
+
+Errors are collected in execution order: pause (`4`), missing admin (`1`),
+empty/oversized batch (`7`/`8`), missing token (`1`), then each payment's
+nonpositive amount (`15`), cap violation (`16`), self-recipient (`14`), or
+running-total overflow (`9`), followed by insufficient balance (`17`). The
+batch limit is 50. Repeated codes are retained, and an amount error does not
+hide a self-recipient error on the same leg. Missing configuration is reported
+once; a missing token yields a reported balance of zero.
+
+`total` sums **positive** amounts, including those on invalid legs. Nonpositive
+amounts never offset the required balance. On overflow it saturates at
+`i128::MAX`; the report includes overflow and insufficient balance even if the
+contract holds `i128::MAX`. Fix all reported errors and simulate again.
+
+For an authorized admin using the same contract state, the first error matches
+the real batch's first local validation failure. `ok` does not validate caller
+authorization or predict external transfer failures, such as a frozen token
+recipient. The token's `balance` view is invoked and may refresh **its own**
+instance/balance TTL (the Stellar Asset Contract does this internally).
+Distribute cannot suppress external token behavior. Use RPC simulation rather
+than a submitted transaction when no on-chain TTL changes are wanted.
+
+Example: with a cap of 100 and balance of 100, payments of 60 and 40 report
+`ok: true, total: 100, legs: 2, contract_balance: 100, paused: false, errors: []`.
+Payments of 0 to Distribute itself and 101 to another address report
+`errors: [15, 14, 16, 17]` and `total: 101`.
+
 ## Relationship to `callora-freeze`
 
 `callora-freeze` is meant to protect the **canonical payout contract**,
