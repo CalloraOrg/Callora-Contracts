@@ -2,10 +2,10 @@
 
 use crate::{
     FeesWithdrawnEvent, InitializedEvent, RefundConfigUpdatedEvent, RefundContract,
-    RefundContractClient, RefundError, RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
-    MAX_PENDING_REFUNDS_PAGE_SIZE, MAX_REQUESTER_REFUNDS,
+    RefundContractClient, RefundError, RefundExpiredEvent, RefundProcessedEvent,
+    RefundRequestedEvent, RefundStatus, MAX_PENDING_REFUNDS_PAGE_SIZE, MAX_REQUESTER_REFUNDS,
 };
-use soroban_sdk::testutils::{Address as _, Events as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{Address, Env, IntoVal, Symbol};
 
 fn create_token<'a>(
@@ -38,7 +38,7 @@ fn setup() -> (Env, Address, RefundContractClient<'static>) {
     let admin = Address::generate(&env);
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
-    client.init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
     (env, admin, client)
 }
 
@@ -51,7 +51,7 @@ fn setup_with_config(
     let admin = Address::generate(&env);
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
-    client.init(&admin, &fee_bps, &min_refund_amount);
+    client.init(&admin, &fee_bps, &min_refund_amount, &0);
     (env, admin, client)
 }
 
@@ -63,11 +63,12 @@ fn test_init() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    client.init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
 
     let config = client.get_config();
     assert_eq!(config.fee_bps, 250);
     assert_eq!(config.min_refund_amount, 100);
+    assert_eq!(config.request_lifetime_secs, 0);
 
     let stored_admin = client.get_admin();
     assert_eq!(stored_admin, admin);
@@ -81,8 +82,8 @@ fn test_init_already_initialized() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    client.init(&admin, &250, &100);
-    let result = client.try_init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
+    let result = client.try_init(&admin, &250, &100, &0);
     assert_eq!(
         result.unwrap_err().unwrap(),
         RefundError::AlreadyInitialized
@@ -97,7 +98,7 @@ fn test_init_fee_too_high() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    let result = client.try_init(&admin, &10_001, &100);
+    let result = client.try_init(&admin, &10_001, &100, &0);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::FeeTooHigh);
 }
 
@@ -109,7 +110,7 @@ fn test_init_invalid_min_amount() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    let result = client.try_init(&admin, &250, &-1);
+    let result = client.try_init(&admin, &250, &-1, &0);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::InvalidAmount);
 }
 
@@ -343,11 +344,12 @@ fn test_process_refund_not_found() {
 fn test_update_config() {
     let (_env, admin, client) = setup();
 
-    client.update_config(&admin, &500, &200);
+    client.update_config(&admin, &500, &200, &86_400);
 
     let config = client.get_config();
     assert_eq!(config.fee_bps, 500);
     assert_eq!(config.min_refund_amount, 200);
+    assert_eq!(config.request_lifetime_secs, 86_400);
 }
 
 #[test]
@@ -355,7 +357,7 @@ fn test_update_config_unauthorized() {
     let (env, _admin, client) = setup();
     let fake_admin = Address::generate(&env);
 
-    let result = client.try_update_config(&fake_admin, &500, &200);
+    let result = client.try_update_config(&fake_admin, &500, &200, &0);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::Unauthorized);
 }
 
@@ -363,7 +365,7 @@ fn test_update_config_unauthorized() {
 fn test_update_config_fee_too_high() {
     let (_env, admin, client) = setup();
 
-    let result = client.try_update_config(&admin, &10_001, &200);
+    let result = client.try_update_config(&admin, &10_001, &200, &0);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::FeeTooHigh);
 }
 
@@ -371,7 +373,7 @@ fn test_update_config_fee_too_high() {
 fn test_update_config_invalid_amount() {
     let (_env, admin, client) = setup();
 
-    let result = client.try_update_config(&admin, &500, &-1);
+    let result = client.try_update_config(&admin, &500, &-1, &0);
     assert_eq!(result.unwrap_err().unwrap(), RefundError::InvalidAmount);
 }
 
@@ -415,7 +417,7 @@ fn test_initialized_event_shape() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    client.init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
 
     let events = env.events().all();
     let event = events.last().unwrap();
@@ -429,6 +431,7 @@ fn test_initialized_event_shape() {
     assert_eq!(data.admin, admin);
     assert_eq!(data.fee_bps, 250);
     assert_eq!(data.min_refund_amount, 100);
+    assert_eq!(data.request_lifetime_secs, 0);
 }
 
 #[test]
@@ -523,7 +526,7 @@ fn test_refund_processed_event_shape_for_each_transition() {
 fn test_config_updated_event_shape() {
     let (env, admin, client) = setup();
 
-    client.update_config(&admin, &500, &200);
+    client.update_config(&admin, &500, &200, &86_400);
 
     let events = env.events().all();
     let event = events.last().unwrap();
@@ -537,6 +540,7 @@ fn test_config_updated_event_shape() {
     assert_eq!(data.admin, admin);
     assert_eq!(data.fee_bps, 500);
     assert_eq!(data.min_refund_amount, 200);
+    assert_eq!(data.request_lifetime_secs, 86_400);
 }
 
 // =========================================================================
@@ -957,6 +961,10 @@ fn test_uninitialized_entrypoints() {
             .unwrap(),
         RefundError::NotInitialized
     );
+    assert_eq!(
+        client.try_expire_refund(&1).unwrap_err().unwrap(),
+        RefundError::NotInitialized
+    );
     #[allow(deprecated)]
     let uninit_total = client.try_get_total_refunds();
     assert_eq!(
@@ -1119,7 +1127,7 @@ fn test_plan_row5_init_bumps_instance_ttl() {
     let contract_id = env.register(RefundContract, ());
     let client = RefundContractClient::new(&env, &contract_id);
 
-    client.init(&admin, &250, &100);
+    client.init(&admin, &250, &100, &0);
 
     let ttl = env.as_contract(&client.address, || env.storage().instance().get_ttl());
     assert!(
@@ -1300,4 +1308,275 @@ fn test_get_pending_refunds_after_reject_then_new_request() {
     assert_eq!(page.len(), 1);
     assert_eq!(page.get(0).unwrap(), second);
     assert_eq!(cursor, None);
+}
+
+// =========================================================================
+// Pending request expiry (issue #1493)
+// =========================================================================
+
+/// Lifetime used by the expiry tests: one hour.
+const REQUEST_LIFETIME: u64 = 3_600;
+
+fn setup_with_lifetime(lifetime: u64) -> (Env, Address, RefundContractClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(RefundContract, ());
+    let client = RefundContractClient::new(&env, &contract_id);
+    client.init(&admin, &250, &100, &lifetime);
+    (env, admin, client)
+}
+
+#[test]
+fn test_init_stores_request_lifetime() {
+    let (_env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+
+    let config = client.get_config();
+    assert_eq!(config.request_lifetime_secs, REQUEST_LIFETIME);
+}
+
+#[test]
+fn test_expire_refund_after_lifetime_is_permissionless() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    // Any caller may expire the request: no authorization is required.
+    env.mock_auths(&[]);
+    client.expire_refund(&request_id);
+
+    let request = client.get_refund_request(&request_id);
+    assert_eq!(request.status, RefundStatus::Expired);
+    assert_eq!(request.processed_at, Some(1_000 + REQUEST_LIFETIME));
+}
+
+#[test]
+fn test_expire_refund_before_lifetime_returns_not_expired() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME - 1);
+    assert_eq!(
+        client.try_expire_refund(&request_id).unwrap_err().unwrap(),
+        RefundError::NotExpired
+    );
+
+    // The request is still pending and actionable.
+    assert_eq!(
+        client.get_refund_request(&request_id).status,
+        RefundStatus::Pending
+    );
+}
+
+#[test]
+fn test_expire_refund_exact_boundary_succeeds() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    assert!(client.try_expire_refund(&request_id).is_ok());
+    assert_eq!(
+        client.get_refund_request(&request_id).status,
+        RefundStatus::Expired
+    );
+}
+
+#[test]
+fn test_expire_refund_lifetime_zero_never_expires() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(u64::MAX - 1);
+    assert_eq!(
+        client.try_expire_refund(&request_id).unwrap_err().unwrap(),
+        RefundError::NotExpired
+    );
+    assert_eq!(
+        client.get_refund_request(&request_id).status,
+        RefundStatus::Pending
+    );
+}
+
+#[test]
+fn test_expire_refund_non_pending_returns_invalid_status() {
+    let (env, admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    client.approve_refund(&admin, &request_id);
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    assert_eq!(
+        client.try_expire_refund(&request_id).unwrap_err().unwrap(),
+        RefundError::InvalidStatus
+    );
+    assert_eq!(
+        client.get_refund_request(&request_id).status,
+        RefundStatus::Approved
+    );
+}
+
+#[test]
+fn test_expire_refund_not_found() {
+    let (_env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+
+    assert_eq!(
+        client.try_expire_refund(&42).unwrap_err().unwrap(),
+        RefundError::NotFound
+    );
+}
+
+#[test]
+fn test_expire_refund_overflow_returns_overflow() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(u64::MAX - 10);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(u64::MAX);
+    assert_eq!(
+        client.try_expire_refund(&request_id).unwrap_err().unwrap(),
+        RefundError::Overflow
+    );
+}
+
+#[test]
+fn test_expired_request_cannot_be_approved_or_processed() {
+    let (env, admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let token_admin = Address::generate(&env);
+    let (token, _token_client, token_admin_client) = create_token(&env, &token_admin);
+    let requester = Address::generate(&env);
+
+    token_admin_client.mint(&client.address, &10_000);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    client.expire_refund(&request_id);
+
+    assert_eq!(
+        client
+            .try_approve_refund(&admin, &request_id)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+    assert_eq!(
+        client
+            .try_process_refund(&admin, &request_id)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+    assert_eq!(
+        client
+            .try_approve_refund_partial(&admin, &request_id, &100)
+            .unwrap_err()
+            .unwrap(),
+        RefundError::InvalidStatus
+    );
+    assert_eq!(
+        client.get_refund_request(&request_id).status,
+        RefundStatus::Expired
+    );
+}
+
+#[test]
+fn test_expired_request_frees_requester_slot() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let first = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    for _ in 1..MAX_REQUESTER_REFUNDS {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    // All 100 slots are taken by pending requests.
+    assert_eq!(
+        client
+            .try_request_refund(&requester, &token, &500, &Symbol::new(&env, "test"))
+            .unwrap_err()
+            .unwrap(),
+        RefundError::TooManyOpenRequests
+    );
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    client.expire_refund(&first);
+
+    // The expired request is closed, so the next request evicts it and succeeds.
+    let new_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "new"));
+    assert_eq!(new_id, (MAX_REQUESTER_REFUNDS + 1) as u64);
+
+    let page = client.get_refunds_by_requester(&requester, &0, &1);
+    assert_eq!(page.get(0).unwrap(), 2);
+}
+
+#[test]
+fn test_expired_request_removed_from_pending_index() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let expiring = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "one"));
+    let pending = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "two"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    client.expire_refund(&expiring);
+
+    let (page, cursor) = client.get_pending_refunds(&0, &10);
+    assert_eq!(page.len(), 1);
+    assert_eq!(page.get(0).unwrap(), pending);
+    assert_eq!(cursor, None);
+}
+
+#[test]
+fn test_refund_expired_event_shape() {
+    let (env, _admin, client) = setup_with_lifetime(REQUEST_LIFETIME);
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    let request_id = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+
+    env.ledger().set_timestamp(1_000 + REQUEST_LIFETIME);
+    client.expire_refund(&request_id);
+
+    let events = env.events().all();
+    let event = events.last().unwrap();
+
+    let topics = &event.1;
+    assert_eq!(topics.len(), 1);
+    let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "refund_expired"));
+
+    let data: RefundExpiredEvent = event.2.into_val(&env);
+    assert_eq!(data.request_id, request_id);
+    assert_eq!(data.requester, requester);
+    assert_eq!(data.token, token);
+    assert_eq!(data.amount, 500);
+    assert_eq!(data.expired_at, 1_000 + REQUEST_LIFETIME);
 }

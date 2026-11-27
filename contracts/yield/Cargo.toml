@@ -17,3 +17,4 @@ callora-storage-migration = { path = "../storage_migration" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 callora-revenue-pool = { path = "../revenue_pool" }
+proptest = "1.4"

@@ -21,7 +21,7 @@ use soroban_sdk::contracterror;
 /// | 11   | DeveloperBalanceUnderflow    | Developer balance debit would underflow              |
 /// | 12   | InsufficientContractBalance  | Contract USDC balance is lower than requested amount |
 /// | 13   | DailyWithdrawCapExceeded     | Daily developer withdrawal cap would be exceeded     |
-/// | 14   | GasExhaustionRisk            | Full scan is too large; use paginated access         |
+/// | 14   | _reserved_ (was GasExhaustionRisk) | Retired; never returned                         |
 /// | 15   | _reserved_ (was ReasonTooLong) | Retired; never returned                            |
 /// | 16   | MigrationSameAddress         | Migration source and target are identical            |
 /// | 17   | InvalidMigrationTarget       | Migration target is the settlement contract          |
@@ -30,7 +30,7 @@ use soroban_sdk::contracterror;
 /// | 20   | MigrationNotFound            | No migration is pending for the source                |
 /// | 21   | TimelockNotExpired           | Migration delay has not elapsed                       |
 /// | 22   | MigrationBalanceChanged      | Approved amount is no longer available                |
-/// | 23   | OverDraft                    | Withdrawal amount exceeds the developer's balance     |
+/// | 23   | _reserved_ (was OverDraft)   | Retired; never returned                              |
 /// | 24   | InvalidClaimWindow            | Claim window parameters are invalid                    |
 /// | 25   | ClaimWindowClosed             | Developer claim window is not currently open           |
 /// | 26   | MinBalanceViolation           | Withdrawal would leave balance below the minimum       |
@@ -45,7 +45,7 @@ use soroban_sdk::contracterror;
 /// | 35   | InvalidConfigAdminContract   | Init config forbids the admin being the contract     |
 /// | 36   | InvalidConfigVaultContract   | Init config forbids the vault being the contract     |
 /// | 37   | InvalidUsdcToken             | USDC token address is invalid                        |
-/// | 38   | InvalidRecipient             | Withdrawal recipient cannot be the contract          |
+/// | 38   | InvalidRecipient             | Withdrawal recipient or payout name is invalid       |
 /// | 39   | NoAdminTransferPending       | No admin transfer is pending                         |
 /// | 40   | InvalidVault                 | Vault address is invalid                             |
 /// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
@@ -59,6 +59,11 @@ use soroban_sdk::contracterror;
 /// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
 /// | 50   | InvalidCursor                | Batch cursor is invalid or listing cursor is past the end |
 /// | 51   | TooManyResults               | Unpaginated developer-balance view exceeds its cap   |
+/// | 52   | InvalidOfferingId            | Offering ID failed `callora-validators` validation   |
+/// | 53   | InvalidPrice                 | Price string failed validation                       |
+/// | 52   | RecipientRegistryNotSet      | A payout name is set but no recipient registry is configured |
+/// | 53   | PayoutNameNotFound           | The configured payout name no longer resolves in the registry |
+/// | 54   | SystemFrozen                 | System is globally frozen via the configured freeze contract |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -76,7 +81,8 @@ pub enum SettlementError {
     DeveloperBalanceUnderflow = 11,
     InsufficientContractBalance = 12,
     DailyWithdrawCapExceeded = 13,
-    GasExhaustionRisk = 14,
+    // code 14 reserved (was GasExhaustionRisk; never returned). Retired so the
+    // enum stays within Soroban's 50-case limit for contract error specs.
     // code 15 reserved (was ReasonTooLong; never returned). Retired so the
     // enum stays within Soroban's 50-case limit for contract error specs.
     MigrationSameAddress = 16,
@@ -86,7 +92,8 @@ pub enum SettlementError {
     MigrationNotFound = 20,
     TimelockNotExpired = 21,
     MigrationBalanceChanged = 22,
-    OverDraft = 23,
+    // code 23 reserved (was OverDraft; never returned). Retired so the enum
+    // stays within Soroban's 50-case limit for contract error specs.
     InvalidClaimWindow = 24,
     ClaimWindowClosed = 25,
     MinBalanceViolation = 26,
@@ -130,4 +137,39 @@ pub enum SettlementError {
     /// `get_all_developer_balances` index exceeds
     /// `MAX_DEVELOPER_BALANCES_PAGE_SIZE`; use a paginated view instead.
     TooManyResults = 51,
+    /// A developer has a payout name configured but the admin has not set a
+    /// recipient registry address.
+    RecipientRegistryNotSet = 52,
+    /// The configured payout name no longer resolves in the recipient registry.
+    PayoutNameNotFound = 53,
+}
+
+/// Error codes that do not fit in [`SettlementError`].
+///
+/// Defined as a separate `#[contracterror]` enum because Soroban's XDR
+/// `ScSpecUdtErrorEnumV0` caps each enum at 50 cases (`SettlementError`
+/// already has 50 active variants). `SystemFrozen` (code `54`) also lives
+/// here: `SettlementError` has no free case left and sharing code `52` with
+/// `RecipientRegistryNotSet` would make the wire code ambiguous.
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum PriceRegistryError {
+    /// Offering ID failed `callora-validators::normalize_offering_id`.
+    InvalidOfferingId = 52,
+    /// Price string is empty, non-visible ASCII, or not a valid decimal number.
+    InvalidPrice = 53,
+}
+
+/// Global freeze circuit-breaker errors.
+///
+/// Kept in a separate `#[contracterror]` enum because `SettlementError` already
+/// uses all 50 cases Soroban allows per error enum.
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(u32)]
+pub enum FreezeError {
+    /// System is globally frozen via the configured freeze contract (code 54).
+    SystemFrozen = 54,
+    /// System is globally frozen via the configured freeze contract.
 }

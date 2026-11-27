@@ -20,6 +20,16 @@ use soroban_sdk::contracterror;
 /// | 10   | CapNotPositive           | Global cap must be greater than zero                |
 /// | 11   | NewAdminSameAsCurrent    | Nominated admin is the same as current admin       |
 /// | 12   | NoAdminTransferPending   | No admin transfer is pending to cancel             |
+/// | 13   | InvalidConfig            | Invalid configuration (e.g. token aliasing)        |
+/// | 14   | InvalidRecipient         | Recipient is the distribute contract itself        |
+/// | 15   | AmountNotPositive        | Distribution amount must be greater than zero      |
+/// | 16   | AmountExceedsMaxDistribute | Distribution amount exceeds configured cap       |
+/// | 17   | InsufficientBalance      | Contract token balance is below requested amount   |
+/// | 18   | AlreadyPaused            | Contract is already paused                         |
+/// | 19   | NotPaused                | Contract is not currently paused                   |
+/// | 20   | UnsupportedToken         | Token is not in the approved-token allowlist       |
+/// | 21   | CannotRemoveDefaultToken | Default USDC token cannot be removed               |
+/// | 22   | TokenAlreadyApproved     | Token is already in the approved-token allowlist   |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -56,6 +66,12 @@ pub enum DistributeError {
     InsufficientBalance = 17,
     AlreadyPaused = 18,
     NotPaused = 19,
+    /// Token is not in the approved-token allowlist (code 20).
+    UnsupportedToken = 20,
+    /// Default USDC token cannot be removed from the allowlist (code 21).
+    CannotRemoveDefaultToken = 21,
+    /// Token is already in the approved-token allowlist (code 22).
+    TokenAlreadyApproved = 22,
 }
 
 #[cfg(test)]
@@ -65,7 +81,7 @@ mod tests {
     /// Verify that every error discriminant is unique and sequential.
     #[test]
     fn error_codes_are_unique_and_sequential() {
-        let codes: [u32; 19] = [
+        let codes: [u32; 22] = [
             DistributeError::NotInitialized as u32,
             DistributeError::AlreadyInitialized as u32,
             DistributeError::Unauthorized as u32,
@@ -85,8 +101,11 @@ mod tests {
             DistributeError::InsufficientBalance as u32,
             DistributeError::AlreadyPaused as u32,
             DistributeError::NotPaused as u32,
+            DistributeError::UnsupportedToken as u32,
+            DistributeError::CannotRemoveDefaultToken as u32,
+            DistributeError::TokenAlreadyApproved as u32,
         ];
-        let mut seen = [false; 20];
+        let mut seen = [false; 23];
         for (i, &code) in codes.iter().enumerate() {
             assert_eq!(
                 code,

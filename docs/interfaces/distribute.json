@@ -30,15 +30,6 @@
       "events": ["admin_transfer_accepted"]
     },
     {
-      "name": "claim_admin",
-      "params": [
-        { "name": "caller", "type": "Address" }
-      ],
-      "access": "pending admin only",
-      "panics_or_errors": ["Unauthorized", "NoAdminTransferPending"],
-      "events": ["admin_transfer_accepted"]
-    },
-    {
       "name": "cancel_admin_transfer",
       "params": [
         { "name": "caller", "type": "Address" }
@@ -77,7 +68,10 @@
     { "name": "AmountExceedsMaxDistribute", "code": 16 },
     { "name": "InsufficientBalance", "code": 17 },
     { "name": "AlreadyPaused", "code": 18 },
-    { "name": "NotPaused", "code": 19 }
+    { "name": "NotPaused", "code": 19 },
+    { "name": "UnsupportedToken", "code": 20 },
+    { "name": "CannotRemoveDefaultToken", "code": 21 },
+    { "name": "TokenAlreadyApproved", "code": 22 }
   ],
   "events": [
     { "name": "admin_transfer_proposed", "source": "contracts/distribute/src/events.rs" },

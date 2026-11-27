@@ -106,3 +106,26 @@ the distribution deterministic and ensures the final payment amounts sum exactly
 to `total`. The entrypoint is limited to `MAX_BATCH_SIZE` (50) recipients,
 preserves duplicate-recipient, pause, emergency-pause, admin, cap and balance
 checks, and emits the existing batch distribution lifecycle events per recipient.
+
+## Multi-token distributions in `callora-distribute`
+
+`callora-distribute` supports an admin-managed allowlist of approved Stellar
+asset tokens alongside its default `usdc_token` configured at `init`:
+
+- **Allowlist management:** `add_approved_token(caller, token)`,
+  `remove_approved_token(caller, token)`, and `is_approved_token(token)`. The
+  default `usdc_token` is approved at `init` and cannot be removed
+  (`CannotRemoveDefaultToken`). Duplicate additions fail with
+  `TokenAlreadyApproved`, and unapproved tokens fail with `UnsupportedToken`.
+- **Per-token caps:** `set_max_distribute_for(caller, token, max_distribute)`
+  and `get_max_distribute_for(token)`. When unset for a token, the cap falls
+  back to the global `max_distribute` value.
+- **Balances:** `balance_of(token)` returns the contract's on-ledger balance
+  for any token; `balance()` and `get_usdc_token()` remain unchanged for USDC.
+- **Distribution entrypoints:** `distribute_token(caller, token, to, amount)`
+  and `batch_distribute_multi(caller, payments)` (where each leg is
+  `(token, to, amount)`). Both enforce pause, admin auth, `MAX_BATCH_SIZE` (50),
+  per-token caps, and per-token balances atomically before any transfer occurs,
+  and include `token` in `DistributionLifecycleEvent` payloads without changing
+  existing event topic names. Legacy `distribute` and `batch_distribute`
+  entrypoints remain unchanged.

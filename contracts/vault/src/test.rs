@@ -1412,9 +1412,7 @@ fn init_with_revenue_pool_stores_address() {
 }
 
 #[test]
-#[should_panic(expected = "Settlement not set")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn deduct_with_only_revenue_pool_panics() {
+fn deduct_with_only_revenue_pool_fails() {
     // Revenue pool is no longer a deduct destination; settlement is mandatory.
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -1436,7 +1434,10 @@ fn deduct_with_only_revenue_pool_panics() {
         &None,
     );
 
-    client.deduct(&caller, &300, &12u64);
+    assert_eq!(
+        client.try_deduct(&caller, &300, &12u64),
+        Err(Ok(VaultError::SettlementNotSet))
+    );
 }
 
 #[test]
@@ -2114,8 +2115,6 @@ fn accept_admin_without_pending_fails() {
 }
 
 #[test]
-#[should_panic(expected = "no ownership transfer pending")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn accept_ownership_without_pending_fails() {
     let env = Env::default();
     let owner = Address::generate(&env);
@@ -2132,7 +2131,10 @@ fn accept_ownership_without_pending_fails() {
         &Some(10000000000),
         &Some(soroban_sdk::Address::generate(&env)),
     );
-    client.accept_ownership();
+    assert_eq!(
+        client.try_accept_ownership(),
+        Err(Ok(VaultError::NoOwnershipTransferPending))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2193,10 +2195,8 @@ fn withdraw_to_negative_fails() {
 }
 
 #[test]
-#[should_panic(expected = "Settlement not set")]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
-fn deduct_without_settlement_panics() {
-    // Settlement is a hard precondition for deduct; missing address must panic.
+fn deduct_without_settlement_fails() {
+    // Settlement is a hard precondition for deduct; missing address must return SettlementNotSet.
     let env = Env::default();
     let owner = Address::generate(&env);
     let (vault_address, client) = create_vault(&env);
@@ -2213,7 +2213,10 @@ fn deduct_without_settlement_panics() {
         &None,
         &None,
     );
-    client.deduct(&owner, &200, &20u64);
+    assert_eq!(
+        client.try_deduct(&owner, &200, &20u64),
+        Err(Ok(VaultError::SettlementNotSet))
+    );
 }
 
 #[test]

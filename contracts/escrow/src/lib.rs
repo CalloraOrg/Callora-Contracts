@@ -28,6 +28,7 @@
 //! |---|---|:---:|---|
 //! | [`CalloraEscrow::create_escrow`] | Fund-Affecting | **No** | Rejects with [`EscrowError::Paused`] |
 //! | [`CalloraEscrow::release`] | Fund-Affecting | **No** | Rejects with [`EscrowError::Paused`] |
+//! | [`CalloraEscrow::refund_escrow`] | Fund-Affecting | **No** | Rejects with [`EscrowError::Paused`] |
 //! | [`CalloraEscrow::pause`] | Admin Critical | **Yes** | Circuit-breaker (not cooldown-guarded) |
 //! | [`CalloraEscrow::unpause`] | Admin Critical | **Yes** | Restores fund operations |
 //! | [`CalloraEscrow::rotate_signer`] | Admin Critical | **Yes** | Allows key rotation during incident |
@@ -45,6 +46,31 @@
 //! | [`CalloraEscrow::is_paused`] | Read-Only View | **Yes** | Inspection / Diagnostics |
 //! | [`CalloraEscrow::is_asset_approved`] | Read-Only View | **Yes** | Inspection / Diagnostics |
 //! | [`CalloraEscrow::get_escrow`] | Read-Only View | **Yes** | Inspection / Diagnostics |
+//!
+//! ## Escrow Expiry and Refunds
+//!
+//! Every escrow created via [`CalloraEscrow::create_escrow`] records the
+//! `funder` (the funding caller) and an `expires_at` ledger timestamp (which
+//! must be strictly greater than the current ledger timestamp).
+//!
+//! Once `env.ledger().timestamp() >= expires_at`, either the original `funder`
+//! or the current `admin` may call [`CalloraEscrow::refund_escrow`] to reclaim
+//! the full escrowed amount back to `funder`. The record is removed before the
+//! outbound transfer (CEI) so an escrow can never be both released and refunded
+//! or refunded twice.
+//!
+//! **Release after expiry:** [`CalloraEscrow::release`] remains permitted after
+//! `expires_at` until the escrow is actually refunded, and retains its
+//! `ACTION_RELEASE` cooldown semantics. Once refunded, the record is removed
+//! and any subsequent `release` fails with [`EscrowError::NotFound`].
+//!
+//! ## Storage Migration (`EscrowRecord` XDR Shape)
+//!
+//! Extending [`EscrowRecord`] with `funder` and `expires_at` changes its
+//! persisted Soroban XDR layout. Because `callora-escrow` is pre-mainnet
+//! (`v0.1.0`), this breaking layout change is intentional; any pre-existing
+//! test deployments should drain/release open escrows before upgrading WASM
+//! or redeploy fresh.
 
 #[cfg(test)]
 extern crate std;
@@ -123,6 +149,10 @@ pub struct EscrowRecord {
     pub amount: i128,
     /// Ledger timestamp at which the escrow was created.
     pub created_at: u64,
+    /// The address that funded the escrow and receives refunds upon expiry.
+    pub funder: Address,
+    /// Ledger timestamp at or after which the escrow may be refunded.
+    pub expires_at: u64,
 }
 
 /// Event payload emitted when an escrow is released.
@@ -134,6 +164,20 @@ pub struct EscrowReleasedEvent {
     /// The designated recipient of the escrowed funds.
     pub recipient: Address,
     /// Escrow amount released in payment asset micro-units.
+    pub amount: i128,
+}
+
+/// Event payload emitted when an expired escrow is refunded to its funder.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRefundedEvent {
+    /// The payment asset contract refunded.
+    pub payment_asset: Address,
+    /// The designated recipient of the original escrow.
+    pub recipient: Address,
+    /// The funder who received the refunded funds.
+    pub funder: Address,
+    /// Escrow amount refunded in payment asset micro-units.
     pub amount: i128,
 }
 
@@ -361,6 +405,9 @@ impl CalloraEscrow {
     ///
     /// The record is removed before outbound token transfer (following Checks-Effects-Interactions)
     /// to provide replay protection. The contract signer is preserved and never overwritten.
+    ///
+    /// Release remains allowed after `expires_at` until the escrow is refunded;
+    /// once refunded, the record is removed and `release` returns [`EscrowError::NotFound`].
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
@@ -628,10 +675,12 @@ impl CalloraEscrow {
     /// recording the escrow.
     ///
     /// # Parameters
-    /// * `caller` -- Must be the current admin; must authorize.
+    /// * `caller` -- Must be the current admin; must authorize. Recorded as `funder`.
     /// * `payment_asset` -- The approved payment asset for this escrow.
     /// * `recipient` -- The designated recipient of the escrowed funds.
     /// * `amount` -- Escrow amount in payment asset micro-units; must be > 0.
+    /// * `expires_at` -- Ledger timestamp at or after which the escrow may be
+    ///   refunded; must be strictly greater than the current ledger timestamp.
     ///
     /// # Errors
     /// * [`EscrowError::Paused`] -- contract is paused.
@@ -639,6 +688,7 @@ impl CalloraEscrow {
     /// * [`EscrowError::NotInitialized`] -- contract not initialized.
     /// * [`EscrowError::InvalidInput`] -- `payment_asset` or `recipient` resolve
     ///   to the contract itself, or `amount` is not positive.
+    /// * [`EscrowError::InvalidExpiry`] -- `expires_at` is zero or not in the future.
     /// * [`EscrowError::AssetNotApproved`] -- `payment_asset` is not approved.
     /// * [`EscrowError::EscrowExists`] -- an escrow for the same
     ///   `(payment_asset, recipient)` already exists (replay).
@@ -652,6 +702,7 @@ impl CalloraEscrow {
         payment_asset: Address,
         recipient: Address,
         amount: i128,
+        expires_at: u64,
     ) -> Result<(), EscrowError> {
         Self::extend_instance_ttl(&env);
         Self::require_not_paused(&env)?;
@@ -662,6 +713,10 @@ impl CalloraEscrow {
         }
         if amount <= 0 {
             return Err(EscrowError::InvalidInput);
+        }
+        let now = env.ledger().timestamp();
+        if expires_at == 0 || expires_at <= now {
+            return Err(EscrowError::InvalidExpiry);
         }
         if !Self::is_asset_approved(env.clone(), payment_asset.clone()) {
             return Err(EscrowError::AssetNotApproved);
@@ -682,13 +737,83 @@ impl CalloraEscrow {
             payment_asset: payment_asset.clone(),
             recipient: recipient.clone(),
             amount,
-            created_at: env.ledger().timestamp(),
+            created_at: now,
+            funder: caller.clone(),
+            expires_at,
         };
         persistent.set(&key, &record);
         persistent.extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
 
         env.events()
             .publish((events::event_escrow_created(&env), caller), record);
+
+        Ok(())
+    }
+
+    /// Refund an expired escrow back to its original funder.
+    ///
+    /// Callable by either the escrow's recorded `funder` or the current `admin`
+    /// once `env.ledger().timestamp() >= record.expires_at`. The record is
+    /// removed before the outbound token transfer (Checks-Effects-Interactions)
+    /// to prevent replay or double settlement.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be either the escrow's `funder` or the current admin; must authorize.
+    /// * `payment_asset` -- Payment asset of the escrow to refund.
+    /// * `recipient` -- Designated recipient of the escrow to refund.
+    ///
+    /// # Errors
+    /// * [`EscrowError::Paused`] -- contract is paused.
+    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::NotFound`] -- no escrow record found for `(payment_asset, recipient)`.
+    /// * [`EscrowError::Unauthorized`] -- caller is neither the funder nor the current admin.
+    /// * [`EscrowError::NotExpired`] -- current ledger timestamp is strictly less than `expires_at`.
+    ///
+    /// # Events
+    /// Emits `escrow_refunded` with `caller` as topic and [`EscrowRefundedEvent`] as data.
+    pub fn refund_escrow(
+        env: Env,
+        caller: Address,
+        payment_asset: Address,
+        recipient: Address,
+    ) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
+        Self::require_not_paused(&env)?;
+        caller.require_auth();
+        let admin = Self::admin(&env)?;
+
+        let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
+        let persistent = env.storage().persistent();
+        let record: EscrowRecord = persistent.get(&key).ok_or(EscrowError::NotFound)?;
+
+        if caller != record.funder && caller != admin {
+            return Err(EscrowError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < record.expires_at {
+            return Err(EscrowError::NotExpired);
+        }
+
+        // Remove the record before the outbound transfer (CEI) to guarantee replay protection.
+        persistent.remove(&key);
+
+        let token_client = soroban_sdk::token::Client::new(&env, &payment_asset);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &record.funder,
+            &record.amount,
+        );
+
+        let event = EscrowRefundedEvent {
+            payment_asset,
+            recipient,
+            funder: record.funder,
+            amount: record.amount,
+        };
+
+        env.events()
+            .publish((events::event_escrow_refunded(&env), caller), event);
 
         Ok(())
     }

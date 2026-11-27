@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use callora_whitelist::{CalloraWhitelist, CalloraWhitelistClient};
+use callora_whitelist::{CalloraWhitelist, CalloraWhitelistClient, WhitelistError};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env};
 
@@ -43,33 +43,46 @@ fn set_admin_requires_auth() {
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn accept_admin_requires_auth() {
     let env = Env::default();
     let (admin, client) = setup(&env);
 
     env.mock_all_auths();
-    let new_admin = Address::generate(&env);
-    client.set_admin(&admin, &new_admin);
+    let pending_admin = Address::generate(&env);
+    client.set_admin(&admin, &pending_admin);
 
     env.set_auths(&[]);
     let res = client.try_accept_admin();
     assert!(res.is_err(), "accept_admin must require auth");
+    assert_eq!(client.get_admin(), admin);
+
+    // A valid pending nomination is still present and succeeds once the
+    // nominee is authorized, so the earlier failure was an auth failure.
+    env.mock_all_auths();
+    client.accept_admin();
+    assert_eq!(client.get_admin(), pending_admin);
 }
 
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn cancel_admin_transfer_requires_auth() {
     let env = Env::default();
     let (admin, client) = setup(&env);
 
     env.mock_all_auths();
-    let new_admin = Address::generate(&env);
-    client.set_admin(&admin, &new_admin);
+    let pending_admin = Address::generate(&env);
+    client.set_admin(&admin, &pending_admin);
 
     env.set_auths(&[]);
     let res = client.try_cancel_admin_transfer(&admin);
     assert!(res.is_err(), "cancel_admin_transfer must require auth");
+    assert_eq!(client.get_admin(), admin);
+
+    env.mock_all_auths();
+    client.cancel_admin_transfer(&admin);
+    assert_eq!(
+        client.try_cancel_admin_transfer(&admin),
+        Err(Ok(WhitelistError::NoAdminTransferPending))
+    );
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Property test asserting the revenue pool's admin two-step transfer
 //! invariant holds across arbitrary sequences of `set_admin`,
-//! `accept_admin`/`claim_admin`, and `cancel_admin_transfer` calls, made by
+//! `accept_admin`, and `cancel_admin_transfer` calls, made by
 //! both legitimate and impostor callers.
 //!
 //! ## Invariant under test
@@ -8,11 +8,11 @@
 //! The contract's `admin` value only ever changes to an address that was
 //! the most recently nominated `pending_admin` via a successful
 //! `set_admin` call from the *current* admin, and only via a subsequent
-//! successful `accept_admin`/`claim_admin` call from that exact nominee.
+//! successful `accept_admin` call from that exact nominee.
 //! No other caller, and no other entrypoint, can ever change who the admin
 //! is. Likewise, `pending_admin` only ever changes via a successful
 //! `set_admin` (by the current admin) or is cleared via a successful
-//! `accept_admin`/`claim_admin`/`cancel_admin_transfer` — never anything
+//! `accept_admin`/`cancel_admin_transfer` — never anything
 //! else.
 //!
 //! This is checked by maintaining a "shadow" model of the expected admin
@@ -39,11 +39,8 @@ enum AdminAction {
         caller_idx: usize,
         target_idx: usize,
     },
-    /// Attempt `accept_admin(caller)` (the primary entrypoint).
+    /// Attempt `accept_admin(caller)`.
     AcceptAdmin { caller_idx: usize },
-    /// Attempt `claim_admin(caller)` (the documented legacy alias for
-    /// `accept_admin` - must behave identically).
-    ClaimAdmin { caller_idx: usize },
     /// Attempt `cancel_admin_transfer(caller)`.
     CancelTransfer { caller_idx: usize },
 }
@@ -58,8 +55,7 @@ fn admin_action_strategy() -> impl Strategy<Value = AdminAction> {
     prop_oneof![
         3 => (0_usize..POOL_SIZE, 0_usize..POOL_SIZE)
             .prop_map(|(caller_idx, target_idx)| AdminAction::SetAdmin { caller_idx, target_idx }),
-        3 => (0_usize..POOL_SIZE).prop_map(|caller_idx| AdminAction::AcceptAdmin { caller_idx }),
-        2 => (0_usize..POOL_SIZE).prop_map(|caller_idx| AdminAction::ClaimAdmin { caller_idx }),
+        5 => (0_usize..POOL_SIZE).prop_map(|caller_idx| AdminAction::AcceptAdmin { caller_idx }),
         2 => (0_usize..POOL_SIZE).prop_map(|caller_idx| AdminAction::CancelTransfer { caller_idx }),
     ]
 }
@@ -117,17 +113,13 @@ proptest! {
                         );
                     }
                 }
-                AdminAction::AcceptAdmin { caller_idx } | AdminAction::ClaimAdmin { caller_idx } => {
+                AdminAction::AcceptAdmin { caller_idx } => {
                     let caller = &pool_addresses[caller_idx % pool_addresses.len()];
                     let is_authorized =
                         expected_pending.as_ref().is_some_and(|pending| pending == caller);
 
                     let result = catch_unwind(AssertUnwindSafe(|| {
-                        if matches!(action, AdminAction::ClaimAdmin { .. }) {
-                            pool.claim_admin(caller);
-                        } else {
-                            pool.accept_admin(caller);
-                        }
+                        pool.accept_admin(caller);
                     }));
 
                     if is_authorized {

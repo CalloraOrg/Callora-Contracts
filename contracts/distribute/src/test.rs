@@ -425,17 +425,11 @@ fn require_auth_on_all_state_changing_functions() {
         "non-admin should not be able to cancel_admin_transfer"
     );
 
-    // accept_admin / claim_admin (no pending transfer — auth checked first)
+    // accept_admin (no pending transfer — auth checked first)
     let result = client.try_accept_admin(&intruder);
     assert!(
         result.is_err(),
         "non-admin should not be able to accept_admin"
-    );
-
-    let result = client.try_claim_admin(&intruder);
-    assert!(
-        result.is_err(),
-        "non-admin should not be able to claim_admin"
     );
 
     // upgrade (auth checked before wasm verification)
@@ -727,31 +721,6 @@ fn get_pending_admin_returns_none_after_claim() {
 
     let pending = client.get_pending_admin();
     assert_eq!(pending, None);
-}
-
-#[test]
-fn claim_admin_alias_works() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let admin = Address::generate(&env);
-    let new_admin = Address::generate(&env);
-    let usdc_addr = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let contract_addr = env.register(Distribute, ());
-    let client = DistributeClient::new(&env, &contract_addr);
-
-    client.init(&admin, &usdc_addr);
-    client.set_admin(&admin, &new_admin);
-    env.events().all();
-
-    // Use claim_admin instead of accept_admin
-    client.claim_admin(&new_admin);
-
-    let events = env.events().all();
-    let event = events.last().unwrap();
-    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
-    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
 }
 
 #[test]
@@ -1077,4 +1046,351 @@ fn batch_distribute_single_leg_preserves_shape() {
     assert_eq!(complete_lifecycle.batch_index, 0);
     assert_eq!(complete_lifecycle.batch_size, 1);
     assert_eq!(complete_lifecycle.amount, 500);
+    assert_eq!(complete_lifecycle.token, usdc_addr);
+}
+
+// ---------------------------------------------------------------------------
+// Multi-token support tests (#1521)
+// ---------------------------------------------------------------------------
+
+fn setup_two_tokens(
+    env: &Env,
+) -> (
+    Address,
+    Address,
+    Address,
+    Address,
+    DistributeClient<'_>,
+) {
+    env.mock_all_auths();
+    let admin = Address::generate(env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let eurc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(env, &contract_addr);
+    client.init(&admin, &usdc_addr);
+    (admin, usdc_addr, eurc_addr, contract_addr, client)
+}
+
+#[test]
+fn approved_token_allowlist_lifecycle_and_errors() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, _contract_addr, client) = setup_two_tokens(&env);
+
+    // Default USDC token is approved at init; secondary token is not.
+    assert!(client.is_approved_token(&usdc_addr));
+    assert!(!client.is_approved_token(&eurc_addr));
+
+    // Removing the default USDC token fails with CannotRemoveDefaultToken.
+    assert_eq!(
+        client.try_remove_approved_token(&admin, &usdc_addr),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::CannotRemoveDefaultToken as u32
+        )))
+    );
+
+    // Removing an unapproved token fails with UnsupportedToken.
+    assert_eq!(
+        client.try_remove_approved_token(&admin, &eurc_addr),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::UnsupportedToken as u32
+        )))
+    );
+
+    // Add eurc_addr -> approved.
+    client.add_approved_token(&admin, &eurc_addr);
+    assert!(client.is_approved_token(&eurc_addr));
+
+    // Duplicate add fails with TokenAlreadyApproved.
+    assert_eq!(
+        client.try_add_approved_token(&admin, &eurc_addr),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::TokenAlreadyApproved as u32
+        )))
+    );
+    assert_eq!(
+        client.try_add_approved_token(&admin, &usdc_addr),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::TokenAlreadyApproved as u32
+        )))
+    );
+
+    // Remove eurc_addr -> no longer approved.
+    client.remove_approved_token(&admin, &eurc_addr);
+    assert!(!client.is_approved_token(&eurc_addr));
+}
+
+#[test]
+fn usdc_only_parity_with_distribute_token_and_balance_of() {
+    let env = Env::default();
+    let (admin, usdc_addr, _eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+    let recipient = Address::generate(&env);
+
+    token::StellarAssetClient::new(&env, &usdc_addr).mint(&contract_addr, &1_000);
+    assert_eq!(client.balance(), 1_000);
+    assert_eq!(client.balance_of(&usdc_addr), 1_000);
+
+    client.distribute_token(&admin, &usdc_addr, &recipient, &400);
+    assert_eq!(client.balance(), 600);
+    assert_eq!(client.balance_of(&usdc_addr), 600);
+    assert_eq!(token::Client::new(&env, &usdc_addr).balance(&recipient), 400);
+}
+
+#[test]
+fn mixed_token_batch_transfers_and_lifecycle_events() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+    client.add_approved_token(&admin, &eurc_addr);
+
+    token::StellarAssetClient::new(&env, &usdc_addr).mint(&contract_addr, &1_000);
+    token::StellarAssetClient::new(&env, &eurc_addr).mint(&contract_addr, &500);
+
+    let dev_a = Address::generate(&env);
+    let dev_b = Address::generate(&env);
+
+    env.events().all();
+
+    let mut payments = Vec::new(&env);
+    payments.push_back((usdc_addr.clone(), dev_a.clone(), 200));
+    payments.push_back((eurc_addr.clone(), dev_b.clone(), 150));
+    // Duplicate recipient across tokens & duplicate leg for dev_a in USDC
+    payments.push_back((usdc_addr.clone(), dev_a.clone(), 100));
+    payments.push_back((eurc_addr.clone(), dev_a.clone(), 50));
+
+    client.batch_distribute_multi(&admin, &payments);
+
+    assert_eq!(client.balance_of(&usdc_addr), 700);
+    assert_eq!(client.balance_of(&eurc_addr), 300);
+    assert_eq!(token::Client::new(&env, &usdc_addr).balance(&dev_a), 300);
+    assert_eq!(token::Client::new(&env, &eurc_addr).balance(&dev_b), 150);
+    assert_eq!(token::Client::new(&env, &eurc_addr).balance(&dev_a), 50);
+
+    // Verify lifecycle event payloads carry the leg's token address.
+    let contract_events: std::vec::Vec<_> = env
+        .events()
+        .all()
+        .iter()
+        .filter(|e| e.0 == contract_addr)
+        .collect();
+    // 1 batch_started + 4 * 3 leg events + 1 batch_completed = 14
+    assert_eq!(contract_events.len(), 14);
+
+    let leg0_started =
+        events::DistributionLifecycleEvent::try_from_val(&env, &contract_events[1].2).unwrap();
+    assert_eq!(leg0_started.token, usdc_addr);
+    assert_eq!(leg0_started.amount, 200);
+    assert_eq!(leg0_started.batch_index, 0);
+
+    let leg1_started =
+        events::DistributionLifecycleEvent::try_from_val(&env, &contract_events[4].2).unwrap();
+    assert_eq!(leg1_started.token, eurc_addr);
+    assert_eq!(leg1_started.amount, 150);
+    assert_eq!(leg1_started.batch_index, 1);
+}
+
+#[test]
+fn mixed_token_batch_one_token_underfunded_reverts_atomically() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+    client.add_approved_token(&admin, &eurc_addr);
+
+    token::StellarAssetClient::new(&env, &usdc_addr).mint(&contract_addr, &1_000);
+    token::StellarAssetClient::new(&env, &eurc_addr).mint(&contract_addr, &100);
+
+    let dev_a = Address::generate(&env);
+    let dev_b = Address::generate(&env);
+
+    env.events().all();
+
+    let mut payments = Vec::new(&env);
+    payments.push_back((usdc_addr.clone(), dev_a.clone(), 200));
+    payments.push_back((eurc_addr.clone(), dev_b.clone(), 150)); // EURC underfunded (100 < 150)
+
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &payments),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::InsufficientBalance as u32
+        )))
+    );
+
+    // No transfers and no contract events emitted.
+    assert_eq!(client.balance_of(&usdc_addr), 1_000);
+    assert_eq!(client.balance_of(&eurc_addr), 100);
+    assert_eq!(token::Client::new(&env, &usdc_addr).balance(&dev_a), 0);
+    assert_eq!(token::Client::new(&env, &eurc_addr).balance(&dev_b), 0);
+}
+
+#[test]
+fn unapproved_and_removed_mid_life_token_rejected_before_transfer() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+
+    token::StellarAssetClient::new(&env, &usdc_addr).mint(&contract_addr, &1_000);
+    token::StellarAssetClient::new(&env, &eurc_addr).mint(&contract_addr, &1_000);
+
+    let recipient = Address::generate(&env);
+
+    // Unapproved token fails in distribute_token
+    assert_eq!(
+        client.try_distribute_token(&admin, &eurc_addr, &recipient, &100),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::UnsupportedToken as u32
+        )))
+    );
+
+    // Unapproved token in second leg of batch_distribute_multi reverts whole batch
+    let mut payments = Vec::new(&env);
+    payments.push_back((usdc_addr.clone(), recipient.clone(), 100));
+    payments.push_back((eurc_addr.clone(), recipient.clone(), 100));
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &payments),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::UnsupportedToken as u32
+        )))
+    );
+    assert_eq!(token::Client::new(&env, &usdc_addr).balance(&recipient), 0);
+
+    // Approve, distribute, then remove mid-life -> subsequent distribution fails
+    client.add_approved_token(&admin, &eurc_addr);
+    client.distribute_token(&admin, &eurc_addr, &recipient, &100);
+    assert_eq!(token::Client::new(&env, &eurc_addr).balance(&recipient), 100);
+
+    client.remove_approved_token(&admin, &eurc_addr);
+    assert_eq!(
+        client.try_distribute_token(&admin, &eurc_addr, &recipient, &100),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::UnsupportedToken as u32
+        )))
+    );
+}
+
+#[test]
+fn per_token_cap_overrides_global_cap_independently() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+    client.add_approved_token(&admin, &eurc_addr);
+
+    token::StellarAssetClient::new(&env, &usdc_addr).mint(&contract_addr, &10_000);
+    token::StellarAssetClient::new(&env, &eurc_addr).mint(&contract_addr, &10_000);
+
+    // Global cap applies as fallback when per-token cap is unset.
+    client.set_max_distribute(&admin, &500);
+    assert_eq!(client.get_max_distribute_for(&usdc_addr), 500);
+    assert_eq!(client.get_max_distribute_for(&eurc_addr), 500);
+
+    // Set a lower per-token cap for EURC and a higher one for USDC.
+    client.set_max_distribute_for(&admin, &eurc_addr, &200);
+    client.set_max_distribute_for(&admin, &usdc_addr, &1_000);
+    assert_eq!(client.get_max_distribute_for(&eurc_addr), 200);
+    assert_eq!(client.get_max_distribute_for(&usdc_addr), 1_000);
+
+    let recipient = Address::generate(&env);
+
+    // USDC 800 succeeds (<= 1_000 per-token cap, even though > 500 global cap).
+    client.distribute_token(&admin, &usdc_addr, &recipient, &800);
+
+    // EURC 250 fails (> 200 per-token cap).
+    assert_eq!(
+        client.try_distribute_token(&admin, &eurc_addr, &recipient, &250),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::AmountExceedsMaxDistribute as u32
+        )))
+    );
+
+    // Non-positive per-token cap is rejected.
+    assert_eq!(
+        client.try_set_max_distribute_for(&admin, &eurc_addr, &0),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::CapNotPositive as u32
+        )))
+    );
+}
+
+#[test]
+fn multi_token_respects_pause_non_admin_batch_limits_and_overflow() {
+    let env = Env::default();
+    let (admin, usdc_addr, eurc_addr, contract_addr, client) = setup_two_tokens(&env);
+    client.add_approved_token(&admin, &eurc_addr);
+    token::StellarAssetClient::new(&env, &eurc_addr).mint(&contract_addr, &1_000);
+
+    let intruder = Address::generate(&env);
+    let recipient = Address::generate(&env);
+
+    // Non-admin rejected
+    assert_eq!(
+        client.try_add_approved_token(&intruder, &Address::generate(&env)),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Unauthorized as u32
+        )))
+    );
+    assert_eq!(
+        client.try_remove_approved_token(&intruder, &eurc_addr),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Unauthorized as u32
+        )))
+    );
+    assert_eq!(
+        client.try_set_max_distribute_for(&intruder, &eurc_addr, &100),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Unauthorized as u32
+        )))
+    );
+    assert_eq!(
+        client.try_distribute_token(&intruder, &eurc_addr, &recipient, &10),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Unauthorized as u32
+        )))
+    );
+
+    // Pause blocks distribute_token and batch_distribute_multi
+    client.pause(&admin);
+    assert_eq!(
+        client.try_distribute_token(&admin, &eurc_addr, &recipient, &10),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Paused as u32
+        )))
+    );
+    let mut single = Vec::new(&env);
+    single.push_back((eurc_addr.clone(), recipient.clone(), 10_i128));
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &single),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Paused as u32
+        )))
+    );
+    client.unpause(&admin);
+
+    // BatchEmpty and BatchTooLarge
+    let empty: Vec<(Address, Address, i128)> = Vec::new(&env);
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &empty),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::BatchEmpty as u32
+        )))
+    );
+    let mut oversized = Vec::new(&env);
+    for _ in 0..(limits::MAX_BATCH_SIZE + 1) {
+        oversized.push_back((eurc_addr.clone(), recipient.clone(), 1_i128));
+    }
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &oversized),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::BatchTooLarge as u32
+        )))
+    );
+
+    // Per-token total overflow returns Overflow
+    let mut overflow_batch = Vec::new(&env);
+    overflow_batch.push_back((eurc_addr.clone(), recipient.clone(), i128::MAX));
+    overflow_batch.push_back((eurc_addr.clone(), recipient, i128::MAX));
+    assert_eq!(
+        client.try_batch_distribute_multi(&admin, &overflow_batch),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            DistributeError::Overflow as u32
+        )))
+    );
 }

@@ -149,9 +149,32 @@ sequenceDiagram
    cargo build --target wasm32v1-none --release -p callora-vault
    ```
 
+## Event shape check
+
+`scripts/check-event-shape.sh` is a static gate that verifies event-topic
+hygiene across `vault`, `settlement`, `revenue_pool`, and `distribute`:
+
+- No inline `Symbol::new` inside `env.events().publish()` call sites — every
+  topic must come from a centralized `events::event_*()` constructor.
+- Every constructor maps to a distinct topic literal, and each topic has a
+  byte-identity snapshot test in the contract's `events.rs`.
+- Every produced topic is documented in [`docs/EVENT_TOPICS.md`](docs/EVENT_TOPICS.md).
+- Every `vault` `publish()` call includes the `event_version_v1` marker at
+  topic[1] (Issue #1118).
+
+Run it from the repository root:
+
+```bash
+./scripts/check-event-shape.sh   # exit 0 = pass, exit 1 = drift detected
+```
+
+Requirements: bash ≥ 4, GNU `grep` with PCRE (`grep -P`), and a working
+`python3` (or `python`) for the vault version-topic check. The script fails
+loudly up front if these are missing rather than passing vacuously.
+
 ## Development
 
-Use one branch per issue or feature. Run `cargo fmt --all` and `cargo test --workspace` before pushing, and make sure the core contracts still build to WASM (`cargo build --release --target wasm32v1-none -p callora-vault -p callora-settlement -p callora-revenue-pool`).
+Use one branch per issue or feature. Plain `cargo test` at the repository root now covers every crate in the workspace (equivalent to `cargo test --workspace`). Run `cargo fmt --all` and `cargo test` before pushing, and make sure the core contracts still build to WASM (`cargo build --release --target wasm32v1-none -p callora-vault -p callora-settlement -p callora-revenue-pool`).
 
 Some legacy tests that no longer match the current contract behaviour are marked `#[ignore]`; they are catalogued in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md).
 

@@ -18,6 +18,7 @@ round-trip.
 |-----------------------|------------------------------------------------------|
 | `init`                | `admin.require_auth()`                               |
 | `freeze`              | `caller.require_auth()` — admin or freeze operator   |
+| `freeze_until`        | `caller.require_auth()` — admin or freeze operator   |
 | `unfreeze`            | `caller.require_auth()` — admin only                 |
 | `set_freeze_operator` | `caller.require_auth()` — admin only                 |
 
@@ -48,27 +49,40 @@ Emitted once by `init()` when the admin address is stored.
 
 ### `freeze_set`
 
-Emitted by `freeze()` when the circuit-breaker is activated. The reason
-label and ledger timestamp are included in the structured data payload and
-are also persisted in contract storage for the `get_freeze_status` view.
+Emitted by `freeze()` (indefinite) and `freeze_until()` (timed) when the
+circuit-breaker is activated. The reason label, ledger timestamp, and
+optional deadline are included in the structured data payload and are also
+persisted in contract storage for the `get_freeze_status` view.
 
-| Index      | Location | Type     | Description                                  |
-|------------|----------|----------|----------------------------------------------|
-| topic 0    | topics   | Symbol   | `"freeze_set"`                               |
-| topic 1    | topics   | Symbol   | `"callora_v1"` (version marker)              |
-| topic 2    | topics   | Address  | `caller` — admin or freeze operator          |
-| `reason`   | data     | Symbol   | opaque reason label supplied by the caller   |
-| `frozen_at`| data     | u64      | `env.ledger().timestamp()` at freeze time    |
+| Index         | Location | Type       | Description                                            |
+|---------------|----------|------------|--------------------------------------------------------|
+| topic 0       | topics   | Symbol     | `"freeze_set"`                                         |
+| topic 1       | topics   | Symbol     | `"callora_v1"` (version marker)                        |
+| topic 2       | topics   | Address    | `caller` — admin or freeze operator                    |
+| `reason`      | data     | Symbol     | opaque reason label supplied by the caller             |
+| `frozen_at`   | data     | u64        | `env.ledger().timestamp()` at freeze time              |
+| `freeze_until`| data     | `Option<u64>` | lapse deadline; `None` for indefinite `freeze()`    |
 
 ```json
 {
   "topics": ["freeze_set", "callora_v1", "GCALLER..."],
-  "data": { "reason": "exploit_risk", "frozen_at": 1700000000 }
+  "data": { "reason": "exploit_risk", "frozen_at": 1700000000, "freeze_until": null }
 }
 ```
 
 > After this event `is_frozen()` returns `true` and `get_freeze_status()`
-> returns `{ frozen: true, reason: Some("exploit_risk"), frozen_at: Some(1700000000) }`.
+> returns `{ frozen: true, reason: Some("exploit_risk"), frozen_at: Some(1700000000), until: None }`.
+
+### Timed freezes (`freeze_until`)
+
+`freeze_until(caller, reason, until)` behaves exactly like `freeze()` except
+the freeze lapses automatically once `env.ledger().timestamp() >= until`:
+`is_frozen()` and `get_freeze_status().frozen` report `false` with no admin
+action and no state write. `until` must be strictly greater than the current
+ledger timestamp, otherwise `FreezeError::FreezeUntilNotInFuture` (code 7) is
+returned. A lapsed freeze does not block a subsequent `freeze` /
+`freeze_until`, and `unfreeze()` on a lapsed freeze returns
+`FreezeError::NotFrozen` since the circuit-breaker is already inactive.
 
 ---
 
@@ -140,11 +154,15 @@ pub struct FreezeStatus {
     pub frozen: bool,
     pub reason: Option<Symbol>,
     pub frozen_at: Option<u64>,
+    pub until: Option<u64>,
 }
 ```
 
 `reason` and `frozen_at` are `Some` while the contract is frozen and `None`
-after `unfreeze()` or before the first `freeze()`.
+after `unfreeze()` or before the first `freeze()`. `until` is `Some(t)` for a
+timed freeze created by `freeze_until()` and `None` for an indefinite freeze;
+it remains populated after the freeze lapses so monitors can still see the
+deadline, while `frozen` reports `false`.
 
 Returns `FreezeError::NotInitialized` if `init` has not been called.
 

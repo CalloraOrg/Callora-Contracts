@@ -566,7 +566,7 @@ The following functions extend instance storage TTL to ensure contract state rem
 |----------|---------------------|
 | `init` | After setting admin and USDC token addresses |
 | `set_admin` | After setting pending admin |
-| `claim_admin` | After completing admin transfer |
+| `accept_admin` | After completing admin transfer |
 | `distribute` | Before executing USDC transfer |
 | `batch_distribute` | Before executing batch transfers |
 

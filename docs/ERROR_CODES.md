@@ -10,6 +10,7 @@ must not be reassigned once released.
 - Add new variants only with new, previously unused codes in that contract.
 - Do not reuse a removed code for a different error.
 - `cargo test --workspace` enforces code stability and duplicate-code checks.
+- `cargo test -p callora-contracts-e2e --test error_codes_doc` verifies that this document matches the real `#[contracterror]` enums in both directions.
 
 ## Vault
 
@@ -24,24 +25,23 @@ must not be reassigned once released.
 | 7 | `ExceedsMaxDeduct` | Vault | Deduct amount exceeds the configured cap |
 | 8 | `BelowMinDeposit` | Vault | Deposit amount is below the configured minimum |
 | 9 | `Overflow` | Vault | Arithmetic overflow was detected |
-| 10 | `InitialBalanceNegative` | Vault | Initial balance must be non-negative |
+| 10 | _reserved_ (was `InitialBalanceNegative`) | Vault | Retired: never returned |
 | 11 | `MinDepositNotPositive` | Vault | Minimum deposit must be greater than zero |
 | 12 | `MaxDeductNotPositive` | Vault | Maximum deduct must be greater than zero |
 | 13 | `MinDepositExceedsMaxDeduct` | Vault | Minimum deposit cannot exceed maximum deduct |
 | 14 | `UsdcTokenCannotBeVault` | Vault | USDC token address cannot be the vault contract |
 | 15 | `RevenuePoolCannotBeVault` | Vault | Revenue pool address cannot be the vault contract |
 | 16 | `AuthorizedCallerCannotBeVault` | Vault | Authorized caller cannot be the vault contract |
-| 17 | `InitialBalanceExceedsOnLedger` | Vault | Initial tracked balance exceeds on-ledger USDC |
 | 18 | `AlreadyPaused` | Vault | Contract is already paused |
 | 19 | `NotPaused` | Vault | Contract is not paused |
 | 20 | `SettlementNotSet` | Vault | Settlement address has not been configured |
 | 21 | `BatchEmpty` | Vault | Batch deduct received no items |
 | 22 | `BatchTooLarge` | Vault | Batch deduct exceeds the maximum allowed size |
-| 23 | `NewOwnerSameAsCurrent` | Vault | Proposed owner matches the current owner |
+| 23 | _reserved_ (was `NewOwnerSameAsCurrent`) | Vault | Retired: never returned |
 | 24 | `NoOwnershipTransferPending` | Vault | No ownership transfer is pending |
 | 25 | `NoAdminTransferPending` | Vault | No admin transfer is pending |
-| 26 | `OfferingIdTooLong` | Vault | Offering ID exceeds the maximum length |
-| 27 | `MetadataTooLong` | Vault | Metadata exceeds the maximum length |
+| 26 | _reserved_ (was `OfferingIdTooLong`) | Vault | Retired: never returned |
+| 27 | _reserved_ (was `MetadataTooLong`) | Vault | Retired: never returned |
 | 28 | `PriceParseError` | Vault | Price is invalid or non-positive |
 | 29 | `DuplicateRequestId` | Vault | Request ID has already been processed |
 | 30 | `OfferingIdInvalid` | Vault | Offering ID is empty or contains invalid characters |
@@ -51,7 +51,6 @@ must not be reassigned once released.
 | 34 | `NoRevenuePoolTransferPending` | Vault | No revenue-pool transfer is pending |
 | 35 | `Slippage` | Vault | Calculated fee in basis points exceeds the caller-supplied `max_fee_bps` limit |
 | 36 | `RateLimited` | Vault | Developer exceeded the configured rate limit |
-| 37 | `PausedState` | Vault | Operation is rejected because the vault is paused |
 | 38 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
 | 39 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
 | 40 | _reserved_ (was `ColdSignersEmpty`) | Vault | Retired: never returned; removed to keep `VaultError` within the 50-case contract error spec limit |
@@ -61,8 +60,6 @@ must not be reassigned once released.
 | 44 | `CallerNotInAllowlist` | Vault | Caller is not in allowlist and not owner |
 | 45 | `InvalidRecipient` | Vault | Withdrawal recipient is the vault address or USDC token address |
 | 46 | `ZeroAddressRecipient` | Vault | Withdrawal recipient is the zero address |
-| 47 | `InvalidHotBps` | Vault | Hot BPS must be between 1 and 10000 |
-| 48 | `InvalidRebalanceThreshold` | Vault | Rebalance threshold must be between 1 and 10000 |
 | 49 | `AdminCooldownActive` | Vault | A critical admin action is still inside the global cool-off window |
 | 50 | `InvalidAdminCooldown` | Vault | Admin cool-off window is outside the accepted bounds |
 | 51 | `ProposalNotFound` | Vault | No pending timelock proposal for the requested action |
@@ -73,6 +70,9 @@ must not be reassigned once released.
 | 56 | `SettlementCannotBeVault` | Vault | Settlement address cannot be the vault contract itself |
 | 57 | `SettlementCannotBeToken` | Vault | Settlement address cannot be the USDC token contract |
 | 58 | `ProposalExpired` | Vault | Proposal has passed its grace period and is no longer executable |
+| 60 | `Frozen` | Vault | System is globally frozen via the configured freeze contract |
+| 59 | `SettlementEqualsRevenuePool` | Vault | Settlement and revenue pool addresses must be distinct |
+| 61 | `TooManyIds` | Vault | `prune_processed_requests` received more ids than `MAX_PRUNE_IDS` (50) allows; split into smaller batches |
 
 ## Settlement
 
@@ -91,7 +91,7 @@ must not be reassigned once released.
 | 11 | `DeveloperBalanceUnderflow` | Settlement | Developer balance debit would underflow |
 | 12 | `InsufficientContractBalance` | Settlement | Contract USDC balance is lower than requested amount |
 | 13 | `DailyWithdrawCapExceeded` | Settlement | Daily developer withdrawal cap would be exceeded |
-| 14 | `GasExhaustionRisk` | Settlement | Full scan is too large; use paginated access |
+| 14 | _reserved_ (was `GasExhaustionRisk`) | Settlement | Retired: never returned |
 | 15 | _reserved_ (was `ReasonTooLong`) | Settlement | Retired: never returned |
 | 16 | `MigrationSameAddress` | Settlement | Migration source and target are identical |
 | 17 | `InvalidMigrationTarget` | Settlement | Migration target is the settlement contract |
@@ -100,7 +100,7 @@ must not be reassigned once released.
 | 20 | `MigrationNotFound` | Settlement | No migration is pending for the source |
 | 21 | `TimelockNotExpired` | Settlement | Migration delay has not elapsed |
 | 22 | `MigrationBalanceChanged` | Settlement | Approved amount is no longer available |
-| 23 | `OverDraft` | Settlement | Withdrawal amount exceeds the developer's balance |
+| 23 | _reserved_ (was `OverDraft`) | Settlement | Retired: never returned |
 | 24 | `InvalidClaimWindow` | Settlement | Claim window parameters are invalid |
 | 25 | `ClaimWindowClosed` | Settlement | Developer claim window is not currently open |
 | 26 | `MinBalanceViolation` | Settlement | Withdrawal would leave balance below the minimum |
@@ -115,7 +115,7 @@ must not be reassigned once released.
 | 35 | `InvalidConfigAdminContract` | Settlement | Init config forbids the admin being the contract |
 | 36 | `InvalidConfigVaultContract` | Settlement | Init config forbids the vault being the contract |
 | 37 | `InvalidUsdcToken` | Settlement | USDC token address is invalid |
-| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient cannot be the contract |
+| 38 | `InvalidRecipient` | Settlement | Withdrawal recipient or payout name is invalid |
 | 39 | `NoAdminTransferPending` | Settlement | No admin transfer is pending |
 | 40 | `InvalidVault` | Settlement | Vault address is invalid |
 | 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
@@ -129,6 +129,9 @@ must not be reassigned once released.
 | 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
 | 50 | `InvalidCursor` | Settlement | Batch cursor is invalid or listing cursor is past the end |
 | 51 | `TooManyResults` | Settlement | Unpaginated developer-balance view exceeds its configured cap |
+| 52 | `RecipientRegistryNotSet` | Settlement | A payout name is set but no recipient registry is configured |
+| 53 | `PayoutNameNotFound` | Settlement | The configured payout name no longer resolves in the registry |
+| 54 | `SystemFrozen` | Settlement | System is globally frozen via the configured freeze contract |
 
 ## Revenue Pool
 
@@ -171,6 +174,20 @@ must not be reassigned once released.
 | 2 | `AlreadyInitialized` | Upgrade | `init` was called more than once |
 | 3 | `Unauthorized` | Upgrade | Caller is not authorized for the operation |
 | 4 | `InvalidWasmHash` | Upgrade | Provided WASM hash is zero or invalid |
+| 5 | `UpgradeNotAllowed` | Upgrade | Upgrade operation is currently disabled |
+| 6 | `MigrationPending` | Upgrade | A migration or upgrade is already pending |
+| 7 | `TimelockNotExpired` | Upgrade | Required timelock delay has not elapsed |
+| 8 | `SameWasmHash` | Upgrade | New WASM hash is identical to current WASM hash |
+| 9 | `SameVersion` | Upgrade | Proposed version matches current version |
+| 10 | `InvalidVersion` | Upgrade | Proposed version number is invalid or non-increasing |
+| 11 | `Overflow` | Upgrade | Arithmetic calculation overflowed |
+| 12 | `AlreadyUpgraded` | Upgrade | Contract has already been upgraded to this state |
+| 13 | `StaleNonce` | Upgrade | Transaction nonce is stale or invalid |
+| 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
+| 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
+| 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
+| 17 | `CooldownNotElapsed` | Upgrade | The cooldown period for upgrades has not yet elapsed |
+| 18 | `InvalidCooldown` | Upgrade | Requested cooldown is outside the allowed bounds |
 
 ## Freeze
 
@@ -182,3 +199,52 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+## Refund
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `AlreadyInitialized` | Refund | Contract has already been initialized |
+| 2 | `NotInitialized` | Refund | Contract has not been initialized |
+| 3 | `Unauthorized` | Refund | Caller is not authorized to perform this action |
+| 4 | `NotFound` | Refund | Requested refund not found |
+| 5 | `FeeTooHigh` | Refund | Fee basis points exceeds maximum (`10000`) |
+| 6 | `InvalidAmount` | Refund | Amount is not positive or minimum amount is negative |
+| 7 | `AmountTooLow` | Refund | Amount is below minimum refund amount |
+| 8 | `Overflow` | Refund | Arithmetic overflow would occur |
+| 9 | `InvalidStatus` | Refund | Refund request is not in the expected status |
+| 10 | `InsufficientBalance` | Refund | Contract balance or accumulated fees are insufficient |
+| 11 | `InvalidRecipient` | Refund | Recipient address is invalid (self or token address) |
+| 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open requests |
+| 13 | `ApprovedAmountInvalid` | Refund | Partial approved amount is `<= 0` or `> request.amount` |
+| 14 | `DisputeWindowClosed` | Refund | Dispute was submitted after the configured dispute window elapsed |
+| 15 | `AlreadyDisputed` | Refund | Request has already been disputed once |
+| 16 | `NotExpired` | Refund | Request lifetime is `0` or the request is younger than the configured lifetime |
+
+## Escrow
+
+| 1 | `NotInitialized` | Escrow | Contract has not been initialized yet |
+| 2 | `AlreadyInitialized` | Escrow | `init` was called more than once |
+| 3 | `Unauthorized` | Escrow | Caller is not authorized for this operation |
+| 4 | `CooldownActive` | Escrow | A critical action is still inside its cool-off window |
+| 5 | `InvalidCooldown` | Escrow | Proposed cooldown value is outside the accepted range |
+| 6 | `NoPendingAdmin` | Escrow | No admin transfer is currently pending |
+| 7 | `Overflow` | Escrow | Arithmetic overflow detected |
+| 8 | `AssetNotApproved` | Escrow | Payment asset is not approved for escrow creation |
+| 9 | `InvalidInput` | Escrow | A supplied input is malformed or forbidden |
+| 10 | `EscrowExists` | Escrow | Escrow already exists for the given payment asset and recipient |
+| 11 | `Paused` | Escrow | Operation is rejected because the contract is paused |
+| 12 | `NotFound` | Escrow | Escrow record not found for the given payment asset and recipient |
+| 13 | `BatchEmpty` | Escrow | `batch_release` was called with an empty `entries` list |
+| 14 | `BatchTooLarge` | Escrow | `batch_release` exceeded `MAX_BATCH_RELEASE` entries |
+| 15 | `DuplicateEntry` | Escrow | `batch_release` lists the same `(payment_asset, recipient)` pair twice |
+| 16 | `NotExpired` | Escrow | Escrow has not yet reached its expiry timestamp |
+| 17 | `InvalidExpiry` | Escrow | Supplied expiry timestamp is zero or not in the future |
+
+
+| 5 | `FeeTooHigh` | Refund | Fee basis points exceeds maximum (10000) |
+| 6 | `InvalidAmount` | Refund | Amount is not positive |
+| 10 | `InsufficientBalance` | Refund | Contract token balance or accumulated fees are insufficient for payout or withdrawal |
+| 11 | `InvalidRecipient` | Refund | Recipient address is invalid (e.g. self or token address) |
+| 12 | `TooManyOpenRequests` | Refund | Requester has reached the maximum number of open refund requests |
+| 7 | `FreezeUntilNotInFuture` | Freeze | `freeze_until` deadline is not in the future (`until <= now`) |

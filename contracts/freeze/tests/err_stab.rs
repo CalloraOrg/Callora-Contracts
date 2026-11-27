@@ -11,4 +11,5 @@ fn test_freeze_error_stability() {
     assert_eq!(FreezeError::AlreadyFrozen as u32, 4);
     assert_eq!(FreezeError::NotFrozen as u32, 5);
     assert_eq!(FreezeError::Overflow as u32, 6);
+    assert_eq!(FreezeError::FreezeUntilNotInFuture as u32, 7);
 }

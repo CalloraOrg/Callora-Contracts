@@ -111,8 +111,9 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 49 | `upgrade_replaced`        | `event_upgrade_replaced`       | Live upgrade proposal replaced by a newer one |
 | 50 | `sweep_replaced`          | `event_sweep_replaced`         | Live sweep proposal replaced by a newer one   |
 | 51 | `proposal_expired`        | `event_proposal_expired`       | Expired timelock proposal pruned              |
+| 52 | `ownership_cancelled`     | `event_ownership_cancelled`    | Owner cancels a pending ownership transfer    |
 
-**Total: 51 topics**
+**Total: 52 topics**
 
 ---
 
@@ -145,8 +146,12 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 21 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
 | 22 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
 | 23 | `deduction_recorded`         | `event_deduction_recorded`         | Vault accounting deduction recorded            |
+| 24 | `payout_name_set`            | `event_payout_name_set`            | Developer configures a registry payout name    |
+| 25 | `payout_name_cleared`        | `event_payout_name_cleared`        | Developer removes their registry payout name   |
+| 24 | `deduction_request_cleared`  | `event_deduction_request_cleared`  | Recorded deduction request marker cleared      |
+| 26 | `freeze_contract_set`        | `event_freeze_contract_set`        | Admin sets or clears the freeze circuit-breaker address |
 
-**Total: 23 topics**
+**Total: 26 topics**
 
 ---
 
@@ -220,6 +225,28 @@ Source: [`contracts/distribute/src/events.rs`](../contracts/distribute/src/event
 
 ---
 
+## Refund Contract (`callora-refund`)
+
+Source: [`contracts/refund/src/lib.rs`](../contracts/refund/src/lib.rs) (events are
+published by the private `emit_*` helpers on `RefundContract`).
+
+| #  | Topic String        | Emitter                | Trigger                                                        |
+|----|---------------------|------------------------|----------------------------------------------------------------|
+| 1  | `initialized`       | `emit_initialized`     | Contract first configured via `init()`                         |
+| 2  | `refund_requested`  | `emit_refund_requested`| New request created in `Pending` status                        |
+| 3  | `refund_processed`  | `emit_refund_processed`| Admin moves a request to `Approved`, `Rejected`, `Disputed` or `Processed` |
+| 4  | `fees_withdrawn`    | `emit_fees_withdrawn`  | Admin withdraws accumulated protocol fees                      |
+| 5  | `config_updated`    | `emit_config_updated`  | Admin changes fee, minimum amount or request lifetime          |
+| 6  | `refund_expired`    | `emit_refund_expired`  | Anyone expires a `Pending` request older than its lifetime      |
+
+**Total: 6 topics**
+
+> `refund_processed` carries the transition in its payload `status` field, so
+> indexers filter on `request_id`. Expiry has its own topic because it needs no
+> admin decision.
+
+---
+
 ## Indexer Quick-Reference
 
 Subscribe by contract address + topic[0]:
@@ -235,7 +262,7 @@ Distribute:   GCONTRACT_DISTRIBUTE...
 
 **Vault-specific** (not shared with other contracts):
 `deduct`, `deposit`, `vault_paused`, `vault_unpaused`,
-`ownership_nominated`, `ownership_accepted`, `withdraw`, `withdraw_to`,
+`ownership_nominated`, `ownership_accepted`, `ownership_cancelled`, `withdraw`, `withdraw_to`,
 `set_authorized_caller`, `set_max_deduct`, `set_revenue_pool`,
 `clear_revenue_pool`, `set_settlement`, `metadata_set`, `metadata_updated`,
 `metadata_removed`, `price_set`, `price_removed`, `allowlist_add`,
@@ -251,7 +278,7 @@ Distribute:   GCONTRACT_DISTRIBUTE...
 `payment_received`, `balance_credited`, `developer_withdraw`,
 `daily_withdraw_cap_changed`, `claim_window_changed`, `vault_proposed`,
 `vault_accepted`, `developer_force_credited`, `admin_migration_proposed`,
-`admin_migration`, `developer_min_balance_changed`, `initialized`, `deduction_recorded`
+`admin_migration`, `developer_min_balance_changed`, `initialized`, `deduction_recorded`, `deduction_request_cleared`
 
 **Revenue Pool-only** (not emitted by any other contract):
 `pause_guardian_set`, `pause_guardian_cleared`,
