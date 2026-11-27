@@ -28,4 +28,12 @@ pub enum RefundError {
     InvalidRecipient = 11,
     /// Requester has reached the maximum number of open refund requests.
     TooManyOpenRequests = 12,
+    /// Approved amount must be > 0 and <= the requested amount.
+    ApprovedAmountInvalid = 13,
+    /// Dispute window after rejection has closed.
+    DisputeWindowClosed = 14,
+    /// Refund request has already been disputed once.
+    AlreadyDisputed = 15,
+    /// Refund request has not outlived its configured lifetime yet.
+    NotExpired = 16,
 }

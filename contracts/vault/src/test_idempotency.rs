@@ -455,6 +455,134 @@ fn prune_allowed_during_pause() {
 }
 
 // ---------------------------------------------------------------------------
+// prune_processed_requests — length-cap boundary tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn prune_empty_ids_is_no_op() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+
+    client.deduct(&owner, &100i128, &1u64);
+    assert!(client.is_request_processed(&1u64));
+
+    let before = env.events().all().len();
+    let ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
+    client.prune_processed_requests(&owner, &ids);
+
+    // No events emitted, marker unchanged.
+    assert_eq!(env.events().all().len(), before);
+    assert!(client.is_request_processed(&1u64));
+}
+
+#[test]
+fn prune_exactly_at_cap_succeeds() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 10_000);
+
+    // Record MAX_PRUNE_IDS (50) distinct processed markers.
+    let cap = MAX_PRUNE_IDS as u64;
+    for i in 1..=cap {
+        client.deduct(&owner, &1i128, &i);
+    }
+
+    // Build a Vec<u64> of exactly cap ids.
+    let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
+    for i in 1..=cap {
+        ids.push_back(i);
+    }
+
+    // Should succeed without error.
+    client.prune_processed_requests(&owner, &ids);
+
+    // All markers cleared.
+    for i in 1..=cap {
+        assert!(!client.is_request_processed(&i));
+    }
+}
+
+#[test]
+fn prune_one_over_cap_returns_too_many_ids() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 10_000);
+
+    // Record MAX_PRUNE_IDS + 1 markers.
+    let cap = MAX_PRUNE_IDS as u64;
+    for i in 1..=(cap + 1) {
+        client.deduct(&owner, &1i128, &i);
+    }
+
+    let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
+    for i in 1..=(cap + 1) {
+        ids.push_back(i);
+    }
+
+    let before = env.events().all().len();
+    let result = client.try_prune_processed_requests(&owner, &ids);
+    assert!(
+        is_vault_err(result, VaultError::TooManyIds as u32),
+        "expected TooManyIds"
+    );
+
+    // No state change: all markers still present.
+    for i in 1..=(cap + 1) {
+        assert!(client.is_request_processed(&i));
+    }
+    // No events emitted.
+    assert_eq!(env.events().all().len(), before);
+}
+
+#[test]
+fn prune_one_over_cap_non_owner_still_gets_unauthorized() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 1_000);
+    let stranger = Address::generate(&env);
+
+    // Build an oversized ids vector (cap + 1).
+    let cap = MAX_PRUNE_IDS as u64;
+    let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
+    for i in 1..=(cap + 1) {
+        ids.push_back(i);
+    }
+    let _ = owner; // silence unused warning
+
+    // Non-owner must receive Unauthorized, not TooManyIds.
+    let result = client.try_prune_processed_requests(&stranger, &ids);
+    assert!(
+        is_vault_err(result, VaultError::Unauthorized as u32),
+        "expected Unauthorized before TooManyIds length check"
+    );
+}
+
+#[test]
+fn prune_oversized_leaves_processed_markers_intact() {
+    let env = Env::default();
+    let (client, owner) = setup_vault(&env, 10_000);
+
+    let cap = MAX_PRUNE_IDS as u64;
+    // Write markers for a handful of ids that will be in the oversized list.
+    for i in 1..=5u64 {
+        client.deduct(&owner, &1i128, &i);
+    }
+
+    // Send cap+1 ids (first 5 are real markers, rest are unknown).
+    let mut ids: soroban_sdk::Vec<u64> = soroban_sdk::vec![&env];
+    for i in 1..=(cap + 1) {
+        ids.push_back(i);
+    }
+
+    let _ = client.try_prune_processed_requests(&owner, &ids);
+
+    // Existing markers must still be there — no partial removal.
+    for i in 1..=5u64 {
+        assert!(
+            client.is_request_processed(&i),
+            "marker for id {i} must not have been removed"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cross-contract: settlement sentinel agreement
 // ---------------------------------------------------------------------------
 //

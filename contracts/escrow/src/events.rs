@@ -98,6 +98,14 @@ pub fn event_escrow_released(env: &Env) -> Symbol {
     Symbol::new(env, "escrow_released")
 }
 
+/// Returns the Symbol for the `"escrow_refunded"` event topic.
+///
+/// Emitted when an expired escrow is refunded back to its funder
+/// via [`crate::CalloraEscrow::refund_escrow`].
+pub fn event_escrow_refunded(env: &Env) -> Symbol {
+    Symbol::new(env, "escrow_refunded")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")
@@ -196,6 +204,16 @@ mod tests {
         assert_eq!(
             event_escrow_released(&env),
             Symbol::new(&env, "escrow_released")
+        );
+    }
+
+    /// Snapshot: proves event_escrow_refunded maps to exactly the bytes for "escrow_refunded".
+    #[test]
+    fn test_event_escrow_refunded_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_escrow_refunded(&env),
+            Symbol::new(&env, "escrow_refunded")
         );
     }
 }

@@ -24,7 +24,7 @@
 //!    byte-identity of the topic string.
 //! 4. Update `EVENT_SCHEMA.md` and `docs/EVENT_TOPICS.md`.
 
-use soroban_sdk::{Address, BytesN, Env, Symbol};
+use soroban_sdk::{Address, BytesN, Env, String, Symbol};
 
 use crate::limits::MinBalanceChanged;
 use crate::types::{
@@ -97,6 +97,30 @@ pub fn emit_supported_token_removed(env: &Env, caller: &Address, token: &Address
     );
 }
 
+/// Returns the Symbol for the `payout_name_set` event topic.
+pub fn event_payout_name_set(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_set")
+}
+
+/// Emit `payout_name_set` when a developer configures a registry payout name.
+pub fn emit_payout_name_set(env: &Env, developer: &Address, name: &String) {
+    env.events().publish(
+        (event_payout_name_set(env), developer.clone()),
+        name.clone(),
+    );
+}
+
+/// Returns the Symbol for the `payout_name_cleared` event topic.
+pub fn event_payout_name_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "payout_name_cleared")
+}
+
+/// Emit `payout_name_cleared` when a developer removes their payout name.
+pub fn emit_payout_name_cleared(env: &Env, developer: &Address) {
+    env.events()
+        .publish((event_payout_name_cleared(env), developer.clone()), ());
+}
+
 /// Returns the canonical Symbol for the `deduction_recorded` event topic.
 pub fn event_deduction_recorded(env: &Env) -> Symbol {
     Symbol::new(env, "deduction_recorded")
@@ -105,6 +129,17 @@ pub fn event_deduction_recorded(env: &Env) -> Symbol {
 /// Emit an accounting-only vault deduction after its replay marker is stored.
 pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
     env.events().publish((event_deduction_recorded(env),), data);
+}
+
+/// Returns the canonical Symbol for the `deduction_request_cleared` event topic.
+pub fn event_deduction_request_cleared(env: &Env) -> Symbol {
+    Symbol::new(env, "deduction_request_cleared")
+}
+
+/// Emit `deduction_request_cleared` when a recorded deduction request marker is removed.
+pub fn emit_deduction_request_cleared(env: &Env, request_id: u64) {
+    env.events()
+        .publish((event_deduction_request_cleared(env),), request_id);
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
@@ -783,6 +818,34 @@ pub fn emit_upgrade_cancelled(env: &Env, caller: &Address, payload: UpgradeCance
         .publish((event_upgrade_cancelled(env), caller.clone()), payload);
 }
 
+/// Returns the Symbol for the `"freeze_contract_set"` event topic.
+pub fn event_freeze_contract_set(env: &Env) -> Symbol {
+    Symbol::new(env, "freeze_contract_set")
+}
+
+/// Emit `"freeze_contract_set"` when the admin sets or clears the freeze
+/// circuit-breaker address.
+///
+/// **What**: Records the new cross-contract address consulted before payouts,
+/// or `None` when the circuit-breaker is disabled.
+///
+/// **How**: `env.events().publish()` with topic `(freeze_contract_set, caller)`
+/// and payload `Option<Address>`.
+///
+/// **Why**: Lets operators and indexers confirm which contract gates payouts
+/// and when the gate was removed.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address making the change.
+/// * `freeze_contract` - New freeze contract address, or `None` to clear it.
+pub fn emit_freeze_contract_set(env: &Env, caller: &Address, freeze_contract: &Option<Address>) {
+    env.events().publish(
+        (event_freeze_contract_set(env), caller.clone()),
+        freeze_contract.clone(),
+    );
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -808,6 +871,15 @@ mod tests {
         assert_eq!(
             event_deduction_recorded(&env),
             Symbol::new(&env, "deduction_recorded")
+        );
+    }
+
+    #[test]
+    fn test_event_deduction_request_cleared_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_deduction_request_cleared(&env),
+            Symbol::new(&env, "deduction_request_cleared")
         );
     }
 
@@ -972,11 +1044,53 @@ mod tests {
     }
 
     #[test]
+    fn test_event_freeze_contract_set_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_freeze_contract_set(&env),
+            Symbol::new(&env, "freeze_contract_set")
+        );
+    }
+
+    #[test]
     fn test_event_upgrade_cancelled_bytes() {
         let env = Env::default();
         assert_eq!(
             event_upgrade_cancelled(&env),
             Symbol::new(&env, "upgrade_cancelled")
+        );
+    }
+
+    #[test]
+    fn test_event_price_set_bytes() {
+        let env = Env::default();
+        assert_eq!(event_price_set(&env), Symbol::new(&env, "price_set"));
+    }
+
+    #[test]
+    fn test_event_price_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_price_removed(&env),
+            Symbol::new(&env, "price_removed")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_added_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_added(&env),
+            Symbol::new(&env, "supported_token_added")
+        );
+    }
+
+    #[test]
+    fn test_event_supported_token_removed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_supported_token_removed(&env),
+            Symbol::new(&env, "supported_token_removed")
         );
     }
 }

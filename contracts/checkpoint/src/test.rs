@@ -1,6 +1,7 @@
 use crate::{
-    CalloraCheckpoint, CalloraCheckpointClient, StorageKey, BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT,
-    INSTANCE_BUMP_THRESHOLD, LIFETIME_THRESHOLD, MAX_BATCH_SIZE, MAX_PAGE_SIZE,
+    errors::CheckpointError, CalloraCheckpoint, CalloraCheckpointClient, CheckpointRecord,
+    StorageKey, BUMP_AMOUNT, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD, LIFETIME_THRESHOLD,
+    MAX_BATCH_SIZE, MAX_PAGE_SIZE, MAX_PRUNE_BATCH,
 };
 use callora_storage_migration::{
     layout_hash, StorageKey as MigrationStorageKey, StorageMigrationValidator,
@@ -8,7 +9,7 @@ use callora_storage_migration::{
 use soroban_sdk::testutils::storage::Instance as _;
 use soroban_sdk::testutils::storage::Persistent;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{xdr::ToXdr, Address, Bytes, BytesN, Env, Symbol, Vec};
 
 /// Helper: initialise a fresh checkpoint contract and return `(env, admin, client)`.
 fn setup() -> (Env, Address, CalloraCheckpointClient<'static>) {
@@ -19,6 +20,27 @@ fn setup() -> (Env, Address, CalloraCheckpointClient<'static>) {
     let client = CalloraCheckpointClient::new(&env, &contract_id);
     client.init(&admin);
     (env, admin, client)
+}
+
+/// Independent (test-side) digest fold: `sha256(prev || xdr(record))`.
+fn hash_step(env: &Env, prev: &BytesN<32>, record: &CheckpointRecord) -> BytesN<32> {
+    let mut preimage = Bytes::new(env);
+    preimage.append(&Bytes::from(prev));
+    preimage.append(&record.clone().to_xdr(env));
+    env.crypto().sha256(&preimage).into()
+}
+
+fn zero_digest(env: &Env) -> BytesN<32> {
+    BytesN::from_array(env, &[0u8; 32])
+}
+
+/// Fold a slice of records in ID order, as an off-chain consumer would.
+fn fold_records(env: &Env, seed: &BytesN<32>, records: &[(u64, CheckpointRecord)]) -> BytesN<32> {
+    let mut head = seed.clone();
+    for (_, record) in records {
+        head = hash_step(env, &head, record);
+    }
+    head
 }
 
 // ===========================================================================
@@ -1700,5 +1722,474 @@ fn test_persistent_checkpoint_ttl_unchanged() {
     assert_eq!(
         ttl, BUMP_AMOUNT,
         "persistent record TTL policy must remain unchanged"
+    );
+}
+
+// ===========================================================================
+// Digest chain and pruning tests
+// ===========================================================================
+
+#[test]
+fn test_digest_chain_starts_at_zero() {
+    let (env, _admin, client) = setup();
+    assert_eq!(client.get_digest_head(), zero_digest(&env));
+    assert_eq!(client.get_digest_at_boundary(), zero_digest(&env));
+    assert_eq!(client.get_pruned_before(), 1);
+    assert_eq!(client.get_chain_start_id(), 1);
+}
+
+#[test]
+fn test_create_checkpoint_advances_digest() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "digest");
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &777i128, &meta);
+    let record = client.get_checkpoint(&id);
+
+    assert_eq!(
+        client.get_digest_head(),
+        hash_step(&env, &zero_digest(&env), &record)
+    );
+    assert_eq!(client.get_digest_at_boundary(), zero_digest(&env));
+}
+
+#[test]
+fn test_batch_create_digest_uses_item_order() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let items = Vec::from_array(
+        &env,
+        [
+            (
+                subject.clone(),
+                token.clone(),
+                100i128,
+                Symbol::new(&env, "first"),
+            ),
+            (
+                subject.clone(),
+                token.clone(),
+                200i128,
+                Symbol::new(&env, "second"),
+            ),
+            (
+                subject.clone(),
+                token.clone(),
+                300i128,
+                Symbol::new(&env, "third"),
+            ),
+        ],
+    );
+
+    let ids = client.batch_create_checkpoints(&admin, &items);
+    let records: std::vec::Vec<(u64, CheckpointRecord)> = ids
+        .iter()
+        .map(|id| (id, client.get_checkpoint(&id)))
+        .collect();
+
+    let forward = fold_records(&env, &zero_digest(&env), &records);
+    assert_eq!(client.get_digest_head(), forward);
+
+    let reversed: std::vec::Vec<(u64, CheckpointRecord)> = records.iter().rev().cloned().collect();
+    assert_ne!(
+        fold_records(&env, &zero_digest(&env), &reversed),
+        forward,
+        "digest must depend on batch ordering"
+    );
+}
+
+#[test]
+fn test_prune_before_retains_digest_and_newer_records() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "prune");
+
+    let all: std::vec::Vec<(u64, CheckpointRecord)> = (1i128..=5i128)
+        .map(|balance| {
+            let id = client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+            (id, client.get_checkpoint(&id))
+        })
+        .collect();
+
+    let head_before = fold_records(&env, &zero_digest(&env), &all);
+    assert_eq!(client.get_digest_head(), head_before);
+
+    client.prune_before(&admin, &3u64, &10u32);
+
+    assert_eq!(client.get_pruned_before(), 3);
+    assert_eq!(client.get_digest_head(), head_before);
+    assert_eq!(
+        client.get_digest_at_boundary(),
+        fold_records(&env, &zero_digest(&env), &all[..2])
+    );
+
+    for (id, _) in all.iter().take(2) {
+        match client.try_get_checkpoint(id) {
+            Err(Ok(CheckpointError::CheckpointPruned)) => {}
+            _ => panic!("pruned ID must return CheckpointPruned"),
+        }
+    }
+    for (id, record) in all.iter().skip(2) {
+        assert_eq!(&client.get_checkpoint(id), record);
+    }
+
+    assert_eq!(
+        fold_records(&env, &client.get_digest_at_boundary(), &all[2..]),
+        client.get_digest_head(),
+        "consumer recomputation must match the retained head"
+    );
+
+    assert_eq!(client.get_checkpoint_count(), 5);
+    assert_eq!(client.get_latest_checkpoint_id(), 5);
+    assert_eq!(client.get_latest_checkpoint(), Some(all[4].1.clone()));
+}
+
+#[test]
+fn test_prune_before_zero_id_is_rejected() {
+    let (_env, admin, client) = setup();
+    match client.try_prune_before(&admin, &0u64, &10u32) {
+        Err(Ok(CheckpointError::PruneOutOfRange)) => {}
+        _ => panic!("id 0 must be rejected as backwards"),
+    }
+    assert_eq!(client.get_pruned_before(), 1);
+}
+
+#[test]
+fn test_prune_before_one_is_a_noop() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.create_checkpoint(
+        &admin,
+        &subject,
+        &token,
+        &100i128,
+        &Symbol::new(&env, "noop"),
+    );
+    let head = client.get_digest_head();
+
+    client.prune_before(&admin, &1u64, &10u32);
+
+    assert_eq!(client.get_pruned_before(), 1);
+    assert_eq!(client.get_digest_head(), head);
+    assert_eq!(client.get_digest_at_boundary(), zero_digest(&env));
+    assert_eq!(client.get_checkpoint(&1).balance, 100);
+}
+
+#[test]
+fn test_prune_before_latest_keeps_latest_record() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "latest");
+    for balance in 1i128..=4i128 {
+        client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+    }
+    let head = client.get_digest_head();
+
+    client.prune_before(&admin, &4u64, &10u32);
+
+    assert_eq!(client.get_pruned_before(), 4);
+    assert_eq!(client.get_digest_head(), head);
+    assert_eq!(client.get_checkpoint(&4).balance, 4);
+    assert_eq!(
+        client.get_latest_checkpoint(),
+        Some(client.get_checkpoint(&4))
+    );
+}
+
+#[test]
+fn test_prune_before_latest_plus_one_removes_every_record() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "all");
+    for balance in 1i128..=3i128 {
+        client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+    }
+    let head = client.get_digest_head();
+
+    client.prune_before(&admin, &4u64, &10u32);
+
+    assert_eq!(client.get_pruned_before(), 4);
+    assert_eq!(client.get_digest_head(), head);
+    assert_eq!(client.get_latest_checkpoint(), None);
+    assert_eq!(client.get_checkpoint_count(), 3);
+    for id in 1u64..=3u64 {
+        match client.try_get_checkpoint(&id) {
+            Err(Ok(CheckpointError::CheckpointPruned)) => {}
+            _ => panic!("all pruned IDs must return CheckpointPruned"),
+        }
+    }
+    assert_eq!(
+        fold_records(&env, &client.get_digest_at_boundary(), &[]),
+        head,
+        "boundary alone must reproduce the head once everything is pruned"
+    );
+}
+
+#[test]
+fn test_prune_before_is_monotonic() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "mono");
+    for balance in 1i128..=6i128 {
+        client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+    }
+
+    client.prune_before(&admin, &4u64, &10u32);
+    assert_eq!(client.get_pruned_before(), 4);
+
+    match client.try_prune_before(&admin, &2u64, &10u32) {
+        Err(Ok(CheckpointError::PruneOutOfRange)) => {}
+        _ => panic!("backwards pruning must be rejected"),
+    }
+    assert_eq!(client.get_pruned_before(), 4);
+
+    client.prune_before(&admin, &6u64, &10u32);
+    assert_eq!(client.get_pruned_before(), 6);
+}
+
+#[test]
+fn test_prune_before_past_latest_is_rejected() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.create_checkpoint(
+        &admin,
+        &subject,
+        &token,
+        &1i128,
+        &Symbol::new(&env, "range"),
+    );
+    client.create_checkpoint(
+        &admin,
+        &subject,
+        &token,
+        &2i128,
+        &Symbol::new(&env, "range"),
+    );
+
+    match client.try_prune_before(&admin, &4u64, &10u32) {
+        Err(Ok(CheckpointError::PruneOutOfRange)) => {}
+        _ => panic!("pruning past latest+1 must be rejected"),
+    }
+    assert_eq!(client.get_pruned_before(), 1);
+}
+
+#[test]
+fn test_prune_before_zero_max_remove_is_rejected() {
+    let (_env, admin, client) = setup();
+    match client.try_prune_before(&admin, &1u64, &0u32) {
+        Err(Ok(CheckpointError::InvalidMaxRemove)) => {}
+        _ => panic!("max_remove 0 must be rejected"),
+    }
+}
+
+#[test]
+fn test_prune_before_requires_admin() {
+    let (env, admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    match client.try_prune_before(&non_admin, &1u64, &10u32) {
+        Err(Ok(CheckpointError::Unauthorized)) => {}
+        _ => panic!("only the admin may prune"),
+    }
+    assert_eq!(admin, client.get_admin());
+}
+
+#[test]
+fn test_max_remove_partial_pruning_advances_boundary_in_steps() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "partial");
+
+    let all: std::vec::Vec<(u64, CheckpointRecord)> = (1i128..=10i128)
+        .map(|balance| {
+            let id = client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+            (id, client.get_checkpoint(&id))
+        })
+        .collect();
+    let head = client.get_digest_head();
+
+    for expected_boundary in [4u64, 7u64, 10u64, 11u64] {
+        client.prune_before(&admin, &11u64, &3u32);
+        assert_eq!(client.get_pruned_before(), expected_boundary);
+        let pruned_count = (expected_boundary - 1) as usize;
+        assert_eq!(
+            client.get_digest_at_boundary(),
+            fold_records(&env, &zero_digest(&env), &all[..pruned_count])
+        );
+        assert_eq!(client.get_digest_head(), head);
+    }
+
+    assert_eq!(
+        fold_records(&env, &client.get_digest_at_boundary(), &[]),
+        head
+    );
+}
+
+#[test]
+fn test_prune_before_caps_max_remove() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "cap");
+    for _ in 0..(MAX_PRUNE_BATCH + 5) {
+        client.create_checkpoint(&admin, &subject, &token, &1i128, &meta);
+    }
+
+    let count = client.get_checkpoint_count();
+    client.prune_before(&admin, &(count + 1), &u32::MAX);
+
+    assert_eq!(client.get_pruned_before(), u64::from(MAX_PRUNE_BATCH) + 1);
+}
+
+#[test]
+fn test_prune_then_create_continues_chain() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "continue");
+
+    let mut all: std::vec::Vec<(u64, CheckpointRecord)> = (1i128..=3i128)
+        .map(|balance| {
+            let id = client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+            (id, client.get_checkpoint(&id))
+        })
+        .collect();
+
+    client.prune_before(&admin, &3u64, &10u32);
+    let boundary = client.get_digest_at_boundary();
+
+    for balance in 4i128..=5i128 {
+        let id = client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+        all.push((id, client.get_checkpoint(&id)));
+    }
+
+    assert_eq!(
+        fold_records(&env, &zero_digest(&env), &all),
+        client.get_digest_head()
+    );
+    assert_eq!(
+        fold_records(&env, &boundary, &all[2..]),
+        client.get_digest_head()
+    );
+}
+
+#[test]
+fn test_subject_paging_across_pruned_ids() {
+    let (env, admin, client) = setup();
+    let subject_a = Address::generate(&env);
+    let subject_b = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "subject");
+
+    for i in 0..10u64 {
+        let subject = if i % 2 == 0 { &subject_a } else { &subject_b };
+        client.create_checkpoint(&admin, subject, &token, &(i as i128), &meta);
+    }
+
+    client.prune_before(&admin, &7u64, &10u32);
+
+    for (subject, expected_ids) in [(&subject_a, [7u64, 9u64]), (&subject_b, [8u64, 10u64])] {
+        let mut seen = std::vec::Vec::new();
+        for start in 0..4u32 {
+            let page = client.get_checkpoints_for_subject(subject, &start, &1u32);
+            for record in page.iter() {
+                seen.push(record.id);
+            }
+        }
+        assert_eq!(seen, expected_ids);
+
+        let key = StorageKey::SubjectIndex(subject.clone());
+        let index: Vec<u64> = env.as_contract(&client.address, || {
+            env.storage().persistent().get(&key).unwrap()
+        });
+        assert_eq!(index.len(), 2);
+        for id in index.iter() {
+            assert!(expected_ids.contains(&id));
+        }
+    }
+}
+
+#[test]
+fn test_bump_ttl_on_pruned_id_returns_typed_error() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.create_checkpoint(
+        &admin,
+        &subject,
+        &token,
+        &1i128,
+        &Symbol::new(&env, "ttlprune"),
+    );
+    client.prune_before(&admin, &2u64, &10u32);
+
+    match client.try_bump_checkpoint_ttl(&admin, &1u64) {
+        Err(Ok(CheckpointError::CheckpointPruned)) => {}
+        _ => panic!("pruned ID must return CheckpointPruned"),
+    }
+}
+
+#[test]
+fn test_migration_starts_chain_at_first_post_upgrade_checkpoint() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "legacy");
+    for balance in 1i128..=2i128 {
+        client.create_checkpoint(&admin, &subject, &token, &balance, &meta);
+    }
+
+    // Simulate a contract deployed before the digest keys existed.
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&StorageKey::DigestHead);
+        env.storage()
+            .instance()
+            .remove(&StorageKey::DigestAtBoundary);
+        env.storage().instance().remove(&StorageKey::PrunedBefore);
+        env.storage().instance().remove(&StorageKey::ChainStartId);
+    });
+
+    let layout = CalloraCheckpoint::storage_layout_hash(&env);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    env.as_contract(&client.address, || {
+        StorageMigrationValidator::validate_before_upgrade(
+            &env, 2, &layout, &layout, &wasm_hash, false,
+        )
+        .unwrap();
+    });
+    client.migrate(&admin, &2, &layout);
+
+    assert_eq!(client.get_chain_start_id(), 3);
+    assert_eq!(client.get_digest_head(), zero_digest(&env));
+    assert_eq!(client.get_digest_at_boundary(), zero_digest(&env));
+    assert_eq!(client.get_pruned_before(), 1);
+    assert_eq!(client.get_checkpoint(&1).balance, 1);
+
+    let id = client.create_checkpoint(&admin, &subject, &token, &99i128, &meta);
+    assert_eq!(id, 3);
+    let record = client.get_checkpoint(&id);
+    let expected = hash_step(&env, &zero_digest(&env), &record);
+    assert_eq!(client.get_digest_head(), expected);
+
+    client.prune_before(&admin, &3u64, &10u32);
+    assert_eq!(client.get_pruned_before(), 3);
+    assert_eq!(
+        client.get_digest_at_boundary(),
+        zero_digest(&env),
+        "legacy records must not advance the chain boundary"
+    );
+    assert_eq!(client.get_digest_head(), expected);
+    assert_eq!(
+        fold_records(&env, &client.get_digest_at_boundary(), &[(id, record)]),
+        expected
     );
 }

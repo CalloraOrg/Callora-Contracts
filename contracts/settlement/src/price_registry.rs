@@ -24,6 +24,7 @@
 
 use soroban_sdk::{Address, Env, String};
 
+use crate::errors::PriceRegistryError;
 use crate::events::{emit_price_removed, emit_price_set};
 use crate::{CalloraSettlement, SettlementError, StorageKey};
 
@@ -52,6 +53,8 @@ pub const MIN_WRITE_INTERVAL: u32 = 10;
 ///
 /// # Panics
 /// * [`SettlementError::Unauthorized`] — caller is not the admin.
+/// * [`SettlementError::InvalidOfferingId`] — `offering_id` fails `callora-validators` rules.
+/// * [`SettlementError::InvalidPrice`] — `price` is not a valid non-empty decimal price string.
 /// * [`SettlementError::WriteRateLimitExceeded`] — write interval not elapsed.
 pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String) {
     caller.require_auth();
@@ -61,6 +64,8 @@ pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String)
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
+    validate_offering_id(env, &offering_id);
+    validate_price(env, &price);
     enforce_write_rate_limit(env, &caller);
     let key = StorageKey::Price(offering_id.clone());
     let old = env.storage().persistent().get::<_, String>(&key);
@@ -86,6 +91,7 @@ pub fn set_price(env: &Env, caller: Address, offering_id: String, price: String)
 ///
 /// # Panics
 /// * [`SettlementError::Unauthorized`] — caller is not the admin.
+/// * [`SettlementError::InvalidOfferingId`] — `offering_id` fails `callora-validators` rules.
 /// * [`SettlementError::WriteRateLimitExceeded`] — write interval not elapsed.
 pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
     caller.require_auth();
@@ -95,6 +101,7 @@ pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
     if caller != admin {
         env.panic_with_error(SettlementError::Unauthorized);
     }
+    validate_offering_id(env, &offering_id);
     enforce_write_rate_limit(env, &caller);
     let key = StorageKey::Price(offering_id.clone());
     if let Some(old) = env.storage().persistent().get::<_, String>(&key) {
@@ -107,6 +114,8 @@ pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
 /// Get the price for an offering.
 ///
 /// Returns `None` if no price has been set for the given offering ID.
+/// Intentionally permissive on read: malformed or unknown offering IDs simply
+/// return `None` without mutating state or panicking.
 ///
 /// # Arguments
 /// * `env` - Execution environment.
@@ -114,6 +123,41 @@ pub fn remove_price(env: &Env, caller: Address, offering_id: String) {
 pub fn get_price(env: &Env, offering_id: String) -> Option<String> {
     let key = StorageKey::Price(offering_id);
     env.storage().persistent().get(&key)
+}
+
+/// Validate `offering_id` using `callora_validators::normalize_offering_id`.
+///
+/// Rejects empty strings, lengths > 64, leading/trailing spaces, uppercase, and
+/// any character outside `[a-z0-9_-]`.
+fn validate_offering_id(env: &Env, offering_id: &String) {
+    if callora_validators::normalize_offering_id(offering_id).is_err() {
+        env.panic_with_error(PriceRegistryError::InvalidOfferingId);
+    }
+}
+
+/// Validate `price` as a non-empty visible ASCII decimal number (`[0-9]+(\.[0-9]+)?`).
+///
+/// First runs `callora_validators::normalize_visible_ascii` (rejecting empty,
+/// over-length, leading/trailing whitespace, and non-visible ASCII), then
+/// ensures the bytes form a valid unsigned decimal with digits and at most one
+/// decimal point (not leading or trailing).
+fn validate_price(env: &Env, price: &String) {
+    let Ok(buf) = callora_validators::normalize_visible_ascii(price) else {
+        env.panic_with_error(PriceRegistryError::InvalidPrice);
+    };
+    let len = price.len() as usize;
+    let bytes = &buf[..len];
+    let mut seen_dot = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'.' {
+            if seen_dot || i == 0 || i + 1 == len {
+                env.panic_with_error(PriceRegistryError::InvalidPrice);
+            }
+            seen_dot = true;
+        } else if !b.is_ascii_digit() {
+            env.panic_with_error(PriceRegistryError::InvalidPrice);
+        }
+    }
 }
 
 /// Enforce the per-admin write rate limit.
@@ -457,6 +501,109 @@ mod tests {
         assert!(is_error(result, SettlementError::Unauthorized));
     }
 
+    #[test]
+    fn set_price_rejects_invalid_offering_ids() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+        let valid_price = String::from_str(&env, "10.50");
+
+        let too_long = std::string::String::from_utf8(std::vec![b'a'; 65]).unwrap();
+        let invalid_ids = [
+            "",
+            too_long.as_str(),
+            "Offer1",
+            " offer1",
+            "offer1 ",
+            "offer\n1",
+            "offer.1",
+        ];
+
+        for id in invalid_ids {
+            let res = client.try_set_price(&admin, &String::from_str(&env, id), &valid_price);
+            assert!(
+                is_error(res, PriceRegistryError::InvalidOfferingId),
+                "expected InvalidOfferingId for {id:?}"
+            );
+        }
+
+        // Rate limit slot must remain unconsumed after rejected writes.
+        env.as_contract(&contract, || {
+            let key = StorageKey::PriceRegistryLastWrite(admin.clone());
+            assert!(env.storage().persistent().get::<_, u32>(&key).is_none());
+        });
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "valid-offer_1"),
+            &valid_price,
+        );
+        assert_eq!(
+            client.get_price(&String::from_str(&env, "valid-offer_1")),
+            Some(valid_price)
+        );
+    }
+
+    #[test]
+    fn set_price_rejects_invalid_prices() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+        let valid_id = String::from_str(&env, "offer1");
+
+        let invalid_prices = [
+            "",
+            " 100",
+            "100 ",
+            "10\n0",
+            "abc",
+            "-10",
+            "1.2.3",
+            ".",
+            "10.",
+            ".5",
+        ];
+
+        for p in invalid_prices {
+            let res = client.try_set_price(&admin, &valid_id, &String::from_str(&env, p));
+            assert!(
+                is_error(res, PriceRegistryError::InvalidPrice),
+                "expected InvalidPrice for {p:?}"
+            );
+        }
+
+        // Rejected calls must not store a price or consume the rate-limit slot.
+        assert_eq!(client.get_price(&valid_id), None);
+        env.as_contract(&contract, || {
+            let key = StorageKey::PriceRegistryLastWrite(admin.clone());
+            assert!(env.storage().persistent().get::<_, u32>(&key).is_none());
+        });
+    }
+
+    #[test]
+    fn remove_price_rejects_invalid_offering_id_without_consuming_rate_limit() {
+        let (env, contract, admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+
+        let res = client.try_remove_price(&admin, &String::from_str(&env, "BadOffer"));
+        assert!(is_error(res, PriceRegistryError::InvalidOfferingId));
+
+        env.as_contract(&contract, || {
+            let key = StorageKey::PriceRegistryLastWrite(admin.clone());
+            assert!(env.storage().persistent().get::<_, u32>(&key).is_none());
+        });
+        // Valid write on the same ledger still succeeds.
+        client.set_price(
+            &admin,
+            &String::from_str(&env, "good-offer"),
+            &String::from_str(&env, "42.00"),
+        );
+    }
+
+    #[test]
+    fn get_price_stays_permissive_on_malformed_id() {
+        let (env, contract, _admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &contract);
+        assert_eq!(client.get_price(&String::from_str(&env, "Bad ID!")), None);
+    }
+
     fn is_write_rate_limit_error<V, CE: Into<soroban_sdk::Error>, E: Into<soroban_sdk::Error>>(
         result: Result<Result<V, CE>, Result<E, soroban_sdk::InvokeError>>,
     ) -> bool {
@@ -466,11 +613,11 @@ mod tests {
         }
     }
 
-    fn is_error<V, CE: Into<soroban_sdk::Error>, E: Into<soroban_sdk::Error>>(
+    fn is_error<V, CE: Into<soroban_sdk::Error>, E: Into<soroban_sdk::Error>, C: Into<soroban_sdk::Error>>(
         result: Result<Result<V, CE>, Result<E, soroban_sdk::InvokeError>>,
-        expected: SettlementError,
+        expected: C,
     ) -> bool {
-        let expected_code = expected as u32;
+        let expected_code = expected.into().get_code();
         match result {
             Err(Ok(e)) => e.into().get_code() == expected_code,
             _ => false,

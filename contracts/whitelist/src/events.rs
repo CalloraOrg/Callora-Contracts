@@ -175,9 +175,17 @@ mod tests {
             Symbol::new(&env, "admin_cooldown_set")
         );
     }
-}
-//! Event topic Symbol constructors for the Callora Whitelist contract.
 
+    /// Snapshot: proves the topic still maps to exactly `"address_added_until"`.
+    #[test]
+    fn test_event_address_added_until_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_address_added_until(&env),
+            Symbol::new(&env, "address_added_until")
+        );
+    }
+}
 
 /// Returns the Symbol for the `"address_added_until"` event topic.
 ///
@@ -186,13 +194,4 @@ mod tests {
 /// caller and the address; the data payload is the `expires_at` timestamp.
 pub fn event_address_added_until(env: &Env) -> Symbol {
     Symbol::new(env, "address_added_until")
-}
-
-
-    /// Snapshot: proves the topic still maps to exactly `"address_added_until"`.
-    fn test_event_address_added_until_bytes() {
-            event_address_added_until(&env),
-            Symbol::new(&env, "address_added_until")
-        );
-    }
 }

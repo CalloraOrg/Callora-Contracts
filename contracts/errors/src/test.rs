@@ -77,6 +77,131 @@ fn test_log_error_after_registration() {
     assert_eq!(client.get_recent_error(&user), Some(101));
 }
 
+fn history_of(env: &Env, codes: &[u32]) -> Vec<u32> {
+    let mut history = Vec::new(env);
+    for code in codes {
+        history.push_back(*code);
+    }
+    history
+}
+
+#[test]
+fn test_error_history_is_empty_before_any_log() {
+    let env = Env::default();
+    let (client, _admin) = setup(&env);
+    let user = Address::generate(&env);
+
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[]));
+}
+
+#[test]
+fn test_error_history_keeps_fewer_than_max_in_order() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in [101u32, 102, 103] {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    assert_eq!(
+        client.get_error_history(&user),
+        history_of(&env, &[101, 102, 103])
+    );
+    assert_eq!(client.get_recent_error(&user), Some(103));
+}
+
+#[test]
+fn test_error_history_keeps_exactly_max_entries() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in 0..MAX_ERROR_HISTORY {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    let expected = [0, 1, 2, 3, 4, 5, 6, 7];
+    assert_eq!(client.get_error_history(&user), history_of(&env, &expected));
+}
+
+#[test]
+fn test_error_history_evicts_oldest_when_full() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    for code in 0..(MAX_ERROR_HISTORY + 4) {
+        client.register_error(&admin, &code, &desc);
+        client.log_error(&user, &code);
+    }
+
+    let expected = [4, 5, 6, 7, 8, 9, 10, 11];
+    assert_eq!(
+        client.get_error_history(&user),
+        history_of(&env, &expected),
+        "history must hold the last MAX_ERROR_HISTORY codes oldest-first"
+    );
+    assert_eq!(client.get_recent_error(&user), Some(MAX_ERROR_HISTORY + 3));
+}
+
+#[test]
+fn test_error_history_is_per_user() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.register_error(&admin, &202, &desc);
+    client.log_error(&alice, &101);
+    client.log_error(&bob, &202);
+
+    assert_eq!(client.get_error_history(&alice), history_of(&env, &[101]));
+    assert_eq!(client.get_error_history(&bob), history_of(&env, &[202]));
+}
+
+#[test]
+fn test_rejected_log_error_leaves_history_untouched() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.log_error(&user, &101);
+
+    assert_eq!(
+        client.try_log_error(&user, &999).unwrap_err().unwrap(),
+        Error::UnknownErrorCode
+    );
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[101]));
+    assert_eq!(client.get_recent_error(&user), Some(101));
+}
+
+#[test]
+fn test_error_history_expires_with_temporary_ttl() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+    let desc = String::from_str(&env, "code");
+
+    client.register_error(&admin, &101, &desc);
+    client.log_error(&user, &101);
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[101]));
+
+    env.ledger().set_sequence_number(RECENT_ERR_TTL_LEDGERS + 1);
+
+    assert_eq!(client.get_error_history(&user), history_of(&env, &[]));
+    assert_eq!(client.get_recent_error(&user), None);
+}
+
 #[test]
 fn test_get_error_description_returns_stored_data() {
     let env = Env::default();
@@ -700,4 +825,184 @@ fn test_recent_err_lifetime_is_short() {
         ttl, RECENT_ERR_TTL_LEDGERS,
         "RecentErr must use the deliberate short lifetime"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Tests for deprecate_error and list_error_codes (Issue #1497)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_deprecate_unregistered_code_fails() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    assert_eq!(
+        client
+            .try_deprecate_error(&admin, &999)
+            .unwrap_err()
+            .unwrap(),
+        Error::NotRegistered
+    );
+}
+
+#[test]
+fn test_deprecate_error_admin_only() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let fake_admin = Address::generate(&env);
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Desc"));
+    assert_eq!(
+        client
+            .try_deprecate_error(&fake_admin, &101)
+            .unwrap_err()
+            .unwrap(),
+        Error::Unauthorized
+    );
+}
+
+#[test]
+fn test_deprecate_error_twice_fails() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Desc"));
+    assert_eq!(client.deprecate_error(&admin, &101), ());
+
+    assert_eq!(
+        client
+            .try_deprecate_error(&admin, &101)
+            .unwrap_err()
+            .unwrap(),
+        Error::AlreadyDeprecated
+    );
+}
+
+#[test]
+fn test_deprecate_emits_event() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Desc"));
+    client.deprecate_error(&admin, &101);
+
+    let dep_sym = Symbol::new(&env, "error_deprecated");
+    let mut found = false;
+    for e in env.events().all().iter() {
+        if !e.1.is_empty() {
+            let t0: Option<Symbol> = Symbol::try_from_val(&env, &e.1.get(0).unwrap()).ok();
+            if t0 == Some(dep_sym.clone()) {
+                let admin_in_topics: Address =
+                    Address::try_from_val(&env, &e.1.get(1).unwrap()).unwrap();
+                assert_eq!(admin_in_topics, admin);
+                let code_payload: u32 = u32::try_from_val(&env, &e.2).unwrap();
+                assert_eq!(code_payload, 101);
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "error_deprecated event must be published");
+}
+
+#[test]
+fn test_deprecated_error_still_resolves_description() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    let desc = String::from_str(&env, "Deprecated Error Description");
+    client.register_error(&admin, &101, &desc);
+    client.deprecate_error(&admin, &101);
+
+    assert_eq!(client.get_error_description(&101), Some(desc));
+}
+
+#[test]
+fn test_log_error_rejects_deprecated_code() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+    let user = Address::generate(&env);
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Desc"));
+    client.deprecate_error(&admin, &101);
+
+    assert_eq!(
+        client.try_log_error(&user, &101).unwrap_err().unwrap(),
+        Error::DeprecatedErrorCode
+    );
+    assert_eq!(client.get_recent_error(&user), None);
+}
+
+#[test]
+fn test_list_error_codes_pagination_and_ordering() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    // Register 5 error codes in order
+    for code in [10u32, 20, 30, 40, 50] {
+        client.register_error(&admin, &code, &String::from_str(&env, "code desc"));
+    }
+
+    // Deprecate 20 and 40
+    client.deprecate_error(&admin, &20);
+    client.deprecate_error(&admin, &40);
+
+    // Page 1: cursor 0, limit 2
+    let page1 = client.list_error_codes(&0, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap(), (10, false));
+    assert_eq!(page1.get(1).unwrap(), (20, true));
+
+    // Page 2: cursor 2, limit 2
+    let page2 = client.list_error_codes(&2, &2);
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2.get(0).unwrap(), (30, false));
+    assert_eq!(page2.get(1).unwrap(), (40, true));
+
+    // Page 3: cursor 4, limit 2
+    let page3 = client.list_error_codes(&4, &2);
+    assert_eq!(page3.len(), 1);
+    assert_eq!(page3.get(0).unwrap(), (50, false));
+
+    // Page 4: cursor at/past count
+    let page4 = client.list_error_codes(&5, &2);
+    assert_eq!(page4.len(), 0);
+
+    // Limit 0 returns empty
+    let page_empty = client.list_error_codes(&0, &0);
+    assert_eq!(page_empty.len(), 0);
+}
+
+#[test]
+fn test_list_error_codes_after_update_error_does_not_duplicate() {
+    let env = Env::default();
+    let (client, admin) = setup(&env);
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Initial"));
+    client.update_error(&admin, &101, &String::from_str(&env, "Updated"));
+
+    let list = client.list_error_codes(&0, &10);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list.get(0).unwrap(), (101, false));
+    assert_eq!(
+        client.get_error_description(&101),
+        Some(String::from_str(&env, "Updated"))
+    );
+}
+
+#[test]
+fn test_deprecated_read_bumps_ttl() {
+    let (env, contract_id, client, admin) = setup_full();
+
+    client.register_error(&admin, &101, &String::from_str(&env, "Initial"));
+    client.deprecate_error(&admin, &101);
+
+    // Read description of deprecated code
+    assert!(client.get_error_description(&101).is_some());
+
+    // Check that ErrorReg key has been bumped
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::ErrorReg(101))
+    });
+    assert!(ttl > REGISTRY_TTL_THRESHOLD);
 }

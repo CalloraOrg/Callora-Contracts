@@ -50,6 +50,10 @@ when the admin address has not signed.
 | `set_default_limits(caller, max_b, max_p, max_s)`             | Replace the global defaults.                             |
 | `set_account_limits(caller, account, max_b, max_p, max_s)`   | Override the defaults for a single account.             |
 | `clear_account_limits(caller, account)`                      | Revert the account to the global defaults.              |
+| `reset_account_state(caller, account)`                       | Zero one account's counters (admin recovery tool).      |
+| `batch_clear_accounts(caller, accounts)`                     | Zero up to `MAX_BATCH_CLEAR` accounts atomically.       |
+| `set_window_ledgers(caller, window_ledgers)`                  | Set the rolling-window length in ledgers (`0` disables).|
+| `set_window_limits(caller, max_b, max_p, max_s)`             | Set the per-window open caps.                           |
 
 ### Counter mutators (operator-gated)
 
@@ -83,9 +87,49 @@ decrement-only, so it cannot be used to mint headroom either.
 | `get_default_limits()`                                    | Global cap defaults (fallback to `DEFAULT_LIMITS`).             |
 | `get_account_limits(account)`                             | Effective caps for the account (per-account override → default). |
 | `get_account_state(account)`                              | Live counters for the account (zeroed if absent).               |
+| `get_remaining_capacity(account)`                         | Remaining headroom (`saturating_sub(cap, state)`) per kind.     |
 | `get_operator(operator)`                                  | `true` when the address is a registered operator.                |
 | `can_place_bet(account)` / `can_open_position(account)` / |                                                              |
-| `can_subscribe(account)`                                  | Dry-run gate checks.                                           |
+| `can_subscribe(account)`                                  | Dry-run gate checks (concurrent **and** window aware).         |
+| `get_window_ledgers()`                                    | Rolling-window length in ledgers (`0` = disabled).             |
+| `get_window_limits()`                                     | Global per-window caps.                                        |
+| `get_window_state(account)`                               | Stored per-window counters (zeroed if absent; does not roll).  |
+
+## Rolling time windows (Issue #1522)
+
+The concurrent caps above never reset. An optional rolling window adds a
+second, time-scoped layer that bounds how much an account can **open** inside
+a configurable number of ledgers:
+
+- `window_ledgers` is a global admin setting. `0` (the default) disables
+  windows and restores the pre-#1522 behaviour exactly: no window storage is
+  read, written, or enforced. Non-zero values must be within
+  `MIN_WINDOW_LEDGERS..=MAX_WINDOW_LEDGERS` (`1..=1_000_000`).
+- `WindowLimits { max_bets, max_positions, max_subscriptions }` caps how many
+  of each kind may be opened per window. It defaults to
+  `DEFAULT_WINDOW_LIMITS`, i.e. every dimension at `MAX_CAP`, so merely
+  enabling windows does not change behaviour until caps are configured.
+- Every account has independent `WindowState { window_start, bets_opened,
+  positions_opened, subscriptions_added }` counters. The window rolls
+  **lazily** on the next successful mutation when
+  `ledger.sequence() >= window_start + window_ledgers`; no keeper is needed.
+  The addition saturates at `u32::MAX` so a sequence near the type ceiling
+  cannot wrap into a spurious reset.
+- Window caps are enforced by `place_bet`, `open_position`, and `subscribe`
+  **in addition to** the concurrent caps, in that order. A rejection returns
+  `BetsWindowCap` / `PositionsWindowCap` / `SubscriptionsWindowCap` and does
+  not consume capacity or persist a roll.
+- Decrements (`clear_bet`, `close_position`, `unsubscribe`) never reduce
+  window counters: closing a bet does not refund window capacity. Only the
+  window rolling over resets the counters.
+- A brand-new account anchors its first window at the ledger of its first
+  successful open.
+
+```text
+ledger:            0    5    7         14        21
+window (W = 7):  [0,7)     [7,14)    [14,21)   [21,28)
+opens at:           2     1         3         1
+```
 
 ## Storage layout
 
@@ -149,6 +193,13 @@ post-init override.
 | 7    | `SubscriptionsAtCap`  | Account's active-subscription counter is at the cap.   |
 | 8    | `CounterUnderflow`    | `clear_*` called when the corresponding counter is 0.  |
 | 9    | `Overflow`            | `u32` counter overflow during increment.               |
+| 11   | `BetsWindowCap`       | Per-window bet cap reached.                            |
+| 12   | `PositionsWindowCap`  | Per-window position cap reached.                       |
+| 13   | `SubscriptionsWindowCap` | Per-window subscription cap reached.                |
+
+Codes 11-13 are only returned while `window_ledgers > 0`. Invalid window
+configuration (length outside the bounds or a window cap above `MAX_CAP`)
+returns the existing `InvalidLimit` (code 4).
 
 ## Events
 
@@ -162,6 +213,16 @@ past-tense-verb pattern documented in `CONTRIBUTING.md`.
 
 Counter events carry `(topic, operator, account)` as the first topic element so
 indexers can attribute every counter change to the operator that signed it.
+
+Rolling windows add three topics, each with a byte-snapshot test:
+
+| Topic                 | Emitted when                                         | Payload (data)                  |
+|-----------------------|------------------------------------------------------|---------------------------------|
+| `window_ledgers_set`  | Admin updates the window length.                     | new `window_ledgers`            |
+| `window_limits_set`   | Admin updates per-window caps.                       | `WindowLimits`                  |
+| `window_rolled`       | Lazy roll on the first successful mutation after expiry. | `(new_window_start, window_ledgers)` |
+
+Existing event topics and payload shapes are unchanged by this feature.
 
 ## Backward compatibility
 

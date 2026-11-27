@@ -27,6 +27,31 @@ if [[ ! -f "$SCHEMA" ]]; then
   exit 1
 fi
 
+# Capability checks. The greps below rely on `grep -P` (PCRE) and `mapfile`
+# (bash >= 4). Stock macOS ships BSD grep and bash 3.2, where every `grep -P`
+# fails — and because no-match and hard-error are both masked by `|| true`,
+# the script would otherwise pass vacuously. Fail loudly instead.
+if ! printf 'x\n' | grep -P 'x' >/dev/null 2>&1; then
+  echo "ERROR: grep -P (PCRE) is not supported by this grep." >&2
+  echo "       Install GNU grep (e.g. 'brew install grep') or run on Linux/CI." >&2
+  exit 1
+fi
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "ERROR: bash >= 4 required (mapfile); found bash ${BASH_VERSION}." >&2
+  exit 1
+fi
+
+# Locate a working Python interpreter for the vault version-topic check.
+# `python3` is preferred, but some environments only ship `python` (or ship a
+# non-functional `python3` stub, e.g. the Windows Store alias).
+PYTHON_BIN=""
+for cand in python3 python; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
+    PYTHON_BIN="$cand"
+    break
+  fi
+done
+
 FAIL=0
 
 check_contract() {
@@ -150,7 +175,13 @@ check_vault_version_topics() {
   # Each publish( opens a tuple; we collect lines until the closing );
   # and check whether event_version_v1 appears in those lines.
   local MISSING
-  MISSING=$(python3 - "$lib" <<'PYEOF'
+  if [[ -z "$PYTHON_BIN" ]]; then
+    echo "FAIL: no working python3/python interpreter found; cannot run vault version-topic check"
+    FAIL=1
+    echo ""
+    return
+  fi
+  if ! MISSING=$("$PYTHON_BIN" - "$lib" <<'PYEOF'
 import re, sys
 
 text = open(sys.argv[1]).read()
@@ -178,12 +209,18 @@ for v in violations:
     print(v)
 print(len(violations))
 PYEOF
-  )
+  ); then
+    echo "FAIL: vault version-topic check could not run (python error)"
+    FAIL=1
+    echo ""
+    return
+  fi
 
   local COUNT
   COUNT=$(echo "$MISSING" | tail -1)
+  # `head -n -1` is GNU-only; `sed '$d'` drops the last line portably.
   local DETAILS
-  DETAILS=$(echo "$MISSING" | head -n -1)
+  DETAILS=$(echo "$MISSING" | sed '$d')
 
   if [[ "$COUNT" -gt 0 ]]; then
     echo "FAIL: $COUNT vault publish() call(s) missing event_version_v1:"

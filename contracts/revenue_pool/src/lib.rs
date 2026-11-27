@@ -239,7 +239,7 @@ impl RevenuePool {
     // -----------------------------------------------------------------------
 
     /// Nominate a new admin. Only the current admin may call.
-    /// The nominee must call `claim_admin` (alias `accept_admin`) to complete.
+    /// The nominee must call `accept_admin` to complete.
     ///
     /// # Errors
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
@@ -298,19 +298,6 @@ impl RevenuePool {
         );
         env.events()
             .publish((events::event_admin_transfer_completed(&env), pending), ());
-    }
-
-    /// Alias for `accept_admin` — legacy name kept for backward compatibility.
-    ///
-    /// # Errors
-    /// * [`RevenuePoolError::NoAdminTransferPending`] - no transfer is in progress.
-    /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
-    ///
-    /// # Events
-    /// Emits `admin_changed` followed by `admin_transfer_completed` with the
-    /// new admin as topic.
-    pub fn claim_admin(env: Env, caller: Address) {
-        Self::accept_admin(env, caller);
     }
 
     /// Cancel a pending admin transfer. Only the current admin may call.

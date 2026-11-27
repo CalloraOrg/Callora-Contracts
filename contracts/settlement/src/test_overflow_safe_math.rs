@@ -333,9 +333,8 @@ fn withdraw_more_than_balance_returns_error() {
 /// accumulator still uses `checked_add` so that an i128 overflow fails
 /// loudly instead of silently saturating.
 #[test]
-#[ignore = "stale test: fails against current contract; see docs/KNOWN_ISSUES.md"]
 fn withdraw_daily_amount_overflow_raises_error() {
-    let (env, contract_id, _admin, vault, stored_usdc) = setup_with_usdc();
+    let (env, contract_id, _admin, _vault, stored_usdc) = setup_with_usdc();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let developer = Address::generate(&env);
 
@@ -343,8 +342,8 @@ fn withdraw_daily_amount_overflow_raises_error() {
     // does not fail with InsufficientDeveloperBalance.
     poke_dev_balance(&env, &contract_id, &developer, &stored_usdc, 1_000_000i128);
 
-    // Seed the same-day withdrawal accumulator to i128::MAX - 1 so the
-    // next withdrawal's checked_add will overflow.
+    // Seed the same-day withdrawal accumulator to i128::MAX - 1 so a
+    // withdrawal of 2 overflows checked_add.
     let today = env.ledger().timestamp() / 86400;
     poke_withdrawal_today(&env, &contract_id, &developer, i128::MAX - 1, today);
 
@@ -353,11 +352,12 @@ fn withdraw_daily_amount_overflow_raises_error() {
     let token_admin_client = soroban_sdk::token::StellarAssetClient::new(&env, &stored_usdc);
     token_admin_client.mint(&contract_id, &1_000i128);
 
-    // Withdraw 1 micro-unit — must fail because daily.amount would overflow.
-    let result = client.try_withdraw_developer_balance(&developer, &1i128, &None);
-    assert!(
-        result.is_err(),
-        "daily accumulator overflow should fail, got {result:?}"
+    // Withdraw 2 micro-units — must fail because (i128::MAX - 1) + 2 overflows.
+    let result = client.try_withdraw_developer_balance(&developer, &2i128, &None);
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        crate::SettlementError::DailyWithdrawCapExceeded,
+        "daily accumulator overflow should raise DailyWithdrawCapExceeded"
     );
 }
 

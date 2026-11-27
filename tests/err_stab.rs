@@ -27,7 +27,6 @@ fn error_codes_are_stable() {
     assert_eq!(VaultError::UsdcTokenCannotBeVault as u32, 14);
     assert_eq!(VaultError::RevenuePoolCannotBeVault as u32, 15);
     assert_eq!(VaultError::AuthorizedCallerCannotBeVault as u32, 16);
-    assert_eq!(VaultError::InitialBalanceExceedsOnLedger as u32, 17);
     assert_eq!(VaultError::AlreadyPaused as u32, 18);
     assert_eq!(VaultError::NotPaused as u32, 19);
     assert_eq!(VaultError::SettlementNotSet as u32, 20);

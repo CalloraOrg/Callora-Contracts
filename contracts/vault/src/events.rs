@@ -20,7 +20,7 @@ pub fn event_init(env: &Env) -> Symbol {
 /// Returns the Symbol for the `"admin_nominated"` event topic.
 ///
 /// Emitted when an owner nominates a new admin. The new admin must call
-/// `claim_admin` to complete the transfer.
+/// `accept_admin` to complete the transfer.
 pub fn event_admin_nominated(env: &Env) -> Symbol {
     Symbol::new(env, "admin_nominated")
 }

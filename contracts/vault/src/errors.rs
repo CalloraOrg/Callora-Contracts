@@ -24,7 +24,6 @@ use soroban_sdk::contracterror;
 /// | 14   | UsdcTokenCannotBeVault         | USDC token address cannot be the vault contract          |
 /// | 15   | RevenuePoolCannotBeVault       | Revenue pool address cannot be the vault contract        |
 /// | 16   | AuthorizedCallerCannotBeVault  | Authorized caller cannot be the vault contract           |
-/// | 17   | InitialBalanceExceedsOnLedger  | Initial tracked balance exceeds on-ledger USDC           |
 /// | 18   | AlreadyPaused                  | Contract is already paused                               |
 /// | 19   | NotPaused                      | Contract is not paused                                   |
 /// | 20   | SettlementNotSet               | Settlement address has not been configured               |
@@ -44,20 +43,21 @@ use soroban_sdk::contracterror;
 /// | 34   | NoRevenuePoolTransferPending   | No revenue-pool transfer is pending                      |
 /// | 35   | Slippage                       | Fee basis points exceeds caller limit                    |
 /// | 36   | RateLimited                    | Developer rate limit has been exceeded                   |
-/// | 37   | PausedState                    | Operation is rejected because the vault is paused        |
 /// | 44   | CallerNotInAllowlist           | Caller not in allowlist and not owner                    |
 /// | 45   | InvalidRecipient               | Withdrawal recipient is the vault address or USDC token  |
 /// | 49   | AdminCooldownActive            | Critical admin cool-off window is still active           |
 /// | 50   | InvalidAdminCooldown           | Admin cool-off window is outside accepted bounds         |
-/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
-/// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
-/// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
 /// | 51   | ProposalNotFound               | No pending timelock proposal for the requested action    |
 /// | 52   | TimelockNotExpired             | Action attempted before the timelock window has elapsed  |
 /// | 53   | TimelockOverflow               | `proposed_at + window` overflowed `u64`                  |
 /// | 54   | InvalidTimelockWindow          | Proposed timelock window is outside allowed bounds       |
 /// | 55   | BelowMinTransferAmount         | Amount is below the minimum transfer unit                |
+/// | 56   | SettlementCannotBeVault        | Settlement address cannot be the vault contract          |
+/// | 57   | SettlementCannotBeToken        | Settlement address cannot be the USDC token contract     |
+/// | 58   | ProposalExpired                | Proposal has passed its grace period and is expired      |
 /// | 59   | SettlementEqualsRevenuePool    | Settlement and revenue pool must be distinct addresses   |
+/// | 60   | Frozen                         | System is globally frozen via the configured freeze contract |
+/// | 61   | TooManyIds                     | `prune_processed_requests` exceeded `MAX_PRUNE_IDS`         |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -93,8 +93,9 @@ pub enum VaultError {
     RevenuePoolCannotBeVault = 15,
     /// Authorized caller address cannot be the vault address (code 16).
     AuthorizedCallerCannotBeVault = 16,
-    /// Initial balance exceeds on-ledger USDC balance (code 17).
-    InitialBalanceExceedsOnLedger = 17,
+    // code 17 reserved (was InitialBalanceExceedsOnLedger; never returned).
+    // Retired to keep the enum within Soroban's 50-case limit for contract
+    // error specs.
     /// Vault is already paused (code 18).
     AlreadyPaused = 18,
     /// Vault is not paused (code 19).
@@ -129,8 +130,9 @@ pub enum VaultError {
     Slippage = 35,
     /// Rate limit exceeded for the developer (code 36).
     RateLimited = 36,
-    /// Operation is rejected because the vault is paused (code 37).
-    PausedState = 37,
+    // code 37 reserved (was PausedState; never returned — `Paused` covers the
+    // same condition). Retired to keep the enum within Soroban's 50-case
+    // limit for contract error specs.
     /// Hot BPS must be between 1 and 10000 (code 38).
     InvalidHotBps = 38,
     /// Rebalance threshold must be between 1 and 10000 (code 39).
@@ -168,4 +170,10 @@ pub enum VaultError {
     ProposalExpired = 58,
     /// Settlement and revenue pool addresses must be distinct (code 59).
     SettlementEqualsRevenuePool = 59,
+    /// System is globally frozen via the configured freeze contract (code 60).
+    Frozen = 60,
+    /// `prune_processed_requests` received more ids than
+    /// [`crate::MAX_PRUNE_IDS`] allows (code 61). Split the work into smaller
+    /// batches.
+    TooManyIds = 61,
 }

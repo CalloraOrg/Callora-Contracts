@@ -322,7 +322,7 @@ fn accept_admin_emits_events_recording_the_final_admin_change() {
     client.set_admin(&admin, &new_admin);
     drain_events(&env);
 
-    client.claim_admin(&new_admin);
+    client.accept_admin(&new_admin);
     let emitted = recorded_events(&env);
 
     assert_eq!(

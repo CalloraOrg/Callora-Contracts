@@ -126,6 +126,16 @@ pub enum StorageKey {
     SupportedTokensMigrated,
     /// Persistent replay marker for an accounting-only vault deduction.
     DeductionRequest(u64),
+    /// Instance: address of the `callora-recipient` registry used to resolve
+    /// developer payout names. Appended to keep existing discriminants stable.
+    RecipientRegistry,
+    /// Persistent: payout name configured by a developer, resolved through
+    /// [`StorageKey::RecipientRegistry`] at withdrawal time.
+    PayoutName(Address),
+    /// Optional freeze contract address. When set, `receive_payment`,
+    /// `batch_receive_payment`, and `withdraw_developer_balance` consult it
+    /// before proceeding. `None` means no freeze check is performed.
+    FreezeContract,
 }
 
 /// Accounting-only deduction recorded; does not imply a token transfer.

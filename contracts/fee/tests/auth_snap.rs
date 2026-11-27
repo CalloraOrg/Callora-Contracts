@@ -102,6 +102,18 @@ fn get_admin_does_not_require_auth() {
 }
 
 #[test]
+fn calculate_fee_does_not_require_auth() {
+    let env = Env::default();
+    let (admin, client) = setup(&env);
+
+    env.mock_all_auths();
+    client.set_fee(&admin, &250);
+
+    env.set_auths(&[]);
+    assert_eq!(client.calculate_fee(&10_000), 250);
+}
+
+#[test]
 fn admin_with_auth_can_call_all_entrypoints() {
     let env = Env::default();
     env.mock_all_auths();

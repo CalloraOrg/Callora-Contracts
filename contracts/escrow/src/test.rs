@@ -6,8 +6,8 @@
 
 use crate::admin::{DEFAULT_COOLDOWN_SECS, MAX_COOLDOWN_SECS, MIN_COOLDOWN_SECS};
 use crate::{
-    events, CalloraEscrow, CalloraEscrowClient, EscrowError, EscrowReleasedEvent, ACTION_RELEASE,
-    ACTION_ROTATE, ACTION_UNPAUSE,
+    events, CalloraEscrow, CalloraEscrowClient, EscrowError, EscrowRefundedEvent,
+    EscrowReleasedEvent, ACTION_RELEASE, ACTION_ROTATE, ACTION_UNPAUSE,
 };
 use proptest::prelude::*;
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
@@ -68,6 +68,11 @@ fn create_token<'a>(env: &'a Env, admin: &Address) -> (Address, TestToken<'a>) {
 fn advance(env: &Env, secs: u64) {
     let now = env.ledger().timestamp();
     env.ledger().set_timestamp(now + secs);
+}
+
+/// Return a valid future expiry timestamp relative to the current ledger time.
+fn future_expiry(env: &Env, offset_secs: u64) -> u64 {
+    env.ledger().timestamp() + offset_secs
 }
 
 // ===========================================================================
@@ -191,7 +196,7 @@ fn test_second_release_within_window_rejected() {
     let amount = 100i128;
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
     client.release(&admin, &asset, &recipient);
 
     // A second release within the window is rejected.
@@ -208,8 +213,8 @@ fn test_release_allowed_after_window_elapses() {
     let amount = 100i128;
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &(amount * 2));
-    client.create_escrow(&admin, &asset, &recipient, &amount);
-    client.create_escrow(&admin, &asset, &recipient2, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
+    client.create_escrow(&admin, &asset, &recipient2, &amount, &future_expiry(&env, 3600));
 
     client.release(&admin, &asset, &recipient);
     let res = client.try_release(&admin, &asset, &recipient);
@@ -360,7 +365,7 @@ fn test_release_and_pause_are_independently_cooled() {
     let amount = 100i128;
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     // Release first.
     client.release(&admin, &asset, &recipient);
@@ -554,7 +559,7 @@ fn test_new_admin_can_perform_guarded_actions_after_rotation() {
     client.unpause(&new_admin);
 
     client.add_approved_asset(&new_admin, &asset);
-    client.create_escrow(&new_admin, &asset, &recipient, &amount);
+    client.create_escrow(&new_admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
     client.release(&new_admin, &asset, &recipient);
 }
 
@@ -710,13 +715,16 @@ fn test_create_escrow_success_and_record() {
     token_client.mint(&admin, &1000);
 
     let now = env.ledger().timestamp();
-    client.create_escrow(&admin, &asset, &recipient, &1000);
+    let expires_at = now + 3600;
+    client.create_escrow(&admin, &asset, &recipient, &1000, &expires_at);
 
     let record = client.get_escrow(&asset, &recipient).unwrap();
     assert_eq!(record.payment_asset, asset);
     assert_eq!(record.recipient, recipient);
     assert_eq!(record.amount, 1000);
     assert_eq!(record.created_at, now);
+    assert_eq!(record.funder, admin);
+    assert_eq!(record.expires_at, expires_at);
 }
 
 /// An unapproved asset is rejected and nothing is recorded (fail closed).
@@ -726,7 +734,7 @@ fn test_create_escrow_unapproved_asset_fails_closed() {
     let asset = Address::generate(&env);
     let recipient = Address::generate(&env);
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &1000),
+        client.try_create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::AssetNotApproved))
     );
     assert!(client.get_escrow(&asset, &recipient).is_none());
@@ -740,7 +748,7 @@ fn test_create_escrow_requires_admin() {
     let asset = Address::generate(&env);
     let recipient = Address::generate(&env);
     assert_eq!(
-        client.try_create_escrow(&intruder, &asset, &recipient, &1000),
+        client.try_create_escrow(&intruder, &asset, &recipient, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::Unauthorized))
     );
 }
@@ -758,7 +766,7 @@ fn test_create_escrow_rejects_self_payment_asset() {
 
     let recipient = Address::generate(&env);
     assert_eq!(
-        client.try_create_escrow(&admin, &contract_id, &recipient, &1000),
+        client.try_create_escrow(&admin, &contract_id, &recipient, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::InvalidInput))
     );
 }
@@ -777,7 +785,7 @@ fn test_create_escrow_rejects_self_recipient() {
     let asset = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &contract_id, &1000),
+        client.try_create_escrow(&admin, &asset, &contract_id, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::InvalidInput))
     );
 }
@@ -790,11 +798,11 @@ fn test_create_escrow_rejects_non_positive_amount() {
     let recipient = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &0),
+        client.try_create_escrow(&admin, &asset, &recipient, &0, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::InvalidInput))
     );
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &-1),
+        client.try_create_escrow(&admin, &asset, &recipient, &-1, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::InvalidInput))
     );
     assert!(client.get_escrow(&asset, &recipient).is_none());
@@ -808,9 +816,9 @@ fn test_create_escrow_rejects_replay() {
     let recipient = Address::generate(&env);
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &3000);
-    client.create_escrow(&admin, &asset, &recipient, &1000);
+    client.create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600));
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &2000),
+        client.try_create_escrow(&admin, &asset, &recipient, &2000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::EscrowExists))
     );
 }
@@ -824,7 +832,7 @@ fn test_create_escrow_after_revoke_fails_closed() {
     client.add_approved_asset(&admin, &asset);
     client.remove_approved_asset(&admin, &asset);
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &1000),
+        client.try_create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::AssetNotApproved))
     );
 }
@@ -872,7 +880,7 @@ fn test_create_escrow_fails_while_paused() {
     client.pause(&admin);
     assert!(client.is_paused());
 
-    let res = client.try_create_escrow(&admin, &asset, &recipient, &1000);
+    let res = client.try_create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600));
     assert_eq!(res, Err(Ok(EscrowError::Paused)));
     assert!(client.get_escrow(&asset, &recipient).is_none());
 }
@@ -907,7 +915,7 @@ fn test_unpause_restores_create_escrow_and_release() {
 
     // Both fund-affecting actions are blocked while paused
     assert_eq!(
-        client.try_create_escrow(&admin, &asset, &recipient, &1000),
+        client.try_create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600)),
         Err(Ok(EscrowError::Paused))
     );
     assert_eq!(
@@ -919,11 +927,11 @@ fn test_unpause_restores_create_escrow_and_release() {
     client.unpause(&admin);
     assert!(!client.is_paused());
 
-    client.create_escrow(&admin, &asset, &recipient, &1000);
+    client.create_escrow(&admin, &asset, &recipient, &1000, &future_expiry(&env, 3600));
     let record = client.get_escrow(&asset, &recipient).unwrap();
     assert_eq!(record.amount, 1000);
 
-    client.create_escrow(&admin, &asset, &release_recipient, &1000);
+    client.create_escrow(&admin, &asset, &release_recipient, &1000, &future_expiry(&env, 3600));
     client.release(&admin, &asset, &release_recipient);
     // Signer is NEVER hijacked by release
     assert_eq!(client.get_signer(), signer);
@@ -994,7 +1002,7 @@ fn test_scenario_1_create_escrow_transfers_funds_and_stores_record() {
     assert_eq!(admin_before, 1000);
     assert_eq!(contract_before, 0);
 
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     // Funder -100, contract +100
     assert_eq!(token_client.balance(&admin), admin_before - amount);
@@ -1019,7 +1027,7 @@ fn test_scenario_2_funder_insufficient_balance_fails_no_record() {
     // Mint only 50 to admin (insufficient for 100)
     token_client.mint(&admin, &50);
 
-    let res = client.try_create_escrow(&admin, &asset, &recipient, &amount);
+    let res = client.try_create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
     assert!(
         res.is_err(),
         "create_escrow must fail on insufficient funds"
@@ -1042,7 +1050,7 @@ fn test_scenario_3_release_for_existing_record_transfers_removes_record_emits_ev
 
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     assert_eq!(token_client.balance(&contract_id), amount);
     assert_eq!(token_client.balance(&recipient), 0);
@@ -1091,7 +1099,7 @@ fn test_scenario_4_release_twice_returns_not_found() {
 
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     client.release(&admin, &asset, &recipient);
 
@@ -1126,7 +1134,7 @@ fn test_scenario_6_get_signer_after_release_is_unchanged() {
 
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     // Initial signer matches setup
     assert_eq!(client.get_signer(), signer);
@@ -1149,8 +1157,8 @@ fn test_scenario_7_release_within_cooldown_returns_cooldown_active() {
 
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &(amount * 2));
-    client.create_escrow(&admin, &asset, &recipient1, &amount);
-    client.create_escrow(&admin, &asset, &recipient2, &amount);
+    client.create_escrow(&admin, &asset, &recipient1, &amount, &future_expiry(&env, 3600));
+    client.create_escrow(&admin, &asset, &recipient2, &amount, &future_expiry(&env, 3600));
 
     client.release(&admin, &asset, &recipient1);
 
@@ -1169,7 +1177,7 @@ fn test_scenario_8_release_while_paused_returns_paused() {
 
     client.add_approved_asset(&admin, &asset);
     token_client.mint(&admin, &amount);
-    client.create_escrow(&admin, &asset, &recipient, &amount);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &future_expiry(&env, 3600));
 
     client.pause(&admin);
     assert!(client.is_paused());
@@ -1221,7 +1229,7 @@ fn run_escrow_conservation_trace(seed: u64) {
             // Attempt create_escrow
             if !open_escrows.contains_key(&target_recipient) {
                 let amount = ((next_u64() % 500) + 1) as i128;
-                client.create_escrow(&admin, &asset, &target_recipient, &amount);
+                client.create_escrow(&admin, &asset, &target_recipient, &amount, &future_expiry(&env, 3600));
                 open_escrows.insert(target_recipient, amount);
             }
         } else {
@@ -1274,4 +1282,374 @@ fn test_scenario_10_revived_rotate_signer_tests_are_active() {
     let payload: (Address, Address) = data.try_into_val(&env).unwrap();
     assert_eq!(payload, (old_signer, new_signer.clone()));
     assert_eq!(client.get_signer(), new_signer);
+}
+
+// ===========================================================================
+// Escrow Expiry & Refund Tests
+// ===========================================================================
+
+/// Rejects zero, past, and current timestamps for `expires_at`.
+#[test]
+fn test_create_escrow_rejects_invalid_expiry() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &1000);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    // Zero expiry
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &100, &0),
+        Err(Ok(EscrowError::InvalidExpiry))
+    );
+    // Past expiry
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &100, &999),
+        Err(Ok(EscrowError::InvalidExpiry))
+    );
+    // Equal to current timestamp
+    assert_eq!(
+        client.try_create_escrow(&admin, &asset, &recipient, &100, &1_000),
+        Err(Ok(EscrowError::InvalidExpiry))
+    );
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+}
+
+/// Refund fails at `expires_at - 1` with `NotExpired` and succeeds at `expires_at`,
+/// returning exact funds to funder, removing the record, and emitting `escrow_refunded`.
+#[test]
+fn test_refund_escrow_boundary_and_event() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let amount = 250i128;
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    let expires_at = 2_000u64;
+
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &1_000);
+    client.create_escrow(&admin, &asset, &recipient, &amount, &expires_at);
+
+    let record = client.get_escrow(&asset, &recipient).unwrap();
+    assert_eq!(record.funder, admin);
+    assert_eq!(record.expires_at, expires_at);
+    assert_eq!(token_client.balance(&admin), 750);
+    assert_eq!(token_client.balance(&contract_id), 250);
+
+    // At expires_at - 1: must fail with NotExpired
+    env.ledger().with_mut(|li| li.timestamp = expires_at - 1);
+    assert_eq!(
+        client.try_refund_escrow(&admin, &asset, &recipient),
+        Err(Ok(EscrowError::NotExpired))
+    );
+    assert!(client.get_escrow(&asset, &recipient).is_some());
+    assert_eq!(token_client.balance(&contract_id), 250);
+
+    // At expires_at: must succeed
+    env.ledger().with_mut(|li| li.timestamp = expires_at);
+    client.refund_escrow(&admin, &asset, &recipient);
+
+    let events = env.events().all();
+
+    // Balance conservation: funder gets full amount back, contract back to 0
+    assert_eq!(token_client.balance(&admin), 1_000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+
+    // Verify EscrowRefunded event
+    let expected_topic = events::event_escrow_refunded(&env);
+    let refunded_event = events.iter().find(|(_, topics, _)| {
+        if topics.is_empty() {
+            return false;
+        }
+        let t0: Result<Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        t0 == Ok(expected_topic.clone())
+    });
+    assert!(refunded_event.is_some(), "escrow_refunded event must be emitted");
+    let (_, topics, data) = refunded_event.unwrap();
+    let caller_topic: Address = topics.get(1).unwrap().try_into_val(&env).unwrap();
+    assert_eq!(caller_topic, admin);
+    let payload: EscrowRefundedEvent = data.try_into_val(&env).unwrap();
+    assert_eq!(payload.payment_asset, asset);
+    assert_eq!(payload.recipient, recipient);
+    assert_eq!(payload.funder, admin);
+    assert_eq!(payload.amount, amount);
+}
+
+/// Unauthorized caller (neither funder nor admin) is rejected with `Unauthorized`.
+#[test]
+fn test_refund_escrow_unauthorized_caller_rejected() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+    let intruder = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_500);
+    assert_eq!(
+        client.try_refund_escrow(&intruder, &asset, &recipient),
+        Err(Ok(EscrowError::Unauthorized))
+    );
+    // Recipient is also not authorized to refund
+    assert_eq!(
+        client.try_refund_escrow(&recipient, &asset, &recipient),
+        Err(Ok(EscrowError::Unauthorized))
+    );
+}
+
+/// Refund fails with `Paused` when the contract is paused.
+#[test]
+fn test_refund_escrow_fails_while_paused() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_500);
+    client.pause(&admin);
+
+    assert_eq!(
+        client.try_refund_escrow(&admin, &asset, &recipient),
+        Err(Ok(EscrowError::Paused))
+    );
+}
+
+/// When admin rotates after escrow creation, `funder != admin`:
+/// - the original funder can refund and receives the funds;
+/// - the new admin can also trigger refund, and funds still go to the original funder.
+#[test]
+fn test_refund_escrow_funder_different_from_admin() {
+    let (env, orig_admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &orig_admin);
+    let new_admin = Address::generate(&env);
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&orig_admin, &asset);
+    token_client.mint(&orig_admin, &1_000);
+    client.create_escrow(&orig_admin, &asset, &recipient1, &400, &2_000);
+    client.create_escrow(&orig_admin, &asset, &recipient2, &600, &2_000);
+
+    // Rotate admin to new_admin
+    client.set_admin(&orig_admin, &new_admin);
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_000);
+
+    // 1. Original funder (no longer admin) refunds escrow 1
+    client.refund_escrow(&orig_admin, &asset, &recipient1);
+    assert_eq!(token_client.balance(&orig_admin), 400);
+    assert_eq!(token_client.balance(&new_admin), 0);
+    assert_eq!(token_client.balance(&contract_id), 600);
+
+    // 2. New admin refunds escrow 2 — funds must go to orig_admin (the funder), not new_admin
+    client.refund_escrow(&new_admin, &asset, &recipient2);
+    assert_eq!(token_client.balance(&orig_admin), 1_000);
+    assert_eq!(token_client.balance(&new_admin), 0);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Double refund returns `NotFound` on the second call.
+#[test]
+fn test_refund_escrow_double_refund_returns_not_found() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_000);
+    client.refund_escrow(&admin, &asset, &recipient);
+
+    assert_eq!(
+        client.try_refund_escrow(&admin, &asset, &recipient),
+        Err(Ok(EscrowError::NotFound))
+    );
+}
+
+/// Release then refund fails with `NotFound`.
+#[test]
+fn test_release_then_refund_returns_not_found() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    client.release(&admin, &asset, &recipient);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_500);
+    assert_eq!(
+        client.try_refund_escrow(&admin, &asset, &recipient),
+        Err(Ok(EscrowError::NotFound))
+    );
+}
+
+/// Refund then release fails with `NotFound`.
+#[test]
+fn test_refund_then_release_returns_not_found() {
+    let (env, admin, _signer, client) = setup(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    env.ledger().with_mut(|li| li.timestamp = 2_000);
+    client.refund_escrow(&admin, &asset, &recipient);
+
+    assert_eq!(
+        client.try_release(&admin, &asset, &recipient),
+        Err(Ok(EscrowError::NotFound))
+    );
+}
+
+/// Release after expiry (before refund) is still allowed and retains cooldown semantics.
+#[test]
+fn test_release_after_expiry_allowed_until_refunded() {
+    let (env, admin, _signer, client, contract_id) = setup_with_id(Some(60));
+    let (asset, token_client) = create_token(&env, &admin);
+    let recipient = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000);
+    client.add_approved_asset(&admin, &asset);
+    token_client.mint(&admin, &500);
+    client.create_escrow(&admin, &asset, &recipient, &500, &2_000);
+
+    // Move past expiry without refunding
+    env.ledger().with_mut(|li| li.timestamp = 3_000);
+    client.release(&admin, &asset, &recipient);
+
+    assert_eq!(token_client.balance(&recipient), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert!(client.get_escrow(&asset, &recipient).is_none());
+}
+
+/// Conservation proptest over random create, release, and refund traces.
+/// Invariant: token.balance(contract) == sum of open escrows, and total supply
+/// across (admin + contract + all recipients) is conserved at every step.
+fn run_escrow_expiry_conservation_trace(seed: u64) {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|li| li.timestamp = 100);
+
+    let admin = Address::generate(&env);
+    let signer = Address::generate(&env);
+    let contract_id = env.register(CalloraEscrow, ());
+    let client = CalloraEscrowClient::new(&env, &contract_id);
+    client.init(&admin, &signer, &Some(1));
+
+    let (asset, token_client) = create_token(&env, &admin);
+    client.add_approved_asset(&admin, &asset);
+    let initial_supply = 1_000_000i128;
+    token_client.mint(&admin, &initial_supply);
+
+    let mut state = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut next_u64 = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        state
+    };
+
+    let mut recipients: std::vec::Vec<Address> = std::vec::Vec::new();
+    for _ in 0..6 {
+        recipients.push(Address::generate(&env));
+    }
+
+    // Track open escrows as recipient -> (amount, expires_at)
+    let mut open_escrows: std::collections::BTreeMap<Address, (i128, u64)> =
+        std::collections::BTreeMap::new();
+
+    for _step in 0..30 {
+        let dt = (next_u64() % 10) + 2;
+        advance(&env, dt);
+        let now = env.ledger().timestamp();
+
+        let action_choice = next_u64() % 3;
+        let recipient_idx = (next_u64() as usize) % recipients.len();
+        let target_recipient = recipients[recipient_idx].clone();
+
+        match action_choice {
+            0 => {
+                // create_escrow
+                if !open_escrows.contains_key(&target_recipient) {
+                    let amount = ((next_u64() % 500) + 1) as i128;
+                    let ttl = (next_u64() % 20) + 1;
+                    let expires_at = now + ttl;
+                    client.create_escrow(&admin, &asset, &target_recipient, &amount, &expires_at);
+                    open_escrows.insert(target_recipient, (amount, expires_at));
+                }
+            }
+            1 => {
+                // release
+                if open_escrows.contains_key(&target_recipient) {
+                    client.release(&admin, &asset, &target_recipient);
+                    open_escrows.remove(&target_recipient);
+                } else {
+                    let res = client.try_release(&admin, &asset, &target_recipient);
+                    assert_eq!(res, Err(Ok(EscrowError::NotFound)));
+                }
+            }
+            _ => {
+                // refund_escrow
+                if let Some(&(_, expires_at)) = open_escrows.get(&target_recipient) {
+                    if now >= expires_at {
+                        client.refund_escrow(&admin, &asset, &target_recipient);
+                        open_escrows.remove(&target_recipient);
+                    } else {
+                        let res = client.try_refund_escrow(&admin, &asset, &target_recipient);
+                        assert_eq!(res, Err(Ok(EscrowError::NotExpired)));
+                    }
+                } else {
+                    let res = client.try_refund_escrow(&admin, &asset, &target_recipient);
+                    assert_eq!(res, Err(Ok(EscrowError::NotFound)));
+                }
+            }
+        }
+
+        let contract_balance = token_client.balance(&contract_id);
+        let sum_open: i128 = open_escrows.values().map(|(amt, _)| *amt).sum();
+        assert_eq!(contract_balance, sum_open);
+
+        let total_held: i128 = token_client.balance(&admin)
+            + contract_balance
+            + recipients
+                .iter()
+                .map(|r| token_client.balance(r))
+                .sum::<i128>();
+        assert_eq!(total_held, initial_supply);
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+    #[test]
+    fn test_conservation_proptest_create_release_and_refund(
+        seed in 0u64..=u64::MAX
+    ) {
+        run_escrow_expiry_conservation_trace(seed);
+    }
 }

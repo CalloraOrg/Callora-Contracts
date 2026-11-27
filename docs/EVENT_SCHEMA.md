@@ -22,7 +22,7 @@ The `workspace-members-dedup` hardening patch does not introduce event additions
 
 **Two-step admin rotation events (Issue #1163).**
 `set_admin()` now publishes `admin_transfer_started` only. The explicit
-`admin_changed` event moved to `accept_admin()` / `claim_admin()`, where it is
+`admin_changed` event moved to `accept_admin()`, where it is
 emitted with `(previous_admin, new_admin)` immediately before
 `admin_transfer_completed`. A nomination that is cancelled therefore leaves no
 `admin_changed` event behind, so indexers keyed on that topic no longer record
@@ -957,7 +957,7 @@ a change in the pool's pause state. Only the admin may trigger either function.
 ```
 
 > While paused, `distribute` and `batch_distribute` are blocked.
-> Admin rotation (`set_admin`, `claim_admin`) remains available.
+> Admin rotation (`set_admin`, `accept_admin`) remains available.
 
 ---
 
@@ -1401,6 +1401,20 @@ and extended using `PERSISTENT_BUMP_THRESHOLD` / `PERSISTENT_BUMP_AMOUNT`
 treated as unused IDs. Markers begin with this upgrade; historical deductions
 made before replay protection was introduced cannot be deduplicated retroactively.
 
+### `deduction_request_cleared`
+
+Emitted once when `clear_deduction_request(request_id)` removes an existing
+`DeductionRequest(request_id)` persistent replay marker. Clearing an unknown
+or already-cleared `request_id` is a no-op and emits no event.
+
+| Index | Location | Type | Description |
+|-------|----------|------|-------------|
+| topic 0 | topics | Symbol | `"deduction_request_cleared"` |
+| `request_id` | data | u64 | Deduction request identifier whose replay marker was removed |
+
+Only the configured vault may authorize this entrypoint. Calling before
+initialization returns `NotInitialized` (1).
+
 ### `initialized`
 
 Emitted once by `init()` when the settlement contract is first configured.
@@ -1510,6 +1524,29 @@ remain stored, but future single and batch payments in that token are rejected.
 | topic 1 | topics   | Address | Admin that disabled the token |
 | topic 2 | topics   | Address | Token contract address |
 | data    | data     | Address | Token contract address |
+
+### `payout_name_set`
+
+Emitted when a developer configures the registry name used for future
+withdrawals. Resolution happens at withdrawal time, so the registry admin can
+rotate the destination without another `set_payout_name` call.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_set"` |
+| topic 1 | topics   | Address | Developer that set the name |
+| data    | data     | String  | Payout name (1-64 bytes) |
+
+### `payout_name_cleared`
+
+Emitted when a developer removes their payout name. Later withdrawals with
+`to = None` pay the developer directly again.
+
+| Index   | Location | Type    | Description |
+|---------|----------|---------|-------------|
+| topic 0 | topics   | Symbol  | `"payout_name_cleared"` |
+| topic 1 | topics   | Address | Developer that cleared the name |
+| data    | data     | void    | Empty |
 
 ### `balance_credited`
 
@@ -2309,10 +2346,10 @@ Emitted by `release()` when funds are paid out to the recipient and the record i
 | `distribute`             | vault           | `distribute()`                           |
 | `swept`                  | vault           | `sweep_idle_balance()`                   |
 | `init`                   | revenue-pool    | `init()`                                 |
-| `admin_changed`          | revenue-pool    | `accept_admin()` / `claim_admin()`       |
+| `admin_changed`          | revenue-pool    | `accept_admin()`                         |
 | `admin_transfer_started` | revenue-pool    | `set_admin()`                            |
 | `set_max_distribute`     | revenue-pool    | `set_max_distribute()`                   |
-| `admin_transfer_completed`| revenue-pool   | `claim_admin()`                          |
+| `admin_transfer_completed`| revenue-pool   | `accept_admin()`                         |
 | `receive_payment`        | revenue-pool    | `receive_payment()`                      |
 | `distribute`             | revenue-pool    | `distribute()`                           |
 | `batch_distribute`       | revenue-pool    | each payment in `batch_distribute()`     |
@@ -2332,9 +2369,9 @@ Emitted by `release()` when funds are paid out to the recipient and the record i
 | `vault_changed`          | settlement      | `set_vault()`                            |
 | `developer_force_credited`| settlement     | `force_credit_developer()`               |
 | `init`                   | distribute      | `init()`                                 |
-| `admin_changed`          | distribute      | `accept_admin()` / `claim_admin()`       |
+| `admin_changed`          | distribute      | `accept_admin()`                         |
 | `admin_transfer_started` | distribute      | `set_admin()`                            |
-| `admin_transfer_completed`| distribute     | `accept_admin()` / `claim_admin()`       |
+| `admin_transfer_completed`| distribute     | `accept_admin()`                         |
 | `admin_cancelled`        | distribute      | `cancel_admin_transfer()`                |
 | `pause_set`              | distribute      | `pause()` / `unpause()`                  |
 | `set_max_distribute`     | distribute      | `set_max_distribute()`                   |
